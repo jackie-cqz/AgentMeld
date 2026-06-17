@@ -130,7 +130,7 @@ export function deleteConversation(conversationId: string) {
   return deleted;
 }
 
-export function sendMessage(input: SendMessageInput) {
+export async function sendMessage(input: SendMessageInput) {
   ensureDatabase();
   const content = input.content.trim();
   if (!content) throw new Error("Message content cannot be empty.");
@@ -173,7 +173,18 @@ export function sendMessage(input: SendMessageInput) {
     message
   });
 
-  const runIds = pickResponders(conversation, mentionedAgentIds).map((agentId) =>
+  // Check for deploy command before starting agent runs
+  const deployResult = detectDeployCommand(content);
+  if (deployResult) {
+    return {
+      message,
+      runIds: [],
+      deploy: deployResult
+    };
+  }
+
+  const responderIds = pickResponders(conversation, mentionedAgentIds);
+  const handles = responderIds.map((agentId) =>
     startAgentRun({
       conversationId: input.conversationId,
       agentId,
@@ -181,7 +192,7 @@ export function sendMessage(input: SendMessageInput) {
     })
   );
 
-  return { message, runIds };
+  return { message, runIds: handles.map((h) => h.runId) };
 }
 
 function pickResponders(conversation: Conversation, mentionedAgentIds: string[]) {
@@ -214,6 +225,16 @@ function createWorkspace(conversationId: string, now: number) {
       `
     )
     .run(workspaceId, conversationId, "sandbox", workspaceRoot, null, now, now);
+}
+
+function detectDeployCommand(content: string): { artifactId?: string } | null {
+  const trimmed = content.trim();
+  // Match: /deploy, 部署, 发布, 上线, /deploy art_xxx
+  const deployMatch = trimmed.match(/^(\/deploy|部署|发布|上线)(?:\s+(art_\w+))?$/);
+  if (deployMatch) {
+    return { artifactId: deployMatch[2] || undefined };
+  }
+  return null;
 }
 
 function resolveAttachment(attachmentId: string, conversationId: string): { id: string; kind: string; fileName: string; size: number; mimeType: string } | null {

@@ -50,14 +50,20 @@ interface StartRunInput {
   agentId: string;
   triggerMessage: Message;
   runId?: string;
+  parentRunId?: string | null;
 }
 
-export function startAgentRun(input: StartRunInput): string {
+export interface RunHandle {
+  runId: string;
+  promise: Promise<void>;
+}
+
+export function startAgentRun(input: StartRunInput): RunHandle {
   const runId = input.runId ?? newRunId();
-  void executeRun({ ...input, runId }).catch((error: unknown) => {
+  const promise = executeRun({ ...input, runId }).catch((error: unknown) => {
     console.error("Agent run failed", error);
   });
-  return runId;
+  return { runId, promise };
 }
 
 // ---------------------------------------------------------------------------

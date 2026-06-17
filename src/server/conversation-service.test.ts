@@ -159,7 +159,7 @@ describe("conversation-service", () => {
   });
 
   describe("sendMessage", () => {
-    it("creates a user message and broadcasts message.added", () => {
+    it("creates a user message and broadcasts message.added", async () => {
       const conv = createConversation({
         mode: "single",
         agentIds: ["ag_mock_builder"]
@@ -170,7 +170,7 @@ describe("conversation-service", () => {
         events.push(entry.event);
       });
 
-      const result = sendMessage({
+      const result = await sendMessage({
         conversationId: conv.id,
         content: "Hello agent"
       });
@@ -186,37 +186,31 @@ describe("conversation-service", () => {
       unsub();
     });
 
-    it("rejects empty content", () => {
+    it("rejects empty content", async () => {
       const conv = createConversation({
         mode: "single",
         agentIds: ["ag_mock_builder"]
       });
 
-      expect(() =>
-        sendMessage({
-          conversationId: conv.id,
-          content: "   "
-        })
-      ).toThrow("Message content cannot be empty.");
+      await expect(
+        sendMessage({ conversationId: conv.id, content: "   " })
+      ).rejects.toThrow("Message content cannot be empty.");
     });
 
-    it("rejects message for non-existent conversation", () => {
-      expect(() =>
-        sendMessage({
-          conversationId: "conv_nonexistent",
-          content: "hello"
-        })
-      ).toThrow("Conversation not found.");
+    it("rejects message for non-existent conversation", async () => {
+      await expect(
+        sendMessage({ conversationId: "conv_nonexistent", content: "hello" })
+      ).rejects.toThrow("Conversation not found.");
     });
 
-    it("returns empty runIds when no responder matches (group with no orchestrator)", () => {
+    it("returns empty runIds when no responder matches (group with no orchestrator)", async () => {
       // Create a group with only the builder (non-orchestrator) and no @mentions
       const conv = createConversation({
         mode: "group",
         agentIds: ["ag_mock_builder", "ag_custom_assistant"]
       });
 
-      const result = sendMessage({
+      const result = await sendMessage({
         conversationId: conv.id,
         content: "hello",
         mentionedAgentIds: []
@@ -226,13 +220,13 @@ describe("conversation-service", () => {
       expect(result.runIds).toHaveLength(0);
     });
 
-    it("mentions specific agents in a group bypass the orchestrator fallback", () => {
+    it("mentions specific agents in a group bypass the orchestrator fallback", async () => {
       const conv = createConversation({
         mode: "group",
         agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
       });
 
-      const result = sendMessage({
+      const result = await sendMessage({
         conversationId: conv.id,
         content: "hello builder",
         mentionedAgentIds: ["ag_mock_builder"]
@@ -270,7 +264,7 @@ describe("conversation-service", () => {
         agentIds: ["ag_mock_builder"]
       });
 
-      sendMessage({ conversationId: conv.id, content: "test" });
+      await sendMessage({ conversationId: conv.id, content: "test" });
 
       // Wait for the agent run to complete so we get both messages
       await new Promise<void>((resolve) => {

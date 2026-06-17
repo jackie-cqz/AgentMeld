@@ -193,7 +193,7 @@ async function runChildTask(
       updatedAt: Date.now()
     };
 
-    const runId = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: childMsg });
+    const { runId } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: childMsg, parentRunId });
 
     // Wait for child run to complete
     await waitForRunEnd(runId, 15000);

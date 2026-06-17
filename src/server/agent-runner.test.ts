@@ -110,7 +110,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    const result = sendMessage({
+    const result = await sendMessage({
       conversationId: conv.id,
       content: "test message"
     });
@@ -147,7 +147,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    sendMessage({
+    await sendMessage({
       conversationId: conv.id,
       content: "hello"
     });
@@ -171,7 +171,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    sendMessage({
+    await sendMessage({
       conversationId: conv.id,
       content: "hello"
     });
@@ -194,7 +194,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    const result = sendMessage({
+    const result = await sendMessage({
       conversationId: conv.id,
       content: "run start test"
     });
@@ -227,7 +227,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    const result = sendMessage({
+    const result = await sendMessage({
       conversationId: conv.id,
       content: "abort me"
     });
@@ -264,7 +264,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    const triggerMsg = sendMessage({
+    const triggerMsg = await sendMessage({
       conversationId: conv.id,
       content: "this should fail"
     });
@@ -303,7 +303,7 @@ describe("agent-runner", () => {
       agentIds: ["ag_mock_builder"]
     });
 
-    sendMessage({
+    await sendMessage({
       conversationId: conv.id,
       content: "order test"
     });
