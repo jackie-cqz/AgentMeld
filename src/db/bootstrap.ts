@@ -248,7 +248,7 @@ function seedWelcomeConversation() {
     "Agent-Conference MVP 群聊",
     "group",
     JSON.stringify(["ag_mock_orchestrator", "ag_mock_builder"]),
-    "review",
+    "auto",
     JSON.stringify([]),
     0,
     now,

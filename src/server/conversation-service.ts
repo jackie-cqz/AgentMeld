@@ -83,7 +83,7 @@ export function createConversation(input: CreateConversationInput) {
     title: input.title?.trim() || "新的 Agent 协作",
     mode,
     agentIds,
-    fsWriteApprovalMode: input.fsWriteApprovalMode ?? "review",
+    fsWriteApprovalMode: input.fsWriteApprovalMode ?? "auto",
     now
   });
 

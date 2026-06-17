@@ -2,6 +2,7 @@
 
 import { File, FileText, Image, Loader2, Rocket, TerminalSquare } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ToolUseCard } from "@/components/tool-card";
 import type { MessagePart } from "@/shared/types";
 
@@ -26,10 +27,10 @@ export function MessageParts({ parts }: { parts: MessagePart[] }) {
 
 function MessagePartView({ part }: { part: MessagePart }) {
   if (part.type === "text") {
-    return (
-      <div className="space-y-2 whitespace-pre-wrap text-[15px] leading-7 text-stone-800">
-        {part.content || <Loader2 className="h-4 w-4 animate-spin text-stone-400" />}
-      </div>
+    return part.content ? (
+      <MarkdownRenderer content={part.content} />
+    ) : (
+      <Loader2 className="h-4 w-4 animate-spin text-stone-400" />
     );
   }
 
@@ -39,14 +40,6 @@ function MessagePartView({ part }: { part: MessagePart }) {
         <summary className="cursor-pointer font-medium">思考过程</summary>
         <p className="mt-2 whitespace-pre-wrap leading-6">{part.content || "正在整理上下文..."}</p>
       </details>
-    );
-  }
-
-  if (part.type === "code") {
-    return (
-      <pre className="overflow-auto rounded-md bg-stone-950 p-3 text-sm leading-6 text-stone-50">
-        <code>{part.content}</code>
-      </pre>
     );
   }
 
@@ -113,7 +106,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
 
   return (
     <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700">
-      工具返回：{JSON.stringify(part.result)}
+      未知消息：{JSON.stringify(part)}
     </div>
   );
 }

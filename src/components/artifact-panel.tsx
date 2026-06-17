@@ -124,7 +124,8 @@ function WebAppPreview({ artifactId }: { artifactId: string }) {
 }
 
 function DocumentPreview({ artifact }: { artifact: Artifact }) {
-  const content = (artifact.content as Extract<ArtifactContent, { type: "document" }>).content;
+  const doc = artifact.content as Extract<ArtifactContent, { type: "document" }>;
+  const content = doc?.content ?? "";
   return (
     <div className="p-4">
       <div className="rounded-md border border-stone-200 bg-white p-5 shadow-sm">
@@ -145,8 +146,15 @@ function ImagePreview({ artifact }: { artifact: Artifact }) {
         <div className="mb-3 flex items-center gap-2 text-sm font-medium text-stone-900">
           <Image className="h-4 w-4" />{artifact.title}
         </div>
-        <img src={img.url} alt={img.alt ?? artifact.title} className="max-h-96 w-full rounded-md border border-stone-200 object-contain" />
-        {img.width && img.height ? <div className="mt-2 text-xs text-stone-500">{img.width} × {img.height}</div> : null}
+        {img?.url ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={img.url} alt={img.alt ?? artifact.title} className="max-h-96 w-full rounded-md border border-stone-200 object-contain" />
+            {img.width && img.height ? <div className="mt-2 text-xs text-stone-500">{String(img.width)} × {String(img.height)}</div> : null}
+          </>
+        ) : (
+          <p className="text-sm text-stone-500">Image URL not available</p>
+        )}
       </div>
     </div>
   );
@@ -154,8 +162,13 @@ function ImagePreview({ artifact }: { artifact: Artifact }) {
 
 function SourceView({ artifact }: { artifact: Artifact }) {
   const body = useMemo(() => {
-    if (artifact.content.type === "document") return artifact.content.content;
-    if (artifact.content.type === "web_app") return Object.entries(artifact.content.files).map(([n, s]) => `// ${n}\n${s}`).join("\n\n");
+    if (artifact.content.type === "document") return (artifact.content as Extract<ArtifactContent, { type: "document" }>).content ?? "";
+    if (artifact.content.type === "web_app") {
+      const wa = artifact.content as Extract<ArtifactContent, { type: "web_app" }>;
+      if (wa.files && typeof wa.files === "object") {
+        return Object.entries(wa.files).map(([n, s]) => `// ${n}\n${String(s)}`).join("\n\n");
+      }
+    }
     return JSON.stringify(artifact.content, null, 2);
   }, [artifact.content]);
   return (

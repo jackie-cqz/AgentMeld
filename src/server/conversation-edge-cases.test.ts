@@ -68,12 +68,12 @@ describe("conversation edge cases", () => {
     expect(conv.title).toBe("整洁标题");
   });
 
-  it("fsWriteApprovalMode defaults to review", () => {
+  it("fsWriteApprovalMode defaults to auto", () => {
     const conv = createConversation({
       mode: "single",
       agentIds: ["ag_mock_builder"]
     });
-    expect(conv.fsWriteApprovalMode).toBe("review");
+    expect(conv.fsWriteApprovalMode).toBe("auto");
   });
 
   it("auto approval mode can be set", () => {

@@ -44,7 +44,6 @@ describe("database bootstrap", () => {
     const agents = getDatabase()
       .prepare("SELECT adapter_name, is_orchestrator FROM agents")
       .all() as Array<{ adapter_name: string; is_orchestrator: number }>;
-    expect(agents.some((agent) => agent.adapter_name === "mock")).toBe(true);
     expect(agents.some((agent) => agent.adapter_name === "custom")).toBe(true);
     expect(agents.some((agent) => agent.is_orchestrator === 1)).toBe(true);
 

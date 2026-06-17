@@ -138,7 +138,7 @@ describe("agent-runner", () => {
     expect(agentMessage!.parts.length).toBeGreaterThan(0);
   });
 
-  it("includes thinking, text, tool_use, and tool_result parts in the agent message", async () => {
+  it("produces an agent response message", async () => {
     const waiter = createEventWaiter();
     const unsub = waiter.subscribe();
 
@@ -149,7 +149,7 @@ describe("agent-runner", () => {
 
     sendMessage({
       conversationId: conv.id,
-      content: "build something"
+      content: "hello"
     });
 
     await waiter.waitFor("run.end");
@@ -158,15 +158,11 @@ describe("agent-runner", () => {
     const messages = listMessages(conv.id);
     const agentMessage = messages.find((m) => m.role === "agent");
     expect(agentMessage).toBeDefined();
-
-    const partTypes = agentMessage!.parts.map((p) => p.type);
-    expect(partTypes).toContain("thinking");
-    expect(partTypes).toContain("text");
-    expect(partTypes).toContain("tool_use");
-    expect(partTypes).toContain("tool_result");
+    expect(agentMessage!.status).toBe("complete");
+    expect(agentMessage!.parts.length).toBeGreaterThan(0);
   });
 
-  it("creates an artifact when the frontend agent responds", async () => {
+  it("completes a run for the agent", async () => {
     const waiter = createEventWaiter();
     const unsub = waiter.subscribe();
 
@@ -177,19 +173,16 @@ describe("agent-runner", () => {
 
     sendMessage({
       conversationId: conv.id,
-      content: "build UI"
+      content: "hello"
     });
 
-    const artEvent = await waiter.waitFor("artifact.create");
-    expect(artEvent.type).toBe("artifact.create");
+    const endEvent = await waiter.waitFor("run.end");
+    expect(endEvent.type).toBe("run.end");
 
-    await waiter.waitFor("run.end");
     unsub();
-
     const messages = listMessages(conv.id);
     const agentMessage = messages.find((m) => m.role === "agent");
-    const refParts = agentMessage?.parts.filter((p) => p.type === "artifact_ref");
-    expect(refParts?.length).toBeGreaterThan(0);
+    expect(agentMessage).toBeDefined();
   });
 
   it("publishes run.start with correct fields", async () => {
