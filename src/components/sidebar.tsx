@@ -4,6 +4,7 @@ import { BarChart3, Bot, FileText, MessageSquare, Plus, Search, Settings, Sparkl
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { AgentsPanel } from "@/components/agents-panel";
+import { ArtifactLibrary } from "@/components/artifact-library";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { useAppStore } from "@/stores/app-store";
 import type { Agent } from "@/shared/types";
@@ -129,9 +130,7 @@ export function Sidebar() {
       ) : activeTab === "agents" ? (
         <AgentsPanel />
       ) : activeTab === "artifacts" ? (
-        <div className="flex-1 grid place-items-center text-sm text-stone-500">
-          产物库 — 开发中
-        </div>
+        <ArtifactLibrary />
       ) : (
         <div className="flex-1 grid place-items-center text-sm text-stone-500">
           分析 — 开发中
