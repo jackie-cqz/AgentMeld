@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { z } from "zod";
 import { getConversation } from "@/server/repositories";
+import { recordFileWrite } from "@/server/dispatch-file-writes";
 import { registerPendingWrite } from "@/server/pending-writes";
 import {
   assertPathWithinWorkspace,
@@ -91,6 +92,7 @@ export const fsWriteTool: ToolDef = {
       // Write directly
       ensureDir(absolutePath);
       fs.writeFileSync(absolutePath, parsed.data.content, "utf-8");
+      if (ctx.runId) recordFileWrite(ctx.runId, absolutePath, parsed.data.content);
       return {
         ok: true,
         value: {
@@ -121,6 +123,7 @@ export const fsWriteTool: ToolDef = {
     // Approved — write to disk
     ensureDir(absolutePath);
     fs.writeFileSync(absolutePath, parsed.data.content, "utf-8");
+    if (ctx.runId) recordFileWrite(ctx.runId, absolutePath, parsed.data.content);
     return {
       ok: true,
       value: {

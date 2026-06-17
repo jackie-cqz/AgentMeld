@@ -7,7 +7,10 @@ import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs } from "@/server/child-prompt-builder";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
-import { recordTaskReport, getTaskReport, evaluateTaskResult, clearTaskResultsForRun } from "@/server/dispatch-task-results";
+import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
+import { compileDispatchPlan, validateDispatchPlan } from "@/server/dispatch-plan";
+import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
+import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { newMessageId } from "@/shared/ids";
 import type { Message, DispatchPlanItem, Agent } from "@/shared/types";
@@ -183,8 +186,18 @@ export async function executeOrchestratorPlan(
     }
   }
 
-  // Code conflict detection
-  const conflicts = detectWaveConflicts(allResults, plan);
+  // Code conflict detection — collect per-run file writes and check same-wave conflicts
+  const runWrites: RunFileWrites[] = [];
+  for (const [, result] of allResults) {
+    if (result.childRunId) {
+      const writes = getFileWrites(result.childRunId);
+      if (writes.size > 0) {
+        const task = plan.find((t) => t.id === result.taskId);
+        runWrites.push({ taskId: result.taskId, agentId: task?.agentId ?? "", runId: result.childRunId, writes });
+      }
+    }
+  }
+  const conflicts = detectWaveConflicts(runWrites);
   if (conflicts.length > 0) {
     const conflictMsg = conflicts.map((c) => `- ${c.path}: ${c.contributors.join(", ")}`).join("\n");
     createSystemMessage(conversationId, `⚠️ 代码冲突检测：\n${conflictMsg}`);
@@ -239,7 +252,7 @@ async function runChildTask(
     // Retry loop — up to maxAttempts
     const maxAttempts = task.maxAttempts || 1;
     let finalRunId = "";
-    let finalEvaluation = evaluateTaskResult(undefined);
+    let finalEvaluation = evaluateChildTaskResult(task, undefined);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptPrompt = attempt > 1
@@ -261,7 +274,7 @@ async function runChildTask(
       }
 
       const report = getTaskReport(attemptRunId);
-      finalEvaluation = evaluateTaskResult(report);
+      finalEvaluation = evaluateChildTaskResult(task, report);
       finalRunId = attemptRunId;
 
       if (finalEvaluation.status === "complete") break;
@@ -529,17 +542,6 @@ function buildDemoPlan(availableAgentIds: string[], triggerMsg: Message): { reas
 interface FileConflict {
   path: string;
   contributors: string[];
-}
-
-function detectWaveConflicts(results: Map<string, TaskResult>, plan: ParsedTask[]): FileConflict[] {
-  // Simple heuristic: tasks in the same wave that completed can conflict
-  // In a real implementation, this would check actual file writes from dispatch-file-writes.ts
-  const conflicts: FileConflict[] = [];
-  const completed = Array.from(results.entries()).filter(([, r]) => r.status === "complete");
-  if (completed.length < 2) return conflicts;
-
-  // Placeholder: real implementation needs per-run file write tracking
-  return conflicts;
 }
 
 function mergeRevisedPlan(original: ParsedTask[], revised: DispatchPlanItem[]): ParsedTask[] {
