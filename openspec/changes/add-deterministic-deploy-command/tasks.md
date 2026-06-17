@@ -1,0 +1,7 @@
+- [x] 1. Add OpenSpec deltas and numbered specs for deterministic deploy commands and candidate selection.
+- [x] 2. Add shared deploy candidate message part types and fallback renderers.
+- [x] 3. Refactor deploy tool logic into a reusable conversation-scoped deploy helper.
+- [x] 4. Implement deploy command service and conversation deploy API.
+- [x] 5. Intercept simple deploy commands in message send without starting AgentRunner.
+- [x] 6. Add `/deploy` slash command and deploy candidate chooser UI.
+- [x] 7. Add focused tests and run validation.

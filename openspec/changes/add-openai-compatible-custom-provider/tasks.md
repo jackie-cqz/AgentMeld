@@ -1,0 +1,8 @@
+- [x] 1. Add OpenSpec proposal, design, task list, and delta specs.
+- [x] 2. Extend provider types, API schemas, and model fallback handling.
+- [x] 3. Implement `openai-compatible` client construction in CustomAgentAdapter.
+- [x] 4. Pass and validate per-agent Base URL for generic Custom agents.
+- [x] 5. Update Create/Edit Agent UI labels, Base URL field, and key fallback hints.
+- [x] 6. Update legacy numbered specs and README provider docs.
+- [x] 7. Add or update focused tests.
+- [x] 8. Run validation commands.

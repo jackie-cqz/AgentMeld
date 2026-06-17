@@ -1,0 +1,7 @@
+- [x] 1. Add OpenSpec delta specs for harness continuation and executable verification commands.
+- [x] 2. Extend dispatch command contracts with `cwd` and `timeoutMs`.
+- [x] 3. Add workspace-scoped `cwd` and timeout support to `bash`.
+- [x] 4. Reuse managed command execution from AgentRunner.
+- [x] 5. Implement bounded child-task continuation attempts.
+- [x] 6. Auto-run required verification commands and feed failures into continuation prompts.
+- [x] 7. Add focused regression tests and run validation.

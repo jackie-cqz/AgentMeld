@@ -1,0 +1,8 @@
+- [x] 1. Add OpenSpec delta specs and numbered spec for Orchestrator plan review.
+- [x] 2. Add shared pending plan and stream event types.
+- [x] 3. Implement pending dispatch plan store and REST routes.
+- [x] 4. Pause AgentRunner between plan validation and DAG execution until approval.
+- [x] 5. Extend Zustand dispatch state and reducers for pending/resolved plan events.
+- [x] 6. Add plan review/edit controls to the dispatch plan card.
+- [x] 7. Add focused regression tests for pending plan approval/rejection/validation.
+- [x] 8. Run typecheck, lint, and focused/full tests.

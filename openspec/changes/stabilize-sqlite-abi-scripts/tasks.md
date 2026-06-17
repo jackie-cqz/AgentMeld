@@ -1,0 +1,7 @@
+- [x] 1. Add OpenSpec proposal, design, task list, and desktop Electron delta spec.
+- [x] 2. Replace import-only Node ABI check with an in-memory SQLite binding check.
+- [x] 3. Add Electron ABI ensure script and shared SQLite binding check helper.
+- [x] 4. Wire package scripts so Node and Electron commands prepare their own ABI.
+- [x] 5. Remove obsolete package-level pnpm build config warning source.
+- [x] 6. Update README and desktop spec documentation.
+- [x] 7. Run validation commands.

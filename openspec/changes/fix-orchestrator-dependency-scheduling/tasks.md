@@ -1,0 +1,8 @@
+- [x] 1. Add Orchestrator delta spec for plan compilation, transitive artifact context, and artifact readiness.
+- [x] 2. Update numbered Orchestrator spec with the same runtime contract.
+- [x] 3. Implement deterministic dispatch plan compilation and dependency closure helpers.
+- [x] 4. Wire compiled plans into Orchestrator execution and dispatch events.
+- [x] 5. Inject transitive upstream artifacts into sub-agent prompts.
+- [x] 6. Fail artifact-producing child tasks that complete without artifacts.
+- [x] 7. Add regression tests for missing `dependsOn`, reviewer tasks, dependency closure, and artifact expectations.
+- [x] 8. Run focused and project validation commands.

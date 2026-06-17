@@ -1,0 +1,9 @@
+- [x] 1. Extend deployment specs for local static deployments and package downloads.
+- [x] 2. Extend `DeployStatusRecord` with optional local deployment metadata.
+- [x] 3. Implement deployment service for materializing web apps, safe file resolution, manifests, and ZIP generation.
+- [x] 4. Update `deploy_artifact` to create local static deployments and return stable paths.
+- [x] 5. Add Next route handlers for `/deployments/{id}/` and deployment package downloads.
+- [x] 6. Enhance the deployment status card UI with local deployment metadata and download actions.
+- [x] 7. Update numbered specs and overview documentation.
+- [x] 8. Add focused tests for deployment materialization, path safety, and packages.
+- [x] 9. Run validation commands.

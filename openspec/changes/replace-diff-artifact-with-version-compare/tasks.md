@@ -1,0 +1,7 @@
+- [x] 1. Add OpenSpec proposal, design, tasks, and delta specs for replacing agent-authored diff artifacts with version compare.
+- [x] 2. Remove `diff` from the agent-facing `write_artifact` type schema and tool descriptions while preserving legacy parsing/rendering.
+- [x] 3. Add a pure helper that derives comparable text diff sections from two artifact contents.
+- [x] 4. Add artifact preview UI controls for comparing two versions and rendering deterministic diffs.
+- [x] 5. Label legacy `diff` artifacts as read-only compatibility views.
+- [x] 6. Update numbered specs for artifacts and tools.
+- [x] 7. Add focused tests and run validation.

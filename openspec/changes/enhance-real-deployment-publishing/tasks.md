@@ -1,0 +1,7 @@
+- [x] 1. Add OpenSpec deltas and numbered specs for external static publishing settings and deployment metadata.
+- [x] 2. Extend `app_settings` schema/bootstrap/settings API with publish target fields.
+- [x] 3. Extend `DeployStatusRecord` and deployment service with static-directory publishing.
+- [x] 4. Update `deploy_artifact` to publish externally when configured.
+- [x] 5. Update settings UI and deployment card UI.
+- [x] 6. Add focused tests for publish directory output and URL metadata.
+- [x] 7. Run db push attempt, tests, typecheck, lint. (`db:push` hit the existing Drizzle duplicate-index path after the new columns were applied.)
