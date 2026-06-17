@@ -64,10 +64,13 @@ export function ArtifactLibrary() {
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
         {allArtifacts.map(({ artifact, conversationTitle }) => (
-          <button
+          <div
             key={artifact.id}
             onClick={() => handleSelect({ artifact, conversationTitle })}
-            className="flex w-full items-start gap-3 rounded-md border border-stone-200 bg-white px-3 py-3 text-left hover:border-stone-300 transition"
+            className="flex w-full cursor-pointer items-start gap-3 rounded-md border border-stone-200 bg-white px-3 py-3 text-left hover:border-stone-300 transition"
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSelect({ artifact, conversationTitle }); }}
           >
             <div className="mt-0.5">{typeIcon(artifact.type)}</div>
             <div className="min-w-0 flex-1">
@@ -88,7 +91,7 @@ export function ArtifactLibrary() {
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
-          </button>
+          </div>
         ))}
       </div>
     </div>

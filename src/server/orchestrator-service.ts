@@ -412,17 +412,26 @@ async function generatePlanWithLLM(input: OrchestratorInput, overrideText?: stri
 ## Available Agents
 ${agentList}
 
-## Rules
-1. Each task MUST have a unique id (t1, t2, ...)
-2. agentId MUST be one of the available agent IDs listed above
-3. dependsOn lists task IDs that must finish BEFORE this task starts
-4. Tasks with no dependencies can run in parallel
-5. Keep tasks focused — delegate one clear goal per task
-6. 1-3 tasks is usually the right amount
-7. acceptanceCriteria should be specific and verifiable
+## Workflow
+1. Read the user request and context carefully.
+2. If a critical ambiguity blocks correct planning AND you can formulate 2-4 clear options, call ask_user first.
+3. Otherwise, call plan_tasks directly with a structured plan.
+4. The system will execute the plan and return results for your final summary.
+
+## Planning Rules
+- Each task MUST have a unique id (t1, t2, ...).
+- agentId MUST be one of the available agent IDs listed above.
+- dependsOn lists task IDs that must finish BEFORE this task starts.
+- **Execution order ONLY follows dependsOn.** Writing "do A first" in task text has NO effect.
+- Tasks with NO dependsOn run IN PARALLEL. Only omit dependsOn for truly independent tasks.
+- When unsure, prefer adding dependencies (serial is safer).
+- Each task must be self-contained: the assigned agent does NOT see full group history.
+- Do NOT declare expectedOutputs for text-only tasks (review, validation, analysis). Use acceptanceCriteria instead.
+- For tasks needing upstream artifacts, declare inputs with fromTaskId and outputId.
+- 1-3 well-structured tasks are usually better than many tiny ones.
 
 ## Output Format (JSON only)
-{"reasoning":"brief plan analysis","tasks":[{"id":"t1","agentId":"<id>","title":"short","prompt":"detailed instructions for the agent","dependsOn":[],"acceptanceCriteria":["verifiable check 1"]}]}`
+{"reasoning":"brief plan analysis","tasks":[{"id":"t1","agentId":"<id>","title":"short","prompt":"detailed self-contained instructions","dependsOn":[],"acceptanceCriteria":["verifiable check 1"]}]}`
           },
           { role: "user", content: userText }
         ],
