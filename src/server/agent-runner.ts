@@ -135,6 +135,27 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   // 6. Orchestrator branch: group chat without @ → plan → approve → DAG → aggregate
   if (agent.isOrchestrator && conversation.mode === "group") {
     const availableAgentIds = conversation.agentIds;
+
+    // Publish planning text via proper SSE events so frontend renders it
+    const planningText = "正在分析任务并生成执行计划...";
+    eventBus.publish({
+      type: "part.start", conversationId: input.conversationId, timestamp: Date.now(),
+      messageId: message.id, partIndex: 0,
+      part: { type: "text", content: "" }
+    });
+    for (const chunk of chunkText(planningText, 10)) {
+      eventBus.publish({
+        type: "part.delta", conversationId: input.conversationId, timestamp: Date.now(),
+        messageId: message.id, partIndex: 0,
+        delta: { type: "text.append", text: chunk }
+      });
+    }
+    eventBus.publish({
+      type: "part.end", conversationId: input.conversationId, timestamp: Date.now(),
+      messageId: message.id, partIndex: 0
+    });
+    updateMessageParts(message.id, [{ type: "text", content: planningText }], Date.now());
+
     try {
       await executeOrchestrator({
         conversationId: input.conversationId,
@@ -143,12 +164,11 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         availableAgentIds,
         orchestratorRunId: run.id
       });
-      const finalUsage: NonNullable<AgentRun["usage"]> = {
+      completeRun(run, message, "complete", null, {
         modelId: agent.modelId ?? "orchestrator",
         inputTokens: 0,
         outputTokens: 0
-      };
-      completeRun(run, message, "complete", null, finalUsage);
+      });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : "Orchestrator failed.";
       createErrorMessage(input.conversationId, message.id, `Orchestrator error: ${errorText}`);
@@ -359,4 +379,12 @@ function createErrorMessage(conversationId: string, relatedMessageId: string, er
     timestamp: now,
     message
   });
+}
+
+function chunkText(text: string, size: number): string[] {
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += size) {
+    chunks.push(text.slice(i, i + size));
+  }
+  return chunks;
 }
