@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle, Check, FileText, Terminal, X, Network } from "lucide-react";
+import { AlertTriangle, Check, FileText, Pencil, Terminal, X, Network } from "lucide-react";
+import { useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import type { PendingWrite, PendingBashCommand, PendingDispatchPlan } from "@/shared/types";
 
@@ -128,12 +129,25 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
 
 function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
   const agents = useAppStore((s) => s.agents);
-  const handleResolve = async (action: "approve" | "reject") => {
+  const [revising, setRevising] = useState(false);
+  const [feedback, setFeedback] = useState("");
+
+  const handleResolve = async (action: "approve" | "reject" | "revise") => {
+    if (action === "revise" && !feedback.trim()) {
+      setRevising(true);
+      return;
+    }
     await fetch(`/api/dispatch-plans/${plan.id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action })
+      body: JSON.stringify(
+        action === "revise"
+          ? { action, revisedPlan: [{ id: "revise_feedback", agentId: "", task: feedback.trim(), dependsOn: [] }] }
+          : { action }
+      )
     });
+    setRevising(false);
+    setFeedback("");
   };
 
   return (
@@ -157,6 +171,18 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
             );
           })}
         </div>
+        {revising ? (
+          <div className="mt-2 flex gap-2">
+            <input
+              className="h-8 flex-1 rounded border border-stone-200 px-2 text-xs outline-none focus:border-blue-400"
+              placeholder="修改意见（自然语言描述）"
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleResolve("revise"); }}
+            />
+            <button onClick={() => setRevising(false)} className="text-xs text-stone-500">取消</button>
+          </div>
+        ) : null}
       </div>
       <div className="flex shrink-0 gap-1">
         <button
@@ -165,6 +191,13 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
           title="批准执行"
         >
           <Check className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => handleResolve("revise")}
+          className="grid h-8 w-8 place-items-center rounded-md bg-blue-100 text-blue-700 hover:bg-blue-200"
+          title="修改计划"
+        >
+          <Pencil className="h-4 w-4" />
         </button>
         <button
           onClick={() => handleResolve("reject")}

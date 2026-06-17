@@ -23,41 +23,69 @@ export interface OrchestratorInput {
 }
 
 export async function executeOrchestrator(input: OrchestratorInput): Promise<void> {
-  // Stage 1: PLAN — try real LLM, fallback to demo
-  const llmResult = await generatePlanWithLLM(input);
-  const plan = llmResult.success
-    ? llmResult.plan!
-    : buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+  // Stage 1: PLAN — with revise loop
+  let reviewing = true;
+  let revisionContext = "";
 
-  // Tell user which mode we're in
-  if (!llmResult.success && llmResult.error) {
-    createSystemMessage(input.conversationId, `⚠️ DeepSeek 调用失败：${llmResult.error.slice(0, 200)}，使用 demo plan。`);
-  } else if (llmResult.success) {
-    createSystemMessage(input.conversationId, `🤖 DeepSeek 生成计划成功（${llmResult.plan!.tasks.length} 个任务）。`);
+  while (reviewing) {
+    // Generate plan (first time: original prompt; revise: with feedback)
+    const effectiveUserText = revisionContext
+      ? `${revisionContext}\n\n<original_request>\n${extractTextFromMessage(input.triggerMessage)}\n</original_request>`
+      : extractTextFromMessage(input.triggerMessage);
+
+    const llmResult = await generatePlanWithLLM(input, effectiveUserText);
+    const plan = llmResult.success
+      ? llmResult.plan!
+      : buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+
+    // Tell user which mode
+    if (!llmResult.success && llmResult.error) {
+      createSystemMessage(input.conversationId, `⚠️ DeepSeek 调用失败：${llmResult.error.slice(0, 200)}，使用 demo plan。`);
+    } else if (llmResult.success && !revisionContext) {
+      createSystemMessage(input.conversationId, `🤖 DeepSeek 生成计划成功（${llmResult.plan!.tasks.length} 个任务）。`);
+    } else if (llmResult.success) {
+      createSystemMessage(input.conversationId, `🔄 根据反馈重新规划（${llmResult.plan!.tasks.length} 个任务）。`);
+    }
+
+    // Publish plan for review
+    const planText = plan.tasks.map((t) =>
+      `- **${t.title}** → ${t.agentId}${t.dependsOn.length > 0 ? ` (依赖: ${t.dependsOn.join(", ")})` : ""}`
+    ).join("\n");
+    createSystemMessage(input.conversationId, `📋 **执行计划**\n\n${planText}\n\n⏳ 等待审批...（点击上方卡片 approve / reject / revise）`);
+
+    const planItems: DispatchPlanItem[] = plan.tasks.map((t) => ({
+      id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn
+    }));
+
+    // Wait for user decision
+    const result = await registerPendingPlan(input.conversationId, input.orchestratorRunId, planItems);
+
+    if (!result.approved) {
+      // REJECT
+      createSystemMessage(input.conversationId, "❌ 计划已拒绝，Orchestrator 运行终止。");
+      return;
+    }
+
+    if (result.revisedPlan) {
+      // REVISE — user gave feedback, re-plan
+      const feedback = result.revisedPlan.length > 0 ? result.revisedPlan[0].task : "请调整计划。";
+      revisionContext = `用户对上一个计划的反馈：${feedback}\n请根据反馈重新规划任务。`;
+      continue; // back to while loop, re-plan
+    }
+
+    // APPROVE — execute
+    reviewing = false;
+    createSystemMessage(input.conversationId, "✅ 计划已批准，正在执行子任务...");
+
+    const finalPlan: ParsedTask[] = result.revisedPlan
+      ? mergeRevisedPlan(plan.tasks, result.revisedPlan)
+      : plan.tasks;
+
+    await executeOrchestratorPlan(
+      input.conversationId, finalPlan, input.availableAgentIds,
+      input.orchestratorRunId, input.triggerMessage
+    );
   }
-
-  // Publish plan as visible message
-  const planText = plan.tasks.map((t) =>
-    `- **${t.title}** → ${t.agentId}${t.dependsOn.length > 0 ? ` (依赖: ${t.dependsOn.join(", ")})` : ""}`
-  ).join("\n");
-  createSystemMessage(input.conversationId, `📋 **执行计划**\n\n${planText}\n\n⏳ 正在执行子任务...`);
-
-  const planItems: DispatchPlanItem[] = plan.tasks.map((t) => ({
-    id: t.id,
-    agentId: t.agentId,
-    task: t.prompt,
-    dependsOn: t.dependsOn
-  }));
-
-  // Stage 2: EXECUTE — auto-execute without waiting for approval
-  const finalPlan: ParsedTask[] = plan.tasks;
-  await executeOrchestratorPlan(
-    input.conversationId,
-    finalPlan,
-    input.availableAgentIds,
-    input.orchestratorRunId,
-    input.triggerMessage
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +359,10 @@ function generateAggregateMessage(
   eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message });
 }
 
+function extractTextFromMessage(msg: Message): string {
+  return msg.parts.filter((p) => p.type === "text").map((p) => p.content).join("\n").trim();
+}
+
 function createSystemMessage(conversationId: string, error: string): void {
   const message = createMessage({
     id: newMessageId(),
@@ -347,7 +379,7 @@ function createSystemMessage(conversationId: string, error: string): void {
 // Real LLM plan generation (DeepSeek / OpenAI-compatible)
 // ---------------------------------------------------------------------------
 
-async function generatePlanWithLLM(input: OrchestratorInput): Promise<{ success: true; plan: { reasoning: string; tasks: ParsedTask[] } } | { success: false; error: string }> {
+async function generatePlanWithLLM(input: OrchestratorInput, overrideText?: string): Promise<{ success: true; plan: { reasoning: string; tasks: ParsedTask[] } } | { success: false; error: string }> {
   try {
     const agents = listAgents();
     const agent = agents.find((a) => a.id === input.orchestratorAgentId);
@@ -365,7 +397,7 @@ async function generatePlanWithLLM(input: OrchestratorInput): Promise<{ success:
       `- id: "${a.id}", name: "${a.name}", description: "${a.description}", capabilities: [${a.capabilities.join(", ")}], tools: [${a.toolNames.join(", ")}]`
     ).join("\n");
 
-    const userText = input.triggerMessage.parts
+    const userText = overrideText ?? input.triggerMessage.parts
       .filter((p) => p.type === "text")
       .map((p) => p.content)
       .join("\n");
