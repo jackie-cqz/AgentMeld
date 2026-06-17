@@ -7,9 +7,11 @@ export function MarkdownRenderer({ content }: { content: string }) {
   const lines = content.split("\n");
   const elements: React.ReactNode[] = [];
   let i = 0;
+  let kid = 0; // unique key counter
 
   while (i < lines.length) {
     const line = lines[i];
+    const k = kid++;
 
     // Code block
     if (line.startsWith("```")) {
@@ -21,7 +23,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
         i++;
       }
       i++; // skip closing ```
-      elements.push(<CodeBlock key={i} code={codeLines.join("\n")} language={lang || undefined} />);
+      elements.push(<CodeBlock key={k} code={codeLines.join("\n")} language={lang || undefined} />);
       continue;
     }
 
@@ -32,7 +34,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
       const cls = level <= 2 ? "text-base font-semibold" : level === 3 ? "text-sm font-medium" : "text-xs font-medium";
       const Tag = level === 1 ? "h1" : level === 2 ? "h2" : "h3" as const;
       elements.push(
-        React.createElement(Tag, { key: i, className: `mt-3 mb-1 first:mt-0 ${cls} text-stone-900` }, text)
+        React.createElement(Tag, { key: k, className: `mt-3 mb-1 first:mt-0 ${cls} text-stone-900` }, text)
       );
       i++; continue;
     }
@@ -45,7 +47,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
         i++;
       }
       elements.push(
-        <ul key={i} className="my-1 list-disc space-y-0.5 pl-5 text-stone-700">
+        <ul key={k} className="my-1 list-disc space-y-0.5 pl-5 text-stone-700">
           {items.map((item, idx) => <li key={idx} className="text-sm leading-6">{renderInline(item)}</li>)}
         </ul>
       );
@@ -60,7 +62,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
         i++;
       }
       elements.push(
-        <ol key={i} className="my-1 list-decimal space-y-0.5 pl-5 text-stone-700">
+        <ol key={k} className="my-1 list-decimal space-y-0.5 pl-5 text-stone-700">
           {items.map((item, idx) => <li key={idx} className="text-sm leading-6">{renderInline(item)}</li>)}
         </ol>
       );
@@ -69,7 +71,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
 
     // Horizontal rule
     if (/^---\s*$/.test(line)) {
-      elements.push(<hr key={i} className="my-3 border-stone-200" />);
+      elements.push(<hr key={k} className="my-3 border-stone-200" />);
       i++; continue;
     }
 
@@ -81,7 +83,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
         i++;
       }
       elements.push(
-        <blockquote key={i} className="my-2 border-l-2 border-stone-300 pl-3 text-sm text-stone-600 italic">
+        <blockquote key={k} className="my-2 border-l-2 border-stone-300 pl-3 text-sm text-stone-600 italic">
           {quoteLines.map((ql, idx) => <p key={idx} className="my-0.5">{renderInline(ql)}</p>)}
         </blockquote>
       );
@@ -98,7 +100,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
       if (tableRows.length >= 2) {
         const [header, sep, ...body] = tableRows;
         elements.push(
-          <div key={i} className="my-2 overflow-x-auto">
+          <div key={k} className="my-2 overflow-x-auto">
             <table className="min-w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b border-stone-300">
@@ -120,10 +122,10 @@ export function MarkdownRenderer({ content }: { content: string }) {
     }
 
     // Empty line
-    if (line.trim() === "") { elements.push(<div key={i} className="h-2" />); i++; continue; }
+    if (line.trim() === "") { elements.push(<div key={k} className="h-2" />); i++; continue; }
 
     // Regular paragraph
-    elements.push(<p key={i} className="my-1 text-sm leading-6 text-stone-800">{renderInline(line)}</p>);
+    elements.push(<p key={k} className="my-1 text-sm leading-6 text-stone-800">{renderInline(line)}</p>);
     i++;
   }
 
@@ -131,16 +133,15 @@ export function MarkdownRenderer({ content }: { content: string }) {
 }
 
 function renderInline(text: string): React.ReactNode {
-  // Bold + inline code
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
+  return parts.map((part, idx) => {
     if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i} className="font-semibold text-stone-900">{part.slice(2, -2)}</strong>;
+      return <strong key={idx} className="font-semibold text-stone-900">{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i} className="rounded bg-stone-200 px-1 py-0.5 text-xs font-mono text-stone-800">{part.slice(1, -1)}</code>;
+      return <code key={idx} className="rounded bg-stone-200 px-1 py-0.5 text-xs font-mono text-stone-800">{part.slice(1, -1)}</code>;
     }
-    return part;
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
   });
 }
 
