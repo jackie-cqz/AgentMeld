@@ -7,7 +7,8 @@ import type { ToolDef } from "@/server/tools/types";
 const ArgsSchema = z.object({
   type: z.enum(["web_app", "document", "image", "ppt"]),
   title: z.string().min(1).max(200),
-  content: z.unknown()
+  content: z.unknown(),
+  outputKey: z.string().optional()
 });
 
 export const writeArtifactTool: ToolDef = {
@@ -69,7 +70,8 @@ IMPORTANT: Always provide type, title, and content. Never call this tool with em
       value: {
         artifactId: artifact.id,
         title: artifact.title,
-        type: artifact.type
+        type: artifact.type,
+        outputKey: parsed.data.outputKey ?? undefined
       }
     };
   }

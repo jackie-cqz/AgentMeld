@@ -20,6 +20,11 @@ function getStore(): Map<string, DispatchTaskReport> {
 }
 
 export function recordTaskReport(runId: string, report: DispatchTaskReport): void {
+  // Merge artifacts if report already exists (e.g., multiple write_artifact calls)
+  const existing = getStore().get(runId);
+  if (existing) {
+    report.artifacts = { ...existing.artifacts, ...report.artifacts };
+  }
   getStore().set(runId, report);
 }
 

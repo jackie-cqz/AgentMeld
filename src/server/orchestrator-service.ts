@@ -234,38 +234,35 @@ async function runChildTask(
       parentRunId, childRunId: "", taskId: task.id, agentId: task.agentId
     });
 
-    const childMsg: Message = {
-      id: newMessageId(),
-      conversationId,
-      role: "user",
-      agentId: null,
-      runId: null,
-      parts: [{ type: "text", content: prompt }],
-      status: "complete",
-      mentionedAgentIds: [task.agentId],
-      parentMessageId: triggerMessage.id,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
+    // Retry loop — up to maxAttempts
+    const maxAttempts = task.maxAttempts || 1;
+    let finalRunId = "";
+    let finalEvaluation = evaluateTaskResult(undefined);
 
-    const { runId } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: childMsg, parentRunId });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const attemptPrompt = attempt > 1
+        ? `${prompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${finalEvaluation.error ?? "unknown"}. Fix the issues and try again.`
+        : prompt;
 
-    // Wait for child run to complete
-    await waitForRunEnd(runId, 15000);
+      const attemptMsg: Message = {
+        id: newMessageId(), conversationId, role: "user", agentId: null, runId: null,
+        parts: [{ type: "text", content: attemptPrompt }], status: "complete",
+        mentionedAgentIds: [task.agentId], parentMessageId: triggerMessage.id,
+        createdAt: Date.now(), updatedAt: Date.now()
+      };
 
-    // Evaluate task result — if no report (mock adapter), auto-succeed
-    const report = getTaskReport(runId);
-    if (!report) {
-      // Mock adapter or simple run: auto-record a complete result
-      recordTaskReport(runId, {
-        taskId: task.id, runId, status: "complete",
-        summary: `Task "${task.title}" completed successfully.`,
-        acceptanceResults: (task.acceptanceCriteria || []).map((c) => ({ criterion: c, passed: true, evidence: "Auto-completed" })),
-        blockers: [], artifacts: {}
-      });
+      const { runId: attemptRunId } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
+      await waitForRunEnd(attemptRunId, 20000);
+
+      const report = getTaskReport(attemptRunId);
+      finalEvaluation = evaluateTaskResult(report);
+      finalRunId = attemptRunId;
+
+      if (finalEvaluation.status === "complete") break;
     }
-    const finalReport = getTaskReport(runId);
-    const evaluation = evaluateTaskResult(finalReport);
+
+    const report = getTaskReport(finalRunId);
+    const evaluation = finalEvaluation;
 
     // Collect outputKey → artifactId bindings
     if (report?.artifacts) {
@@ -280,18 +277,18 @@ async function runChildTask(
 
     eventBus.publish({
       type: "dispatch.end", conversationId, timestamp: Date.now(),
-      parentRunId, childRunId: runId, taskId: task.id,
+      parentRunId, childRunId: finalRunId, taskId: task.id,
       status: dispatchStatus,
       error: evaluation.error
     });
 
-    clearTaskResultsForRun(runId);
+    clearTaskResultsForRun(finalRunId);
 
     return {
       taskId: task.id,
       status: evaluation.status === "complete" ? "complete" : "failed",
       summary: report?.summary ?? evaluation.error ?? `Task "${task.title}" completed.`,
-      childRunId: runId
+      childRunId: finalRunId
     };
   } finally {
     release?.();
