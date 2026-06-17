@@ -86,13 +86,26 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
 
   if (part.type === "deploy_candidates") {
+    const handleDeploy = async (artifactId: string) => {
+      await fetch("/api/artifacts/" + artifactId, { method: "GET" });
+      window.open("/api/artifacts/" + artifactId + "/preview", "_blank");
+    };
     return (
-      <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-        <div className="font-medium">可部署产物</div>
-        <div className="mt-2 space-y-1">
+      <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm">
+        <div className="font-medium text-blue-900 mb-2">选择要部署的产物</div>
+        <div className="space-y-2">
           {part.candidates.map((candidate) => (
-            <div key={candidate.artifactId}>
-              {candidate.title} · v{candidate.version}
+            <div key={candidate.artifactId} className="flex items-center justify-between rounded-lg bg-white border border-blue-100 px-3 py-2">
+              <div>
+                <span className="font-medium text-slate-800">{candidate.title}</span>
+                <span className="ml-2 text-xs text-slate-500">v{candidate.version}</span>
+              </div>
+              <button
+                onClick={() => handleDeploy(candidate.artifactId)}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                部署预览
+              </button>
             </div>
           ))}
         </div>

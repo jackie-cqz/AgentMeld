@@ -1,6 +1,6 @@
 "use client";
 
-import { Circle, Folder, GitBranch, Layers, Loader2, UserPlus, Users } from "lucide-react";
+import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, RotateCcw, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useEffect, type ReactNode } from "react";
 import { MessageInput } from "@/components/message-input";
 import { MessageParts } from "@/components/message-parts";
@@ -87,9 +87,13 @@ export function ChatPanel() {
               发送一条消息，启动这个群聊里的 Agent 协作。
             </div>
           ) : null}
-          {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} agent={message.agentId ? agents[message.agentId] : null} />
-          ))}
+          {(() => {
+            const latestUserMsg = [...messages].reverse().find((m) => m.role === "user");
+            const latestUserId = latestUserMsg?.id ?? null;
+            return messages.map((message) => (
+              <MessageBubble key={message.id} message={message} agent={message.agentId ? agents[message.agentId] : null} isLatestUser={message.id === latestUserId} />
+            ));
+          })()}
         </div>
       </div>
 
@@ -99,11 +103,16 @@ export function ChatPanel() {
   );
 }
 
-function MessageBubble({ message, agent }: { message: Message; agent: Agent | null }) {
+function MessageBubble({ message, agent, isLatestUser }: { message: Message; agent: Agent | null; isLatestUser?: boolean }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+
+  const handleWithdraw = async () => {
+    await fetch(`/api/messages/${message.id}/withdraw`, { method: "POST" });
+  };
+
   return (
-    <article className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+    <article className={`flex gap-3 group ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser ? <Avatar label={isSystem ? "系统" : agent?.name ?? "A"} muted={isSystem} /> : null}
       <div className={`${isUser ? "max-w-[54%]" : "max-w-[78%]"} min-w-0`}>
         {!isUser ? (
@@ -124,6 +133,13 @@ function MessageBubble({ message, agent }: { message: Message; agent: Agent | nu
         >
           <MessageParts parts={message.parts} />
         </div>
+        {isUser && isLatestUser && message.status === "complete" ? (
+          <div className="mt-1 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition">
+            <button onClick={handleWithdraw} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" title="撤回">
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
       </div>
       {isUser ? <Avatar label="你" dark /> : null}
     </article>

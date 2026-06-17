@@ -3,6 +3,7 @@ import path from "node:path";
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDataDir, getDatabase } from "@/db/client";
 import { startAgentRun } from "@/server/agent-runner";
+import { deployArtifact } from "@/server/deployment-service";
 import { eventBus } from "@/server/event-bus";
 import { getAllPendingBashCommands } from "@/server/pending-bash";
 import { getAllPendingPlans } from "@/server/dispatch-plan-manager";
@@ -183,12 +184,13 @@ export async function sendMessage(input: SendMessageInput) {
   });
 
   // Check for deploy command before starting agent runs
-  const deployResult = detectDeployCommand(content);
-  if (deployResult) {
+  const deployIntent = detectDeployCommand(content);
+  if (deployIntent) {
+    const deployMessage = await handleDeployCommand(input.conversationId, deployIntent);
     return {
       message,
       runIds: [],
-      deploy: deployResult
+      deploy: deployMessage
     };
   }
 
@@ -234,6 +236,62 @@ function createWorkspace(conversationId: string, now: number) {
       `
     )
     .run(workspaceId, conversationId, "sandbox", workspaceRoot, null, now, now);
+}
+
+async function handleDeployCommand(conversationId: string, intent: { artifactId?: string }) {
+  // If specific artifact requested, deploy it directly
+  if (intent.artifactId) {
+    const result = deployArtifact(intent.artifactId, conversationId);
+    const msg = createMessage({
+      id: newMessageId(),
+      conversationId,
+      role: "system",
+      parts: [{
+        type: "deploy_status",
+        deployment: result
+      }],
+      status: "complete",
+      now: Date.now()
+    });
+    eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message: msg });
+    return { deployed: true, artifactId: intent.artifactId, status: result.status };
+  }
+
+  // No specific artifact — find candidates
+  const artifacts = listArtifacts(conversationId).filter((a) => a.type === "web_app");
+  if (artifacts.length === 0) {
+    const msg = createMessage({
+      id: newMessageId(), conversationId, role: "system",
+      parts: [{ type: "text", content: "当前会话没有可部署的 web_app 产物。先让 Agent 创建一个吧。" }],
+      status: "complete", now: Date.now()
+    });
+    eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message: msg });
+    return { deployed: false, reason: "No web_app artifacts" };
+  }
+
+  if (artifacts.length === 1) {
+    const result = deployArtifact(artifacts[0].id, conversationId);
+    const msg = createMessage({
+      id: newMessageId(), conversationId, role: "system",
+      parts: [{ type: "deploy_status", deployment: result }],
+      status: "complete", now: Date.now()
+    });
+    eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message: msg });
+    return { deployed: true, artifactId: artifacts[0].id, status: result.status };
+  }
+
+  // Multiple candidates — show selection
+  const candidates = artifacts.map((a) => ({
+    artifactId: a.id, title: a.title, version: a.version,
+    createdByAgentId: a.createdByAgentId, createdAt: a.createdAt
+  }));
+  const msg = createMessage({
+    id: newMessageId(), conversationId, role: "system",
+    parts: [{ type: "deploy_candidates", candidates }],
+    status: "complete", now: Date.now()
+  });
+  eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message: msg });
+  return { deployed: false, candidates };
 }
 
 function detectDeployCommand(content: string): { artifactId?: string } | null {

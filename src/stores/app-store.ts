@@ -229,6 +229,28 @@ export const useAppStore = create<AppState>()(
             run.finishedAt = event.timestamp;
             run.updatedAt = event.timestamp;
           }
+
+          // When run fails/aborts, fill unpaired tool_use with synthetic error result
+          if (event.status === "failed" || event.status === "aborted") {
+            const messages = state.messagesByConversation[event.conversationId] ?? [];
+            for (const msg of messages) {
+              if (msg.runId !== event.runId) continue;
+              const toolUseParts = msg.parts.filter((p) => p.type === "tool_use");
+              const toolResultCallIds = new Set(
+                msg.parts.filter((p) => p.type === "tool_result").map((p) => p.callId)
+              );
+              for (const toolUse of toolUseParts) {
+                if (!toolResultCallIds.has(toolUse.callId)) {
+                  msg.parts.push({
+                    type: "tool_result",
+                    callId: toolUse.callId,
+                    result: `Run ${event.status}: tool call did not complete.`,
+                    isError: true
+                  });
+                }
+              }
+            }
+          }
           return;
         }
 
