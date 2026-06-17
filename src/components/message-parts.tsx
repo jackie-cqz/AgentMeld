@@ -2,6 +2,7 @@
 
 import { File, FileText, Image, Loader2, Rocket, TerminalSquare } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
+import { ToolUseCard } from "@/components/tool-card";
 import type { MessagePart } from "@/shared/types";
 
 export function MessageParts({ parts }: { parts: MessagePart[] }) {
@@ -9,11 +10,16 @@ export function MessageParts({ parts }: { parts: MessagePart[] }) {
     return <div className="h-5 w-40 animate-pulse rounded bg-stone-200" />;
   }
 
+  // Separate tool calls from regular parts for merged rendering
+  const toolCallIds = new Set(parts.filter((p) => p.type === "tool_use" || p.type === "tool_result").map((p) => p.type === "tool_use" ? p.callId : (p as { callId: string }).callId));
+  const nonToolParts = parts.filter((p) => p.type !== "tool_use" && p.type !== "tool_result");
+
   return (
     <div className="space-y-3">
-      {parts.map((part, index) => (
+      {nonToolParts.map((part, index) => (
         <MessagePartView key={`${part.type}-${index}`} part={part} />
       ))}
+      {toolCallIds.size > 0 ? <ToolUseCard parts={parts} /> : null}
     </div>
   );
 }
