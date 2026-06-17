@@ -1,93 +1,182 @@
 "use client";
 
-import { ChevronDown, Code2, ExternalLink, Eye, FileText, Image, RefreshCw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronDown, Code2, Copy, Download, ExternalLink, Eye, FileText, History, Image, Pencil, X } from "lucide-react";
+import {
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from "react";
 import { useAppStore } from "@/stores/app-store";
 import type { Artifact, ArtifactContent } from "@/shared/types";
+
+const MIN_PANEL_WIDTH = 420;
+const MAX_PANEL_WIDTH = 960;
 
 export function ArtifactPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
   const artifactsByConversation = useAppStore((s) => s.artifactsByConversation);
   const activeArtifactId = useAppStore((s) => s.activeArtifactId);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
+  const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
+  const panelWidth = useAppStore((s) => s.artifactPanelWidth);
+  const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
   const [mode, setMode] = useState<"preview" | "source">("preview");
 
   const artifacts = activeConversationId ? artifactsByConversation[activeConversationId] ?? [] : [];
+  const fallbackArtifact = artifacts[0] ?? null;
   const selectedArtifact = activeArtifactId
-    ? artifacts.find((a) => a.id === activeArtifactId) ?? artifacts[0] ?? null
-    : artifacts[0] ?? null;
+    ? artifacts.find((a) => a.id === activeArtifactId) ?? fallbackArtifact
+    : fallbackArtifact;
+
+  const handleResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const maxWidth = Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * 0.72));
+      const nextWidth = clamp(startWidth + startX - moveEvent.clientX, MIN_PANEL_WIDTH, maxWidth);
+      setPanelWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
+  const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const maxWidth = Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * 0.72));
+    const delta = event.key === "ArrowLeft" ? 24 : -24;
+    setPanelWidth((current) => clamp(current + delta, MIN_PANEL_WIDTH, maxWidth));
+  };
 
   return (
-    <aside className="flex h-screen w-[380px] shrink-0 flex-col border-l border-stone-200 bg-white">
-      <header className="flex h-16 items-center justify-between border-b border-stone-200 px-5">
-        {artifacts.length > 1 ? (
-          <div className="relative flex-1 mr-2">
+    <aside
+      className="relative flex h-screen shrink-0 flex-col border-l border-slate-200 bg-white"
+      style={{ width: panelWidth, minWidth: MIN_PANEL_WIDTH, maxWidth: MAX_PANEL_WIDTH }}
+    >
+      <div
+        aria-label="调整 Artifact Workspace 宽度"
+        aria-orientation="vertical"
+        aria-valuemax={MAX_PANEL_WIDTH}
+        aria-valuemin={MIN_PANEL_WIDTH}
+        aria-valuenow={panelWidth}
+        className="group absolute left-0 top-0 z-20 h-full w-2 -translate-x-1 cursor-col-resize touch-none"
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={handleResizeStart}
+        role="separator"
+        tabIndex={0}
+      >
+        <div className="mx-auto h-full w-px bg-transparent transition group-hover:bg-[#4264ff]" />
+      </div>
+      <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 px-4">
+        <div className="min-w-0">
+          <div className="truncate text-base font-semibold text-slate-950">
+            {selectedArtifact?.title ?? "Artifact Workspace"}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {selectedArtifact ? `${formatArtifactType(selectedArtifact.type)} · v${selectedArtifact.version}` : "等待 Agent 生成产物"}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <ToolbarButton title="复制">
+            <Copy className="h-4 w-4" />
+          </ToolbarButton>
+          <ToolbarButton title="下载">
+            <Download className="h-4 w-4" />
+          </ToolbarButton>
+          <ToolbarButton title="新窗口打开">
+            <ExternalLink className="h-4 w-4" />
+          </ToolbarButton>
+          <ToolbarButton
+            title="关闭预览"
+            onClick={() => {
+              setActiveArtifact(null);
+              setRightPanelOpen(false);
+            }}
+          >
+            <X className="h-4 w-4" />
+          </ToolbarButton>
+        </div>
+      </header>
+
+      {artifacts.length > 1 ? (
+        <div className="flex h-11 shrink-0 items-center border-b border-slate-200 px-4">
+          <div className="relative w-full">
             <select
-              className="h-9 w-full rounded-md border border-stone-200 bg-white pl-3 pr-8 text-sm font-medium text-stone-900 appearance-none cursor-pointer"
+              className="h-8 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 text-xs font-medium text-slate-700 outline-none hover:border-slate-300"
               value={selectedArtifact?.id ?? ""}
-              onChange={(e) => setActiveArtifact(e.target.value || null)}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setActiveArtifact(null);
+                  setRightPanelOpen(false);
+                  return;
+                }
+                setActiveArtifact(e.target.value);
+              }}
             >
+              <option value="">选择产物</option>
               {artifacts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.title} · v{a.version}
                 </option>
               ))}
             </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400" />
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           </div>
-        ) : (
-          <div>
-            <div className="text-sm font-semibold text-stone-950">
-              {selectedArtifact?.title ?? "Artifact Preview"}
-            </div>
-            <div className="mt-1 text-xs text-stone-500">
-              {selectedArtifact ? `${selectedArtifact.type} · v${selectedArtifact.version}` : "等待 Agent 生成产物"}
-            </div>
-          </div>
-        )}
-      </header>
+        </div>
+      ) : null}
 
-      <div className="flex h-12 items-center gap-2 border-b border-stone-200 px-5">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-4">
+        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+          <button
+            className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
+              mode === "preview" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+            }`}
+            type="button"
+            onClick={() => setMode("preview")}
+          >
+            <Eye className="h-4 w-4" />预览
+          </button>
+          <button
+            className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
+              mode === "source" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+            }`}
+            type="button"
+            onClick={() => setMode("source")}
+          >
+            <Pencil className="h-4 w-4" />编辑
+          </button>
+        </div>
         <button
-          className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-            mode === "preview" ? "bg-stone-950 text-white" : "text-stone-600 hover:bg-stone-100"
-          }`}
+          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
           type="button"
-          onClick={() => setMode("preview")}
+          title="版本历史（开发中）"
         >
-          <Eye className="h-4 w-4" />预览
-        </button>
-        <button
-          className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-            mode === "source" ? "bg-stone-950 text-white" : "text-stone-600 hover:bg-stone-100"
-          }`}
-          type="button"
-          onClick={() => setMode("source")}
-        >
-          <Code2 className="h-4 w-4" />源码
+          <History className="h-4 w-4" />
+          {selectedArtifact ? `v${selectedArtifact.version}` : "版本"}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto bg-[#f7f6f2]">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[#f4f6fb]">
         {selectedArtifact ? (
           <ArtifactPreview artifact={selectedArtifact} mode={mode} />
         ) : (
           <EmptyPreview />
         )}
       </div>
-
-      {selectedArtifact ? (
-        <footer className="shrink-0 border-t border-stone-200 px-5 py-3">
-          <button
-            className="flex w-full items-center gap-2 text-xs text-stone-500 hover:text-stone-900 transition"
-            type="button"
-            title="版本历史（开发中）"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            版本历史 · {selectedArtifact.version > 1 ? `共 ${selectedArtifact.version} 版` : "初版"}
-          </button>
-        </footer>
-      ) : null}
     </aside>
   );
 }
@@ -111,14 +200,21 @@ function ArtifactPreview({ artifact, mode }: { artifact: Artifact; mode: "previe
 function WebAppPreview({ artifactId }: { artifactId: string }) {
   const previewUrl = `/api/artifacts/${artifactId}/preview`;
   return (
-    <div className="flex h-full flex-col p-4">
+    <div className="flex h-full min-h-[520px] flex-col p-4">
       <div className="mb-3 flex items-center justify-between">
-        <span className="text-sm font-medium text-stone-700">Web App</span>
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <span className="flex gap-1">
+            <span className="h-2.5 w-2.5 rounded-full bg-red-300" />
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
+          </span>
+          Web App
+        </div>
         <a href={previewUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
           <ExternalLink className="h-3.5 w-3.5" />新窗口打开
         </a>
       </div>
-      <iframe className="min-h-0 flex-1 rounded-md border border-stone-300 bg-white" src={previewUrl} sandbox="allow-scripts" title="Web App Preview" />
+      <iframe className="min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm" src={previewUrl} sandbox="allow-scripts" title="Web App Preview" />
     </div>
   );
 }
@@ -128,11 +224,11 @@ function DocumentPreview({ artifact }: { artifact: Artifact }) {
   const content = doc?.content ?? "";
   return (
     <div className="p-4">
-      <div className="rounded-md border border-stone-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-stone-900">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-900">
           <FileText className="h-4 w-4" />{artifact.title}
         </div>
-        <div className="prose prose-sm max-w-none text-stone-700"><MarkdownRenderer content={content} /></div>
+        <div className="prose prose-sm max-w-none text-slate-700"><MarkdownRenderer content={content} /></div>
       </div>
     </div>
   );
@@ -142,18 +238,18 @@ function ImagePreview({ artifact }: { artifact: Artifact }) {
   const img = artifact.content as Extract<ArtifactContent, { type: "image" }>;
   return (
     <div className="p-4">
-      <div className="rounded-md border border-stone-200 bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-stone-900">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900">
           <Image className="h-4 w-4" />{artifact.title}
         </div>
         {img?.url ? (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={img.url} alt={img.alt ?? artifact.title} className="max-h-96 w-full rounded-md border border-stone-200 object-contain" />
-            {img.width && img.height ? <div className="mt-2 text-xs text-stone-500">{String(img.width)} × {String(img.height)}</div> : null}
+            <img src={img.url} alt={img.alt ?? artifact.title} className="max-h-96 w-full rounded-lg border border-slate-200 object-contain" />
+            {img.width && img.height ? <div className="mt-2 text-xs text-slate-500">{String(img.width)} × {String(img.height)}</div> : null}
           </>
         ) : (
-          <p className="text-sm text-stone-500">Image URL not available</p>
+          <p className="text-sm text-slate-500">Image URL not available</p>
         )}
       </div>
     </div>
@@ -173,11 +269,11 @@ function SourceView({ artifact }: { artifact: Artifact }) {
   }, [artifact.content]);
   return (
     <div className="p-4">
-      <div className="rounded-md border border-stone-200 bg-white shadow-sm">
-        <div className="flex items-center gap-2 border-b border-stone-100 px-4 py-2 text-xs text-stone-500">
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
           <Code2 className="h-3.5 w-3.5" />{artifact.type} · v{artifact.version}
         </div>
-        <pre className="overflow-auto p-4 text-sm leading-6 text-stone-700 whitespace-pre-wrap font-mono">{body}</pre>
+        <pre className="overflow-auto p-4 font-mono text-sm leading-6 text-slate-700 whitespace-pre-wrap">{body}</pre>
       </div>
     </div>
   );
@@ -186,18 +282,42 @@ function SourceView({ artifact }: { artifact: Artifact }) {
 function EmptyPreview() {
   return (
     <div className="grid h-full place-items-center p-6">
-      <div className="rounded-md border border-dashed border-stone-300 bg-white p-6 text-center">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-md bg-stone-100 text-stone-500"><FileText className="h-5 w-5" /></div>
-        <div className="mt-4 text-sm font-medium text-stone-900">还没有产物</div>
-        <p className="mt-2 text-sm leading-6 text-stone-500">Agent 生成文档、代码或 Web App 后会出现在这里。</p>
+      <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-slate-100 text-slate-500"><FileText className="h-5 w-5" /></div>
+        <div className="mt-4 text-sm font-medium text-slate-900">还没有选择产物</div>
+        <p className="mt-2 text-sm leading-6 text-slate-500">点击消息里的产物引用，或从产物库选择一个文档、代码或 Web App。</p>
       </div>
     </div>
   );
 }
 
+function ToolbarButton({ children, title, onClick }: { children: ReactNode; title: string; onClick?: () => void }) {
+  return (
+    <button
+      className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-950"
+      type="button"
+      title={title}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function formatArtifactType(type: Artifact["type"]) {
+  if (type === "web_app") return "Web App";
+  if (type === "document") return "Document";
+  if (type === "image") return "Image";
+  return type;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function MarkdownRenderer({ content }: { content: string }) {
   const lines = content.split("\n");
-  const elements: React.ReactNode[] = [];
+  const elements: ReactNode[] = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];

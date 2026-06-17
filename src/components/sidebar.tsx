@@ -1,6 +1,18 @@
 "use client";
 
-import { BarChart3, Bot, FileText, MessageSquare, Plus, Search, Settings, Sparkles } from "lucide-react";
+import {
+  BarChart3,
+  Bot,
+  ChevronRight,
+  Layers,
+  MessageSquare,
+  Moon,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings,
+  SlidersHorizontal
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { AgentsPanel } from "@/components/agents-panel";
@@ -9,8 +21,6 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { useAppStore } from "@/stores/app-store";
 import type { Agent } from "@/shared/types";
 
-type SidebarTab = "conversations" | "artifacts" | "agents" | "analytics";
-
 export function Sidebar() {
   const agents = useAppStore((state) => state.agents);
   const conversations = useAppStore((state) => state.conversations);
@@ -18,38 +28,59 @@ export function Sidebar() {
   const activeConversationId = useAppStore((state) => state.activeConversationId);
   const setActiveConversation = useAppStore((state) => state.setActiveConversation);
   const createConversation = useAppStore((state) => state.createConversation);
-  const [activeTab, setActiveTab] = useState<SidebarTab>("conversations");
+  const activeTab = useAppStore((state) => state.sidebarTab);
+  const setActiveTab = useAppStore((state) => state.setSidebarTab);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   const orderedConversations = useMemo(
-    () => conversationOrder.map((id) => conversations[id]).filter(Boolean),
-    [conversationOrder, conversations]
+    () =>
+      conversationOrder
+        .map((id) => conversations[id])
+        .filter(Boolean)
+        .filter((conversation) => conversation.title.toLowerCase().includes(query.trim().toLowerCase())),
+    [conversationOrder, conversations, query]
   );
 
   return (
-    <aside className="relative flex h-screen w-[292px] shrink-0 flex-col border-r border-stone-200 bg-[#f3f1ec]">
-      <div className="flex h-16 items-center gap-3 border-b border-stone-200 px-5">
-        <button
-          onClick={() => setActiveTab("conversations")}
-          className="grid h-9 w-9 place-items-center rounded-md bg-stone-950 text-white"
-        >
-          <Sparkles className="h-5 w-5" />
-        </button>
-        <div className="flex-1">
-          <div className="text-base font-semibold text-stone-950">Agent-Conference</div>
-          <div className="text-xs text-stone-500">Agent 协作入口</div>
+    <aside className="relative flex h-screen w-[344px] shrink-0 flex-col border-r border-slate-200 bg-white">
+      <div className="border-b border-slate-200 px-4 pb-4 pt-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="whitespace-nowrap text-[20px] font-semibold leading-6 text-slate-950">
+              Agent Conference
+            </div>
+            <div className="mt-1 truncate text-sm text-slate-500">多 Agent 协作平台</div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
+              type="button"
+              title="设置"
+            >
+              <Settings className="h-5 w-5" />
+            </button>
+            <button
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
+              type="button"
+              title="主题"
+            >
+              <Moon className="h-5 w-5" />
+            </button>
+            <button
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
+              type="button"
+              title="折叠侧栏"
+            >
+              <PanelLeft className="h-5 w-5" />
+            </button>
+          </div>
         </div>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="grid h-8 w-8 place-items-center rounded-md text-stone-500 hover:bg-stone-200"
-          title="设置"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
       </div>
 
-      <nav className="grid grid-cols-4 gap-1 px-3 py-3">
+      <nav className="space-y-2 px-3 py-4">
         <NavButton
           active={activeTab === "conversations"}
           icon={<MessageSquare className="h-4 w-4" />}
@@ -58,8 +89,8 @@ export function Sidebar() {
         />
         <NavButton
           active={activeTab === "artifacts"}
-          icon={<FileText className="h-4 w-4" />}
-          label="产物"
+          icon={<Layers className="h-4 w-4" />}
+          label="产物库"
           onClick={() => setActiveTab("artifacts")}
         />
         <NavButton
@@ -78,9 +109,9 @@ export function Sidebar() {
 
       {activeTab === "conversations" ? (
         <>
-          <div className="px-3">
+          <div className="px-3 pt-4">
             <button
-              className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-stone-950 text-sm font-medium text-white transition hover:bg-stone-800"
+              className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-950 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
               type="button"
               onClick={() => setDialogOpen(true)}
             >
@@ -89,21 +120,30 @@ export function Sidebar() {
             </button>
           </div>
 
-          <label className="mx-3 mt-3 flex h-10 items-center gap-2 rounded-md border border-stone-200 bg-white px-3 text-sm text-stone-500">
-            <Search className="h-4 w-4" />
-            <input className="min-w-0 flex-1 bg-transparent outline-none" placeholder="搜索对话" />
-          </label>
+          <div className="mx-3 mt-3 flex items-center gap-2">
+            <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-500">
+              <Search className="h-4 w-4" />
+              <input
+                className="min-w-0 flex-1 bg-transparent outline-none"
+                placeholder="搜索会话..."
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <button className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" title="筛选">
+              <SlidersHorizontal className="h-4 w-4" />
+            </button>
+          </div>
 
-          <div className="mt-4 flex-1 overflow-y-auto px-3 pb-4">
-            <div className="mb-2 px-1 text-xs font-medium uppercase text-stone-500">Conversations</div>
+          <div className="mt-5 flex-1 overflow-y-auto px-3 pb-4">
             <div className="space-y-2">
               {orderedConversations.map((conversation) => (
                 <button
                   key={conversation.id}
-                  className={`w-full rounded-md border px-3 py-3 text-left transition ${
+                  className={`group flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${
                     conversation.id === activeConversationId
-                      ? "border-stone-950 bg-white shadow-sm"
-                      : "border-transparent bg-transparent hover:bg-white"
+                      ? "bg-[#fffdf5] shadow-sm ring-1 ring-amber-100"
+                      : "hover:bg-slate-50"
                   }`}
                   type="button"
                   onClick={() => {
@@ -111,17 +151,21 @@ export function Sidebar() {
                     setActiveTab("conversations");
                   }}
                 >
-                  <div className="truncate text-sm font-medium text-stone-900">{conversation.title}</div>
-                  <div className="mt-1 text-xs text-stone-500">
-                    {conversation.mode === "group" ? "群聊" : "单聊"} · {conversation.agentIds.length} 位 Agent
+                  <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#635bff] text-sm font-semibold text-white">
+                    {getConversationInitials(conversation.title)}
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {conversation.agentIds.map((agentId) => (
-                      <span key={agentId} className="rounded bg-stone-200 px-1.5 py-0.5 text-[11px] text-stone-700">
-                        {agents[agentId]?.name ?? "Agent"}
-                      </span>
-                    ))}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      {conversation.id === activeConversationId ? (
+                        <span className="text-amber-500">◆</span>
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-slate-950">{conversation.title}</div>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {conversation.mode === "group" ? "群聊" : "单聊"} · {conversation.agentIds.length} 位 Agent
+                    </div>
                   </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-300 opacity-0 transition group-hover:opacity-100" />
                 </button>
               ))}
             </div>
@@ -132,7 +176,7 @@ export function Sidebar() {
       ) : activeTab === "artifacts" ? (
         <ArtifactLibrary />
       ) : (
-        <div className="flex-1 grid place-items-center text-sm text-stone-500">
+        <div className="grid flex-1 place-items-center text-sm text-slate-500">
           分析 — 开发中
         </div>
       )}
@@ -268,15 +312,27 @@ function CreateConversationDialog({
 function NavButton({ active, icon, label, onClick }: { active?: boolean; icon: ReactNode; label: string; onClick?: () => void }) {
   return (
     <button
-      className={`flex h-14 flex-col items-center justify-center gap-1 rounded-md text-xs transition ${
-        active ? "bg-white text-stone-950 shadow-sm" : "text-stone-500 hover:bg-white"
+      className={`flex h-12 w-full items-center gap-3 rounded-lg px-3 text-base font-medium transition ${
+        active ? "bg-[#4264ff] text-white shadow-sm" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
       }`}
       type="button"
       onClick={onClick}
       title={label}
     >
-      {icon}
+      <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${active ? "bg-white/10" : "bg-transparent"}`}>
+        {icon}
+      </span>
       <span>{label}</span>
     </button>
   );
+}
+
+function getConversationInitials(title: string) {
+  const trimmed = title.trim();
+  if (!trimmed) return "AC";
+  const asciiWords = trimmed.match(/[A-Za-z0-9]+/g);
+  if (asciiWords && asciiWords.length > 0) {
+    return asciiWords.slice(0, 2).map((word) => word[0]?.toUpperCase()).join("");
+  }
+  return trimmed.slice(0, 2);
 }

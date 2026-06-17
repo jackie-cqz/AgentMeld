@@ -4,6 +4,9 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { getDataDir, getDatabase } from "@/db/client";
 import { startAgentRun } from "@/server/agent-runner";
 import { eventBus } from "@/server/event-bus";
+import { getAllPendingBashCommands } from "@/server/pending-bash";
+import { getAllPendingPlans } from "@/server/dispatch-plan-manager";
+import { getAllPendingWrites } from "@/server/pending-writes";
 import {
   createConversation as insertConversation,
   createMessage,
@@ -27,6 +30,9 @@ interface BootstrapPayload {
   messagesByConversation: Record<string, Message[]>;
   runsByConversation: Record<string, ReturnType<typeof listRuns>>;
   artifactsByConversation: Record<string, ReturnType<typeof listArtifacts>>;
+  pendingWrites: ReturnType<typeof getAllPendingWrites>;
+  pendingBashCommands: ReturnType<typeof getAllPendingBashCommands>;
+  pendingDispatchPlans: ReturnType<typeof getAllPendingPlans>;
 }
 
 interface CreateConversationInput {
@@ -62,7 +68,10 @@ export function getBootstrapPayload(): BootstrapPayload {
     runsByConversation: Object.fromEntries(conversations.map((conversation) => [conversation.id, listRuns(conversation.id)])),
     artifactsByConversation: Object.fromEntries(
       conversations.map((conversation) => [conversation.id, listArtifacts(conversation.id)])
-    )
+    ),
+    pendingWrites: getAllPendingWrites(),
+    pendingBashCommands: getAllPendingBashCommands(),
+    pendingDispatchPlans: getAllPendingPlans()
   };
 }
 

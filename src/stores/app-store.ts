@@ -16,6 +16,9 @@ import type {
 } from "@/shared/types";
 
 type ConnectionStatus = "connecting" | "open" | "closed" | "error";
+export type SidebarTab = "conversations" | "artifacts" | "agents" | "analytics";
+
+const DEFAULT_ARTIFACT_PANEL_WIDTH = 640;
 
 interface BootstrapPayload {
   agents: Agent[];
@@ -23,6 +26,9 @@ interface BootstrapPayload {
   messagesByConversation: Record<string, Message[]>;
   runsByConversation: Record<string, AgentRun[]>;
   artifactsByConversation: Record<string, Artifact[]>;
+  pendingWrites: PendingWrite[];
+  pendingBashCommands: PendingBashCommand[];
+  pendingDispatchPlans: PendingDispatchPlan[];
 }
 
 interface CreateConversationPayload {
@@ -44,6 +50,9 @@ interface AppState {
   pendingDispatchPlans: Record<string, PendingDispatchPlan>;
   activeConversationId: string | null;
   activeArtifactId: string | null;
+  sidebarTab: SidebarTab;
+  rightPanelOpen: boolean;
+  artifactPanelWidth: number;
   connectionStatus: ConnectionStatus;
   lastHeartbeatAt: number | null;
   isBootstrapping: boolean;
@@ -53,6 +62,9 @@ interface AppState {
   sendMessage: (conversationId: string, content: string, mentionedAgentIds?: string[]) => Promise<void>;
   setActiveConversation: (conversationId: string) => void;
   setActiveArtifact: (artifactId: string | null) => void;
+  setSidebarTab: (tab: SidebarTab) => void;
+  setRightPanelOpen: (open: boolean) => void;
+  setArtifactPanelWidth: (width: number | ((prev: number) => number)) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setComposerDraft: (draft: string) => void;
   applyEvent: (event: StreamEvent) => void;
@@ -71,6 +83,9 @@ export const useAppStore = create<AppState>()(
     pendingDispatchPlans: {},
     activeConversationId: null,
     activeArtifactId: null,
+    sidebarTab: "conversations",
+    rightPanelOpen: true,
+    artifactPanelWidth: DEFAULT_ARTIFACT_PANEL_WIDTH,
     connectionStatus: "connecting",
     lastHeartbeatAt: null,
     isBootstrapping: true,
@@ -93,6 +108,9 @@ export const useAppStore = create<AppState>()(
         state.messagesByConversation = payload.messagesByConversation;
         state.runsByConversation = payload.runsByConversation;
         state.artifactsByConversation = payload.artifactsByConversation;
+        state.pendingWrites = keyById(payload.pendingWrites ?? []);
+        state.pendingBashCommands = keyById(payload.pendingBashCommands ?? []);
+        state.pendingDispatchPlans = keyById(payload.pendingDispatchPlans ?? []);
         state.activeConversationId = state.activeConversationId ?? payload.conversations[0]?.id ?? null;
         state.isBootstrapping = false;
       });
@@ -114,6 +132,7 @@ export const useAppStore = create<AppState>()(
         state.runsByConversation[conversation.id] = [];
         state.artifactsByConversation[conversation.id] = [];
         state.activeConversationId = conversation.id;
+        state.sidebarTab = "conversations";
       });
     },
 
@@ -138,6 +157,25 @@ export const useAppStore = create<AppState>()(
     setActiveArtifact(artifactId) {
       set((state) => {
         state.activeArtifactId = artifactId;
+        if (artifactId) state.rightPanelOpen = true;
+      });
+    },
+
+    setSidebarTab(tab) {
+      set((state) => {
+        state.sidebarTab = tab;
+      });
+    },
+
+    setRightPanelOpen(open) {
+      set((state) => {
+        state.rightPanelOpen = open;
+      });
+    },
+
+    setArtifactPanelWidth(width) {
+      set((state) => {
+        state.artifactPanelWidth = typeof width === "function" ? width(state.artifactPanelWidth) : width;
       });
     },
 
@@ -241,6 +279,10 @@ export const useAppStore = create<AppState>()(
           state.artifactsByConversation[event.conversationId] = artifacts.filter(
             (artifact) => !event.artifactIds.includes(artifact.id)
           );
+          if (state.activeArtifactId && event.artifactIds.includes(state.activeArtifactId)) {
+            state.activeArtifactId = null;
+            state.rightPanelOpen = false;
+          }
           return;
         }
 
@@ -368,6 +410,10 @@ function upsertById<T extends { id: string }>(items: T[], item: T) {
   const next = [...items];
   next[index] = item;
   return next;
+}
+
+function keyById<T extends { id: string }>(items: T[]) {
+  return Object.fromEntries(items.map((item) => [item.id, item])) as Record<string, T>;
 }
 
 function findMessage(messages: Message[] | undefined, messageId: string) {

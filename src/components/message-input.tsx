@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUp, AtSign, Paperclip, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useAppStore } from "@/stores/app-store";
 import type { Agent } from "@/shared/types";
 
@@ -34,16 +34,16 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
   };
 
   return (
-    <footer className="shrink-0 border-t border-stone-200 bg-white px-6 py-4">
-      <div className="mx-auto max-w-3xl rounded-md border border-stone-300 bg-white p-2 shadow-sm">
-        <div className="mb-2 flex flex-wrap gap-2 px-2">
+    <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-4">
+      <div className="mx-auto max-w-[760px] rounded-xl border border-slate-200 bg-white p-2 shadow-[0_10px_34px_rgba(15,23,42,0.08)]">
+        <div className="mb-2 flex flex-wrap gap-2 px-2 pt-1">
           {agents.map((agent) => (
             <button
               key={agent.id}
-              className={`flex h-7 items-center gap-1 rounded-md px-2 text-xs transition ${
+              className={`flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition ${
                 mentionedAgentIds.includes(agent.id)
-                  ? "bg-stone-950 text-white"
-                  : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                  ? "border-[#4264ff] bg-[#eff5ff] text-[#2546d8]"
+                  : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"
               }`}
               type="button"
               onClick={() => toggleMention(agent.id)}
@@ -56,14 +56,14 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
         </div>
 
         {mentionedAgents.length > 0 ? (
-          <div className="mb-2 px-2 text-xs text-stone-500">
+          <div className="mb-2 px-2 text-xs text-slate-500">
             将指定 {mentionedAgents.map((agent) => agent.name).join("、")} 回复
           </div>
         ) : null}
 
-        <div className="flex items-end gap-3">
+        <div className="flex items-end gap-2">
           <textarea
-            className="max-h-36 min-h-11 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-6 text-stone-900 outline-none"
+            className="max-h-36 min-h-12 flex-1 resize-none bg-transparent px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
             placeholder="输入消息，@ 指定 Agent，Enter 发送，Shift+Enter 换行"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -82,7 +82,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
               <ShieldCheck className="h-4 w-4" />
             </IconButton>
             <button
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-[#4264ff] text-white transition hover:bg-[#2f50e6] disabled:cursor-not-allowed disabled:bg-slate-300"
               type="button"
               disabled={!draft.trim()}
               onClick={submit}
@@ -97,10 +97,10 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
   );
 }
 
-function IconButton({ children, title }: { children: React.ReactNode; title: string }) {
+function IconButton({ children, title }: { children: ReactNode; title: string }) {
   return (
     <button
-      className="grid h-10 w-10 place-items-center rounded-md text-stone-500 transition hover:bg-stone-100 hover:text-stone-900"
+      className="grid h-10 w-10 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
       type="button"
       title={title}
     >

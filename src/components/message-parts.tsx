@@ -36,8 +36,8 @@ function MessagePartView({ part }: { part: MessagePart }) {
 
   if (part.type === "thinking") {
     return (
-      <details className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" open>
-        <summary className="cursor-pointer font-medium">思考过程</summary>
+      <details className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        <summary className="cursor-pointer font-medium text-slate-700">思考过程</summary>
         <p className="mt-2 whitespace-pre-wrap leading-6">{part.content || "正在整理上下文..."}</p>
       </details>
     );
@@ -47,14 +47,19 @@ function MessagePartView({ part }: { part: MessagePart }) {
     const setActiveArtifact = useAppStore.getState().setActiveArtifact;
     return (
       <button
-        className="flex w-full items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-left text-sm text-emerald-900 hover:bg-emerald-100 transition cursor-pointer"
+        className="flex w-full items-center gap-3 rounded-lg border border-[#cfd9ff] bg-[#f4f7ff] px-3 py-2.5 text-left text-sm text-slate-800 transition hover:border-[#9db3ff] hover:bg-[#edf2ff]"
         type="button"
         onClick={() => setActiveArtifact(part.artifactId)}
         title="点击在右侧预览"
       >
-        <FileText className="h-4 w-4 shrink-0" />
-        <span className="font-medium truncate">{part.title ?? part.artifactId}</span>
-        <span className="shrink-0 text-emerald-700">{part.artifactType ?? "artifact"}</span>
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-[#4264ff] shadow-sm">
+          <FileText className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{part.title ?? part.artifactId}</span>
+          <span className="mt-0.5 block text-xs text-slate-500">点击在右侧工作区预览</span>
+        </span>
+        <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs text-slate-500">{part.artifactType ?? "artifact"}</span>
       </button>
     );
   }
@@ -70,10 +75,12 @@ function MessagePartView({ part }: { part: MessagePart }) {
 
   if (part.type === "deploy_status") {
     return (
-      <div className="flex items-center gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-        <Rocket className="h-4 w-4" />
-        <span className="font-medium">{part.deployment.title}</span>
-        <span>{part.deployment.status}</span>
+      <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-white text-blue-600">
+          <Rocket className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1 font-medium">{part.deployment.title}</span>
+        <span className="rounded-full bg-white px-2 py-1 text-xs">{part.deployment.status}</span>
       </div>
     );
   }

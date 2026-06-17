@@ -16,6 +16,7 @@ export function AppShell() {
 
 function ShellContent() {
   const isBootstrapping = useAppStore((state) => state.isBootstrapping);
+  const rightPanelOpen = useAppStore((state) => state.rightPanelOpen);
 
   if (isBootstrapping) {
     return (
@@ -28,10 +29,10 @@ function ShellContent() {
   }
 
   return (
-    <main className="flex h-screen overflow-hidden bg-[#fbfaf7] text-stone-950">
+    <main className="flex h-screen overflow-hidden bg-[#f7f8fb] text-slate-950">
       <Sidebar />
       <ChatPanel />
-      <ArtifactPanel />
+      {rightPanelOpen ? <ArtifactPanel /> : null}
     </main>
   );
 }
