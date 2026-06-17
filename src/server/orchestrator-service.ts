@@ -88,7 +88,7 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
 
     await executeOrchestratorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
-      input.orchestratorRunId, input.triggerMessage
+      input.orchestratorRunId, input.triggerMessage, input.orchestratorAgentId
     );
   }
 }
@@ -110,6 +110,7 @@ export async function executeOrchestratorPlan(
   availableAgents: string[],
   orchestratorRunId: string,
   triggerMessage: Message,
+  orchestratorAgentId: string,
   signal?: AbortSignal
 ): Promise<Map<string, TaskResult>> {
   const results = new Map<string, TaskResult>();
@@ -203,7 +204,7 @@ export async function executeOrchestratorPlan(
     createSystemMessage(conversationId, `⚠️ 代码冲突检测：\n${conflictMsg}`);
   }
 
-  generateAggregateMessage(conversationId, allResults, plan, outputBindings);
+  await runAggregateStage(conversationId, plan, allResults, outputBindings, orchestratorAgentId, orchestratorRunId, triggerMessage, abortSignal);
   return allResults;
 }
 
@@ -327,7 +328,120 @@ function waitForRunEnd(runId: string, timeoutMs: number): Promise<void> {
   });
 }
 
-function generateAggregateMessage(
+function buildAggregatePrompt(
+  conversationId: string,
+  plan: ParsedTask[],
+  results: Map<string, TaskResult>,
+  outputBindings: Map<string, string>,
+  triggerMessage: Message
+): string {
+  const userText = extractTextFromMessage(triggerMessage);
+  const lines: string[] = [];
+
+  lines.push(`<user_request>${userText}</user_request>`);
+  lines.push("");
+  lines.push("<task_results>");
+
+  for (const task of plan) {
+    const r = results.get(task.id);
+    const status = r?.status ?? "unknown";
+    lines.push(`  <result task="${task.id}" agent="${task.agentId}" status="${status}">`);
+
+    if (r?.summary) {
+      lines.push(`    <task_report status="${status}">`);
+      lines.push(`      <summary>${escapeXml(r.summary)}</summary>`);
+      lines.push(`    </task_report>`);
+    }
+
+    // Artifact bindings for this task
+    for (const [key, artId] of outputBindings) {
+      if (key.startsWith(`${task.id}.`)) {
+        lines.push(`    <artifact id="${artId}" outputKey="${key}" />`);
+      }
+    }
+
+    lines.push(`  </result>`);
+  }
+
+  lines.push("</task_results>");
+  lines.push("");
+  lines.push("请基于以上结果给用户输出最终总结消息。");
+
+  return lines.join("\n");
+}
+
+async function runAggregateStage(
+  conversationId: string,
+  plan: ParsedTask[],
+  results: Map<string, TaskResult>,
+  outputBindings: Map<string, string>,
+  orchestratorAgentId: string,
+  orchestratorRunId: string,
+  triggerMessage: Message,
+  signal: AbortSignal
+): Promise<void> {
+  const agents = listAgents();
+  const agent = agents.find((a) => a.id === orchestratorAgentId);
+  if (!agent || agent.adapterName !== "custom") {
+    // Fallback to template summary
+    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    return;
+  }
+
+  const conversation = getConversation(conversationId);
+  const workspace = getWorkspaceForConversation(conversationId);
+  if (!conversation || !workspace) {
+    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    return;
+  }
+
+  const settings = getSettings();
+  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  if (!apiKey) {
+    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    return;
+  }
+
+  // Build aggregate prompt
+  const aggregateSystemPrompt = `${agent.systemPrompt}
+
+## 当前阶段
+你处于「聚合阶段」。所有子任务已执行完成（含成功与失败），结果在 user 消息中以 XML 给出。
+请直接给用户输出一条总结消息：
+- 简明列出完成 / 失败的任务
+- 如果存在 failed / skipped / aborted 任务，必须明确说明整体未完成，不要把局部成功说成全部完成
+- 用 <artifact_ref id="art_xxx"/> 形式引用关键产物（如果有）
+- 给出明确的下一步建议
+不要再调用 plan_tasks，不要把任务再次分派。`;
+
+  const aggregateUserPrompt = buildAggregatePrompt(conversationId, plan, results, outputBindings, triggerMessage);
+
+  // Tools: remove plan_tasks and ask_user
+  const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
+
+  const adapterInput: AdapterInput = {
+    conversationId,
+    runId: orchestratorRunId,
+    agent: { ...agent, toolNames: aggregateTools, systemPrompt: aggregateSystemPrompt },
+    conversation,
+    workspace,
+    triggerMessage: { ...triggerMessage, parts: [{ type: "text", content: aggregateUserPrompt }] },
+    recentMessages: [],
+    toolNames: aggregateTools,
+    systemPrompt: "",
+    workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
+    apiKey
+  };
+
+  const adapter = getAdapter(agent.adapterName);
+
+  // Consume aggregate stream — publish all events
+  for await (const event of adapter.run(adapterInput, signal)) {
+    eventBus.publish(event);
+  }
+}
+
+function generateAggregateFallback(
   conversationId: string,
   results: Map<string, TaskResult>,
   plan: ParsedTask[],
@@ -338,41 +452,31 @@ function generateAggregateMessage(
   const skipped = Array.from(results.values()).filter((r) => r.status === "skipped").length;
 
   const lines = [
-    "## Orchestrator 总结",
-    "",
-    "| 状态 | 数量 |",
-    "|------|------|",
-    `| ✅ 完成 | ${completed} |`,
-    `| ❌ 失败 | ${failed} |`,
-    `| ⏭️ 跳过 | ${skipped} |`,
-    "",
-    "### 任务详情",
+    "## Orchestrator 总结", "",
+    "| 状态 | 数量 |", "|------|------|",
+    `| ✅ 完成 | ${completed} |`, `| ❌ 失败 | ${failed} |`, `| ⏭️ 跳过 | ${skipped} |`,
+    "", "### 任务详情",
     ...plan.map((t) => {
       const r = results.get(t.id);
       const icon = r?.status === "complete" ? "✅" : r?.status === "skipped" ? "⏭️" : "❌";
       return `- ${icon} **${t.title}** (${t.agentId}) — ${r?.summary ?? "pending"}`;
     })
   ];
-
-  // Show output bindings if any
   if (outputBindings && outputBindings.size > 0) {
     lines.push("", "### 产物输出", ...Array.from(outputBindings.entries()).map(([key, artId]) => `- ${key} → ${artId}`));
   }
 
-  const summary = lines.join("\n");
-
   const message = createMessage({
-    id: newMessageId(),
-    conversationId,
-    role: "agent",
-    agentId: plan[0]?.agentId ?? "ag_orchestrator",
-    runId: "",
-    parts: [{ type: "text", content: summary }],
-    status: "complete",
-    now: Date.now()
+    id: newMessageId(), conversationId, role: "agent",
+    agentId: plan[0]?.agentId ?? "ag_orchestrator", runId: "",
+    parts: [{ type: "text", content: lines.join("\n") }],
+    status: "complete", now: Date.now()
   });
-
   eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message });
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function extractTextFromMessage(msg: Message): string {
