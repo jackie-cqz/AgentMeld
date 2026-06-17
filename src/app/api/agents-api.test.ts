@@ -120,16 +120,15 @@ describe("PATCH /api/agents/[id]", () => {
     expect(body.agent.name).toBe("Renamed Agent");
   });
 
-  it("returns 400 for built-in agent modification", async () => {
-    // Get a built-in agent
+  it("allows editing model on built-in agent", async () => {
     const listRes = await getAgents();
     const { agents } = (await listRes.json()) as { agents: Array<{ id: string; isBuiltin: boolean }> };
     const builtin = agents.find((a) => a.isBuiltin);
     expect(builtin).toBeDefined();
 
-    const req = jsonRequest("PATCH", { name: "Hacked" });
+    const req = jsonRequest("PATCH", { modelId: "gpt-4.1-mini" });
     const res = await patchAgent(req, { params: Promise.resolve({ id: builtin!.id }) });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
   });
 });
 

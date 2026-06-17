@@ -17,22 +17,36 @@ interface CreateAgentDialogProps {
     systemPrompt?: string;
     toolNames?: string[];
   }) => Promise<void>;
+  // Edit mode: pre-fill form with existing agent data
+  initial?: {
+    name: string;
+    adapterName: AdapterName;
+    modelProvider: ModelProvider | null;
+    modelId: string | null;
+    apiKey: string | null;
+    apiBaseUrl: string | null;
+    systemPrompt: string;
+    toolNames: string[];
+  };
 }
 
-export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialogProps) {
-  const [name, setName] = useState("");
-  const [adapterName, setAdapterName] = useState<AdapterName>("custom");
-  const [modelProvider, setModelProvider] = useState<ModelProvider | null>("openai");
-  const [modelId, setModelId] = useState("gpt-4.1-mini");
-  const [apiKey, setApiKey] = useState("");
-  const [apiBaseUrl, setApiBaseUrl] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [toolNames, setToolNames] = useState<string[]>(["write_artifact"]);
+export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAgentDialogProps) {
+  const isEdit = !!initial;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [adapterName, setAdapterName] = useState<AdapterName>(initial?.adapterName ?? "custom");
+  const [modelProvider, setModelProvider] = useState<ModelProvider | null>(initial?.modelProvider ?? "openai");
+  const [modelId, setModelId] = useState(initial?.modelId ?? "gpt-4.1-mini");
+  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
+  const [apiBaseUrl, setApiBaseUrl] = useState(initial?.apiBaseUrl ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
+  const [toolNames, setToolNames] = useState<string[]>(initial?.toolNames ?? ["write_artifact"]);
   const [submitting, setSubmitting] = useState(false);
 
   if (!open) return null;
 
   const isSdk = adapterName === "claude-code" || adapterName === "codex";
+  const isSdkDisabled = true; // SDK adapters not yet implemented
+  const anthropicDisabled = true; // Anthropic provider not yet supported in CustomAdapter
 
   const handlePreset = (presetName: ToolPresetName) => {
     setToolNames([...TOOL_PRESETS[presetName].tools]);
@@ -46,6 +60,21 @@ export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialog
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
+    // Config validation
+    if (!isSdk && !modelId?.trim()) {
+      alert("Custom 适配器必须指定 Model ID。");
+      return;
+    }
+    if (!isSdk && modelProvider === "openai-compatible") {
+      if (!apiKey.trim()) {
+        alert("OpenAI-Compatible 必须提供 API Key。");
+        return;
+      }
+      if (!apiBaseUrl.trim()) {
+        alert("OpenAI-Compatible 必须提供 API Base URL。");
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       await onCreate({
@@ -67,7 +96,7 @@ export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialog
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 px-4">
       <div className="w-full max-w-md rounded-lg border border-stone-200 bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
-        <h2 className="text-lg font-semibold text-stone-950">新建 Agent</h2>
+        <h2 className="text-lg font-semibold text-stone-950">{isEdit ? "编辑 Agent" : "新建 Agent"}</h2>
 
         {/* Name */}
         <label className="mt-4 block text-sm font-medium text-stone-700">
@@ -81,23 +110,35 @@ export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialog
         />
 
         {/* Adapter */}
-        <label className="mt-4 block text-sm font-medium text-stone-700">适配器</label>
-        <div className="mt-1 grid grid-cols-3 gap-2">
-          {(["custom", "claude-code", "codex"] as AdapterName[]).map((a) => (
-            <button
-              key={a}
-              type="button"
-              className={`rounded-md border px-3 py-2 text-xs font-medium transition ${
-                adapterName === a
-                  ? "border-stone-950 bg-stone-950 text-white"
-                  : "border-stone-200 text-stone-600 hover:bg-stone-50"
-              }`}
-              onClick={() => setAdapterName(a)}
-            >
-              {a === "custom" ? "Custom" : a === "claude-code" ? "Claude Code" : "Codex"}
-            </button>
-          ))}
-        </div>
+        {!isEdit ? (
+          <>
+            <label className="mt-4 block text-sm font-medium text-stone-700">适配器</label>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {(["custom", "claude-code", "codex"] as AdapterName[]).map((a) => {
+                const disabled = a !== "custom" && isSdkDisabled;
+                return (
+                  <button
+                    key={a}
+                    type="button"
+                    disabled={disabled}
+                    className={`rounded-md border px-3 py-2 text-xs font-medium transition ${
+                      adapterName === a
+                        ? "border-stone-950 bg-stone-950 text-white"
+                        : disabled
+                          ? "border-stone-100 bg-stone-50 text-stone-300 cursor-not-allowed"
+                          : "border-stone-200 text-stone-600 hover:bg-stone-50"
+                    }`}
+                    onClick={() => setAdapterName(a)}
+                    title={disabled ? "SDK adapter 尚未接入" : undefined}
+                  >
+                    {a === "custom" ? "Custom" : a === "claude-code" ? "Claude Code" : "Codex"}
+                    {disabled ? <span className="block text-[10px]">规划中</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
 
         {/* Provider & Model (Custom only) */}
         {!isSdk ? (
@@ -113,7 +154,7 @@ export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialog
               <option value="openai">OpenAI</option>
               <option value="deepseek">DeepSeek</option>
               <option value="volcano-ark">火山方舟</option>
-              <option value="openai-compatible">OpenAI-Compatible</option>
+              <option value="openai-compatible">OpenAI-Compatible（需 Key + URL）</option>
             </select>
 
             <label className="mt-3 block text-sm font-medium text-stone-700">
@@ -212,7 +253,7 @@ export function CreateAgentDialog({ open, onClose, onCreate }: CreateAgentDialog
             onClick={handleSubmit}
             disabled={!name.trim() || submitting}
           >
-            {submitting ? "创建中..." : "创建 Agent"}
+            {submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}
           </button>
         </div>
       </div>

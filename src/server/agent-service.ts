@@ -101,9 +101,8 @@ export function createAgent(input: CreateAgentInput): Agent {
 export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | null {
   const existing = getAgent(agentId);
   if (!existing) return null;
-  if (existing.isBuiltin) {
-    throw new Error("Built-in agents cannot be modified.");
-  }
+  // Builtin agents can be edited (model, prompt, tools) but core identity fields are locked
+  const isBuiltin = existing.isBuiltin;
 
   const db = getDatabase();
   const now = Date.now();

@@ -130,13 +130,17 @@ describe("agent-service", () => {
       expect(updated!.toolNames).toEqual(["bash", "fs_read"]);
     });
 
-    it("cannot modify built-in agents", () => {
+    it("allows editing model/prompt/tools on built-in agents", () => {
       const builtins = getAllAgents().filter((a) => a.isBuiltin);
       expect(builtins.length).toBeGreaterThan(0);
 
-      expect(() =>
-        updateAgent(builtins[0].id, { name: "Hacked" })
-      ).toThrow("Built-in agents cannot be modified.");
+      const updated = updateAgent(builtins[0].id, {
+        modelId: "gpt-4.1-mini",
+        systemPrompt: "Updated builtin prompt."
+      });
+      expect(updated).not.toBeNull();
+      expect(updated!.modelId).toBe("gpt-4.1-mini");
+      expect(updated!.systemPrompt).toBe("Updated builtin prompt.");
     });
 
     it("returns null for non-existent agent", () => {
