@@ -1,6 +1,8 @@
 import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
-import { createMessage, getConversation, listAgents } from "@/server/repositories";
+import { getAdapter } from "@/server/adapters/registry";
+import type { AdapterInput } from "@/server/adapters/types";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents } from "@/server/repositories";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs } from "@/server/child-prompt-builder";
@@ -251,8 +253,12 @@ async function runChildTask(
         createdAt: Date.now(), updatedAt: Date.now()
       };
 
-      const { runId: attemptRunId } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
-      await waitForRunEnd(attemptRunId, 20000);
+      const { runId: attemptRunId, promise } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
+      try {
+        await promise;
+      } catch {
+        // Run failed — continue to evaluation
+      }
 
       const report = getTaskReport(attemptRunId);
       finalEvaluation = evaluateTaskResult(report);
@@ -382,12 +388,13 @@ async function generatePlanWithLLM(input: OrchestratorInput, overrideText?: stri
     const agent = agents.find((a) => a.id === input.orchestratorAgentId);
     if (!agent || agent.adapterName !== "custom") return { success: false, error: "Orchestrator agent is not a custom adapter." };
 
+    const conversation = getConversation(input.conversationId);
+    const workspace = getWorkspaceForConversation(input.conversationId);
+    if (!conversation || !workspace) return { success: false, error: "Conversation or workspace not found." };
+
     const settings = getSettings();
     const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
-    if (!apiKey) return { success: false, error: "No DeepSeek API key configured. Please add it in Settings → DeepSeek API Key." };
-
-    const baseUrl = agent.apiBaseUrl || "https://api.deepseek.com/v1";
-    const model = agent.modelId || "deepseek-chat";
+    if (!apiKey) return { success: false, error: "No DeepSeek API key configured." };
 
     const otherAgents = agents.filter((a) => !a.isOrchestrator && input.availableAgentIds.includes(a.id));
     const agentList = otherAgents.map((a) =>
@@ -399,71 +406,59 @@ async function generatePlanWithLLM(input: OrchestratorInput, overrideText?: stri
       .map((p) => p.content)
       .join("\n");
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: `You are a task orchestrator in a multi-agent system. Your role is to analyze user requests, break them into subtasks, and assign them to appropriate agents.
+    const adapterInput: AdapterInput = {
+      conversationId: input.conversationId,
+      runId: input.orchestratorRunId,
+      agent: {
+        ...agent,
+        toolNames: ["plan_tasks", "ask_user"], // Plan stage: only these tools
+        systemPrompt: `You are a task orchestrator in a multi-agent system. You MUST call plan_tasks with a structured plan. Do NOT output JSON in plain text — use the plan_tasks tool.
 
 ## Available Agents
 ${agentList}
-
-## Workflow
-1. Read the user request and context carefully.
-2. If a critical ambiguity blocks correct planning AND you can formulate 2-4 clear options, call ask_user first.
-3. Otherwise, call plan_tasks directly with a structured plan.
-4. The system will execute the plan and return results for your final summary.
 
 ## Planning Rules
 - Each task MUST have a unique id (t1, t2, ...).
 - agentId MUST be one of the available agent IDs listed above.
 - dependsOn lists task IDs that must finish BEFORE this task starts.
-- **Execution order ONLY follows dependsOn.** Writing "do A first" in task text has NO effect.
+- Execution order ONLY follows dependsOn. Writing "do A first" in task text has NO effect.
 - Tasks with NO dependsOn run IN PARALLEL. Only omit dependsOn for truly independent tasks.
 - When unsure, prefer adding dependencies (serial is safer).
 - Each task must be self-contained: the assigned agent does NOT see full group history.
-- Do NOT declare expectedOutputs for text-only tasks (review, validation, analysis). Use acceptanceCriteria instead.
-- For tasks needing upstream artifacts, declare inputs with fromTaskId and outputId.
+- Do NOT declare expectedOutputs for text-only tasks. Use acceptanceCriteria instead.
 - 1-3 well-structured tasks are usually better than many tiny ones.
+- If a critical ambiguity blocks planning AND you can formulate 2-4 options, call ask_user first.`
+      },
+      conversation,
+      workspace,
+      triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
+      recentMessages: [],
+      toolNames: ["plan_tasks", "ask_user"],
+      systemPrompt: "",
+      workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
+      apiKey
+    };
 
-## Output Format (JSON only)
-{"reasoning":"brief plan analysis","tasks":[{"id":"t1","agentId":"<id>","title":"short","prompt":"detailed self-contained instructions","dependsOn":[],"acceptanceCriteria":["verifiable check 1"]}]}`
-          },
-          { role: "user", content: userText }
-        ],
-        temperature: 0.3, max_tokens: 2000
-      }),
-      signal: AbortSignal.timeout(30000)
-    });
+    const adapter = getAdapter(agent.adapterName);
+    const signal = AbortSignal.timeout(45000);
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      return { success: false, error: `API returned ${response.status}: ${errText.slice(0, 150)}` };
+    // Stream events and capture plan_tasks tool call
+    let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
+    for await (const event of adapter.run(adapterInput, signal)) {
+      if (event.type === "tool.call" && "toolName" in event && (event as { toolName: string }).toolName === "plan_tasks") {
+        const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
+        if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
+          capturedPlan = { reasoning: args.reasoning || "Plan", tasks: args.tasks };
+          break; // Stop consuming — plan_tasks is the terminator
+        }
+      }
     }
 
-    const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-    let content = data.choices?.[0]?.message?.content;
-    if (!content) return { success: false, error: "DeepSeek returned empty response." };
-
-    // Handle markdown-wrapped JSON or extra text
-    const jsonMatch = content.match(/\{[\s\S]*"tasks"\s*:\s*\[[\s\S]*?\][\s\S]*\}/);
-    if (jsonMatch) content = jsonMatch[0];
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      return { success: false, error: `DeepSeek returned non-JSON. Raw: ${content.slice(0, 200)}` };
+    if (!capturedPlan) {
+      return { success: false, error: "Orchestrator LLM did not call plan_tasks. It may have replied in text instead of using the tool." };
     }
 
-    if (!parsed.tasks || !Array.isArray(parsed.tasks) || (parsed.tasks as unknown[]).length === 0) {
-      return { success: false, error: `DeepSeek returned empty tasks. Raw: ${content.slice(0, 300)}` };
-    }
-    const planResult = parsePlanArgs({ reasoning: (parsed.reasoning as string) || "Plan", tasks: parsed.tasks as Array<Record<string, unknown>> });
+    const planResult = parsePlanArgs(capturedPlan);
     if (typeof planResult === "string") return { success: false, error: `Plan validation failed: ${planResult}` };
 
     return { success: true, plan: planResult };
