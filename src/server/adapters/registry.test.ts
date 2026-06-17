@@ -15,7 +15,7 @@ describe("adapter registry", () => {
   });
 
   it("throws for an unknown adapter name", () => {
-    expect(() => getAdapter("claude-code")).toThrow("Unknown adapter: claude-code");
+    expect(() => getAdapter("unknown-adapter" as never)).toThrow("Unknown adapter");
   });
 
   it("allows registering a custom adapter", () => {

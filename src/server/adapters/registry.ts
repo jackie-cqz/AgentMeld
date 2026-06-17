@@ -2,6 +2,8 @@ import type { AdapterName } from "@/shared/types";
 import type { AgentPlatformAdapter } from "@/server/adapters/types";
 import { mockAdapter } from "@/server/adapters/mock-adapter";
 import { customAgentAdapter } from "@/server/adapters/custom-agent-adapter";
+import { claudeCodeAdapter } from "@/server/adapters/claude-code-adapter";
+import { codexAdapter } from "@/server/adapters/codex-adapter";
 
 const adapters = new Map<AdapterName, AgentPlatformAdapter>();
 
@@ -9,6 +11,8 @@ function buildRegistry(): Map<AdapterName, AgentPlatformAdapter> {
   const map = new Map<AdapterName, AgentPlatformAdapter>();
   map.set(mockAdapter.name, mockAdapter);
   map.set(customAgentAdapter.name, customAgentAdapter);
+  map.set(claudeCodeAdapter.name, claudeCodeAdapter);
+  map.set(codexAdapter.name, codexAdapter);
   return map;
 }
 
