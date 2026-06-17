@@ -52,6 +52,10 @@ import { fsReadTool } from "@/server/tools/fs-read";
 import { fsWriteTool } from "@/server/tools/fs-write";
 import { readArtifactTool } from "@/server/tools/read-artifact";
 import { writeArtifactTool } from "@/server/tools/write-artifact";
+import { askUserTool } from "@/server/tools/ask-user";
+import { deployArtifactTool } from "@/server/tools/deploy-artifact";
+import { deployWorkspaceTool } from "@/server/tools/deploy-workspace";
+import { readAttachmentTool } from "@/server/tools/read-attachment";
 import { planTasksTool, reportTaskResultTool } from "@/server/tools/orchestrator-tools";
 
 function buildRegistry(): ToolRegistry {
@@ -62,6 +66,10 @@ function buildRegistry(): ToolRegistry {
   registry.register(fsWriteTool);
   registry.register(readArtifactTool);
   registry.register(writeArtifactTool);
+  registry.register(askUserTool);
+  registry.register(deployArtifactTool);
+  registry.register(deployWorkspaceTool);
+  registry.register(readAttachmentTool);
   registry.register(planTasksTool);
   registry.register(reportTaskResultTool);
   return registry;
