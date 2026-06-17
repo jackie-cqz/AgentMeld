@@ -201,20 +201,22 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   const provider = agent.modelProvider ?? "openai";
   const apiKey = resolveApiKey(provider, agent.apiKey, getSettings());
 
-  // Build cross-run history
+  // Build cross-run history (skip for child tasks — they get task-only context)
   let history: ChatMessage[] = [];
-  try {
-    const limits = getModelLimits(agent.modelProvider);
-    const promptEstimate = estimateTokens(systemPrompt)
-      + estimateTokens(extractTextFromMessage(input.triggerMessage)) + 512;
-    const historyBudget = Math.max(0, limits.contextWindow - limits.outputReserve - promptEstimate);
-    history = await buildHistoryFor(agent.id, input.conversationId, {
-      excludeMessageId: input.triggerMessage.id,
-      tokenBudget: historyBudget
-    });
-  } catch (err) {
-    console.warn("[agent-runner] buildHistoryFor failed, continuing without history", err);
-    history = [];
+  if (!input.parentRunId) {
+    try {
+      const limits = getModelLimits(agent.modelProvider);
+      const promptEstimate = estimateTokens(systemPrompt)
+        + estimateTokens(extractTextFromMessage(input.triggerMessage)) + 512;
+      const historyBudget = Math.max(0, limits.contextWindow - limits.outputReserve - promptEstimate);
+      history = await buildHistoryFor(agent.id, input.conversationId, {
+        excludeMessageId: input.triggerMessage.id,
+        tokenBudget: historyBudget
+      });
+    } catch (err) {
+      console.warn("[agent-runner] buildHistoryFor failed, continuing without history", err);
+      history = [];
+    }
   }
 
   const adapterInput: AdapterInput = {

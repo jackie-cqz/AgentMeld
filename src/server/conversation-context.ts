@@ -1,4 +1,5 @@
 import { getConversation, getMessage, listArtifacts, listMessages } from "@/server/repositories";
+import { getDatabase } from "@/db/client";
 import { estimateTokens } from "@/shared/token-estimate";
 import type { Artifact, Message, MessagePart } from "@/shared/types";
 
@@ -33,25 +34,31 @@ export async function buildHistoryFor(
   const includePinned = options?.includePinned ?? true;
   const excludeMessageId = options?.excludeMessageId;
 
-  // 1. Read conversation
+  // 1. Read conversation + context summary
   const conversation = getConversation(conversationId);
   if (!conversation) return [];
 
   const isGroup = conversation.agentIds.length > 1;
+  const summary = getLatestContextSummary(conversationId);
 
-  // 2. Get recent complete messages
+  // 2. Get recent complete messages (after summary covered range if exists)
   const allMessages = listMessages(conversationId).filter(
     (m) => m.status === "complete" && m.id !== excludeMessageId
   );
 
+  // If summary exists, only include messages after the covered range
+  const afterCovered = summary
+    ? allMessages.filter((m) => m.createdAt > summary.coveredUntilCreatedAt)
+    : allMessages;
+
   // 3. Split recent + pinned
   const pinnedIds = includePinned ? new Set(conversation.pinnedMessageIds) : new Set<string>();
-  const recentMessages = allMessages
+  const recentMessages = afterCovered
     .filter((m) => !pinnedIds.has(m.id))
     .slice(-maxTurns);
 
   const pinnedMessages = includePinned
-    ? allMessages.filter((m) => pinnedIds.has(m.id))
+    ? allMessages.filter((m) => pinnedIds.has(m.id)) // pinned always from full range
     : [];
 
   // 4. Merge, dedupe, sort by createdAt
@@ -102,8 +109,17 @@ export async function buildHistoryFor(
     }
   }
 
-  // 8. Flatten
+  // 8. Flatten — summary goes first, then history
   const result: ChatMessage[] = [];
+
+  // Inject context summary as first user message (durable context)
+  if (summary) {
+    result.push({
+      role: "user",
+      content: `<conversation_summary covered_until="${summary.coveredUntilMessageId}">\n${summary.summary}\n</conversation_summary>`
+    });
+  }
+
   for (const item of items) {
     if (item.tokens < 0) continue;
     result.push(...item.messages);
@@ -186,4 +202,30 @@ function renderAgentPublicText(
     // Drop: thinking, tool_use, tool_result
   }
   return chunks.join("\n").trim();
+}
+
+interface ContextSummary {
+  id: string;
+  summary: string;
+  coveredUntilMessageId: string;
+  coveredUntilCreatedAt: number;
+  sourceMessageCount: number;
+}
+
+function getLatestContextSummary(conversationId: string): ContextSummary | null {
+  try {
+    const row = getDatabase()
+      .prepare("SELECT * FROM conversation_context_summaries WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1")
+      .get(conversationId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      summary: row.summary as string,
+      coveredUntilMessageId: row.covered_until_message_id as string,
+      coveredUntilCreatedAt: row.covered_until_created_at as number,
+      sourceMessageCount: row.source_message_count as number
+    };
+  } catch {
+    return null;
+  }
 }
