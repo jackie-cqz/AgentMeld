@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Code2, Copy, Download, ExternalLink, Eye, FileText, History, Image, Pencil, X } from "lucide-react";
+import { ChevronDown, Code2, Copy, Download, ExternalLink, Eye, FileText, Globe, History, Image, Pencil, Play, X } from "lucide-react";
 import {
   useMemo,
   useState,
@@ -91,13 +91,15 @@ export function ArtifactPanel() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <ToolbarButton title="复制">
-            <Copy className="h-4 w-4" />
-          </ToolbarButton>
-          <ToolbarButton title="下载">
-            <Download className="h-4 w-4" />
-          </ToolbarButton>
-          <ToolbarButton title="新窗口打开">
+          {selectedArtifact?.type === "web_app" ? (
+            <ToolbarButton title="部署预览" onClick={() => deployArtifactAction(selectedArtifact.id)}>
+              <Play className="h-4 w-4" />
+            </ToolbarButton>
+          ) : null}
+          <ToolbarButton
+            title="新窗口打开"
+            onClick={() => selectedArtifact?.type === "web_app" ? window.open(`/api/artifacts/${selectedArtifact.id}/preview`, "_blank") : null}
+          >
             <ExternalLink className="h-4 w-4" />
           </ToolbarButton>
           <ToolbarButton
@@ -160,14 +162,7 @@ export function ArtifactPanel() {
             <Pencil className="h-4 w-4" />编辑
           </button>
         </div>
-        <button
-          className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-          type="button"
-          title="版本历史（开发中）"
-        >
-          <History className="h-4 w-4" />
-          {selectedArtifact ? `v${selectedArtifact.version}` : "版本"}
-        </button>
+        <VersionHistoryButton artifactId={selectedArtifact?.id ?? null} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-[#f4f6fb]">
@@ -356,4 +351,70 @@ function MarkdownRenderer({ content }: { content: string }) {
     i++;
   }
   return <div>{elements}</div>;
+}
+
+function deployArtifactAction(artifactId: string) {
+  fetch("/api/artifacts/" + artifactId, { method: "GET" })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.artifact?.type === "web_app") {
+        window.open("/api/artifacts/" + artifactId + "/preview", "_blank");
+      }
+    })
+    .catch(() => {});
+}
+
+function VersionHistoryButton({ artifactId }: { artifactId: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [versions, setVersions] = useState<Array<{ id: string; version: number; title: string; createdAt: number }>>([]);
+  const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
+
+  const load = () => {
+    if (!artifactId) return;
+    fetch("/api/artifacts/" + artifactId + "/versions")
+      .then((r) => r.json())
+      .then((data) => setVersions(data.versions ?? []))
+      .catch(() => {});
+    setOpen(true);
+  };
+
+  return (
+    <>
+      <button
+        className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+        type="button"
+        onClick={load}
+        title="版本历史"
+      >
+        <History className="h-4 w-4" />
+        版本
+      </button>
+      {open ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/20" onClick={() => setOpen(false)}>
+          <div className="w-80 rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-slate-900">版本历史</h3>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+            </div>
+            {versions.length === 0 ? (
+              <p className="text-sm text-slate-500">加载中...</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {versions.map((v) => (
+                  <button
+                    key={v.id}
+                    onClick={() => { setActiveArtifact(v.id); setOpen(false); }}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left hover:bg-slate-50"
+                  >
+                    <span className="text-sm font-medium text-slate-900">{v.title}</span>
+                    <span className="text-xs text-slate-500">v{v.version}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }
