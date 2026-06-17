@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recordTaskReport } from "@/server/dispatch-task-results";
 import type { ToolDef } from "@/server/tools/types";
 
 // ---------------------------------------------------------------------------
@@ -139,10 +140,23 @@ export const reportTaskResultTool: ToolDef = {
       }
     }
   },
-  async handler(args, _ctx) {
+  async handler(args, ctx) {
     const parsed = reportSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid report: ${parsed.error.message}` };
+    }
+
+    // Record task result for orchestrator evaluation (when runId is set)
+    if (ctx.runId) {
+      recordTaskReport(ctx.runId, {
+        taskId: "",
+        runId: ctx.runId,
+        status: parsed.data.status,
+        summary: parsed.data.summary,
+        acceptanceResults: parsed.data.acceptanceResults ?? [],
+        blockers: parsed.data.blockers ?? [],
+        artifacts: {}
+      });
     }
 
     return {
