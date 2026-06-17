@@ -132,9 +132,36 @@ export async function executeOrchestratorPlan(
     await Promise.all(wavePromises);
   }
 
-  // Stage 3: AGGREGATE
-  generateAggregateMessage(conversationId, results, plan, outputBindings);
-  return results;
+  // Stage 3: AGGREGATE — with multi-round support
+  const MAX_DISPATCH_ROUNDS = 2;
+  let allResults = results;
+  for (let round = 1; round <= MAX_DISPATCH_ROUNDS; round++) {
+    const hasFailures = Array.from(allResults.values()).some((r) => r.status !== "complete" && r.status !== "skipped");
+    if (!hasFailures) break;
+
+    if (round < MAX_DISPATCH_ROUNDS) {
+      // Retry failed tasks once
+      createSystemMessage(conversationId, `🔄 第 ${round + 1} 轮：重试失败任务...`);
+      const failedTasks = plan.filter((t) => {
+        const r = allResults.get(t.id);
+        return r && r.status === "failed";
+      });
+      for (const task of failedTasks) {
+        const r = await runChildTask(conversationId, task, triggerMessage, orchestratorRunId, outputBindings, abortSignal);
+        allResults.set(task.id, r);
+      }
+    }
+  }
+
+  // Code conflict detection
+  const conflicts = detectWaveConflicts(allResults, plan);
+  if (conflicts.length > 0) {
+    const conflictMsg = conflicts.map((c) => `- ${c.path}: ${c.contributors.join(", ")}`).join("\n");
+    createSystemMessage(conversationId, `⚠️ 代码冲突检测：\n${conflictMsg}`);
+  }
+
+  generateAggregateMessage(conversationId, allResults, plan, outputBindings);
+  return allResults;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +362,7 @@ async function generatePlanWithLLM(input: OrchestratorInput): Promise<{ success:
 
     const otherAgents = agents.filter((a) => !a.isOrchestrator && input.availableAgentIds.includes(a.id));
     const agentList = otherAgents.map((a) =>
-      `- ${a.id}: ${a.name}, tools: ${a.toolNames.join(", ")}`
+      `- id: "${a.id}", name: "${a.name}", description: "${a.description}", capabilities: [${a.capabilities.join(", ")}], tools: [${a.toolNames.join(", ")}]`
     ).join("\n");
 
     const userText = input.triggerMessage.parts
@@ -351,7 +378,22 @@ async function generatePlanWithLLM(input: OrchestratorInput): Promise<{ success:
         messages: [
           {
             role: "system",
-            content: `You are a task orchestrator. Analyze the user's request and assign tasks to agents. You MUST output a valid JSON object with at least 1 task. Always include the "tasks" array.\n\nAvailable agents:\n${agentList}\n\nOutput format:\n{"reasoning":"brief analysis","tasks":[{"id":"t1","agentId":"<pick from list>","title":"short name","prompt":"detailed instructions","dependsOn":[],"acceptanceCriteria":["check 1"]}]}`
+            content: `You are a task orchestrator in a multi-agent system. Your role is to analyze user requests, break them into subtasks, and assign them to appropriate agents.
+
+## Available Agents
+${agentList}
+
+## Rules
+1. Each task MUST have a unique id (t1, t2, ...)
+2. agentId MUST be one of the available agent IDs listed above
+3. dependsOn lists task IDs that must finish BEFORE this task starts
+4. Tasks with no dependencies can run in parallel
+5. Keep tasks focused — delegate one clear goal per task
+6. 1-3 tasks is usually the right amount
+7. acceptanceCriteria should be specific and verifiable
+
+## Output Format (JSON only)
+{"reasoning":"brief plan analysis","tasks":[{"id":"t1","agentId":"<id>","title":"short","prompt":"detailed instructions for the agent","dependsOn":[],"acceptanceCriteria":["verifiable check 1"]}]}`
           },
           { role: "user", content: userText }
         ],
@@ -449,6 +491,22 @@ function buildDemoPlan(availableAgentIds: string[], triggerMsg: Message): { reas
           }
         ]
   };
+}
+
+interface FileConflict {
+  path: string;
+  contributors: string[];
+}
+
+function detectWaveConflicts(results: Map<string, TaskResult>, plan: ParsedTask[]): FileConflict[] {
+  // Simple heuristic: tasks in the same wave that completed can conflict
+  // In a real implementation, this would check actual file writes from dispatch-file-writes.ts
+  const conflicts: FileConflict[] = [];
+  const completed = Array.from(results.entries()).filter(([, r]) => r.status === "complete");
+  if (completed.length < 2) return conflicts;
+
+  // Placeholder: real implementation needs per-run file write tracking
+  return conflicts;
 }
 
 function mergeRevisedPlan(original: ParsedTask[], revised: DispatchPlanItem[]): ParsedTask[] {
