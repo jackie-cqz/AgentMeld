@@ -47,6 +47,7 @@ interface SendMessageInput {
   conversationId: string;
   content: string;
   mentionedAgentIds?: string[];
+  attachmentIds?: string[];
 }
 
 export function getBootstrapPayload(): BootstrapPayload {
@@ -139,11 +140,26 @@ export function sendMessage(input: SendMessageInput) {
 
   const now = Date.now();
   const mentionedAgentIds = input.mentionedAgentIds ?? [];
+
+  // Build parts: text + attachment references
+  const parts: Message["parts"] = [{ type: "text", content }];
+  const attachmentIds = input.attachmentIds ?? [];
+  for (const attId of attachmentIds) {
+    const att = resolveAttachment(attId, input.conversationId);
+    if (att) {
+      parts.push(
+        att.kind === "image"
+          ? { type: "image_attachment", attachmentId: att.id, fileName: att.fileName, size: att.size, mimeType: att.mimeType }
+          : { type: "file_attachment", attachmentId: att.id, fileName: att.fileName, size: att.size, mimeType: att.mimeType }
+      );
+    }
+  }
+
   const message = createMessage({
     id: newMessageId(),
     conversationId: input.conversationId,
     role: "user",
-    parts: [{ type: "text", content }],
+    parts,
     status: "complete",
     mentionedAgentIds,
     now
@@ -198,6 +214,24 @@ function createWorkspace(conversationId: string, now: number) {
       `
     )
     .run(workspaceId, conversationId, "sandbox", workspaceRoot, null, now, now);
+}
+
+function resolveAttachment(attachmentId: string, conversationId: string): { id: string; kind: string; fileName: string; size: number; mimeType: string } | null {
+  try {
+    const row = getDatabase()
+      .prepare("SELECT * FROM attachments WHERE id = ? AND conversation_id = ?")
+      .get(attachmentId, conversationId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      kind: row.kind as string,
+      fileName: row.file_name as string,
+      size: row.size as number,
+      mimeType: row.mime_type as string
+    };
+  } catch {
+    return null;
+  }
 }
 
 function validateConversationAgents(mode: "single" | "group", agentIds: string[], agents: Agent[]) {
