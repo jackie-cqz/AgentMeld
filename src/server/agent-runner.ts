@@ -443,6 +443,7 @@ function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePa
 
   if (agent.toolNames.length > 0) {
     parts.push(`\nAvailable tools: ${agent.toolNames.join(", ")}. Use them to complete the task.`);
+    parts.push(buildToolGuidance(agent.toolNames, workspacePath));
   }
 
   if (conversation.mode === "group" && conversation.agentIds.length > 1) {
@@ -453,6 +454,40 @@ function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePa
   }
 
   return parts.join("\n");
+}
+
+function buildToolGuidance(toolNames: string[], workspacePath: string): string {
+  const lines: string[] = ["\n## Tool Usage Guidelines"];
+
+  if (toolNames.includes("write_artifact")) {
+    lines.push("- write_artifact: NEVER call with empty arguments. Always provide type, title, and content together.");
+    lines.push("  Use write_artifact ONLY for deliverables (docs, web apps, presentations), NOT for source code files.");
+  }
+
+  if (toolNames.includes("fs_write")) {
+    lines.push(`- fs_write: Write source code files directly to the workspace (${workspacePath}). Max 100KB per file.`);
+    lines.push("  Use fs_write for .ts, .tsx, .js, .html, .css, .json, config files, etc.");
+  }
+
+  if (toolNames.includes("bash")) {
+    lines.push("- bash: Run shell commands in the workspace. Use for npm/pnpm install, build, test, git operations.");
+    lines.push("  Output is truncated to 10,000 chars. 30s timeout. Check exitCode for success/failure.");
+  }
+
+  if (toolNames.includes("fs_read")) {
+    lines.push("- fs_read: Read text files from the workspace. Max 1MB files, output truncated to 50K chars.");
+  }
+
+  if (toolNames.includes("read_artifact")) {
+    lines.push("- read_artifact: Read previously created artifacts. Use artifactId to fetch content.");
+  }
+
+  if (toolNames.includes("report_task_result")) {
+    lines.push("- report_task_result: MUST be called exactly once before finishing. Report status (complete/failed/blocked),");
+    lines.push("  summary of what was done, and acceptance results for each criterion.");
+  }
+
+  return lines.join("\n");
 }
 
 function extractTextFromMessage(msg: Message): string {

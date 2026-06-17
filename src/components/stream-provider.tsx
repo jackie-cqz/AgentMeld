@@ -10,9 +10,12 @@ let refCount = 0;
 
 export function StreamProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    const { loadBootstrap, setConnectionStatus } = useAppStore.getState();
-    void loadBootstrap().catch(() => {
-      setConnectionStatus("error");
+    const store = useAppStore.getState();
+    void store.loadBootstrap().then(() => {
+      // After bootstrap, recover pending state (survives page refresh)
+      recoverPendingState();
+    }).catch(() => {
+      store.setConnectionStatus("error");
     });
   }, []);
 
@@ -46,4 +49,47 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return children;
+}
+
+async function recoverPendingState() {
+  const { conversations, conversationOrder, activeConversationId } = useAppStore.getState();
+  const convId = activeConversationId ?? conversationOrder[0];
+  if (!convId) return;
+
+  try {
+    // Recover pending writes
+    const writesRes = await fetch(`/api/conversations/${convId}/pending-writes`);
+    if (writesRes.ok) {
+      const { pendingWrites } = await writesRes.json() as { pendingWrites: Array<{ id: string }> };
+      useAppStore.setState((state) => {
+        for (const w of pendingWrites) {
+          state.pendingWrites[w.id] = w as never;
+        }
+      });
+    }
+
+    // Recover pending bash commands
+    const bashRes = await fetch(`/api/conversations/${convId}/pending-bash-commands`);
+    if (bashRes.ok) {
+      const { pendingBashCommands } = await bashRes.json() as { pendingBashCommands: Array<{ id: string }> };
+      useAppStore.setState((state) => {
+        for (const b of pendingBashCommands) {
+          state.pendingBashCommands[b.id] = b as never;
+        }
+      });
+    }
+
+    // Recover pending dispatch plans
+    const plansRes = await fetch(`/api/conversations/${convId}/pending-dispatch-plans`);
+    if (plansRes.ok) {
+      const { pendingDispatchPlans } = await plansRes.json() as { pendingDispatchPlans: Array<{ id: string }> };
+      useAppStore.setState((state) => {
+        for (const p of pendingDispatchPlans) {
+          state.pendingDispatchPlans[p.id] = p as never;
+        }
+      });
+    }
+  } catch {
+    // Recovery is best-effort; don't block the UI
+  }
 }
