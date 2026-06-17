@@ -15,9 +15,14 @@ import {
   updateMessageStatus,
   updateRunStatus
 } from "@/server/repositories";
+import { buildHistoryFor } from "@/server/conversation-context";
 import { executeOrchestrator } from "@/server/orchestrator-service";
+import { resolveApiKey, getSettings } from "@/server/settings-service";
+import { estimateTokens } from "@/shared/token-estimate";
+import { getModelLimits } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
-import type { AgentRun, Message, StreamEvent } from "@/shared/types";
+import type { Agent, AgentRun, Conversation, Message, StreamEvent } from "@/shared/types";
+import type { ChatMessage } from "@/server/conversation-context";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
@@ -180,6 +185,32 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
 
   // 7. Normal adapter flow (non-orchestrator agents)
   const recentMessages = listMessages(input.conversationId).slice(-20);
+
+  // Build system prompt with workspace info, tool guidance, group context
+  const workspacePath = workspace.mode === "local" && workspace.boundPath
+    ? workspace.boundPath : workspace.rootPath;
+  const systemPrompt = buildSystemPrompt(agent, conversation, workspacePath);
+
+  // Resolve API key (agent → global settings → env)
+  const provider = agent.modelProvider ?? "openai";
+  const apiKey = resolveApiKey(provider, agent.apiKey, getSettings());
+
+  // Build cross-run history
+  let history: ChatMessage[] = [];
+  try {
+    const limits = getModelLimits(agent.modelProvider);
+    const promptEstimate = estimateTokens(systemPrompt)
+      + estimateTokens(extractTextFromMessage(input.triggerMessage)) + 512;
+    const historyBudget = Math.max(0, limits.contextWindow - limits.outputReserve - promptEstimate);
+    history = await buildHistoryFor(agent.id, input.conversationId, {
+      excludeMessageId: input.triggerMessage.id,
+      tokenBudget: historyBudget
+    });
+  } catch (err) {
+    console.warn("[agent-runner] buildHistoryFor failed, continuing without history", err);
+    history = [];
+  }
+
   const adapterInput: AdapterInput = {
     conversationId: input.conversationId,
     runId: run.id,
@@ -188,7 +219,11 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     workspace,
     triggerMessage: input.triggerMessage,
     recentMessages,
-    toolNames: agent.toolNames
+    toolNames: agent.toolNames,
+    systemPrompt,
+    workspacePath,
+    apiKey,
+    history
   };
 
   // 8. Consume adapter stream
@@ -388,3 +423,35 @@ function chunkText(text: string, size: number): string[] {
   }
   return chunks;
 }
+
+function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePath: string): string {
+  const parts: string[] = [];
+
+  parts.push(`<workspace_info>\nWorkspace path: ${workspacePath}\n</workspace_info>`);
+
+  if (agent.systemPrompt) {
+    parts.push(agent.systemPrompt);
+  }
+
+  if (agent.toolNames.length > 0) {
+    parts.push(`\nAvailable tools: ${agent.toolNames.join(", ")}. Use them to complete the task.`);
+  }
+
+  if (conversation.mode === "group" && conversation.agentIds.length > 1) {
+    parts.push(
+      "\nYou are in a multi-agent group chat. Messages from other agents are prefixed with [AgentName]. " +
+      "Focus on your assigned task and collaborate clearly."
+    );
+  }
+
+  return parts.join("\n");
+}
+
+function extractTextFromMessage(msg: Message): string {
+  return msg.parts
+    .filter((p) => p.type === "text")
+    .map((p) => p.content)
+    .join("\n")
+    .trim();
+}
+

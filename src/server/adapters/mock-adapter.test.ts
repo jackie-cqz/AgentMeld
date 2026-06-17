@@ -61,6 +61,9 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
     },
     recentMessages: [],
     toolNames: [],
+    systemPrompt: "You are a test assistant.",
+    workspacePath: "/tmp/ws",
+    apiKey: null,
     ...overrides
   };
 }

@@ -326,23 +326,13 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
 
-  // System prompt
-  const systemPrompt = input.agent.systemPrompt || "You are a helpful assistant.";
-  messages.push({ role: "system", content: systemPrompt });
+  // System prompt with workspace info (already composed by AgentRunner)
+  messages.push({ role: "system", content: input.systemPrompt });
 
-  // History (recent messages before the trigger)
-  for (const msg of input.recentMessages) {
-    if (msg.id === input.triggerMessage.id) continue;
-    const text = msg.parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.content)
-      .join("\n");
-    if (!text) continue;
-
-    if (msg.role === "user") {
-      messages.push({ role: "user", content: text });
-    } else if (msg.role === "agent") {
-      messages.push({ role: "assistant", content: text });
+  // Cross-run history (from conversation-context service)
+  if (input.history && input.history.length > 0) {
+    for (const h of input.history) {
+      messages.push({ role: h.role as "user" | "assistant" | "system", content: h.content });
     }
   }
 

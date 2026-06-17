@@ -77,6 +77,9 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
     triggerMessage,
     recentMessages: [],
     toolNames: [],
+    systemPrompt: "You are a test assistant.",
+    workspacePath: "/tmp/ws",
+    apiKey: null,
     ...overrides
   };
 }
