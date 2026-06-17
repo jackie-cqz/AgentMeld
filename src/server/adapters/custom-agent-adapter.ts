@@ -94,13 +94,26 @@ export const customAgentAdapter: AgentPlatformAdapter = {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (signal.aborted) break;
 
-      const stream = await client.chat.completions.create({
-        model,
-        messages: currentMessages,
-        tools: tools.length > 0 ? tools : undefined,
-        stream: true,
-        stream_options: { include_usage: true }
-      });
+      let stream: Awaited<ReturnType<typeof client.chat.completions.create>>;
+      try {
+        stream = await client.chat.completions.create({
+          model,
+          messages: currentMessages,
+          tools: tools.length > 0 ? tools : undefined,
+          stream: true,
+          stream_options: { include_usage: true }
+        });
+      } catch (err: unknown) {
+        const errorText = formatApiError(err, model);
+        if (round === 0) {
+          // First round error — show directly as message part
+          yield { type: "part.start", conversationId, timestamp: Date.now(), messageId: "", partIndex, part: { type: "text", content: "" } };
+          yield { type: "part.delta", conversationId, timestamp: Date.now(), messageId: "", partIndex, delta: { type: "text.append", text: errorText } };
+          yield { type: "part.end", conversationId, timestamp: Date.now(), messageId: "", partIndex };
+        }
+        yield { type: "run.usage", conversationId, timestamp: Date.now(), runId: "", usage: { modelId: model, inputTokens: totalInputTokens, outputTokens: totalOutputTokens } };
+        return;
+      }
 
       // Accumulate deltas
       let textContent = "";
@@ -344,4 +357,28 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
   messages.push({ role: "user", content: triggerText });
 
   return messages;
+}
+
+function formatApiError(err: unknown, model: string): string {
+  if (err instanceof Error) {
+    const msg = err.message;
+    // OpenAI SDK wraps HTTP errors with status code in message
+    if (msg.includes("401")) {
+      return `⚠️ API Key 无效（401）。请在 Settings → DeepSeek API Key 中检查 Key 是否正确，或确认 Key 是否已过期。`;
+    }
+    if (msg.includes("403")) {
+      return `⚠️ 访问被拒绝（403）。API Key 可能没有权限访问模型 "${model}"，或账户余额不足。请检查 DeepSeek 控制台。`;
+    }
+    if (msg.includes("429")) {
+      return `⚠️ API 请求频率过高（429）。DeepSeek 限流，请稍后重试。`;
+    }
+    if (msg.includes("500") || msg.includes("502") || msg.includes("503")) {
+      return `⚠️ DeepSeek 服务端错误（5xx）。服务器暂时不可用，请稍后重试。`;
+    }
+    if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
+      return `⚠️ 连接 DeepSeek API 超时。请检查网络连接，或确认 API Base URL 配置正确。`;
+    }
+    return `⚠️ API 调用失败：${msg.slice(0, 200)}`;
+  }
+  return `⚠️ API 调用失败：未知错误。`;
 }
