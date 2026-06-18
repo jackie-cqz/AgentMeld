@@ -85,9 +85,9 @@ export const fsWriteTool: ToolDef = {
       // If scan fails, proceed (e.g. workspace dir doesn't exist yet).
     }
 
-    // Determine approval mode from conversation
+    // Determine approval mode from conversation (sandbox default: auto)
     const conversation = getConversation(ctx.conversationId);
-    const approvalMode = conversation?.fsWriteApprovalMode ?? "review";
+    const approvalMode = conversation?.fsWriteApprovalMode ?? "auto";
 
     if (approvalMode === "auto") {
       // Write directly

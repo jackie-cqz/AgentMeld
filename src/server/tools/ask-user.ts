@@ -3,17 +3,17 @@ import { registerPendingQuestion } from "@/server/pending-questions";
 import type { ToolDef } from "@/server/tools/types";
 
 const questionSchema = z.object({
-  question: z.string().min(1).max(200),
-  header: z.string().min(1).max(12),
+  question: z.string().min(1).max(300),
+  header: z.string().min(1).max(20),
   options: z
     .array(z.object({ label: z.string().min(1), description: z.string().optional() }))
     .min(2)
-    .max(4),
+    .max(6),
   multiSelect: z.boolean().optional()
 });
 
 const ArgsSchema = z.object({
-  questions: z.array(questionSchema).min(1).max(4)
+  questions: z.array(questionSchema).min(1).max(5)
 });
 
 export const askUserTool: ToolDef = {
@@ -30,17 +30,17 @@ export const askUserTool: ToolDef = {
       questions: {
         type: "array",
         minItems: 1,
-        maxItems: 4,
+        maxItems: 5,
         items: {
           type: "object",
           required: ["question", "header", "options"],
           properties: {
             question: { type: "string", description: "Full question text." },
-            header: { type: "string", maxLength: 12, description: "Short label." },
+            header: { type: "string", maxLength: 20, description: "Short label." },
             options: {
               type: "array",
               minItems: 2,
-              maxItems: 4,
+              maxItems: 6,
               items: {
                 type: "object",
                 required: ["label"],

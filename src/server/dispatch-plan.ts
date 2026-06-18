@@ -57,7 +57,48 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
 }
 
 // ---------------------------------------------------------------------------
-// 8.2 compileDispatchPlan — auto-add dependencies from text heuristics
+// 8.2 compileAndValidateDispatchPlan — unified entry point for all 3 layers
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile + validate a dispatch plan in one call.
+ * Returns the compiled plan on success, or an error string on failure.
+ *
+ * Called at:
+ *   Layer 2 — immediately after plan_tasks capture (executeOrchestrator)
+ *   Layer 3 — approval gate, re-validated before execution
+ */
+export function compileAndValidateDispatchPlan(
+  rawTasks: Array<{ id: string; agentId: string; task?: string; prompt?: string; title?: string; dependsOn?: string[]; inputs?: unknown[]; expectedOutputs?: unknown[]; acceptanceCriteria?: string[]; maxAttempts?: number; targetPaths?: string[]; requiredCommands?: unknown[]; requiredEvidence?: string[] }>,
+  availableAgentIds: string[],
+  orchestratorAgentId: string
+): DispatchPlanItem[] | string {
+  // Convert to DispatchPlanItem format
+  const items: DispatchPlanItem[] = rawTasks.map((t) => ({
+    id: t.id,
+    agentId: t.agentId,
+    task: t.task ?? t.prompt ?? "",
+    dependsOn: t.dependsOn ?? [],
+    expectedOutputs: t.expectedOutputs as DispatchPlanItem["expectedOutputs"],
+    inputs: t.inputs as DispatchPlanItem["inputs"],
+    acceptanceCriteria: t.acceptanceCriteria,
+    targetPaths: t.targetPaths,
+    requiredCommands: t.requiredCommands as DispatchPlanItem["requiredCommands"],
+    requiredEvidence: t.requiredEvidence
+  }));
+
+  // Compile: auto-add dependencies, resolve inputs
+  const compiled = compileDispatchPlan(items, availableAgentIds, orchestratorAgentId);
+
+  // Validate: agentId existence, no self-dispatch, no cycles, etc.
+  const error = validateDispatchPlan(compiled, availableAgentIds, orchestratorAgentId);
+  if (error) return error;
+
+  return compiled;
+}
+
+// ---------------------------------------------------------------------------
+// 8.3 compileDispatchPlan — auto-add dependencies from text heuristics
 // ---------------------------------------------------------------------------
 
 export function compileDispatchPlan(

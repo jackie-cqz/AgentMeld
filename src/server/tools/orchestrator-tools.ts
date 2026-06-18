@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { recordTaskReport } from "@/server/dispatch-task-results";
+import { getConversation } from "@/server/repositories";
 import type { ToolDef } from "@/server/tools/types";
 
 // ---------------------------------------------------------------------------
@@ -96,26 +97,57 @@ export const planTasksTool: ToolDef = {
       }
     }
   },
-  async handler(args, _ctx) {
+  async handler(args, ctx) {
     const parsed = planArgsSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid plan: ${parsed.error.message}` };
     }
 
-    const { reasoning, tasks } = parsed.data;
+    const { reasoning, tasks: rawTasks } = parsed.data;
 
-    // Validate
-    const validation = validatePlan(tasks);
+    // Look up conversation agents and all agents for auto-correction
+    let agentMap = new Map<string, string>();
+    let allAgents: Array<{ id: string; name: string; capabilities: string[] }> = [];
+    try {
+      const { listAgents } = await import("@/server/repositories");
+      allAgents = listAgents();
+      const conv = getConversation(ctx.conversationId);
+      if (conv) {
+        agentMap = buildAgentAliasMap(conv.agentIds, allAgents);
+      }
+    } catch { /* proceed without auto-correction */ }
+
+    // Auto-correct task agentIds (exact alias + fuzzy task-based guessing)
+    const tasks = rawTasks.map((t) => ({ ...t }));
+    const correctedCount = correctAgentIds(tasks, agentMap, allAgents);
+
+    // Rebuild data with corrected tasks for validation
+    const correctedData = { reasoning, tasks };
+    const correctedArgs = { ...args, tasks: correctedData.tasks };
+
+    // Validate corrected plan
+    let availableAgentIds: string[] | undefined;
+    try {
+      const conv = getConversation(ctx.conversationId);
+      if (conv) availableAgentIds = conv.agentIds;
+    } catch { /* proceed */ }
+
+    const validation = validatePlan(tasks, availableAgentIds);
     if (validation) {
       return { ok: false, error: validation };
     }
+
+    const msg = correctedCount > 0
+      ? `Plan accepted (${correctedCount} agent ID(s) auto-corrected).`
+      : "Plan accepted.";
 
     return {
       ok: true,
       value: {
         acknowledged: true,
         taskCount: tasks.length,
-        reasoning
+        reasoning,
+        _corrected: correctedCount > 0
       }
     };
   }
@@ -362,6 +394,80 @@ export interface ParsedPlan {
   tasks: ParsedTask[];
 }
 
+// Fuzzy agent ID correction. DeepSeek often invents names instead of using real IDs.
+// This maps ANY plausible alias to the correct agent ID.
+
+function buildAgentAliasMap(availableAgentIds: string[], allAgents: Array<{ id: string; name: string; capabilities: string[] }>): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const agentId of availableAgentIds) {
+    const a = allAgents.find((ag) => ag.id === agentId);
+    if (!a) continue;
+    const nameLower = a.name.toLowerCase();
+    const caps = a.capabilities.map((c) => c.toLowerCase());
+
+    // Direct name match
+    map.set(nameLower, a.id);
+
+    // Keyword-based matching: which capabilities does this agent have?
+    const isFrontend = caps.some((c) => ["frontend", "react", "html", "css", "javascript", "web"].some((k) => c.includes(k))) || nameLower.includes("前端");
+    const isDesigner = caps.some((c) => ["design", "ui", "visual"].some((k) => c.includes(k))) || nameLower.includes("设计");
+    const isPM = caps.some((c) => ["requirements", "prd", "product"].some((k) => c.includes(k))) || nameLower.includes("pm") || nameLower.includes("产品");
+    const isReviewer = caps.some((c) => ["review", "qa", "analysis"].some((k) => c.includes(k))) || nameLower.includes("review");
+
+    // Map common LLM-made-up names
+    if (isFrontend) for (const alias of ["frontend", "web_dev", "app_developer", "app-dev", "developer", "coder", "fe", "front_end", "front-end", "builder", "web", "dev", "engineer", "programmer"]) map.set(alias, a.id);
+    if (isDesigner) for (const alias of ["designer", "ui_designer", "ui", "ux", "visual", "design"]) map.set(alias, a.id);
+    if (isPM) for (const alias of ["pm", "product_manager", "po", "product", "manager"]) map.set(alias, a.id);
+    if (isReviewer) for (const alias of ["reviewer", "code_reviewer", "qa", "tester", "review", "auditor"]) map.set(alias, a.id);
+  }
+  return map;
+}
+
+/** Try to guess which agent the LLM meant based on task description keywords */
+function guessAgentFromTask(agentId: string, taskPrompt: string, availableAgents: Array<{ id: string; name: string; capabilities: string[] }>): string | null {
+  const lower = `${agentId} ${taskPrompt}`.toLowerCase();
+  // Score each agent by keyword matches in the task
+  let bestScore = 0;
+  let bestId: string | null = null;
+  for (const a of availableAgents) {
+    let score = 0;
+    for (const cap of a.capabilities) {
+      if (lower.includes(cap.toLowerCase())) score += 2;
+    }
+    if (lower.includes(a.name.toLowerCase())) score += 3;
+    // Heuristic: if task mentions code/html/css/js, it's frontend
+    if (/html|css|javascript|js|代码|前端|code|编程/.test(lower) && a.capabilities.some((c) => ["frontend", "react", "html", "css", "javascript"].some((k) => c.includes(k)))) score += 5;
+    // If task mentions design/UI/颜色/样式, it's designer
+    if (/设计|design|ui|颜色|样式|风格|配色/.test(lower) && a.capabilities.some((c) => ["design", "ui", "visual"].some((k) => c.includes(k)))) score += 5;
+    // If task mentions review/审查/检查, it's reviewer
+    if (/审查|review|检查|验证|测试|test/.test(lower) && a.capabilities.some((c) => ["review", "qa", "analysis"].some((k) => c.includes(k)))) score += 5;
+    if (score > bestScore) { bestScore = score; bestId = a.id; }
+  }
+  return bestScore >= 3 ? bestId : null;
+}
+
+function correctAgentIds(tasks: Array<{ agentId: string; prompt?: string; task?: string }>, aliasMap: Map<string, string>, allAgents: Array<{ id: string; name: string; capabilities: string[] }>): number {
+  let count = 0;
+  for (const t of tasks) {
+    const lower = t.agentId.toLowerCase();
+    // 1. Exact alias match
+    const corrected = aliasMap.get(lower);
+    if (corrected && corrected !== t.agentId) {
+      t.agentId = corrected;
+      count++;
+      continue;
+    }
+    // 2. Fuzzy: try to guess from task description
+    const desc = t.prompt ?? t.task ?? "";
+    const guessed = guessAgentFromTask(t.agentId, desc, allAgents);
+    if (guessed && guessed !== t.agentId) {
+      t.agentId = guessed;
+      count++;
+    }
+  }
+  return count;
+}
+
 export function parsePlanArgs(args: unknown): ParsedPlan | string {
   const parsed = planArgsSchema.safeParse(args);
   if (!parsed.success) return `Invalid plan: ${parsed.error.message}`;
@@ -384,7 +490,10 @@ export function parsePlanArgs(args: unknown): ParsedPlan | string {
   return { reasoning: parsed.data.reasoning, tasks };
 }
 
-export function validatePlan(tasks: Array<{ id: string; agentId: string; dependsOn?: string[] }>): string | null {
+export function validatePlan(
+  tasks: Array<{ id: string; agentId: string; dependsOn?: string[] }>,
+  availableAgentIds?: string[]
+): string | null {
   const ids = new Set(tasks.map((t) => t.id));
 
   // Duplicate IDs
@@ -392,6 +501,15 @@ export function validatePlan(tasks: Array<{ id: string; agentId: string; depends
 
   // Empty
   if (tasks.length === 0) return "Plan must contain at least one task.";
+
+  // Unknown agentId
+  if (availableAgentIds && availableAgentIds.length > 0) {
+    for (const t of tasks) {
+      if (!availableAgentIds.includes(t.agentId)) {
+        return `Task "${t.id}" references unknown agent "${t.agentId}". Available agents: ${availableAgentIds.join(", ")}`;
+      }
+    }
+  }
 
   // Self-dependency
   for (const t of tasks) {

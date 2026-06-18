@@ -5,11 +5,12 @@ import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
 import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistOrchestrationTask } from "@/server/repositories";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
+import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact } from "@/server/child-prompt-builder";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
-import { compileDispatchPlan, validateDispatchPlan } from "@/server/dispatch-plan";
+import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
@@ -53,31 +54,49 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
       const revised = await runOrchestratorAssess(input, effectiveText);
       if (revised.mode === "plan" && revised.plan) {
         plan = revised.plan;
-        createSystemMessage(input.conversationId, `🔄 根据反馈重新规划（${revised.plan.tasks.length} 个任务）。`);
       } else {
         createSystemMessage(input.conversationId, "⚠️ 重新规划失败，使用原计划继续。");
       }
-    } else {
-      createSystemMessage(input.conversationId, `🤖 Orchestrator 生成计划（${plan.tasks.length} 个任务）。`);
     }
 
-    // Publish plan for review
-    const planText = plan.tasks.map((t) =>
-      `- **${t.title}** → ${t.agentId}${t.dependsOn.length > 0 ? ` (依赖: ${t.dependsOn.join(", ")})` : ""}`
+    // ── Layer 2: compileAndValidateDispatchPlan (code validation before approval) ──
+    const validationResult = compileAndValidateDispatchPlan(
+      plan.tasks,
+      input.availableAgentIds,
+      input.orchestratorAgentId
+    );
+
+    if (typeof validationResult === "string") {
+      // Plan rejected — fail the run with clear error
+      createSystemMessage(input.conversationId, `❌ Plan 校验失败：${validationResult}`);
+      const errorMsg = `Plan validation failed: ${validationResult}`;
+      eventBus.publish({
+        type: "run.end", conversationId: input.conversationId, timestamp: Date.now(),
+        runId: input.orchestratorRunId, status: "failed", error: errorMsg
+      });
+      return;
+    }
+
+    // Validated plan (compiled with auto-deps)
+    const compiledPlan = validationResult;
+
+    // Publish plan for review (use validated agent IDs)
+    const planText = compiledPlan.map((t) =>
+      `- **${t.id}** → ${t.agentId}${t.dependsOn.length > 0 ? ` (依赖: ${t.dependsOn.join(", ")})` : ""}`
     ).join("\n");
     createSystemMessage(input.conversationId, `📋 **执行计划**\n\n${planText}\n\n⏳ 等待审批...（点击上方卡片 approve / reject / revise）`);
 
-    const planItems: DispatchPlanItem[] = plan.tasks.map((t) => ({
+    // Build DispatchPlanItem[] from validated compiledPlan
+    const planItems: DispatchPlanItem[] = compiledPlan.map((t) => ({
       id: t.id,
       agentId: t.agentId,
-      task: t.prompt,
+      task: t.task,
       dependsOn: t.dependsOn,
-      title: t.title,
-      prompt: t.prompt,
+      title: t.id,
+      prompt: t.task,
       inputs: t.inputs,
       expectedOutputs: t.expectedOutputs,
       acceptanceCriteria: t.acceptanceCriteria,
-      maxAttempts: t.maxAttempts,
       targetPaths: t.targetPaths,
       requiredCommands: t.requiredCommands,
       requiredEvidence: t.requiredEvidence
@@ -95,11 +114,27 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
       continue;
     }
 
-    // APPROVE — execute
+    // APPROVE — execute with validated compiled plan
     reviewing = false;
+    // Cancel any lingering ask_user questions from the PLAN stage
+    cancelPendingQuestionsForRun(input.orchestratorRunId);
     createSystemMessage(input.conversationId, "✅ 计划已批准，正在执行子任务...");
 
-    const finalPlan: ParsedTask[] = plan.tasks;
+    // Convert validated DispatchPlanItem[] back to ParsedTask[] for execution
+    const finalPlan: ParsedTask[] = compiledPlan.map((t) => ({
+      id: t.id,
+      agentId: t.agentId,
+      title: t.id,
+      prompt: t.task,
+      dependsOn: t.dependsOn,
+      inputs: (t.inputs ?? []).map((i) => ({ ...i, required: true })),
+      expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: true })),
+      acceptanceCriteria: t.acceptanceCriteria ?? [],
+      maxAttempts: 1,
+      targetPaths: t.targetPaths,
+      requiredCommands: t.requiredCommands,
+      requiredEvidence: t.requiredEvidence
+    } as ParsedTask));
 
     await executeOrchestratorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
@@ -142,7 +177,7 @@ export async function executeOrchestratorPlan(
   const allConflicts: StructuredConflict[] = [];
   const abortSignal = signal ?? new AbortController().signal;
 
-  const validation = validatePlan(plan);
+  const validation = validatePlan(plan, availableAgents);
   if (validation) {
     createSystemMessage(conversationId, `Plan validation failed: ${validation}`);
     return { results, completionStatus: "has_failures", conflicts: [] };
@@ -749,7 +784,24 @@ export function buildOrchestratorPlanPrompt(
 4. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
 
 ## 可用 Agent
+
 ${agentList}
+
+## 🚫 agentId 严格规则（违反将直接报错）
+agentId 字段只能填写上面「可用 Agent」列表里出现的 id 值，一个字符都不能改。
+
+正确示例：
+  "agentId": "ag_mock_builder"   ← 这是列表里「前端工程师」的真实 id
+  "agentId": "ag_pm"             ← 这是列表里「PM 小灰」的真实 id
+
+错误示例（系统会拒绝，不要这样写）：
+  "agentId": "web_dev"           ← ❌ 列表中不存在
+  "agentId": "app_developer"     ← ❌ 列表中不存在
+  "agentId": "frontend"          ← ❌ 列表中不存在
+  "agentId": "developer"         ← ❌ 列表中不存在
+  "agentId": "coder"             ← ❌ 列表中不存在
+
+Agent 名称只是给人看的描述，agentId 才是系统识别的唯一标识。你必须到上面列表里找到匹配的 Agent，复制它的 id 字段的值。
 
 ## 拆解原则
 - 充分利用每个 Agent 的 capabilities，不要把任务派给不合适的人。
@@ -954,7 +1006,12 @@ async function runOrchestratorAssess(
   const signal = AbortSignal.timeout(60000);
 
   // Stream events AND watch for plan_tasks via onEvent callback
+  // We capture on tool.result (success) rather than tool.call, because the tool handler
+  // may auto-correct agent IDs before returning success.
+  let capturedPlanArgs: { reasoning?: string; tasks?: Array<Record<string, unknown>> } | null = null;
   let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
+  let planCallId: string | null = null;
+  let planWasAttempted = false;
 
   try {
     await consumeStream({
@@ -963,7 +1020,7 @@ async function runOrchestratorAssess(
       runId: input.orchestratorRunId,
       signal,
       onEvent: (event) => {
-        // Detect plan_tasks tool call → capture and stop
+        // Remember plan_tasks call args
         if (
           event.type === "tool.call" &&
           "toolName" in event &&
@@ -971,9 +1028,33 @@ async function runOrchestratorAssess(
         ) {
           const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
           if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
-            capturedPlan = { reasoning: args.reasoning || "Plan", tasks: args.tasks };
-            return { stop: true };
+            capturedPlanArgs = args;
+            planCallId = (event as { callId: string }).callId;
+            planWasAttempted = true;
           }
+        }
+
+        // When plan_tasks tool.result arrives with success, capture and stop
+        if (
+          event.type === "tool.result" &&
+          "callId" in event &&
+          (event as { callId: string }).callId === planCallId &&
+          capturedPlanArgs &&
+          !(event as { isError?: boolean }).isError
+        ) {
+          capturedPlan = { reasoning: capturedPlanArgs.reasoning || "Plan", tasks: capturedPlanArgs.tasks! };
+          return { stop: true };
+        }
+
+        // If plan_tasks failed, clear capture so LLM can retry
+        if (
+          event.type === "tool.result" &&
+          "callId" in event &&
+          (event as { callId: string }).callId === planCallId &&
+          (event as { isError?: boolean }).isError
+        ) {
+          capturedPlanArgs = null;
+          planCallId = null;
         }
       }
     });
@@ -999,6 +1080,12 @@ async function runOrchestratorAssess(
       return { mode: "plan", plan: demoPlan };
     }
     return { mode: "plan", plan: planResult };
+  }
+
+  // Plan was attempted but failed → fall back to demo plan
+  if (planWasAttempted) {
+    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+    return { mode: "plan", plan: demoPlan };
   }
 
   // No plan_tasks detected → LLM responded directly (simple chat)
@@ -1121,7 +1208,11 @@ async function generateRecoveryPlan(
 - 每个修复任务必须独立可执行。
 
 ## 可用 Agent
+
 ${otherAgents.map((a) => `- id: "${a.id}", name: "${a.name}", capabilities: [${a.capabilities.join(", ")}]`).join("\n")}
+
+## 🚫 agentId 严格规则
+agentId 只能填上面列表里的真实 id 值。❌ 禁止编造：web_dev, app_developer, frontend, developer, coder 等都不在列表中。
 
 ## 约束
 - 每个任务必须有唯一的 id（使用 r1, r2, ... 避免与原始 t1, t2 冲突）
