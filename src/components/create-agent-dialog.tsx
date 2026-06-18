@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import type { AdapterName, ModelProvider } from "@/shared/types";
 import { ALL_TOOL_NAMES, TOOL_PRESETS, type ToolPresetName } from "@/shared/agent-constants";
 
@@ -50,6 +51,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
   const [toolNames, setToolNames] = useState<string[]>(initial?.toolNames ?? ["write_artifact"]);
   const [submitting, setSubmitting] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   if (!open) return null;
 
@@ -232,6 +234,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               onChange={(e) => setModelProvider(e.target.value as ModelProvider)}
             >
               <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
               <option value="deepseek">DeepSeek</option>
               <option value="volcano-ark">火山方舟</option>
               <option value="openai-compatible">OpenAI-Compatible（需 Key + URL）</option>
@@ -251,13 +254,23 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
         {/* API Key */}
         <label className="mt-3 block text-sm font-medium text-stone-700">API Key（可选，覆盖全局设置）</label>
-        <input
-          className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
-          type="password"
-          placeholder="sk-..."
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
+        <div className="mt-1 flex gap-2">
+          <input
+            className="h-9 flex-1 rounded-md border border-stone-300 px-3 text-sm font-mono outline-none focus:border-stone-500"
+            type={showApiKey ? "text" : "password"}
+            placeholder="sk-..."
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={() => setShowApiKey((prev) => !prev)}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-stone-200 text-stone-500 hover:bg-stone-50"
+            title={showApiKey ? "隐藏" : "显示"}
+          >
+            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
 
         {/* Base URL */}
         <label className="mt-3 block text-sm font-medium text-stone-700">API Base URL（可选）</label>

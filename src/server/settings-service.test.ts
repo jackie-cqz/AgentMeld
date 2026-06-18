@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
-import { getSettings, updateSettings, resolveApiKey } from "@/server/settings-service";
+import { getSettings, updateSettings, resolveApiKey, resolveApiKeyForAgent, resolveApiBaseUrl } from "@/server/settings-service";
 import type { AppSettings } from "@/shared/types";
 
 let tempDir: string;
@@ -98,6 +98,121 @@ describe("settings-service", () => {
       const settings = getSettings();
       const key = resolveApiKey("volcano-ark", "sk-ark-agent", settings);
       expect(key).toBe("sk-ark-agent");
+    });
+
+    it("returns null for openai-compatible even when global key exists", () => {
+      updateSettings({ openaiApiKey: "sk-global" });
+      const settings = getSettings();
+      const key = resolveApiKey("openai-compatible", null, settings);
+      expect(key).toBeNull(); // §6.1 Rule 3: openai-compatible 不查全局
+    });
+  });
+
+  describe("resolveApiKeyForAgent", () => {
+    it("returns per-agent key as highest priority", () => {
+      updateSettings({ openaiApiKey: "sk-global" });
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "custom", modelProvider: "openai", apiKey: "sk-per-agent" },
+        settings
+      );
+      expect(key).toBe("sk-per-agent");
+    });
+
+    it("claude-code adapter reads anthropic global key", () => {
+      updateSettings({ anthropicApiKey: "sk-ant-global" });
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "claude-code", apiKey: null },
+        settings
+      );
+      expect(key).toBe("sk-ant-global");
+    });
+
+    it("claude-code adapter falls back to ANTHROPIC_AUTH_TOKEN then ANTHROPIC_API_KEY env var", () => {
+      const prevToken = process.env.ANTHROPIC_AUTH_TOKEN;
+      const prevKey = process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+      delete process.env.ANTHROPIC_API_KEY;
+
+      process.env.ANTHROPIC_API_KEY = "sk-ant-env-test";
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "claude-code", apiKey: null },
+        settings
+      );
+      expect(key).toBe("sk-ant-env-test");
+
+      // Restore
+      delete process.env.ANTHROPIC_API_KEY;
+      if (prevKey) process.env.ANTHROPIC_API_KEY = prevKey;
+      if (prevToken) process.env.ANTHROPIC_AUTH_TOKEN = prevToken;
+    });
+
+    it("codex adapter reads openai global key", () => {
+      updateSettings({ openaiApiKey: "sk-oai-global" });
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "codex", apiKey: null },
+        settings
+      );
+      expect(key).toBe("sk-oai-global");
+    });
+
+    it("codex adapter falls back to CODEX_API_KEY env var", () => {
+      const prev = process.env.CODEX_API_KEY;
+      delete process.env.CODEX_API_KEY;
+
+      process.env.CODEX_API_KEY = "sk-codex-env-test";
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "codex", apiKey: null },
+        settings
+      );
+      expect(key).toBe("sk-codex-env-test");
+
+      delete process.env.CODEX_API_KEY;
+      if (prev) process.env.CODEX_API_KEY = prev;
+    });
+
+    it("custom adapter uses modelProvider to pick global key", () => {
+      updateSettings({ deepseekApiKey: "sk-ds-global" });
+      const settings = getSettings();
+      const key = resolveApiKeyForAgent(
+        { adapterName: "custom", modelProvider: "deepseek", apiKey: null },
+        settings
+      );
+      expect(key).toBe("sk-ds-global");
+    });
+  });
+
+  describe("resolveApiBaseUrl", () => {
+    it("returns per-agent base URL as priority", () => {
+      const settings = getSettings();
+      const url = resolveApiBaseUrl(
+        { adapterName: "custom", apiBaseUrl: "https://my-gateway.com" },
+        settings
+      );
+      expect(url).toBe("https://my-gateway.com");
+    });
+
+    it("claude-code adapter reads anthropic base URL from global settings", () => {
+      updateSettings({ anthropicBaseUrl: "https://anyrouter.io" });
+      const settings = getSettings();
+      const url = resolveApiBaseUrl(
+        { adapterName: "claude-code", apiBaseUrl: null },
+        settings
+      );
+      expect(url).toBe("https://anyrouter.io");
+    });
+
+    it("returns null when no base URL configured", () => {
+      const settings = getSettings();
+      const url = resolveApiBaseUrl(
+        { adapterName: "custom", apiBaseUrl: null },
+        settings
+      );
+      expect(url).toBeNull();
     });
   });
 });

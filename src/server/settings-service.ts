@@ -67,6 +67,9 @@ export function resolveApiKey(
   // 1. Per-agent override
   if (agentApiKey) return agentApiKey;
 
+  // openai-compatible must be per-agent — never fall back to global or env
+  if (provider === "openai-compatible") return null;
+
   // 2. Global settings
   const settingKey = providerToSettingKey(provider);
   if (settingKey) {
@@ -77,6 +80,63 @@ export function resolveApiKey(
   // 3. Environment variable
   const envKey = providerToEnvKey(provider);
   if (envKey && process.env[envKey]) return process.env[envKey]!;
+
+  return null;
+}
+
+/**
+ * Resolve API key for an agent, taking adapter type into account.
+ *
+ * Mapping per api-key-management.md §6.2:
+ *   claude-code → anthropic_api_key
+ *   codex       → openai_api_key
+ *   custom      → by agent.modelProvider
+ */
+export function resolveApiKeyForAgent(
+  agent: { adapterName: string; modelProvider?: string | null; apiKey?: string | null },
+  settings: AppSettings
+): string | null {
+  // 1. Per-agent override — always wins
+  if (agent.apiKey) return agent.apiKey;
+
+  // 2. Determine which global field / env var to check based on adapter
+  if (agent.adapterName === "claude-code") {
+    return (
+      settings.anthropicApiKey ??
+      process.env.ANTHROPIC_AUTH_TOKEN ??
+      process.env.ANTHROPIC_API_KEY ??
+      null
+    );
+  }
+
+  if (agent.adapterName === "codex") {
+    return (
+      settings.openaiApiKey ??
+      process.env.CODEX_API_KEY ??
+      process.env.OPENAI_API_KEY ??
+      null
+    );
+  }
+
+  // 3. Custom adapter — delegate to provider-based resolution
+  const provider = agent.modelProvider ?? "openai";
+  return resolveApiKey(provider, null, settings);
+}
+
+/**
+ * Resolve API base URL for an agent.
+ * Per api-key-management.md §6.5:
+ *   agent.apiBaseUrl → (claude-code) app_settings.anthropicBaseUrl → SDK default
+ */
+export function resolveApiBaseUrl(
+  agent: { adapterName: string; apiBaseUrl?: string | null },
+  settings: AppSettings
+): string | null {
+  if (agent.apiBaseUrl) return agent.apiBaseUrl;
+
+  if (agent.adapterName === "claude-code") {
+    return settings.anthropicBaseUrl ?? null;
+  }
 
   return null;
 }

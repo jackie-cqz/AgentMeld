@@ -1,6 +1,8 @@
+import { getConversation, listMessages, listArtifacts } from "@/server/repositories";
+import { runCompaction } from "@/server/conversation-context";
+import { eventBus } from "@/server/event-bus";
+import { newMessageId } from "@/shared/ids";
 import { getDatabase } from "@/db/client";
-import { getConversation, listMessages } from "@/server/repositories";
-import { newContextSummaryId, newMessageId } from "@/shared/ids";
 
 export const dynamic = "force-dynamic";
 
@@ -13,64 +15,173 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   }
 
   const allMessages = listMessages(id).filter((m) => m.status === "complete");
-  if (allMessages.length < 10) {
-    return Response.json({ compacted: false, reason: "Not enough messages to compact (need 10+)." });
+  if (allMessages.length < 6) {
+    return Response.json({
+      compacted: false,
+      reason: `消息太少（${allMessages.length} 条），至少需要 6 条。`
+    });
   }
 
-  // Skip pinned messages, keep last 6 recent
+  // Skip pinned messages — they're important and should stay in context
   const pinnedIds = new Set(conversation.pinnedMessageIds ?? []);
   const compactable = allMessages.filter((m) => !pinnedIds.has(m.id));
-  const keepRecent = Math.min(6, Math.max(0, compactable.length - 10));
-  const source = compactable.slice(0, compactable.length - keepRecent);
 
-  if (source.length === 0) {
-    return Response.json({ compacted: false, reason: "No compactable messages." });
+  // Keep the last 8 messages; compress everything before that
+  const keepRecent = Math.min(8, Math.max(2, compactable.length - 6));
+  const sourceMessages = compactable.slice(0, compactable.length - keepRecent);
+
+  if (sourceMessages.length < 3) {
+    return Response.json({
+      compacted: false,
+      reason: "可压缩消息不足（需至少 3 条非置顶消息）。"
+    });
   }
 
-  // Build simple summary from message texts
-  const texts = source
-    .map((m) =>
-      m.parts
-        .filter((p) => p.type === "text")
-        .map((p) => p.content)
-        .join(" ")
-    )
-    .filter(Boolean);
+  // Get artifact titles for rendering
+  const artifactTitles = new Map<string, string>();
+  try {
+    const artifacts = listArtifacts(id);
+    for (const art of artifacts) {
+      artifactTitles.set(art.id, art.title);
+    }
+  } catch {
+    // proceed without artifact titles
+  }
 
-  const summary = `[Compacted ${source.length} messages] ` + texts.slice(0, 20).join(" | ").slice(0, 2000);
+  // Serialize messages for the compaction prompt
+  const rendered = sourceMessages.map((m) => {
+    const text = m.parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.content)
+      .join(" ");
+    const artifactRefs = m.parts
+      .filter((p) => p.type === "artifact_ref")
+      .map((p) => `[产物: ${artifactTitles.get(p.artifactId) ?? "unknown"} (${p.artifactId})]`);
 
-  const now = Date.now();
-  const lastSource = source[source.length - 1];
+    const content = [text, ...artifactRefs].filter(Boolean).join("\n");
+    const agentName = m.agentId ? conversation.agentIds.includes(m.agentId) ? m.agentId : undefined : undefined;
 
-  // Store summary
-  const db = getDatabase();
-  db.prepare(`
-    INSERT INTO conversation_context_summaries (
-      id, conversation_id, summary, covered_until_message_id,
-      covered_until_created_at, source_message_count, token_estimate,
-      model_provider, model_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    newContextSummaryId(), id, summary,
-    lastSource.id, lastSource.createdAt,
-    source.length, Math.ceil(summary.length / 4),
-    null, null, now
+    return {
+      role: m.role,
+      agentName,
+      content: content.slice(0, 800)
+    };
+  }).filter((m) => m.content.length > 0);
+
+  const lastSource = sourceMessages[sourceMessages.length - 1];
+
+  // Run compaction asynchronously — return 202 immediately
+  const compactionPromise = runCompaction(
+    id,
+    rendered,
+    lastSource.id,
+    lastSource.createdAt,
+    sourceMessages.length
   );
 
-  // Post a system message about the compaction
-  db.prepare(`
+  // Post a system message noting compaction has started
+  const now = Date.now();
+  const systemMsgId = newMessageId();
+  getDatabase().prepare(`
     INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    newMessageId(), id, "system", null, null,
-    JSON.stringify([{ type: "text", content: `已压缩早期上下文，覆盖 ${source.length} 条消息。` }]),
+    systemMsgId, id, "system", null, null,
+    JSON.stringify([{ type: "text", content: `🧹 正在压缩上下文（${sourceMessages.length} 条早期消息）...` }]),
     "complete", JSON.stringify([]), null, now, now
   );
 
+  eventBus.publish({
+    type: "message.added",
+    conversationId: id,
+    timestamp: now,
+    message: {
+      id: systemMsgId,
+      conversationId: id,
+      role: "system",
+      agentId: null,
+      runId: null,
+      parts: [{ type: "text", content: `🧹 正在压缩上下文（${sourceMessages.length} 条早期消息）...` }],
+      status: "complete",
+      parentMessageId: null,
+      mentionedAgentIds: [],
+      createdAt: now,
+      updatedAt: now
+    }
+  });
+
+  // Wait for compaction in background — don't block response
+  compactionPromise
+    .then((result) => {
+      const doneTime = Date.now();
+      const doneMsgId = newMessageId();
+      const content = `✅ 上下文压缩完成：${sourceMessages.length} 条消息 → ${result.tokenEstimate} token 摘要。后续对话将自动引用此摘要。`;
+
+      getDatabase().prepare(`
+        INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        doneMsgId, id, "system", null, null,
+        JSON.stringify([{ type: "text", content }]),
+        "complete", JSON.stringify([]), null, doneTime, doneTime
+      );
+
+      eventBus.publish({
+        type: "message.added",
+        conversationId: id,
+        timestamp: doneTime,
+        message: {
+          id: doneMsgId,
+          conversationId: id,
+          role: "system",
+          agentId: null,
+          runId: null,
+          parts: [{ type: "text", content }],
+          status: "complete",
+          parentMessageId: null,
+          mentionedAgentIds: [],
+          createdAt: doneTime,
+          updatedAt: doneTime
+        }
+      });
+    })
+    .catch((err) => {
+      const errTime = Date.now();
+      const errMsgId = newMessageId();
+      const content = `⚠️ 上下文压缩失败：${err instanceof Error ? err.message.slice(0, 200) : "未知错误"}`;
+
+      getDatabase().prepare(`
+        INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        errMsgId, id, "system", null, null,
+        JSON.stringify([{ type: "text", content }]),
+        "complete", JSON.stringify([]), null, errTime, errTime
+      );
+
+      eventBus.publish({
+        type: "message.added",
+        conversationId: id,
+        timestamp: errTime,
+        message: {
+          id: errMsgId,
+          conversationId: id,
+          role: "system",
+          agentId: null,
+          runId: null,
+          parts: [{ type: "text", content }],
+          status: "complete",
+          parentMessageId: null,
+          mentionedAgentIds: [],
+          createdAt: errTime,
+          updatedAt: errTime
+        }
+      });
+    });
+
   return Response.json({
     compacted: true,
-    sourceMessageCount: source.length,
-    coveredUntilMessageId: lastSource.id,
-    summary
+    sourceMessageCount: sourceMessages.length,
+    coveredUntilMessageId: lastSource.id
   });
 }

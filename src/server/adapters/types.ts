@@ -14,6 +14,7 @@ export interface AdapterInput {
   systemPrompt: string;
   workspacePath: string;
   apiKey: string | null;
+  apiBaseUrl?: string | null;
   history?: ChatMessage[];
 }
 

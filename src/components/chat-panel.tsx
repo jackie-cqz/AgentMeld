@@ -1,12 +1,15 @@
 "use client";
 
 import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, RotateCcw, UserPlus, Users } from "lucide-react";
-import { useMemo, useRef, useEffect, type ReactNode } from "react";
+import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 import { MessageInput } from "@/components/message-input";
 import { MessageParts } from "@/components/message-parts";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
+import { ContextStatsPanel } from "@/components/context-stats-panel";
+import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { useAppStore } from "@/stores/app-store";
 import type { Agent, Message } from "@/shared/types";
+import type { AdapterName, ModelProvider } from "@/shared/types";
 
 export function ChatPanel() {
   const agents = useAppStore((state) => state.agents);
@@ -17,6 +20,26 @@ export function ChatPanel() {
   const connectionStatus = useAppStore((state) => state.connectionStatus);
   const setRightPanelOpen = useAppStore((state) => state.setRightPanelOpen);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const [showContextStats, setShowContextStats] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const loadBootstrap = useAppStore((s) => s.loadBootstrap);
+
+  const handleEditAgent = (agent: Agent) => setEditingAgent(agent);
+
+  const handleUpdateAgent = async (payload: {
+    name: string; adapterName: AdapterName; modelProvider?: ModelProvider | null;
+    modelId?: string | null; apiKey?: string | null; apiBaseUrl?: string | null;
+    systemPrompt?: string; toolNames?: string[];
+  }) => {
+    if (!editingAgent) return;
+    await fetch(`/api/agents/${editingAgent.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    setEditingAgent(null);
+  };
 
   const conversation = activeConversationId ? conversations[activeConversationId] : null;
   const messages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
@@ -47,7 +70,7 @@ export function ChatPanel() {
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex -space-x-2">
             {activeAgents.slice(0, 3).map((agent) => (
-              <Avatar key={agent.id} label={agent.name} className="ring-2 ring-white" />
+              <Avatar key={agent.id} label={agent.name} className="ring-2 ring-white cursor-pointer hover:ring-blue-300 hover:scale-110 transition-transform" onClick={() => handleEditAgent(agent)} />
             ))}
           </div>
           <div className="min-w-0">
@@ -65,9 +88,21 @@ export function ChatPanel() {
           <HeaderIcon title="打开 Artifact Workspace" onClick={() => setRightPanelOpen(true)}><Layers className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="文件"><Folder className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="添加 Agent"><UserPlus className="h-4 w-4" /></HeaderIcon>
-          <div className="flex h-8 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-xs text-slate-500">
-            <Circle className="h-3 w-3 text-slate-400" />
-            {formatTokenCount(tokenTotal)}
+          <div className="relative">
+            <button
+              onClick={() => setShowContextStats((prev) => !prev)}
+              className="flex h-8 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
+              title="上下文统计与压缩"
+            >
+              <Circle className="h-3 w-3 text-slate-400" />
+              {formatTokenCount(tokenTotal)}
+            </button>
+            {showContextStats && activeConversationId && (
+              <ContextStatsPanel
+                conversationId={activeConversationId}
+                onClose={() => setShowContextStats(false)}
+              />
+            )}
           </div>
           <div
             className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium ${
@@ -91,7 +126,7 @@ export function ChatPanel() {
             const latestUserMsg = [...messages].reverse().find((m) => m.role === "user");
             const latestUserId = latestUserMsg?.id ?? null;
             return messages.map((message) => (
-              <MessageBubble key={message.id} message={message} agent={message.agentId ? agents[message.agentId] : null} isLatestUser={message.id === latestUserId} />
+              <MessageBubble key={message.id} message={message} agent={message.agentId ? agents[message.agentId] : null} isLatestUser={message.id === latestUserId} onEditAgent={handleEditAgent} />
             ));
           })()}
         </div>
@@ -99,11 +134,28 @@ export function ChatPanel() {
 
       <PendingApprovalPanel />
       <MessageInput conversationId={conversation.id} agents={activeAgents} />
+
+      <CreateAgentDialog
+        key={editingAgent?.id ?? "new"}
+        open={!!editingAgent}
+        onClose={() => setEditingAgent(null)}
+        onCreate={handleUpdateAgent}
+        initial={editingAgent ? {
+          name: editingAgent.name,
+          adapterName: editingAgent.adapterName as AdapterName,
+          modelProvider: editingAgent.modelProvider,
+          modelId: editingAgent.modelId,
+          apiKey: editingAgent.apiKey,
+          apiBaseUrl: editingAgent.apiBaseUrl,
+          systemPrompt: editingAgent.systemPrompt,
+          toolNames: editingAgent.toolNames
+        } : undefined}
+      />
     </main>
   );
 }
 
-function MessageBubble({ message, agent, isLatestUser }: { message: Message; agent: Agent | null; isLatestUser?: boolean }) {
+function MessageBubble({ message, agent, isLatestUser, onEditAgent }: { message: Message; agent: Agent | null; isLatestUser?: boolean; onEditAgent?: (agent: Agent) => void }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -113,7 +165,7 @@ function MessageBubble({ message, agent, isLatestUser }: { message: Message; age
 
   return (
     <article className={`flex gap-3 group ${isUser ? "justify-end" : "justify-start"}`}>
-      {!isUser ? <Avatar label={isSystem ? "系统" : agent?.name ?? "A"} muted={isSystem} /> : null}
+      {!isUser ? <Avatar label={isSystem ? "系统" : agent?.name ?? "A"} muted={isSystem} onClick={!isSystem && agent && onEditAgent ? () => onEditAgent(agent) : undefined} /> : null}
       <div className={`${isUser ? "max-w-[54%]" : "max-w-[78%]"} min-w-0`}>
         {!isUser ? (
           <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
@@ -153,16 +205,20 @@ function formatTime(timestamp: number) {
   }).format(new Date(timestamp));
 }
 
-function Avatar({ label, dark, muted, className = "" }: { label: string; dark?: boolean; muted?: boolean; className?: string }) {
-  return (
-    <div
-      className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold ${
-        dark ? "bg-[#4169ff] text-white" : muted ? "bg-slate-100 text-slate-500" : "bg-emerald-500 text-white"
-      } ${className}`}
-    >
-      {label.slice(0, 2)}
-    </div>
-  );
+function Avatar({ label, dark, muted, className = "", onClick }: { label: string; dark?: boolean; muted?: boolean; className?: string; onClick?: () => void }) {
+  const base = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+    dark ? "bg-[#4169ff] text-white" : muted ? "bg-slate-100 text-slate-500" : "bg-emerald-500 text-white"
+  } ${className}`;
+
+  if (onClick) {
+    return (
+      <button type="button" className={base} onClick={onClick} title={`编辑 ${label}`}>
+        {label.slice(0, 2)}
+      </button>
+    );
+  }
+
+  return <div className={base}>{label.slice(0, 2)}</div>;
 }
 
 function HeaderIcon({ children, title, onClick }: { children: ReactNode; title: string; onClick?: () => void }) {

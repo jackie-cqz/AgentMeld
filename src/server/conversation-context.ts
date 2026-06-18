@@ -1,6 +1,9 @@
 import { getConversation, getMessage, listArtifacts, listMessages } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
+import { eventBus } from "@/server/event-bus";
+import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
+import { newContextSummaryId } from "@/shared/ids";
 import type { Artifact, Message, MessagePart } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
@@ -227,5 +230,229 @@ function getLatestContextSummary(conversationId: string): ContextSummary | null 
     };
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Context compaction — LLM-powered summarization
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the system + user prompts for the compaction LLM call.
+ * The compaction model receives the raw conversation text and produces a
+ * structured summary that preserves task context, decisions, and artifacts.
+ */
+export function buildCompactionPrompt(
+  messages: Array<{ role: string; agentName?: string; content: string }>,
+  existingSummary?: string | null
+): { systemPrompt: string; userPrompt: string } {
+  const systemPrompt = `You are a conversation archivist for a multi-agent collaboration platform.
+Your task is to compress a conversation into a concise, structured summary.
+
+The summary must be DENSE — every sentence should carry information. Cut greetings,
+repetitions, and filler. Preserve ALL of the following:
+
+1. **User Requests**: every explicit request the user made, with any clarifications or
+   choices they gave (especially ask_user Q&A results).
+2. **Task Assignments**: which agent was asked to do what, with task IDs if present.
+3. **Decisions & Outcomes**: what was decided, what succeeded, what failed and why.
+4. **Artifacts**: every artifact reference (art_xxx) with its type and title.
+5. **Files**: paths created or modified, with a one-word purpose each.
+6. **Pending Items**: anything not yet done, blocked, or waiting for user input.
+
+Output format — use this exact Markdown structure:
+
+## 用户请求
+- (one bullet per distinct user request)
+
+## 任务与结果
+- (one bullet per task: Agent → what → outcome)
+
+## 产物
+- (one bullet per artifact: type title (id=art_xxx))
+
+## 文件
+- (one bullet per file path: purpose)
+
+## 待办
+- (items not yet resolved)
+
+Keep the total output under 1500 characters. Prefer bullets over prose.
+Use Chinese for user-facing content, English for technical identifiers.`;
+
+  // Build the conversation text
+  const conversationText = messages
+    .map((m) => {
+      const label = m.agentName ? `[${m.agentName}] ` : m.role === "user" ? "[用户] " : "";
+      return `${label}${m.content}`;
+    })
+    .join("\n\n");
+
+  const userPrompt = `${existingSummary ? `Previous summary for context:\n${existingSummary}\n\n` : ""}New messages to compress (${messages.length} messages):\n\n${conversationText}\n\nPlease compress the above conversation into the specified structured summary format.`;
+
+  return { systemPrompt, userPrompt };
+}
+
+/**
+ * Run LLM-powered compaction on a conversation.
+ * Publishes progress events via EventBus → SSE → frontend.
+ * Stores the result in conversation_context_summaries.
+ */
+export async function runCompaction(
+  conversationId: string,
+  messages: Array<{ role: string; agentName?: string; content: string }>,
+  coveredUntilMessageId: string,
+  coveredUntilCreatedAt: number,
+  sourceMessageCount: number,
+  modelProvider: string = "deepseek",
+  modelId: string = "deepseek-chat"
+): Promise<{ summary: string; tokenEstimate: number }> {
+  const existingSummary = getLatestContextSummary(conversationId);
+
+  // Publish start event
+  eventBus.publish({
+    type: "compaction.start",
+    conversationId,
+    timestamp: Date.now(),
+    sourceMessageCount
+  });
+
+  // Build prompts
+  eventBus.publish({
+    type: "compaction.progress",
+    conversationId,
+    timestamp: Date.now(),
+    stage: "reading",
+    detail: `正在分析 ${sourceMessageCount} 条消息...`
+  });
+
+  const { systemPrompt, userPrompt } = buildCompactionPrompt(messages, existingSummary?.summary);
+
+  // Resolve API key
+  const settings = getSettings();
+  const apiKey = resolveApiKey(modelProvider, null, settings);
+  if (!apiKey) {
+    // No API key — fall back to concatenation-based summary
+    const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
+    return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+  }
+
+  // Call LLM for smart compaction
+  eventBus.publish({
+    type: "compaction.progress",
+    conversationId,
+    timestamp: Date.now(),
+    stage: "summarizing",
+    detail: "正在调用 AI 生成摘要..."
+  });
+
+  try {
+    const response = await fetch(`${resolveBaseUrl(modelProvider)}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        max_tokens: 1024,
+        temperature: 0.3
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    if (!response.ok) {
+      const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
+      return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+    }
+
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const summary = data.choices?.[0]?.message?.content?.trim() ?? buildFallbackSummary(messages, sourceMessageCount);
+
+    return storeCompactionResult(conversationId, summary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, modelProvider, modelId);
+  } catch {
+    const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
+    return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers for compaction
+// ---------------------------------------------------------------------------
+
+function buildFallbackSummary(
+  messages: Array<{ role: string; agentName?: string; content: string }>,
+  count: number
+): string {
+  const texts = messages
+    .map((m) => m.content)
+    .filter(Boolean)
+    .slice(0, 30);
+  return `[压缩了 ${count} 条消息] ${texts.join(" | ").slice(0, 2000)}`;
+}
+
+async function storeCompactionResult(
+  conversationId: string,
+  summary: string,
+  coveredUntilMessageId: string,
+  coveredUntilCreatedAt: number,
+  sourceMessageCount: number,
+  modelProvider: string | null,
+  modelId: string | null
+): Promise<{ summary: string; tokenEstimate: number }> {
+  const now = Date.now();
+  const tokenEstimate = Math.ceil(summary.length / 4);
+
+  eventBus.publish({
+    type: "compaction.progress",
+    conversationId,
+    timestamp: now,
+    stage: "storing",
+    detail: "正在保存压缩结果..."
+  });
+
+  // Store in DB
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO conversation_context_summaries (
+      id, conversation_id, summary, covered_until_message_id,
+      covered_until_created_at, source_message_count, token_estimate,
+      model_provider, model_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    newContextSummaryId(), conversationId, summary,
+    coveredUntilMessageId, coveredUntilCreatedAt,
+    sourceMessageCount, tokenEstimate,
+    modelProvider, modelId, now
+  );
+
+  // Publish completion event
+  eventBus.publish({
+    type: "compaction.end",
+    conversationId,
+    timestamp: now,
+    sourceMessageCount,
+    coveredUntilMessageId,
+    summary,
+    tokenEstimate
+  });
+
+  return { summary, tokenEstimate };
+}
+
+function resolveBaseUrl(provider: string): string {
+  switch (provider) {
+    case "deepseek":
+      return process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
+    case "openai":
+      return process.env.OPENAI_BASE_URL ?? "https://api.open.com";
+    case "anthropic":
+      return process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+    default:
+      return "https://api.deepseek.com";
   }
 }

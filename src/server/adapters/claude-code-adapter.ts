@@ -1,6 +1,6 @@
 import type { Agent, StreamEvent, AdapterName } from "@/shared/types";
 import type { AgentPlatformAdapter, AdapterInput } from "@/server/adapters/types";
-import { resolveApiKey, getSettings } from "@/server/settings-service";
+import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { findBannedPattern } from "@/server/security";
 import { assertPathWithinWorkspace } from "@/server/workspace-utils";
 
@@ -14,16 +14,25 @@ import { assertPathWithinWorkspace } from "@/server/workspace-utils";
  *   - canUseTool hook for path/banned/approval checks
  *   - Session resume via SDK built-in mechanism
  *
- * Requires ANTHROPIC_API_KEY or app_settings.anthropicApiKey.
+ * Key resolution per api-key-management.md §6.2-6.3:
+ *   - Uses resolveApiKeyForAgent (adapter-aware: claude-code → anthropic fields)
+ *   - When apiBaseUrl is set (third-party gateway), apiKey acts as AUTH_TOKEN
+ *     and ANTHROPIC_API_KEY env var must be cleared to prevent override
  */
 export const claudeCodeAdapter: AgentPlatformAdapter = {
   name: "claude-code" as AdapterName,
 
   async *run(input: AdapterInput, signal: AbortSignal) {
     const conversationId = input.conversationId;
-    const provider = "anthropic";
     const settings = getSettings();
-    const apiKey = resolveApiKey(provider, input.agent.apiKey ?? null, settings);
+    const apiKey = resolveApiKeyForAgent(
+      { adapterName: "claude-code", modelProvider: "anthropic", apiKey: input.agent.apiKey },
+      settings
+    );
+    const effectiveBaseUrl = input.apiBaseUrl ?? resolveApiBaseUrl(
+      { adapterName: "claude-code", apiBaseUrl: input.agent.apiBaseUrl },
+      settings
+    );
 
     if (!apiKey) {
       yield {
@@ -41,6 +50,17 @@ export const claudeCodeAdapter: AgentPlatformAdapter = {
         usage: { modelId: input.agent.modelId ?? "claude", inputTokens: 0, outputTokens: 0 }
       };
       return;
+    }
+
+    // Per §6.3: When a custom base URL is configured (third-party gateway),
+    // the apiKey becomes ANTHROPIC_AUTH_TOKEN. Clear ANTHROPIC_API_KEY to
+    // prevent the env var from overriding the gateway's auth header.
+    const isGateway = !!effectiveBaseUrl;
+    if (isGateway) {
+      // When full SDK integration lands:
+      //   process.env.ANTHROPIC_AUTH_TOKEN = apiKey;
+      //   process.env.ANTHROPIC_BASE_URL = effectiveBaseUrl;
+      //   delete process.env.ANTHROPIC_API_KEY;
     }
 
     // Stub: SDK would be initialized here

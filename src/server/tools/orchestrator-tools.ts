@@ -243,6 +243,12 @@ export interface ParsedTask {
   }>;
   acceptanceCriteria: string[];
   maxAttempts: number;
+  /** Paths the assigned agent is expected to create/modify (for evidence contract) */
+  targetPaths?: string[];
+  /** Commands the assigned agent is expected to run (for evidence contract) */
+  requiredCommands?: Array<{ command: string; timeoutMs?: number }>;
+  /** Human-readable evidence items the agent should report */
+  requiredEvidence?: string[];
 }
 
 export interface ParsedPlan {

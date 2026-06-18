@@ -2,22 +2,20 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
 import { eventBus } from "@/server/event-bus";
+import { consumeStream } from "@/server/consume-stream";
 import {
-  createArtifact,
   createMessage,
   createRun,
   getAgent,
-  getArtifact,
   getConversation,
   getWorkspaceForConversation,
   listMessages,
-  updateMessageParts,
   updateMessageStatus,
   updateRunStatus
 } from "@/server/repositories";
 import { buildHistoryFor } from "@/server/conversation-context";
 import { executeOrchestrator } from "@/server/orchestrator-service";
-import { resolveApiKey, getSettings } from "@/server/settings-service";
+import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
 import { getModelLimits } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
@@ -143,38 +141,19 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     runId: run.id
   });
 
-  // 6. Orchestrator branch: group chat without @ → plan → approve → DAG → aggregate
+  // 6. Orchestrator branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
   if (agent.isOrchestrator && conversation.mode === "group") {
-    const availableAgentIds = conversation.agentIds;
-
-    // Publish planning text via proper SSE events so frontend renders it
-    const planningText = "正在分析任务并生成执行计划...";
-    eventBus.publish({
-      type: "part.start", conversationId: input.conversationId, timestamp: Date.now(),
-      messageId: message.id, partIndex: 0,
-      part: { type: "text", content: "" }
-    });
-    for (const chunk of chunkText(planningText, 10)) {
-      eventBus.publish({
-        type: "part.delta", conversationId: input.conversationId, timestamp: Date.now(),
-        messageId: message.id, partIndex: 0,
-        delta: { type: "text.append", text: chunk }
-      });
-    }
-    eventBus.publish({
-      type: "part.end", conversationId: input.conversationId, timestamp: Date.now(),
-      messageId: message.id, partIndex: 0
-    });
-    updateMessageParts(message.id, [{ type: "text", content: planningText }], Date.now());
-
     try {
       await executeOrchestrator({
         conversationId: input.conversationId,
         orchestratorAgentId: agent.id,
         triggerMessage: input.triggerMessage,
-        availableAgentIds,
-        orchestratorRunId: run.id
+        availableAgentIds: conversation.agentIds,
+        orchestratorRunId: run.id,
+        messageId: message.id
       });
+      // If executeOrchestrator streamed events, update message parts from the DB record
+      // (the adapter's streaming events were published with message.id)
       completeRun(run, message, "complete", null, {
         modelId: agent.modelId ?? "orchestrator",
         inputTokens: 0,
@@ -192,14 +171,31 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   // 7. Normal adapter flow (non-orchestrator agents)
   const recentMessages = listMessages(input.conversationId).slice(-20);
 
+  // Child tasks (dispatched by Orchestrator) MUST have report_task_result tool
+  const effectiveToolNames = input.parentRunId && !agent.toolNames.includes("report_task_result")
+    ? [...agent.toolNames, "report_task_result"]
+    : agent.toolNames;
+
   // Build system prompt with workspace info, tool guidance, group context
   const workspacePath = workspace.mode === "local" && workspace.boundPath
     ? workspace.boundPath : workspace.rootPath;
-  const systemPrompt = buildSystemPrompt(agent, conversation, workspacePath);
+  const systemPrompt = buildSystemPrompt(
+    { ...agent, toolNames: effectiveToolNames },
+    conversation,
+    workspacePath
+  );
 
-  // Resolve API key (agent → global settings → env)
-  const provider = agent.modelProvider ?? "openai";
-  const apiKey = resolveApiKey(provider, agent.apiKey, getSettings());
+  // Resolve API key + base URL (agent → global settings → env)
+  // Uses adapter-aware resolution per api-key-management.md §6.2
+  const settings = getSettings();
+  const apiKey = resolveApiKeyForAgent(
+    { adapterName: agent.adapterName, modelProvider: agent.modelProvider, apiKey: agent.apiKey },
+    settings
+  );
+  const apiBaseUrl = resolveApiBaseUrl(
+    { adapterName: agent.adapterName, apiBaseUrl: agent.apiBaseUrl },
+    settings
+  );
 
   // Build cross-run history (skip for child tasks — they get task-only context)
   let history: ChatMessage[] = [];
@@ -227,33 +223,36 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     workspace,
     triggerMessage: input.triggerMessage,
     recentMessages,
-    toolNames: agent.toolNames,
+    toolNames: effectiveToolNames,
     systemPrompt,
     workspacePath,
     apiKey,
+    apiBaseUrl,
     history
   };
 
-  // 8. Consume adapter stream
+  // 8. Consume adapter stream via unified consumeStream
   const adapter = getAdapter(agent.adapterName);
-  let lastUsage: NonNullable<AgentRun["usage"]> | null = run.usage;
 
   try {
-    for await (const event of adapter.run(adapterInput, abortController.signal)) {
-      if (abortController.signal.aborted) break;
+    const { parts, usage: streamUsage } = await consumeStream({
+      stream: adapter.run(adapterInput, abortController.signal),
+      messageId: message.id,
+      runId: run.id,
+      signal: abortController.signal
+    });
 
-      // Fill in ids that the adapter leaves empty
-      const filledEvent = fillEventIds(event, message.id, run.id);
-      eventBus.publish(filledEvent);
+    // Update message with final parts
+    message = { ...message, parts, updatedAt: Date.now() };
 
-      // Capture usage if the adapter reports it
-      if (filledEvent.type === "run.usage") {
-        lastUsage = filledEvent.usage;
-      }
+    // 9. Finalize
+    const finalUsage: NonNullable<AgentRun["usage"]> = streamUsage ?? {
+      modelId: agent.modelId ?? "mock",
+      inputTokens: 0,
+      outputTokens: 0
+    };
 
-      // Apply persistence side-effects
-      message = applyEventToState(filledEvent, message);
-    }
+    completeRun(run, message, abortController.signal.aborted ? "aborted" : "complete", null, finalUsage);
   } catch (error) {
     const errorText = error instanceof Error ? error.message : "Unknown adapter error.";
     const fallbackUsage: NonNullable<AgentRun["usage"]> = {
@@ -262,109 +261,14 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       outputTokens: 0
     };
     createErrorMessage(input.conversationId, message.id, `Agent run failed: ${errorText}`);
-    completeRun(run, message, "failed", errorText, lastUsage ?? fallbackUsage);
-    activeRuns.delete(run.id);
-    return;
+    completeRun(run, message, "failed", errorText, fallbackUsage);
   }
-
-  // 9. Finalize
-  const finalUsage: NonNullable<AgentRun["usage"]> = lastUsage ?? {
-    modelId: agent.modelId ?? "mock",
-    inputTokens: 0,
-    outputTokens: 0
-  };
-
-  completeRun(run, message, abortController.signal.aborted ? "aborted" : "complete", null, finalUsage);
   activeRuns.delete(run.id);
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function fillEventIds(event: StreamEvent, messageId: string, runId: string): StreamEvent {
-  if ("messageId" in event && (event as { messageId?: string }).messageId === "") {
-    return { ...event, messageId } as StreamEvent;
-  }
-  if ("runId" in event && (event as { runId?: string }).runId === "") {
-    return { ...event, runId } as StreamEvent;
-  }
-  return event;
-}
-
-function applyEventToState(event: StreamEvent, message: Message): Message {
-  const now = Date.now();
-
-  if (event.type === "part.start") {
-    const parts = [...message.parts];
-    parts[event.partIndex] = event.part;
-    updateMessageParts(message.id, parts, now);
-    return { ...message, parts, updatedAt: now };
-  }
-
-  if (event.type === "part.delta") {
-    const parts = [...message.parts];
-    const part = parts[event.partIndex];
-    if (part && (part.type === "text" || part.type === "thinking" || part.type === "code")) {
-      parts[event.partIndex] = { ...part, content: part.content + event.delta.text };
-      updateMessageParts(message.id, parts, now);
-      return { ...message, parts, updatedAt: now };
-    }
-  }
-
-  if (event.type === "tool.call") {
-    const parts = [...message.parts];
-    parts.push({ type: "tool_use", callId: event.callId, toolName: event.toolName, args: event.args });
-    updateMessageParts(message.id, parts, now);
-    return { ...message, parts, updatedAt: now };
-  }
-
-  if (event.type === "tool.result") {
-    const parts = [...message.parts];
-    parts.push({ type: "tool_result", callId: event.callId, result: event.result, isError: event.isError });
-    updateMessageParts(message.id, parts, now);
-    return { ...message, parts, updatedAt: now };
-  }
-
-  if (event.type === "artifact.create") {
-    const art = event.artifact;
-
-    // Only persist if tool didn't already create it (avoids duplicate insert G3)
-    const existing = getArtifact(art.id);
-    if (!existing) {
-      createArtifact({
-        id: art.id,
-        conversationId: art.conversationId,
-        createdByAgentId: art.createdByAgentId,
-        type: art.type,
-        title: art.title,
-        content: art.content,
-        version: art.version,
-        parentArtifactId: art.parentArtifactId,
-        now: art.createdAt
-      });
-    }
-
-    // Inject artifact_ref part into the message (idempotent — dedupe by artifactId)
-    const parts = [...message.parts];
-    if (!parts.some((p) => p.type === "artifact_ref" && p.artifactId === art.id)) {
-      parts.push({
-        type: "artifact_ref",
-        artifactId: art.id,
-        title: art.title,
-        artifactType: art.type
-      });
-      updateMessageParts(message.id, parts, now);
-    }
-    return { ...message, parts, updatedAt: now };
-  }
-
-  if (event.type === "run.usage") {
-    return message; // usage tracked separately on the run
-  }
-
-  return message;
-}
 
 function completeRun(
   run: AgentRun,
@@ -422,14 +326,6 @@ function createErrorMessage(conversationId: string, relatedMessageId: string, er
     timestamp: now,
     message
   });
-}
-
-function chunkText(text: string, size: number): string[] {
-  const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += size) {
-    chunks.push(text.slice(i, i + size));
-  }
-  return chunks;
 }
 
 function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePath: string): string {

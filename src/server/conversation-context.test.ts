@@ -6,7 +6,7 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { createConversation, sendMessage } from "@/server/conversation-service";
-import { buildHistoryFor } from "@/server/conversation-context";
+import { buildHistoryFor, buildCompactionPrompt } from "@/server/conversation-context";
 import { createMessage } from "@/server/repositories";
 import { newMessageId } from "@/shared/ids";
 
@@ -229,5 +229,74 @@ describe("conversation-context — buildHistoryFor", () => {
     // Verify the function doesn't throw on missing data
     const history = await buildHistoryFor("ag_test", "conv_fake_id");
     expect(Array.isArray(history)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P8: buildCompactionPrompt
+// ---------------------------------------------------------------------------
+
+describe("buildCompactionPrompt", () => {
+  const sampleMessages = [
+    { role: "user", content: "帮我做一个番茄时钟" },
+    { role: "assistant", agentName: "Orchestrator", content: "正在分析任务..." },
+    {
+      role: "assistant",
+      agentName: "PM 小灰",
+      content: "PRD 已完成 [产物: 番茄钟 PRD (art_001)]"
+    },
+    { role: "user", content: "不错，继续" }
+  ];
+
+  it("returns systemPrompt with required output sections", () => {
+    const { systemPrompt } = buildCompactionPrompt(sampleMessages);
+    expect(systemPrompt).toContain("conversation archivist");
+    expect(systemPrompt).toContain("## 用户请求");
+    expect(systemPrompt).toContain("## 任务与结果");
+    expect(systemPrompt).toContain("## 产物");
+    expect(systemPrompt).toContain("## 文件");
+    expect(systemPrompt).toContain("## 待办");
+    expect(systemPrompt).toContain("1500 characters");
+  });
+
+  it("returns userPrompt with all message content", () => {
+    const { userPrompt } = buildCompactionPrompt(sampleMessages);
+    expect(userPrompt).toContain("帮我做一个番茄时钟");
+    expect(userPrompt).toContain("[Orchestrator]");
+    expect(userPrompt).toContain("[PM 小灰]");
+    expect(userPrompt).toContain("art_001");
+    expect(userPrompt).toContain("New messages to compress (4 messages)");
+  });
+
+  it("includes existing summary when provided", () => {
+    const { userPrompt } = buildCompactionPrompt(
+      sampleMessages,
+      "Previous: user requested a tomato clock."
+    );
+    expect(userPrompt).toContain("Previous summary for context");
+    expect(userPrompt).toContain("tomato clock");
+  });
+
+  it("handles empty message array", () => {
+    const { systemPrompt, userPrompt } = buildCompactionPrompt([]);
+    expect(systemPrompt).toBeTruthy();
+    expect(userPrompt).toContain("(0 messages)");
+  });
+
+  it("labels user messages with [用户] prefix", () => {
+    const { userPrompt } = buildCompactionPrompt([{ role: "user", content: "hello" }]);
+    expect(userPrompt).toContain("[用户] hello");
+  });
+
+  it("labels assistant messages with agentName prefix", () => {
+    const { userPrompt } = buildCompactionPrompt([
+      { role: "assistant", agentName: "前端工程师", content: "done" }
+    ]);
+    expect(userPrompt).toContain("[前端工程师] done");
+  });
+
+  it("omits label for assistant messages without agentName", () => {
+    const { userPrompt } = buildCompactionPrompt([{ role: "assistant", content: "done" }]);
+    expect(userPrompt).not.toContain("[undefined]");
   });
 });

@@ -1,6 +1,6 @@
 import type { StreamEvent, AdapterName } from "@/shared/types";
 import type { AgentPlatformAdapter, AdapterInput } from "@/server/adapters/types";
-import { resolveApiKey, getSettings } from "@/server/settings-service";
+import { resolveApiKeyForAgent, getSettings } from "@/server/settings-service";
 
 /**
  * CodexAdapter — wraps @openai/codex-sdk.
@@ -12,7 +12,11 @@ import { resolveApiKey, getSettings } from "@/server/settings-service";
  *   - Isolated CODEX_HOME pointing to Agent-Conference data dir
  *   - Codex base URL validation (must support /responses endpoint)
  *
- * Requires CODEX_API_KEY or OPENAI_API_KEY, or app_settings.
+ * Key resolution per api-key-management.md §6.2 + §6.4:
+ *   - Uses resolveApiKeyForAgent (adapter-aware: codex → openai fields)
+ *   - Extra fallback: CODEX_API_KEY env var
+ *   - CODEX_HOME and CODEX_SQLITE_HOME must point to isolated directories
+ *     to prevent external Codex config from affecting Agent-Conference
  */
 export const codexAdapter: AgentPlatformAdapter = {
   name: "codex" as AdapterName,
@@ -20,8 +24,11 @@ export const codexAdapter: AgentPlatformAdapter = {
   async *run(input: AdapterInput, signal: AbortSignal) {
     const conversationId = input.conversationId;
     const settings = getSettings();
-    const apiKey = resolveApiKey("openai", input.agent.apiKey ?? null, settings)
-      ?? process.env.CODEX_API_KEY
+    const apiKey = resolveApiKeyForAgent(
+      { adapterName: "codex", apiKey: input.agent.apiKey },
+      settings
+    )
+      ?? process.env.CODEX_API_KEY  // extra fallback per §6.4
       ?? null;
 
     if (!apiKey) {
@@ -63,6 +70,13 @@ export const codexAdapter: AgentPlatformAdapter = {
         return;
       }
     }
+
+    // Per §6.4: Isolate CODEX_HOME to Agent-Conference data directory.
+    // This prevents the user's external Codex config (~/.codex) from leaking in.
+    // When full SDK integration lands:
+    //   const dataDir = process.env.AGENT_CONFERENCE_DATA_DIR ?? ".agenthub-data";
+    //   process.env.CODEX_HOME = path.join(dataDir, "codex");
+    //   process.env.CODEX_SQLITE_HOME = path.join(dataDir, "codex");
 
     // Stub: SDK would be initialized here
     yield {

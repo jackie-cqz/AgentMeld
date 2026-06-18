@@ -1,11 +1,12 @@
 import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
+import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents } from "@/server/repositories";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact } from "@/server/repositories";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
-import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs } from "@/server/child-prompt-builder";
+import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact } from "@/server/child-prompt-builder";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileDispatchPlan, validateDispatchPlan } from "@/server/dispatch-plan";
@@ -25,31 +26,39 @@ export interface OrchestratorInput {
   triggerMessage: Message;
   availableAgentIds: string[];
   orchestratorRunId: string;
+  /** messageId of the orchestrator's streaming response bubble, so events can target it */
+  messageId: string;
 }
 
 export async function executeOrchestrator(input: OrchestratorInput): Promise<void> {
-  // Stage 1: PLAN — with revise loop
+  // Stage 1: ASSESS — LLM decides whether this needs a plan or is a simple chat
+  const userText = extractTextFromMessage(input.triggerMessage);
+  const assessResult = await runOrchestratorAssess(input, userText);
+
+  // Case A: Direct response — LLM answered directly (simple chat, greeting, question)
+  if (assessResult.mode === "direct") {
+    // Events were already streamed to the frontend via runOrchestratorAssess
+    return;
+  }
+
+  // Case B: Plan required — proceed with approval → DAG → aggregate
+  let plan = assessResult.plan!;
   let reviewing = true;
   let revisionContext = "";
 
   while (reviewing) {
-    // Generate plan (first time: original prompt; revise: with feedback)
-    const effectiveUserText = revisionContext
-      ? `${revisionContext}\n\n<original_request>\n${extractTextFromMessage(input.triggerMessage)}\n</original_request>`
-      : extractTextFromMessage(input.triggerMessage);
-
-    const llmResult = await generatePlanWithLLM(input, effectiveUserText);
-    const plan = llmResult.success
-      ? llmResult.plan!
-      : buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-
-    // Tell user which mode
-    if (!llmResult.success && llmResult.error) {
-      createSystemMessage(input.conversationId, `⚠️ DeepSeek 调用失败：${llmResult.error.slice(0, 200)}，使用 demo plan。`);
-    } else if (llmResult.success && !revisionContext) {
-      createSystemMessage(input.conversationId, `🤖 DeepSeek 生成计划成功（${llmResult.plan!.tasks.length} 个任务）。`);
-    } else if (llmResult.success) {
-      createSystemMessage(input.conversationId, `🔄 根据反馈重新规划（${llmResult.plan!.tasks.length} 个任务）。`);
+    // If revising, re-run the assess with feedback
+    if (revisionContext) {
+      const effectiveText = `${revisionContext}\n\n<original_request>\n${userText}\n</original_request>`;
+      const revised = await runOrchestratorAssess(input, effectiveText);
+      if (revised.mode === "plan" && revised.plan) {
+        plan = revised.plan;
+        createSystemMessage(input.conversationId, `🔄 根据反馈重新规划（${revised.plan.tasks.length} 个任务）。`);
+      } else {
+        createSystemMessage(input.conversationId, "⚠️ 重新规划失败，使用原计划继续。");
+      }
+    } else {
+      createSystemMessage(input.conversationId, `🤖 Orchestrator 生成计划（${plan.tasks.length} 个任务）。`);
     }
 
     // Publish plan for review
@@ -62,20 +71,17 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
       id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn
     }));
 
-    // Wait for user decision
     const result = await registerPendingPlan(input.conversationId, input.orchestratorRunId, planItems);
 
     if (!result.approved) {
-      // REJECT
       createSystemMessage(input.conversationId, "❌ 计划已拒绝，Orchestrator 运行终止。");
       return;
     }
 
     if (result.revisedPlan) {
-      // REVISE — user gave feedback, re-plan
       const feedback = result.revisedPlan.length > 0 ? result.revisedPlan[0].task : "请调整计划。";
-      revisionContext = `用户对上一个计划的反馈：${feedback}\n请根据反馈重新规划任务。`;
-      continue; // back to while loop, re-plan
+      revisionContext = buildReviseContext(feedback);
+      continue;
     }
 
     // APPROVE — execute
@@ -243,7 +249,39 @@ async function runChildTask(
 
   try {
     // Build child prompt with full context
-    const prompt = buildChildTaskPrompt(task, resolvedInputs, outputBindings);
+        // Build upstream artifact references
+    const upstreamArtifacts: UpstreamArtifact[] = [];
+    for (const ri of resolvedInputs) {
+      if (ri.artifactId) {
+        const art = getArtifact(ri.artifactId);
+        if (art) {
+          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
+        }
+      }
+    }
+    for (const [, artId] of outputBindings) {
+      if (!upstreamArtifacts.some((a) => a.id === artId)) {
+        const art = getArtifact(artId);
+        if (art) {
+          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
+        }
+      }
+    }
+
+    // Build recent conversation snippet
+    const recentConversation: Array<{ from: string; content: string }> = [];
+    const userText = extractTextFromMessage(triggerMessage);
+    if (userText) {
+      recentConversation.push({ from: "user", content: userText });
+    }
+
+    // Build child prompt with full context
+    const prompt = buildChildTaskPrompt({
+      task,
+      resolvedInputs,
+      upstreamArtifacts,
+      recentConversation
+    });
 
     eventBus.publish({
       type: "dispatch.start", conversationId, timestamp: Date.now(),
@@ -257,7 +295,7 @@ async function runChildTask(
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptPrompt = attempt > 1
-        ? `${prompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${finalEvaluation.error ?? "unknown"}. Fix the issues and try again.`
+        ? buildContinuationPrompt(prompt, attempt, maxAttempts, finalEvaluation.error ?? "unknown")
         : prompt;
 
       const attemptMsg: Message = {
@@ -403,18 +441,8 @@ async function runAggregateStage(
   }
 
   // Build aggregate prompt
-  const aggregateSystemPrompt = `${agent.systemPrompt}
-
-## 当前阶段
-你处于「聚合阶段」。所有子任务已执行完成（含成功与失败），结果在 user 消息中以 XML 给出。
-请直接给用户输出一条总结消息：
-- 简明列出完成 / 失败的任务
-- 如果存在 failed / skipped / aborted 任务，必须明确说明整体未完成，不要把局部成功说成全部完成
-- 用 <artifact_ref id="art_xxx"/> 形式引用关键产物（如果有）
-- 给出明确的下一步建议
-不要再调用 plan_tasks，不要把任务再次分派。`;
-
-  const aggregateUserPrompt = buildAggregatePrompt(conversationId, plan, results, outputBindings, triggerMessage);
+  const { systemPrompt: aggregateSystemPrompt, userPrompt: aggregateUserPrompt } =
+    buildOrchestratorAggregatePrompt(agent, plan, results, outputBindings, triggerMessage, conversationId);
 
   // Tools: remove plan_tasks and ask_user
   const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
@@ -435,7 +463,7 @@ async function runAggregateStage(
 
   const adapter = getAdapter(agent.adapterName);
 
-  // Consume aggregate stream — publish all events
+  // Consume aggregate stream — events published directly (aggregate output is self-contained)
   for await (const event of adapter.run(adapterInput, signal)) {
     eventBus.publish(event);
   }
@@ -496,93 +524,322 @@ function createSystemMessage(conversationId: string, error: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Real LLM plan generation (DeepSeek / OpenAI-compatible)
+// Orchestrator assess — flexible LLM call that can produce direct response OR plan
 // ---------------------------------------------------------------------------
 
-async function generatePlanWithLLM(input: OrchestratorInput, overrideText?: string): Promise<{ success: true; plan: { reasoning: string; tasks: ParsedTask[] } } | { success: false; error: string }> {
-  try {
-    const agents = listAgents();
-    const agent = agents.find((a) => a.id === input.orchestratorAgentId);
-    if (!agent || agent.adapterName !== "custom") return { success: false, error: "Orchestrator agent is not a custom adapter." };
+// ---------------------------------------------------------------------------
+// Prompt builders — independent, testable pure functions
+// ---------------------------------------------------------------------------
 
-    const conversation = getConversation(input.conversationId);
-    const workspace = getWorkspaceForConversation(input.conversationId);
-    if (!conversation || !workspace) return { success: false, error: "Conversation or workspace not found." };
+/** Tools available to the Orchestrator during the PLAN (assess) stage only */
+export const ORCHESTRATOR_PLAN_TOOLS = [
+  "plan_tasks",
+  "ask_user",
+  "read_artifact",
+  "read_attachment",
+  "fs_list",
+  "fs_read"
+] as const;
 
-    const settings = getSettings();
-    const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
-    if (!apiKey) return { success: false, error: "No DeepSeek API key configured." };
+/**
+ * Build the complete system prompt for the Orchestrator's PLAN (assess) stage.
+ * Four blocks per message-flow-with-prompts-new.md §LLM 调用 #1:
+ *   1. Workspace context
+ *   2. Orchestrator persona
+ *   3. PLAN dynamic instructions (workflow + agents + decomposition + dependencies + example)
+ *   4. Tool guidance (cut-down: plan_tasks, ask_user, read_artifact, read_attachment, fs_list, fs_read)
+ */
+export function buildOrchestratorPlanPrompt(
+  agent: Agent,
+  otherAgents: Agent[],
+  workspacePath: string
+): string {
+  const agentList = otherAgents.length > 0
+    ? otherAgents.map((a) =>
+        `- { id: "${a.id}", name: "${a.name}", capabilities: [${a.capabilities.join(", ")}], tools: [${a.toolNames.join(", ")}], description: "${a.description}" }`
+      ).join("\n")
+    : "(无其他可用 Agent)";
 
-    const otherAgents = agents.filter((a) => !a.isOrchestrator && input.availableAgentIds.includes(a.id));
-    const agentList = otherAgents.map((a) =>
-      `- id: "${a.id}", name: "${a.name}", description: "${a.description}", capabilities: [${a.capabilities.join(", ")}], tools: [${a.toolNames.join(", ")}]`
-    ).join("\n");
+  const blocks: string[] = [];
 
-    const userText = overrideText ?? input.triggerMessage.parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.content)
-      .join("\n");
+  // Block 1: Workspace context
+  blocks.push(`<workspace_info>
+  <cwd>${workspacePath}</cwd>
+  <mode>sandbox</mode>
+  <note>
+    This is an isolated sandbox directory. Files you write here are only visible
+    inside this conversation.
+  </note>
+</workspace_info>`);
 
-    const adapterInput: AdapterInput = {
-      conversationId: input.conversationId,
-      runId: input.orchestratorRunId,
-      agent: {
-        ...agent,
-        toolNames: ["plan_tasks", "ask_user"], // Plan stage: only these tools
-        systemPrompt: `You are a task orchestrator in a multi-agent system. You MUST call plan_tasks with a structured plan. Do NOT output JSON in plain text — use the plan_tasks tool.
+  // Block 2: Orchestrator persona
+  blocks.push(agent.systemPrompt);
 
-## Available Agents
+  // Block 3: PLAN dynamic instructions
+  blocks.push(`## 你的工作流
+1. 阅读用户最新请求与上下文。
+2. 如果存在会阻塞正确规划的关键歧义，且能归纳为 2-4 个清晰选项，
+   先调用 ask_user 让用户选择；拿到答案后继续。
+3. 调用 plan_tasks 工具，输出结构化 plan。
+4. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
+
+## 可用 Agent
 ${agentList}
 
-## Planning Rules
-- Each task MUST have a unique id (t1, t2, ...).
-- agentId MUST be one of the available agent IDs listed above.
-- dependsOn lists task IDs that must finish BEFORE this task starts.
-- Execution order ONLY follows dependsOn. Writing "do A first" in task text has NO effect.
-- Tasks with NO dependsOn run IN PARALLEL. Only omit dependsOn for truly independent tasks.
-- When unsure, prefer adding dependencies (serial is safer).
-- Each task must be self-contained: the assigned agent does NOT see full group history.
-- Do NOT declare expectedOutputs for text-only tasks. Use acceptanceCriteria instead.
-- 1-3 well-structured tasks are usually better than many tiny ones.
-- If a critical ambiguity blocks planning AND you can formulate 2-4 options, call ask_user first.`
-      },
-      conversation,
-      workspace,
-      triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
-      recentMessages: [],
-      toolNames: ["plan_tasks", "ask_user"],
-      systemPrompt: "",
-      workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
-      apiKey
-    };
+## 拆解原则
+- 充分利用每个 Agent 的 capabilities，不要把任务派给不合适的人。
+- 每个子任务必须独立可执行（被分派的 Agent 看不到完整群聊上下文，
+  必要上下文要写进 task）。
+- 计划阶段只能调用 ask_user、plan_tasks 和只读侦察工具
+  （fs_list / fs_read / read_artifact / read_attachment）；不要写文件或执行命令。
+- 若用户需求已足够明确，不要为了形式感提问，直接 plan_tasks。
 
-    const adapter = getAdapter(agent.adapterName);
-    const signal = AbortSignal.timeout(45000);
+## 依赖关系（执行顺序的唯一来源，务必读完）
+- 系统【只】按每个任务的 dependsOn 决定顺序：
+  dependsOn 为空的任务会【同时并发】启动。
+- 若任务 B 需要任务 A 的产物 / 结论 / 输出，
+  你【必须】在 B 的 dependsOn 里写上 A 的 id。
+- 在 task 文本里写「先做 A」「基于上一步」之类【没有任何效果】
+  ——执行顺序只认 dependsOn 字段。
+- 只有彼此真正无关、可同时进行的任务才留空 dependsOn；
+  拿不准时倾向加依赖（串行更安全）。
+- Only declare expectedOutputs when the assigned agent must create a real artifact
+  via write_artifact for downstream handoff or user inspection.
+- Do NOT declare expectedOutputs for text-only tasks such as review, validation,
+  diagnosis, status check, explanation, or summary.
+- If a task needs an upstream artifact, declare inputs with fromTaskId and outputId.
+- For tasks with quality requirements, add concise acceptanceCriteria.
 
-    // Stream events and capture plan_tasks tool call
-    let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
-    for await (const event of adapter.run(adapterInput, signal)) {
-      if (event.type === "tool.call" && "toolName" in event && (event as { toolName: string }).toolName === "plan_tasks") {
-        const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
-        if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
-          capturedPlan = { reasoning: args.reasoning || "Plan", tasks: args.tasks };
-          break; // Stop consuming — plan_tasks is the terminator
+示例（设计 → 前端 → 审查，逐级依赖；agentId 用上面可用列表里的真实 id）：
+tasks: [
+  { "id": "t1", "agentId": "<设计师 id>", "task": "产出 UI 设计稿" },
+  { "id": "t2", "agentId": "<前端 id>", "task": "按设计稿实现页面",
+    "dependsOn": ["t1"] },
+  { "id": "t3", "agentId": "<Reviewer id>", "task": "审查 t2 的实现",
+    "dependsOn": ["t2"] }
+]`);
+
+  // Block 4: Tool guidance (cut-down for PLAN stage — no fs_write, no bash)
+  blocks.push(buildPlanStageToolGuidance());
+
+  return blocks.join("\n");
+}
+
+/** Tool guidance for PLAN stage only — covers just the 6 allowed tools */
+function buildPlanStageToolGuidance(): string {
+  const lines: string[] = ["\n## AgentHub 工具调用规范"];
+  lines.push("- 需要调用工具时，必须用工具调用通道提交结构化参数，不要把 JSON 示例写进普通回复里假装调用。");
+  lines.push("- 字段名必须严格使用工具 schema 里的 camelCase。");
+  lines.push("- 不要编造 artifactId、attachmentId、outputKey、文件路径；只能使用上下文里明确给出的 id / 路径。");
+  lines.push("- 工具返回 ok:false 或 isError=true 时，先根据错误修正参数；不要继续基于失败结果推进。");
+
+  lines.push("\n### plan_tasks");
+  lines.push("用途：Orchestrator 用结构化计划拆分子任务；执行顺序只认 dependsOn 字段。");
+  lines.push("正确案例：t2.dependsOn=[\"t1\"]，不要只在 task 文本里写\"基于 t1\"。");
+  lines.push("只在确实需要多 Agent 协作时调用此工具——简单对话直接文字回复即可。");
+
+  lines.push("\n### ask_user");
+  lines.push("用途：当继续执行前需要用户在有限方案中选择时，发起结构化问答；不要只在普通文本里问。");
+  lines.push("正确案例：产品范围不清，调用 ask_user({ questions: [...] })。");
+  lines.push("参数规则：每次 1-4 个 questions，每题 2-4 个 options。");
+  lines.push("不要滥用：开放式讨论、非关键细节、或可以保守决策时，直接说明假设并继续。");
+
+  lines.push("\n### read_artifact");
+  lines.push("用途：需要基于已有产物继续设计、实现、审查或修改时，先读取完整产物内容。");
+  lines.push("正确案例：read_artifact({ artifactId: \"art_123\" })。");
+  lines.push("常见错误：传 { id: \"art_123\" } 或把 att_* 附件 id 传给 read_artifact。");
+
+  lines.push("\n### read_attachment");
+  lines.push("用途：用户上传了文本/文件附件且任务依赖附件内容时，先读取附件；不要只凭文件名猜测。");
+  lines.push("常见错误：传 { id: \"att_123\" }；附件用 read_attachment，产物用 read_artifact。");
+
+  lines.push("\n### fs_list / fs_read");
+  lines.push("用途：探索 workspace 目录结构和读取文本文件。只读侦察，不能修改。");
+  lines.push("fs_list 正确案例：fs_list({ path: \"\" }) 查看根目录。");
+  lines.push("fs_read 正确案例：fs_read({ path: \"src/app/page.tsx\" })，上限 1MB / 截断到 50K 字符。");
+
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Prompt builders — P6: Aggregate prompt & P7: Replan / Revise / Continuation
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the system + user prompts for the Orchestrator's AGGREGATE stage.
+ * Extracted from runAggregateStage.
+ */
+export function buildOrchestratorAggregatePrompt(
+  agent: Agent,
+  plan: ParsedTask[],
+  results: Map<string, TaskResult>,
+  outputBindings: Map<string, string>,
+  triggerMessage: Message,
+  conversationId: string
+): { systemPrompt: string; userPrompt: string } {
+  const systemPrompt = `${agent.systemPrompt}
+
+## 当前阶段
+你处于「聚合阶段」。所有子任务已执行完成（含成功与失败），结果在 user 消息中以 XML 给出。
+请直接给用户输出一条总结消息：
+- 简明列出完成 / 失败的任务
+- 如果存在 failed / skipped / aborted 任务，必须明确说明整体未完成，不要把局部成功说成全部完成
+- 用 <artifact_ref id="art_xxx"/> 形式引用关键产物（如果有）
+- 给出明确的下一步建议
+不要再调用 plan_tasks，不要把任务再次分派。`;
+
+  const userPrompt = buildAggregatePrompt(conversationId, plan, results, outputBindings, triggerMessage);
+  return { systemPrompt, userPrompt };
+}
+
+/**
+ * Build context for re-planning after a round of failed tasks.
+ * Used in multi-round retry within executeOrchestratorPlan.
+ */
+export function buildReplanContext(
+  plan: ParsedTask[],
+  results: Map<string, TaskResult>
+): string {
+  const failedTasks = plan.filter((t) => {
+    const r = results.get(t.id);
+    return r && r.status === "failed";
+  });
+
+  const summary = failedTasks.map((t) => {
+    const r = results.get(t.id);
+    return `- ${t.id} (${t.title}): ${r?.summary ?? "unknown error"}`;
+  }).join("\n");
+
+  return `上一轮以下任务失败：\n${summary}\n\n补救指示：为失败任务修正参数后重试。`;
+}
+
+/**
+ * Build revision context when the user provides feedback on a plan.
+ * Used in executeOrchestrator's revise loop.
+ */
+export function buildReviseContext(feedback: string): string {
+  return `用户对上一个计划的反馈：${feedback}\n请根据反馈重新规划任务。`;
+}
+
+/**
+ * Build a retry prompt for a child task attempt.
+ * Used in runChildTask's retry loop.
+ */
+export function buildContinuationPrompt(
+  basePrompt: string,
+  attempt: number,
+  maxAttempts: number,
+  lastError: string
+): string {
+  return `${basePrompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${lastError}. Fix the issues and try again.`;
+}
+
+type AssessResult =
+  | { mode: "direct" }
+  | { mode: "plan"; plan: { reasoning: string; tasks: ParsedTask[] } };
+
+async function runOrchestratorAssess(
+  input: OrchestratorInput,
+  userText: string
+): Promise<AssessResult> {
+  const agents = listAgents();
+  const agent = agents.find((a) => a.id === input.orchestratorAgentId);
+  if (!agent || agent.adapterName !== "custom") {
+    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+    return { mode: "plan", plan: demoPlan };
+  }
+
+  const conversation = getConversation(input.conversationId);
+  const workspace = getWorkspaceForConversation(input.conversationId);
+  if (!conversation || !workspace) {
+    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+    return { mode: "plan", plan: demoPlan };
+  }
+
+  const settings = getSettings();
+  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  if (!apiKey) {
+    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+    return { mode: "plan", plan: demoPlan };
+  }
+
+  const otherAgents = agents.filter((a) => !a.isOrchestrator && input.availableAgentIds.includes(a.id));
+  const workspacePath = workspace.mode === "local" && workspace.boundPath
+    ? workspace.boundPath : workspace.rootPath;
+
+  // Build the PLAN stage system prompt from the extracted pure function
+  const assessSystemPrompt = buildOrchestratorPlanPrompt(agent, otherAgents, workspacePath);
+  const assessToolNames = [...ORCHESTRATOR_PLAN_TOOLS];
+
+  const adapterInput: AdapterInput = {
+    conversationId: input.conversationId,
+    runId: input.orchestratorRunId,
+    agent: { ...agent, toolNames: assessToolNames, systemPrompt: assessSystemPrompt },
+    conversation,
+    workspace,
+    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
+    recentMessages: [],
+    toolNames: assessToolNames,
+    systemPrompt: "",
+    workspacePath,
+    apiKey
+  };
+
+  const adapter = getAdapter(agent.adapterName);
+  const signal = AbortSignal.timeout(60000);
+
+  // Stream events AND watch for plan_tasks via onEvent callback
+  let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
+
+  try {
+    await consumeStream({
+      stream: adapter.run(adapterInput, signal),
+      messageId: input.messageId,
+      runId: input.orchestratorRunId,
+      signal,
+      onEvent: (event) => {
+        // Detect plan_tasks tool call → capture and stop
+        if (
+          event.type === "tool.call" &&
+          "toolName" in event &&
+          (event as { toolName: string }).toolName === "plan_tasks"
+        ) {
+          const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
+          if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
+            capturedPlan = { reasoning: args.reasoning || "Plan", tasks: args.tasks };
+            return { stop: true };
+          }
         }
       }
-    }
-
-    if (!capturedPlan) {
-      return { success: false, error: "Orchestrator LLM did not call plan_tasks. It may have replied in text instead of using the tool." };
-    }
-
-    const planResult = parsePlanArgs(capturedPlan);
-    if (typeof planResult === "string") return { success: false, error: `Plan validation failed: ${planResult}` };
-
-    return { success: true, plan: planResult };
+    });
   } catch (err) {
-    return { success: false, error: `Exception: ${err instanceof Error ? err.message : String(err)}` };
+    // If we already captured a plan, the error after capture is irrelevant
+    if (capturedPlan) {
+      // proceed to plan validation below
+    } else {
+      // Stream error without a plan — fall back to demo plan
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      createSystemMessage(input.conversationId, `⚠️ Orchestrator 调用失败：${errorMsg.slice(0, 200)}`);
+      const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+      return { mode: "plan", plan: demoPlan };
+    }
   }
+
+  // If plan_tasks was captured, validate and return plan mode
+  if (capturedPlan) {
+    const planResult = parsePlanArgs(capturedPlan);
+    if (typeof planResult === "string") {
+      createSystemMessage(input.conversationId, `⚠️ Plan 校验失败：${planResult}，使用 demo plan`);
+      const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
+      return { mode: "plan", plan: demoPlan };
+    }
+    return { mode: "plan", plan: planResult };
+  }
+
+  // No plan_tasks detected → LLM responded directly (simple chat)
+  return { mode: "direct" };
 }
+
 
 // ---------------------------------------------------------------------------
 // Demo plan generator (fallback)

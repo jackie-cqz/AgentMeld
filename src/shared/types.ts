@@ -356,4 +356,20 @@ export type StreamEvent =
   | (BaseEvent & { type: "fs_write.pending"; pendingWrite: PendingWrite })
   | (BaseEvent & { type: "fs_write.resolved"; pendingId: string; applied: boolean })
   | (BaseEvent & { type: "bash_command.pending"; pendingCommand: PendingBashCommand })
-  | (BaseEvent & { type: "bash_command.resolved"; pendingId: string; approved: boolean });
+  | (BaseEvent & { type: "bash_command.resolved"; pendingId: string; approved: boolean })
+  | (BaseEvent & {
+      type: "compaction.start";
+      sourceMessageCount: number;
+    })
+  | (BaseEvent & {
+      type: "compaction.progress";
+      stage: "reading" | "summarizing" | "storing";
+      detail?: string;
+    })
+  | (BaseEvent & {
+      type: "compaction.end";
+      sourceMessageCount: number;
+      coveredUntilMessageId: string;
+      summary: string;
+      tokenEstimate: number;
+    });

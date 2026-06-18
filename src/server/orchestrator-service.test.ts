@@ -1,0 +1,204 @@
+import { describe, it, expect } from "vitest";
+import {
+  buildOrchestratorPlanPrompt,
+  buildOrchestratorAggregatePrompt,
+  buildReplanContext,
+  buildReviseContext,
+  buildContinuationPrompt,
+  ORCHESTRATOR_PLAN_TOOLS
+} from "@/server/orchestrator-service";
+import type { TaskResult } from "@/server/orchestrator-service";
+import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { Agent } from "@/shared/types";
+
+function makeStubAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: "ag_orch",
+    name: "Orchestrator",
+    avatar: "",
+    description: "",
+    capabilities: [],
+    adapterName: "custom",
+    modelProvider: "deepseek",
+    modelId: "deepseek-chat",
+    apiKey: null,
+    apiBaseUrl: null,
+    systemPrompt: "You are the Orchestrator.",
+    toolNames: ["plan_tasks", "ask_user"],
+    isBuiltin: true,
+    isOrchestrator: true,
+    supportsVision: false,
+    conversationId: "conv_x",
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides
+  };
+}
+
+function makeStubWorker(id: string, name: string, caps: string[], tools: string[]): Agent {
+  return makeStubAgent({
+    id,
+    name,
+    capabilities: caps,
+    toolNames: tools,
+    isOrchestrator: false
+  });
+}
+
+describe("buildOrchestratorPlanPrompt", () => {
+  it("returns a string containing all 4 blocks", () => {
+    const orch = makeStubAgent();
+    const workers = [
+      makeStubWorker("ag_pm", "PM 小灰", ["requirements"], ["write_artifact", "read_artifact"]),
+      makeStubWorker("ag_reviewer", "Reviewer", ["review"], ["read_artifact", "bash"]),
+    ];
+    const prompt = buildOrchestratorPlanPrompt(orch, workers, "/tmp/ws");
+
+    // Block 1: workspace info
+    expect(prompt).toContain("<workspace_info>");
+    expect(prompt).toContain("<cwd>/tmp/ws</cwd>");
+
+    // Block 2: persona
+    expect(prompt).toContain("You are the Orchestrator.");
+
+    // Block 3: dynamic instructions
+    expect(prompt).toContain("## 你的工作流");
+    expect(prompt).toContain("## 可用 Agent");
+    expect(prompt).toContain('"ag_pm"');
+    expect(prompt).toContain("PM 小灰");
+    expect(prompt).toContain('"ag_reviewer"');
+    expect(prompt).toContain("## 拆解原则");
+    expect(prompt).toContain("## 依赖关系");
+    expect(prompt).toContain("dependsOn");
+
+    // Block 4: tool guidance
+    expect(prompt).toContain("## AgentHub 工具调用规范");
+    expect(prompt).toContain("### plan_tasks");
+    expect(prompt).toContain("### ask_user");
+    expect(prompt).toContain("### read_artifact");
+    expect(prompt).toContain("### read_attachment");
+    expect(prompt).toContain("### fs_list / fs_read");
+  });
+
+  it("handles empty workers list gracefully", () => {
+    const orch = makeStubAgent();
+    const prompt = buildOrchestratorPlanPrompt(orch, [], "/tmp/ws");
+    expect(prompt).toContain("(无其他可用 Agent)");
+  });
+
+  it("includes dependency example with placeholder agent ids", () => {
+    const orch = makeStubAgent();
+    const prompt = buildOrchestratorPlanPrompt(orch, [], "/tmp/ws");
+    expect(prompt).toContain('"id": "t1"');
+    expect(prompt).toContain('"dependsOn": ["t1"]');
+  });
+
+  it("does NOT include fs_write or bash guidance", () => {
+    const orch = makeStubAgent();
+    const prompt = buildOrchestratorPlanPrompt(orch, [], "/tmp/ws");
+    expect(prompt).not.toContain("### fs_write");
+    expect(prompt).not.toContain("### bash");
+    expect(prompt).not.toContain("### deploy_artifact");
+  });
+});
+
+describe("ORCHESTRATOR_PLAN_TOOLS", () => {
+  it("contains the 6 allowed PLAN-stage tools", () => {
+    expect(ORCHESTRATOR_PLAN_TOOLS).toEqual([
+      "plan_tasks",
+      "ask_user",
+      "read_artifact",
+      "read_attachment",
+      "fs_list",
+      "fs_read"
+    ]);
+  });
+
+  it("does NOT contain fs_write or bash", () => {
+    expect(ORCHESTRATOR_PLAN_TOOLS).not.toContain("fs_write");
+    expect(ORCHESTRATOR_PLAN_TOOLS).not.toContain("bash");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P6: buildOrchestratorAggregatePrompt
+// ---------------------------------------------------------------------------
+
+describe("buildOrchestratorAggregatePrompt", () => {
+  const orch = makeStubAgent();
+  const task: ParsedTask = {
+    id: "t1", agentId: "ag_pm", title: "写 PRD",
+    prompt: "写 PRD", dependsOn: [], inputs: [], expectedOutputs: [],
+    acceptanceCriteria: [], maxAttempts: 1
+  };
+  const results = new Map<string, TaskResult>([
+    ["t1", { taskId: "t1", status: "complete", summary: "PRD 完成" }]
+  ]);
+  const triggerMsg = {
+    id: "msg_1", conversationId: "c1", role: "user" as const,
+    agentId: null, runId: null,
+    parts: [{ type: "text" as const, content: "帮我做番茄时钟" }],
+    status: "complete" as const, parentMessageId: null,
+    mentionedAgentIds: [], createdAt: 0, updatedAt: 0
+  };
+
+  it("returns systemPrompt with aggregate stage instructions", () => {
+    const { systemPrompt } = buildOrchestratorAggregatePrompt(
+      orch, [task], results, new Map(), triggerMsg, "c1"
+    );
+    expect(systemPrompt).toContain("You are the Orchestrator");
+    expect(systemPrompt).toContain("聚合阶段");
+    expect(systemPrompt).toContain("不要再调用 plan_tasks");
+  });
+
+  it("returns userPrompt with task_results XML", () => {
+    const { userPrompt } = buildOrchestratorAggregatePrompt(
+      orch, [task], results, new Map(), triggerMsg, "c1"
+    );
+    expect(userPrompt).toContain("<user_request>帮我做番茄时钟</user_request>");
+    expect(userPrompt).toContain("<task_results>");
+    expect(userPrompt).toContain('task="t1"');
+    expect(userPrompt).toContain('status="complete"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P7: buildReplanContext / buildReviseContext / buildContinuationPrompt
+// ---------------------------------------------------------------------------
+
+describe("buildReplanContext", () => {
+  it("lists failed tasks with summaries", () => {
+    const plan: ParsedTask[] = [
+      { id: "t1", agentId: "ag_pm", title: "PRD", prompt: "", dependsOn: [], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 },
+      { id: "t2", agentId: "ag_fe", title: "实现", prompt: "", dependsOn: ["t1"], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 },
+    ];
+    const results = new Map<string, TaskResult>([
+      ["t1", { taskId: "t1", status: "complete", summary: "OK" }],
+      ["t2", { taskId: "t2", status: "failed", summary: "build error" }],
+    ]);
+    const ctx = buildReplanContext(plan, results);
+    expect(ctx).toContain("上一轮以下任务失败");
+    expect(ctx).toContain("t2");
+    expect(ctx).toContain("实现");
+    expect(ctx).toContain("build error");
+    expect(ctx).not.toContain("t1"); // t1 succeeded
+  });
+});
+
+describe("buildReviseContext", () => {
+  it("wraps feedback in revision format", () => {
+    const ctx = buildReviseContext("t3 不需要，请移除。");
+    expect(ctx).toContain("用户对上一个计划的反馈：t3 不需要，请移除。");
+    expect(ctx).toContain("请根据反馈重新规划任务。");
+  });
+});
+
+describe("buildContinuationPrompt", () => {
+  it("generates retry prompt with attempt info and error", () => {
+    const prompt = buildContinuationPrompt("base prompt here", 2, 3, "timeout");
+    expect(prompt).toContain("base prompt here");
+    expect(prompt).toContain("[Retry 2/3]");
+    expect(prompt).toContain("timeout");
+    expect(prompt).toContain("Fix the issues and try again");
+  });
+});
