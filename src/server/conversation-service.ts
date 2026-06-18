@@ -7,6 +7,7 @@ import { deployArtifact } from "@/server/deployment-service";
 import { eventBus } from "@/server/event-bus";
 import { getAllPendingBashCommands } from "@/server/pending-bash";
 import { getAllPendingPlans } from "@/server/dispatch-plan-manager";
+import { getAllPendingQuestions } from "@/server/pending-questions";
 import { getAllPendingWrites } from "@/server/pending-writes";
 import {
   createConversation as insertConversation,
@@ -34,6 +35,7 @@ interface BootstrapPayload {
   pendingWrites: ReturnType<typeof getAllPendingWrites>;
   pendingBashCommands: ReturnType<typeof getAllPendingBashCommands>;
   pendingDispatchPlans: ReturnType<typeof getAllPendingPlans>;
+  pendingQuestions: ReturnType<typeof getAllPendingQuestions>;
 }
 
 interface CreateConversationInput {
@@ -72,7 +74,8 @@ export function getBootstrapPayload(): BootstrapPayload {
     ),
     pendingWrites: getAllPendingWrites(),
     pendingBashCommands: getAllPendingBashCommands(),
-    pendingDispatchPlans: getAllPendingPlans()
+    pendingDispatchPlans: getAllPendingPlans(),
+    pendingQuestions: getAllPendingQuestions()
   };
 }
 

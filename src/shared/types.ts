@@ -46,6 +46,18 @@ export interface DeployCandidateRecord {
   createdAt: number;
 }
 
+export interface SearchHit {
+  messageId: string;
+  conversationId: string;
+  conversationTitle: string;
+  role: "user" | "agent" | "system";
+  agentId: string | null;
+  agentName: string | null;
+  agentAvatar: string | null;
+  createdAt: number;
+  snippetHtml: string;
+}
+
 export type PartDelta =
   | { type: "text.append"; text: string }
   | { type: "code.append"; text: string }
@@ -275,11 +287,34 @@ export interface PendingBashCommand {
   createdAt: number;
 }
 
+export interface PendingQuestion {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  runId: string;
+  questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+  createdAt: number;
+}
+
 export interface DispatchPlanItem {
   id: string;
   agentId: string;
   task: string;
   dependsOn: string[];
+  title?: string;
+  prompt?: string;
+  inputs?: Array<{ fromTaskId: string; outputId: string; required?: boolean; description?: string }>;
+  expectedOutputs?: Array<{ id: string; type: "web_app" | "document" | "image" | "ppt"; required?: boolean; description?: string }>;
+  acceptanceCriteria?: string[];
+  maxAttempts?: number;
+  targetPaths?: string[];
+  requiredCommands?: Array<{ command: string; timeoutMs?: number }>;
+  requiredEvidence?: string[];
 }
 
 export interface PendingDispatchPlan {
@@ -343,8 +378,25 @@ export type StreamEvent =
   | (BaseEvent & { type: "deploy.status"; messageId: string; deployment: DeployStatusRecord })
   | (BaseEvent & { type: "dispatch.plan"; runId: string; plan: DispatchPlanItem[] })
   | (BaseEvent & { type: "dispatch.plan.pending"; pendingPlan: PendingDispatchPlan })
-  | (BaseEvent & { type: "dispatch.plan.resolved"; pendingId: string; runId: string; approved: boolean })
+  | (BaseEvent & { type: "dispatch.plan.resolved"; pendingId: string; runId: string; approved: boolean; feedback?: string })
   | (BaseEvent & { type: "dispatch.start"; parentRunId: string; childRunId: string; taskId: string; agentId: string })
+  | (BaseEvent & {
+      type: "dispatch.task.start";
+      parentRunId: string;
+      childRunId: string;
+      taskId: string;
+      agentId: string;
+      attempt: number;
+    })
+  | (BaseEvent & {
+      type: "dispatch.task.end";
+      parentRunId: string;
+      childRunId: string;
+      taskId: string;
+      agentId: string;
+      status: "complete" | "failed" | "aborted" | "skipped" | "blocked";
+      error?: string;
+    })
   | (BaseEvent & {
       type: "dispatch.end";
       parentRunId: string;
@@ -357,6 +409,9 @@ export type StreamEvent =
   | (BaseEvent & { type: "fs_write.resolved"; pendingId: string; applied: boolean })
   | (BaseEvent & { type: "bash_command.pending"; pendingCommand: PendingBashCommand })
   | (BaseEvent & { type: "bash_command.resolved"; pendingId: string; approved: boolean })
+  | (BaseEvent & { type: "ask_user.pending"; pendingQuestion: PendingQuestion })
+  | (BaseEvent & { type: "ask_user.answered"; pendingId: string; answers: Record<string, string> })
+  | (BaseEvent & { type: "ask_user.cancelled"; pendingId: string; runId: string })
   | (BaseEvent & {
       type: "compaction.start";
       sourceMessageCount: number;
@@ -372,4 +427,8 @@ export type StreamEvent =
       coveredUntilMessageId: string;
       summary: string;
       tokenEstimate: number;
+    })
+  | (BaseEvent & {
+      type: "compaction.error";
+      error: string;
     });

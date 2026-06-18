@@ -5,33 +5,21 @@ import { useAppStore } from "@/stores/app-store";
 import type { Artifact, ArtifactContent } from "@/shared/types";
 
 export function ArtifactLibrary() {
-  const artifactsByConversation = useAppStore((s) => s.artifactsByConversation);
+  const artifacts = useAppStore((s) => s.artifacts);
   const conversations = useAppStore((s) => s.conversations);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
 
-  // Flatten all artifacts across conversations
-  const allArtifacts: Array<{ artifact: Artifact; conversationTitle: string }> = [];
-  for (const [convId, arts] of Object.entries(artifactsByConversation)) {
-    const conv = conversations[convId];
-    for (const art of arts) {
-      allArtifacts.push({
-        artifact: art,
-        conversationTitle: conv?.title ?? convId
-      });
-    }
-  }
-  allArtifacts.sort((a, b) => b.artifact.updatedAt - a.artifact.updatedAt);
+  const allArtifacts = Object.values(artifacts)
+    .map((artifact) => ({
+      artifact,
+      conversationTitle: conversations[artifact.conversationId]?.title ?? artifact.conversationId
+    }))
+    .sort((a, b) => b.artifact.updatedAt - a.artifact.updatedAt);
 
   const handleSelect = (item: typeof allArtifacts[0]) => {
-    // Find which conversation this artifact belongs to
-    for (const [convId, arts] of Object.entries(artifactsByConversation)) {
-      if (arts.some((a) => a.id === item.artifact.id)) {
-        setActiveConversation(convId);
-        setActiveArtifact(item.artifact.id);
-        break;
-      }
-    }
+    setActiveConversation(item.artifact.conversationId);
+    setActiveArtifact(item.artifact.id);
   };
 
   const handleDelete = async (artifactId: string) => {

@@ -9,7 +9,14 @@ export interface DispatchTaskReport {
   summary: string;
   acceptanceResults: Array<{ criterion: string; passed: boolean; evidence: string }>;
   blockers: string[];
-  artifacts: Record<string, string>; // outputKey → artifactId
+  /** outputKey → artifactId mapping for produced artifacts */
+  artifacts: Record<string, string>;
+  /** Files created/modified/deleted during task execution */
+  files?: Array<{ path: string; action?: "created" | "modified" | "deleted" | "read"; summary?: string }>;
+  /** Commands executed with exit codes */
+  commands?: Array<{ command: string; exitCode: number; passed?: boolean; summary?: string }>;
+  /** Test commands that passed or failed */
+  tests?: Array<{ command: string; passed: boolean; summary?: string }>;
 }
 
 function getStore(): Map<string, DispatchTaskReport> {

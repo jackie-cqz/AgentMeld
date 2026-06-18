@@ -1,35 +1,43 @@
 "use client";
 
-import { AlertTriangle, Check, FileText, Pencil, Terminal, X, Network } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, FileText, Pencil, Terminal, X, Network } from "lucide-react";
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { FileDiffView } from "@/components/file-diff-view";
+import { PendingQuestionCard } from "@/components/pending-question-card";
 import { useAppStore } from "@/stores/app-store";
+import {
+  selectConversationPendingBashCommands,
+  selectConversationPendingDispatchPlans,
+  selectConversationPendingQuestions,
+  selectConversationPendingWrites
+} from "@/stores/selectors";
 import type { PendingWrite, PendingBashCommand, PendingDispatchPlan } from "@/shared/types";
 
 export function PendingApprovalPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
-  const pendingWrites = useAppStore((s) => s.pendingWrites);
-  const pendingBashCommands = useAppStore((s) => s.pendingBashCommands);
-  const pendingDispatchPlans = useAppStore((s) => s.pendingDispatchPlans);
+  const agents = useAppStore((s) => s.agents);
+  const writes = useAppStore(useShallow((s) => selectConversationPendingWrites(s, s.activeConversationId)));
+  const bashes = useAppStore(useShallow((s) => selectConversationPendingBashCommands(s, s.activeConversationId)));
+  const plans = useAppStore(useShallow((s) => selectConversationPendingDispatchPlans(s, s.activeConversationId)));
+  const questions = useAppStore(useShallow((s) => selectConversationPendingQuestions(s, s.activeConversationId)));
 
   if (!activeConversationId) return null;
 
-  const writes = Object.values(pendingWrites).filter(
-    (w) => w.conversationId === activeConversationId
-  );
-  const bashes = Object.values(pendingBashCommands).filter(
-    (b) => b.conversationId === activeConversationId
-  );
-  const plans = Object.values(pendingDispatchPlans).filter(
-    (p) => p.conversationId === activeConversationId
-  );
-
-  if (writes.length === 0 && bashes.length === 0 && plans.length === 0) return null;
+  if (writes.length === 0 && bashes.length === 0 && plans.length === 0 && questions.length === 0) return null;
 
   return (
     <div className="shrink-0 border-t border-amber-200 bg-amber-50 px-6 py-3">
       <div className="mx-auto max-w-3xl space-y-2">
         {plans.map((plan) => (
           <DispatchPlanCard key={plan.id} plan={plan} />
+        ))}
+        {questions.map((question) => (
+          <PendingQuestionCard
+            key={question.id}
+            question={question}
+            agentName={agents[question.agentId]?.name ?? question.agentId}
+          />
         ))}
         {writes.map((write) => (
           <PendingWriteCard key={write.id} write={write} />
@@ -43,12 +51,19 @@ export function PendingApprovalPanel() {
 }
 
 function PendingWriteCard({ write }: { write: PendingWrite }) {
+  const [expanded, setExpanded] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const handleResolve = async (approved: boolean) => {
-    await fetch(`/api/pending-writes/${write.id}/resolve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved })
-    });
+    setResolving(true);
+    try {
+      await fetch(`/api/pending-writes/${write.id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved })
+      });
+    } finally {
+      setResolving(false);
+    }
   };
 
   return (
@@ -57,17 +72,27 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">文件写入审批</div>
         <div className="mt-1 text-xs text-stone-600 font-mono truncate">{write.path}</div>
-        {write.oldContent !== null ? (
-          <div className="mt-2 rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700 max-h-24 overflow-auto">
-            <pre className="whitespace-pre-wrap">{write.newContent.slice(0, 500)}</pre>
+        <div className="mt-1 text-xs text-stone-500">
+          Agent {write.agentId} · Run {write.runId} · {write.newContent.length} 字符
+        </div>
+        <button
+          type="button"
+          className="mt-2 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          {expanded ? "收起变更" : "查看完整变更"}
+        </button>
+        {expanded ? (
+          <div className="mt-2">
+            <FileDiffView oldContent={write.oldContent} newContent={write.newContent} />
           </div>
-        ) : (
-          <div className="mt-2 text-xs text-stone-500">新建文件 · {write.newContent.length} 字符</div>
-        )}
+        ) : null}
       </div>
       <div className="flex shrink-0 gap-1">
         <button
           onClick={() => handleResolve(true)}
+          disabled={resolving}
           className="grid h-8 w-8 place-items-center rounded-md bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
           title="批准"
         >
@@ -75,6 +100,7 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
         </button>
         <button
           onClick={() => handleResolve(false)}
+          disabled={resolving}
           className="grid h-8 w-8 place-items-center rounded-md bg-red-100 text-red-700 hover:bg-red-200"
           title="拒绝"
         >
@@ -142,7 +168,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         action === "revise"
-          ? { action, revisedPlan: [{ id: "revise_feedback", agentId: "", task: feedback.trim(), dependsOn: [] }] }
+          ? { action, feedback: feedback.trim() }
           : { action }
       )
     });

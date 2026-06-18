@@ -2,7 +2,7 @@ import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
-type Resolver = (approved: boolean, revisedPlan?: DispatchPlanItem[]) => void;
+type Resolver = (outcome: { approved: boolean; feedback?: string }) => void;
 
 interface PlanEntry {
   plan: PendingDispatchPlan;
@@ -24,16 +24,16 @@ export function registerPendingPlan(
   conversationId: string,
   runId: string,
   plan: DispatchPlanItem[]
-): Promise<{ approved: boolean; revisedPlan?: DispatchPlanItem[] }> {
+): Promise<{ approved: boolean; feedback?: string }> {
   const store = getStore();
   const id = `dp_${nanoid(12)}`;
 
   return new Promise((resolve) => {
     const entry: PlanEntry = {
       plan: { id, conversationId, runId, plan, createdAt: Date.now() },
-      resolver: (approved, revisedPlan) => {
+      resolver: (outcome) => {
         store.delete(id);
-        resolve({ approved, revisedPlan });
+        resolve(outcome);
       }
     };
     store.set(id, entry);
@@ -63,21 +63,21 @@ export function getPendingPlansForConversation(conversationId: string): PendingD
 export function approvePlan(id: string): boolean {
   const entry = getStore().get(id);
   if (!entry) return false;
-  entry.resolver(true);
+  entry.resolver({ approved: true });
   return true;
 }
 
 export function rejectPlan(id: string): boolean {
   const entry = getStore().get(id);
   if (!entry) return false;
-  entry.resolver(false);
+  entry.resolver({ approved: false });
   return true;
 }
 
-export function revisePlan(id: string, revisedPlan: DispatchPlanItem[]): boolean {
+export function revisePlanWithFeedback(id: string, feedback: string): boolean {
   const entry = getStore().get(id);
   if (!entry) return false;
-  entry.resolver(true, revisedPlan);
+  entry.resolver({ approved: true, feedback });
   return true;
 }
 
@@ -85,7 +85,7 @@ export function cancelPendingPlansForRun(runId: string): void {
   const store = getStore();
   for (const [id, entry] of store) {
     if (entry.plan.runId === runId) {
-      entry.resolver(false);
+      entry.resolver({ approved: false });
       store.delete(id);
     }
   }
@@ -94,7 +94,7 @@ export function cancelPendingPlansForRun(runId: string): void {
 export function clearPendingPlansForTests(): void {
   const store = getStore();
   for (const [, entry] of store) {
-    entry.resolver(false);
+    entry.resolver({ approved: false });
   }
   store.clear();
 }

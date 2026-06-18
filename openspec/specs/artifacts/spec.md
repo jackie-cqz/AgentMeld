@@ -70,6 +70,11 @@ Each `web_app` artifact MUST have an HTTP preview route that renders the same HT
 - **THEN** a `web_app` artifact is returned as sandboxed HTML
 - **AND** non-web artifacts are rejected.
 
+#### Scenario: Preview package contains nested assets
+- **WHEN** a web app entry references `assets/app.js` or another nested relative file
+- **THEN** the preview route preserves the relative directory structure
+- **AND** rejects absolute paths, traversal segments, and files outside the artifact preview directory.
+
 ### Requirement: Artifact writes SHALL record ownership
 
 Every artifact created by an agent MUST record the originating conversation and agent id.
@@ -86,3 +91,36 @@ Editing an artifact SHALL create a new artifact version linked to the previous v
 - **WHEN** an artifact edit flow is implemented
 - **THEN** it creates a new row with `parentArtifactId`
 - **AND** increments `version`.
+
+#### Scenario: User edits a document or web app
+- **WHEN** the user saves changes from the artifact workspace
+- **THEN** the UI posts the edited typed content to the versions API
+- **AND** selects the newly created version without mutating the previous row.
+
+### Requirement: Artifact versions SHALL be navigable as a family
+
+The versions API SHALL resolve the root, all descendants, the selected current id, and a deterministic latest id from any artifact version in the family.
+
+#### Scenario: User opens history from an intermediate version
+- **WHEN** the selected artifact has both ancestors and descendants
+- **THEN** the UI lists the complete ordered version family
+- **AND** marks the selected and latest versions
+- **AND** permits Document and Web App text comparison between two versions.
+
+### Requirement: Static deployments SHALL be safely addressable
+
+Local deployments SHALL be served from `/deployments/{id}` with nested static paths preserved. Optional external publishing SHALL write only to a deployment-specific child of the configured publish directory.
+
+#### Scenario: Local deployment contains nested assets
+- **WHEN** a deployed web app references a nested asset
+- **THEN** `/deployments/{id}/{path}` serves the asset with its correct content type
+- **AND** rejects traversal and `.agent-conference` private paths.
+
+#### Scenario: External publishing is enabled
+- **WHEN** a valid absolute publish directory and HTTP(S) public base URL are configured
+- **THEN** deployment output is copied to `<publish-dir>/<deployment-id>`
+- **AND** the deployment record exposes the exact public URL and a local preview fallback.
+
+#### Scenario: Source archive is unavailable
+- **WHEN** no source archive route is implemented
+- **THEN** deployment records MUST NOT advertise a `sourceDownloadPath`.

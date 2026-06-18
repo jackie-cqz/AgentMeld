@@ -2,8 +2,10 @@
 
 import { ArrowUp, AtSign, Paperclip, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
-import type { Agent, PendingDispatchPlan } from "@/shared/types";
+import { selectConversationPendingDispatchPlans } from "@/stores/selectors";
+import type { Agent } from "@/shared/types";
 
 interface MessageInputProps {
   conversationId: string;
@@ -14,7 +16,9 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
   const draft = useAppStore((state) => state.composerDraft);
   const setDraft = useAppStore((state) => state.setComposerDraft);
   const sendMessage = useAppStore((state) => state.sendMessage);
-  const pendingDispatchPlans = useAppStore((state) => state.pendingDispatchPlans);
+  const pendingDispatchPlans = useAppStore(
+    useShallow((state) => selectConversationPendingDispatchPlans(state, conversationId))
+  );
   const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
   const [reviseForPlanId, setReviseForPlanId] = useState<string | null>(null);
   const mentionedAgents = useMemo(
@@ -23,9 +27,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
   );
 
   // Check if there's a pending plan for this conversation → revise mode
-  const pendingPlan = Object.values(pendingDispatchPlans).find(
-    (p) => p.conversationId === conversationId
-  ) ?? null;
+  const pendingPlan = pendingDispatchPlans[0] ?? null;
 
   const isReviseMode = reviseForPlanId !== null && pendingPlan?.id === reviseForPlanId;
 
@@ -39,7 +41,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "revise",
-          revisedPlan: [{ id: "revise_feedback", agentId: "", task: draft.trim(), dependsOn: [] }]
+          feedback: draft.trim()
         })
       });
       setDraft("");

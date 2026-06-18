@@ -63,6 +63,19 @@ The agent builder MUST provide one-click tool presets for common custom-agent ro
 - **THEN** the default preset is all-purpose
 - **AND** both artifact tools and local workspace file/command tools are selected.
 
+#### Scenario: User selects research preset
+- **WHEN** the user selects the research workflow
+- **THEN** the Agent receives read, attachment, question, and report artifact tools
+- **AND** destructive workspace command tools are not enabled by default.
+
+### Requirement: Agent tool names SHALL be validated
+
+User-created custom agents MUST only persist tools exposed by the Agent Builder allowlist.
+
+#### Scenario: API submits an unknown tool
+- **WHEN** a custom Agent payload contains an unregistered or Orchestrator-only tool
+- **THEN** creation or update is rejected with a visible validation error.
+
 ### Requirement: Codex agent configuration SHALL reject unsupported base URLs
 
 The agent builder MUST validate known unsupported Codex base URLs before saving or running the agent.

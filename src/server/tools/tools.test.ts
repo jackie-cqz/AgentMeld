@@ -10,6 +10,8 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
+import { getAllPendingBashCommands, rejectPendingBash } from "@/server/pending-bash";
+import { SANDBOX_MAX_FILES } from "@/server/workspace-utils";
 
 let tempDir: string;
 let workspacePath: string;
@@ -118,6 +120,35 @@ describe("fs_list", () => {
   it("rejects path outside workspace", async () => {
     const result = await toolRegistry.execute("fs_list", { path: "../../../etc" }, ctx());
     expect(result.ok).toBe(false);
+  });
+
+  it("rejects creating a new file after the workspace file limit", async () => {
+    for (let index = 0; index < SANDBOX_MAX_FILES - 3; index++) {
+      fs.writeFileSync(path.join(workspacePath, `quota-${index}.txt`), "");
+    }
+
+    const result = await toolRegistry.execute(
+      "fs_write",
+      { path: "over-limit.txt", content: "x" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("file limit");
+  });
+
+  it("allows replacing an existing file at the workspace file limit", async () => {
+    for (let index = 0; index < SANDBOX_MAX_FILES - 3; index++) {
+      fs.writeFileSync(path.join(workspacePath, `replace-quota-${index}.txt`), "");
+    }
+
+    const result = await toolRegistry.execute(
+      "fs_write",
+      { path: "readme.txt", content: "replacement" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(true);
   });
 
   it("rejects non-directory path", async () => {
@@ -232,6 +263,18 @@ describe("bash", () => {
   it("rejects empty command", async () => {
     const result = await toolRegistry.execute("bash", { command: "" }, ctx());
     expect(result.ok).toBe(false);
+  });
+
+  it("requires approval for dependency installation commands", async () => {
+    const execution = toolRegistry.execute("bash", { command: "pnpm install" }, ctx());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const pending = getAllPendingBashCommands();
+    expect(pending).toHaveLength(1);
+    rejectPendingBash(pending[0].id);
+
+    const result = await execution;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("rejected");
   });
 });
 

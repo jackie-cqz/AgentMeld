@@ -1,22 +1,12 @@
 import { z } from "zod";
-import { approvePlan, getPendingPlan, rejectPlan, revisePlan } from "@/server/dispatch-plan-manager";
+import { approvePlan, getPendingPlan, rejectPlan, revisePlanWithFeedback } from "@/server/dispatch-plan-manager";
 import { eventBus } from "@/server/event-bus";
-import type { DispatchPlanItem } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
   action: z.enum(["approve", "reject", "revise"]),
-  revisedPlan: z
-    .array(
-      z.object({
-        id: z.string(),
-        agentId: z.string(),
-        task: z.string(),
-        dependsOn: z.array(z.string())
-      })
-    )
-    .optional()
+  feedback: z.string().optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -32,7 +22,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Pending plan not found." }, { status: 404 });
   }
 
-  const { action, revisedPlan } = parsed.data;
+  const { action, feedback } = parsed.data;
 
   if (action === "reject") {
     rejectPlan(id);
@@ -47,15 +37,17 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, approved: false });
   }
 
-  if (action === "revise" && revisedPlan) {
-    revisePlan(id, revisedPlan as DispatchPlanItem[]);
+  if (action === "revise") {
+    const effectiveFeedback = feedback?.trim() || "请调整计划。";
+    revisePlanWithFeedback(id, effectiveFeedback);
     eventBus.publish({
       type: "dispatch.plan.resolved",
       conversationId: entry.plan.conversationId,
       timestamp: Date.now(),
       pendingId: id,
       runId: entry.plan.runId,
-      approved: true
+      approved: true,
+      feedback: effectiveFeedback
     });
     return Response.json({ resolved: true, approved: true, revised: true });
   }

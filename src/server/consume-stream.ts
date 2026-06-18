@@ -4,7 +4,7 @@ import {
   getArtifact,
   updateMessageParts
 } from "@/server/repositories";
-import type { MessagePart, StreamEvent } from "@/shared/types";
+import type { MessagePart, StreamEvent, UsagePayload } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,11 +20,7 @@ export interface ConsumeStreamInput {
   onEvent?: (event: StreamEvent) => { stop?: boolean } | void;
 }
 
-export interface StreamUsage {
-  modelId: string;
-  inputTokens: number;
-  outputTokens: number;
-}
+export type StreamUsage = UsagePayload;
 
 export interface ConsumeStreamResult {
   parts: MessagePart[];
@@ -67,13 +63,17 @@ export async function consumeStream(
 
     // 3. Persistence side-effects — accumulate parts + update DB at key events
     const flush = getFlushEvents(filled);
-    parts = applyPartsState(parts, filled);
+    const { parts: newParts, sideEvents } = applyPartsState(parts, filled);
+    parts = newParts;
     if (flush) {
       updateMessageParts(input.messageId, parts, Date.now());
     }
 
-    // 4. Broadcast
+    // 4. Broadcast main event + any synthetic side events (e.g. part.start for artifact_ref)
     eventBus.publish(filled);
+    for (const side of sideEvents) {
+      eventBus.publish(side);
+    }
 
     // 5. Track usage
     if (filled.type === "run.usage") {
@@ -112,6 +112,7 @@ function getFlushEvents(event: StreamEvent): boolean {
     case "tool.call":
     case "tool.result":
     case "artifact.create":
+    case "deploy.status":
     case "run.usage":
       return true;
     default:
@@ -119,17 +120,24 @@ function getFlushEvents(event: StreamEvent): boolean {
   }
 }
 
+interface PartsResult {
+  parts: MessagePart[];
+  /** Side events to broadcast after the triggering event (e.g. part.start for artifact_ref) */
+  sideEvents: StreamEvent[];
+}
+
 /**
  * Pure function: given current parts array and a stream event, returns the
- * new parts array. Same logic as the original applyEventToState but stateless
- * (no DB writes — caller handles that).
+ * new parts array plus any synthetic side events to broadcast.
  */
-function applyPartsState(parts: MessagePart[], event: StreamEvent): MessagePart[] {
+function applyPartsState(parts: MessagePart[], event: StreamEvent): PartsResult {
+  const noSide: StreamEvent[] = [];
+
   switch (event.type) {
     case "part.start": {
       const next = [...parts];
       next[event.partIndex] = event.part as MessagePart;
-      return next;
+      return { parts: next, sideEvents: noSide };
     }
 
     case "part.delta": {
@@ -141,7 +149,7 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): MessagePart[
           content: part.content + (event.delta as { text: string }).text
         } as MessagePart;
       }
-      return next;
+      return { parts: next, sideEvents: noSide };
     }
 
     case "tool.call": {
@@ -152,7 +160,7 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): MessagePart[
         toolName: event.toolName,
         args: event.args
       } as MessagePart);
-      return next;
+      return { parts: next, sideEvents: noSide };
     }
 
     case "tool.result": {
@@ -163,7 +171,7 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): MessagePart[
         result: event.result,
         isError: event.isError
       } as MessagePart);
-      return next;
+      return { parts: next, sideEvents: noSide };
     }
 
     case "artifact.create": {
@@ -185,18 +193,47 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): MessagePart[
       }
       // Inject artifact_ref part (idempotent by artifactId)
       const next = [...parts];
+      const sideEvents: StreamEvent[] = [];
       if (!next.some((p) => p.type === "artifact_ref" && p.artifactId === art.id)) {
-        next.push({
+        const refPart: MessagePart = {
           type: "artifact_ref",
           artifactId: art.id,
           title: art.title,
           artifactType: art.type
-        } as MessagePart);
+        };
+        const refIndex = next.length;
+        next.push(refPart);
+        // P0.3: Emit synthetic part.start so live UI can render the artifact card
+        sideEvents.push({
+          type: "part.start",
+          conversationId: event.conversationId,
+          timestamp: event.timestamp,
+          messageId: (event as { messageId?: string }).messageId ?? "",
+          partIndex: refIndex,
+          part: refPart
+        } as StreamEvent);
       }
-      return next;
+      return { parts: next, sideEvents };
+    }
+
+    case "deploy.status": {
+      const next = [...parts];
+      const existingIndex = next.findIndex(
+        (p) => p.type === "deploy_status" && p.deployment.id === event.deployment.id
+      );
+      const deployPart: MessagePart = {
+        type: "deploy_status",
+        deployment: event.deployment
+      };
+      if (existingIndex >= 0) {
+        next[existingIndex] = deployPart;
+      } else {
+        next.push(deployPart);
+      }
+      return { parts: next, sideEvents: noSide };
     }
 
     default:
-      return parts;
+      return { parts, sideEvents: noSide };
   }
 }

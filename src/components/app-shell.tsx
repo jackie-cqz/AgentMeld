@@ -2,6 +2,7 @@
 
 import { ArtifactPanel } from "@/components/artifact-panel";
 import { ChatPanel } from "@/components/chat-panel";
+import { GlobalSearch } from "@/components/global-search";
 import { Sidebar } from "@/components/sidebar";
 import { StreamProvider } from "@/components/stream-provider";
 import { useAppStore } from "@/stores/app-store";
@@ -33,6 +34,7 @@ function ShellContent() {
       <Sidebar />
       <ChatPanel />
       {rightPanelOpen ? <ArtifactPanel /> : null}
+      <GlobalSearch />
     </main>
   );
 }

@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import type { AdapterName, ModelProvider } from "@/shared/types";
-import { ALL_TOOL_NAMES, TOOL_PRESETS, type ToolPresetName } from "@/shared/agent-constants";
+import {
+  DEFAULT_CUSTOM_PROMPT,
+  TOOL_PRESETS,
+  type ToolPresetName
+} from "@/shared/agent-constants";
 
 const TOOL_GROUPS = [
   { label: "文件操作", tools: ["fs_read", "fs_write", "fs_list"] as const },
@@ -11,6 +15,13 @@ const TOOL_GROUPS = [
   { label: "产物", tools: ["write_artifact", "read_artifact", "deploy_artifact", "deploy_workspace"] as const },
   { label: "交互", tools: ["ask_user"] as const },
 ];
+
+const PROVIDER_DEFAULT_MODELS: Partial<Record<ModelProvider, string>> = {
+  deepseek: "deepseek-chat",
+  openai: "gpt-4o",
+  "volcano-ark": "doubao-seed-2-0-lite-260428",
+  "openai-compatible": ""
+};
 
 interface CreateAgentDialogProps {
   open: boolean;
@@ -44,20 +55,20 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [quickDesc, setQuickDesc] = useState("");
   const [name, setName] = useState(initial?.name ?? "");
   const [adapterName, setAdapterName] = useState<AdapterName>(initial?.adapterName ?? "custom");
-  const [modelProvider, setModelProvider] = useState<ModelProvider | null>(initial?.modelProvider ?? "openai");
-  const [modelId, setModelId] = useState(initial?.modelId ?? "gpt-4.1-mini");
+  const [modelProvider, setModelProvider] = useState<ModelProvider | null>(initial?.modelProvider ?? "deepseek");
+  const [modelId, setModelId] = useState(initial?.modelId ?? "deepseek-chat");
   const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
   const [apiBaseUrl, setApiBaseUrl] = useState(initial?.apiBaseUrl ?? "");
-  const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
-  const [toolNames, setToolNames] = useState<string[]>(initial?.toolNames ?? ["write_artifact"]);
+  const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT);
+  const [toolNames, setToolNames] = useState<string[]>(initial?.toolNames ?? [...TOOL_PRESETS["all-purpose"].tools]);
   const [submitting, setSubmitting] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!open) return null;
 
   const isSdk = adapterName === "claude-code" || adapterName === "codex";
   const isSdkDisabled = true;
-  const anthropicDisabled = true;
 
   const handleGenerateDraft = () => {
     if (!quickDesc.trim()) return;
@@ -65,8 +76,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     const desc = quickDesc.toLowerCase();
     const draft: { name: string; tools: string[]; prompt: string } = {
       name: quickDesc.slice(0, 30).replace(/[，,。.]/g, "").trim() || "新 Agent",
-      tools: ["write_artifact"],
-      prompt: `You are a helpful assistant. ${quickDesc}`
+      tools: [...TOOL_PRESETS["all-purpose"].tools],
+      prompt: `${DEFAULT_CUSTOM_PROMPT}\n\nSpecialized role:\n${quickDesc}`
     };
 
     if (desc.includes("前端") || desc.includes("代码") || desc.includes("react") || desc.includes("vue")) {
@@ -85,6 +96,10 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
       draft.name = draft.name || "文档写作";
       draft.tools = ["write_artifact", "read_artifact"];
       draft.prompt = `You are a technical writer. Produce clear, well-structured documents using write_artifact. ${quickDesc}`;
+    } else if (desc.includes("研究") || desc.includes("调研") || desc.includes("research")) {
+      draft.name = draft.name || "研究分析";
+      draft.tools = [...TOOL_PRESETS.research.tools];
+      draft.prompt = `${DEFAULT_CUSTOM_PROMPT}\n\n## Specialized role\nYou are a research analyst. Compare evidence, identify uncertainty, and deliver a structured report artifact.\n\nUser role description:\n${quickDesc}`;
     }
 
     setName(draft.name);
@@ -105,18 +120,23 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
+    setError(null);
     // Config validation
     if (!isSdk && !modelId?.trim()) {
-      alert("Custom 适配器必须指定 Model ID。");
+      setError("Custom 适配器必须指定 Model ID。");
+      return;
+    }
+    if (!isSdk && !modelProvider) {
+      setError("Custom 适配器必须指定 Provider。");
       return;
     }
     if (!isSdk && modelProvider === "openai-compatible") {
       if (!apiKey.trim()) {
-        alert("OpenAI-Compatible 必须提供 API Key。");
+        setError("OpenAI-Compatible 必须提供 API Key。");
         return;
       }
       if (!apiBaseUrl.trim()) {
-        alert("OpenAI-Compatible 必须提供 API Base URL。");
+        setError("OpenAI-Compatible 必须提供 API Base URL。");
         return;
       }
     }
@@ -133,6 +153,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         toolNames: isSdk ? [] : toolNames
       });
       onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "保存 Agent 失败。");
     } finally {
       setSubmitting(false);
     }
@@ -230,12 +252,16 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             </label>
             <select
               className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
-              value={modelProvider ?? "openai"}
-              onChange={(e) => setModelProvider(e.target.value as ModelProvider)}
+              value={modelProvider ?? "deepseek"}
+              onChange={(e) => {
+                const provider = e.target.value as ModelProvider;
+                setModelProvider(provider);
+                setModelId(PROVIDER_DEFAULT_MODELS[provider] ?? "");
+                setError(null);
+              }}
             >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
               <option value="deepseek">DeepSeek</option>
+              <option value="openai">OpenAI</option>
               <option value="volcano-ark">火山方舟</option>
               <option value="openai-compatible">OpenAI-Compatible（需 Key + URL）</option>
             </select>
@@ -245,7 +271,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             </label>
             <input
               className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
-              placeholder="gpt-4.1-mini"
+              placeholder="deepseek-chat"
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
             />
@@ -345,6 +371,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         )}
 
         {/* Actions */}
+        {error ? (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        ) : null}
         <div className="mt-6 flex justify-end gap-3">
           <button
             type="button"

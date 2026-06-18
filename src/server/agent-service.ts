@@ -56,16 +56,17 @@ export function createAgent(input: CreateAgentInput): Agent {
   const isClaudeCodeOrCodex = adapterName === "claude-code" || adapterName === "codex";
   const toolNames = isClaudeCodeOrCodex
     ? [] // SDK adapters use their own tool sets
-    : (input.toolNames ?? ["write_artifact"]);
+    : (input.toolNames ?? TOOL_PRESETS["all-purpose"].tools);
 
   const modelProvider = isClaudeCodeOrCodex
     ? (adapterName === "claude-code" ? "anthropic" : null)
-    : (input.modelProvider ?? null);
+    : (input.modelProvider ?? "deepseek");
 
   // Validate: custom adapter must have model
   if (adapterName === "custom" && !input.modelId?.trim()) {
     throw new Error("Custom agents must specify a model ID.");
   }
+  validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl, toolNames, false);
 
   db.prepare(`
     INSERT INTO agents (
@@ -101,9 +102,6 @@ export function createAgent(input: CreateAgentInput): Agent {
 export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | null {
   const existing = getAgent(agentId);
   if (!existing) return null;
-  // Builtin agents can be edited (model, prompt, tools) but core identity fields are locked
-  const isBuiltin = existing.isBuiltin;
-
   const db = getDatabase();
   const now = Date.now();
 
@@ -120,6 +118,15 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   // SDK adapters force empty toolNames
   const isSdk = existing.adapterName === "claude-code" || existing.adapterName === "codex";
   const toolNames = isSdk ? [] : (input.toolNames ?? existing.toolNames);
+  validateCustomAgentConfig(
+    existing.adapterName,
+    modelProvider,
+    modelId,
+    apiKey,
+    apiBaseUrl,
+    toolNames,
+    existing.isBuiltin
+  );
 
   db.prepare(`
     UPDATE agents SET
@@ -134,6 +141,39 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   );
 
   return getAgent(agentId);
+}
+
+function validateCustomAgentConfig(
+  adapterName: AdapterName,
+  modelProvider: ModelProvider | null,
+  modelId: string | null | undefined,
+  apiKey: string | null | undefined,
+  apiBaseUrl: string | null | undefined,
+  toolNames: readonly string[],
+  allowInternalTools: boolean
+) {
+  if (adapterName !== "custom") return;
+  if (!modelProvider) {
+    throw new Error("Custom agents must specify a model provider.");
+  }
+  if (!modelId?.trim()) {
+    throw new Error("Custom agents must specify a model ID.");
+  }
+  if (modelProvider === "openai-compatible") {
+    if (!apiKey?.trim()) {
+      throw new Error("OpenAI-compatible agents must specify an API key.");
+    }
+    if (!apiBaseUrl?.trim()) {
+      throw new Error("OpenAI-compatible agents must specify an API base URL.");
+    }
+  }
+  const allowedTools = allowInternalTools
+    ? new Set([...ALL_TOOL_NAMES, "plan_tasks", "report_task_result"])
+    : new Set<string>(ALL_TOOL_NAMES);
+  const unknownTools = toolNames.filter((toolName) => !allowedTools.has(toolName));
+  if (unknownTools.length > 0) {
+    throw new Error(`Unknown Agent tools: ${unknownTools.join(", ")}.`);
+  }
 }
 
 export function deleteAgent(agentId: string): boolean {

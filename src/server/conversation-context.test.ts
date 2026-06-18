@@ -3,11 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
-import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
+import { getDatabase, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { createConversation, sendMessage } from "@/server/conversation-service";
-import { buildHistoryFor, buildCompactionPrompt } from "@/server/conversation-context";
+import {
+  buildCompactionPrompt,
+  buildHistoryFor,
+  getContextBudgetPreview,
+  runCompaction
+} from "@/server/conversation-context";
 import { createMessage } from "@/server/repositories";
+import { updateSettings } from "@/server/settings-service";
 import { newMessageId } from "@/shared/ids";
 
 let tempDir: string;
@@ -193,7 +199,7 @@ describe("conversation-context — buildHistoryFor", () => {
       status: "complete",
       now: now - 3000
     });
-    const msg2 = createMessage({
+    createMessage({
       id: "msg_exclude_me",
       conversationId: conv.id,
       role: "user",
@@ -298,5 +304,82 @@ describe("buildCompactionPrompt", () => {
   it("omits label for assistant messages without agentName", () => {
     const { userPrompt } = buildCompactionPrompt([{ role: "assistant", content: "done" }]);
     expect(userPrompt).not.toContain("[undefined]");
+  });
+});
+
+describe("context budget and compaction", () => {
+  it("reports summary, pinned, recent, and omitted message counts", () => {
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    for (let index = 0; index < 25; index++) {
+      createMessage({
+        id: `msg_budget_${index}`,
+        conversationId: conv.id,
+        role: "user",
+        parts: [{ type: "text", content: `message ${index}` }],
+        status: "complete",
+        now: index + 1
+      });
+    }
+    getDatabase().prepare("UPDATE conversations SET pinned_message_ids = ? WHERE id = ?")
+      .run(JSON.stringify(["msg_budget_0"]), conv.id);
+
+    const preview = getContextBudgetPreview(conv.id);
+
+    expect(preview).toMatchObject({
+      summaryIncluded: false,
+      pinnedMessageCount: 1,
+      recentMessageCount: 20,
+      omittedMessageCount: 4,
+      totalCompleteMessages: 25
+    });
+    expect(preview!.estimatedTokens).toBeGreaterThan(0);
+  });
+
+  it("publishes an explicit error when no compaction API key is configured", async () => {
+    const events: string[] = [];
+    const unsubscribe = eventBus.subscribe(({ event }) => events.push(event.type));
+
+    await expect(runCompaction(
+      "conv_missing_key",
+      [{ role: "user", content: "important context" }],
+      "msg_last",
+      1,
+      1
+    )).rejects.toThrow("缺少 deepseek API Key");
+
+    unsubscribe();
+    expect(events).toEqual([
+      "compaction.start",
+      "compaction.progress",
+      "compaction.error"
+    ]);
+  });
+
+  it("uses the corrected OpenAI endpoint for compaction", async () => {
+    updateSettings({ openaiApiKey: "sk-test" });
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "## 用户请求\n- 测试" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      await runCompaction(
+        conversation.id,
+        [{ role: "user", content: "test" }],
+        "msg_last",
+        1,
+        1,
+        "openai",
+        "gpt-4o"
+      );
+      expect(requestedUrl).toBe("https://api.openai.com/v1/chat/completions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

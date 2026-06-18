@@ -1,6 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import { getArtifactById, ensureWebAppPreview } from "@/server/artifact-service";
+import {
+  getStaticResponseHeaders,
+  normalizeStaticFilePath,
+  resolveStaticFilePath
+} from "@/server/static-file-utils";
 import type { ArtifactContent } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -18,57 +22,43 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
   const webAppContent = artifact.content as Extract<ArtifactContent, { type: "web_app" }>;
 
-  // Ensure preview files are on disk
   const previewDir = ensureWebAppPreview(artifact);
-
-  // Check if a specific file is requested via query param
   const url = new URL(request.url);
   const fileParam = url.searchParams.get("file");
+  const entry = fileParam || webAppContent.entry || "index.html";
+  const entryPath = resolveStaticFilePath(previewDir, entry);
 
-  if (fileParam) {
-    const safeName = path.basename(fileParam);
-    const filePath = path.join(previewDir, safeName);
-    if (!fs.existsSync(filePath)) {
-      return new Response("File not found.", { status: 404 });
-    }
-    const content = fs.readFileSync(filePath, "utf-8");
-    const mime = getMimeType(safeName);
-    return new Response(content, {
-      headers: {
-        "Content-Type": mime,
-        "Cache-Control": "no-cache"
-      }
-    });
-  }
-
-  // Serve the entry file (index.html by default)
-  const entry = webAppContent.entry || "index.html";
-  const entryPath = path.join(previewDir, path.basename(entry));
-
-  if (!fs.existsSync(entryPath)) {
+  if (!entryPath || !fs.existsSync(entryPath) || !fs.statSync(entryPath).isFile()) {
     return new Response("Preview entry not found.", { status: 404 });
   }
 
+  if (!entryPath.toLowerCase().endsWith(".html")) {
+    const content = fs.readFileSync(entryPath);
+    return new Response(new Uint8Array(content), {
+      headers: getStaticResponseHeaders(entry)
+    });
+  }
+
   const html = fs.readFileSync(entryPath, "utf-8");
-
-  // Inject sandbox-safe wrapper
-  const wrapped = wrapPreviewHtml(html, id);
-
-  return new Response(wrapped, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https:; connect-src 'none';",
-      "Cache-Control": "no-cache"
-    }
+  return new Response(wrapPreviewHtml(html, id, entry), {
+    headers: getStaticResponseHeaders(entry)
   });
 }
 
-function wrapPreviewHtml(original: string, artifactId: string): string {
-  const baseTag = `<base href="/api/artifacts/${artifactId}/preview?file=">`;
+function wrapPreviewHtml(original: string, artifactId: string, entry: string): string {
+  const normalizedEntry = normalizeStaticFilePath(entry) ?? "index.html";
+  const entrySegments = normalizedEntry.split("/");
+  entrySegments.pop();
+  const entryDirectory = entrySegments.length > 0
+    ? `${entrySegments.map(encodeURIComponent).join("/")}/`
+    : "";
+  const baseTag = `<base href="/api/artifacts/${encodeURIComponent(artifactId)}/preview/${entryDirectory}">`;
 
-  if (/<html/i.test(original)) {
-    // Inject base tag after <head> for relative resource resolution
-    return original.replace(/<head>/i, `<head>\n${baseTag}`);
+  if (/<head[\s>]/i.test(original)) {
+    return original.replace(/<head([^>]*)>/i, `<head$1>\n${baseTag}`);
+  }
+  if (/<html[\s>]/i.test(original)) {
+    return original.replace(/<html([^>]*)>/i, `<html$1>\n<head>${baseTag}</head>`);
   }
 
   return `<!DOCTYPE html>
@@ -86,22 +76,4 @@ ${baseTag}
 ${original}
 </body>
 </html>`;
-}
-
-function getMimeType(fileName: string): string {
-  const ext = path.extname(fileName).toLowerCase();
-  const mimes: Record<string, string> = {
-    ".html": "text/html",
-    ".css": "text/css",
-    ".js": "application/javascript",
-    ".json": "application/json",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".woff2": "font/woff2",
-    ".woff": "font/woff"
-  };
-  return mimes[ext] ?? "text/plain";
 }

@@ -58,9 +58,11 @@ describe("agent-service", () => {
       const agent = createAgent({
         name: "Default Prompt",
         adapterName: "custom",
-        modelId: "gpt-4.1-mini"
+        modelId: "deepseek-chat"
       });
       expect(agent.systemPrompt).toBe(DEFAULT_CUSTOM_PROMPT);
+      expect(agent.modelProvider).toBe("deepseek");
+      expect(agent.toolNames).toEqual(TOOL_PRESETS["all-purpose"].tools);
     });
 
     it("rejects custom agent without model ID", () => {
@@ -99,7 +101,7 @@ describe("agent-service", () => {
   describe("getAgentById / getAllAgents", () => {
     it("returns created agents", () => {
       const a1 = createAgent({ name: "A1", adapterName: "custom", modelId: "gpt-4" });
-      const a2 = createAgent({ name: "A2", adapterName: "custom", modelId: "gpt-4" });
+      createAgent({ name: "A2", adapterName: "custom", modelId: "gpt-4" });
 
       const all = getAllAgents();
       // Built-in + 2 new
@@ -172,11 +174,13 @@ describe("agent-service", () => {
   });
 
   describe("tool presets", () => {
-    it("defines all four presets", () => {
+    it("defines the supported presets", () => {
       expect(TOOL_PRESETS["all-purpose"].tools.length).toBeGreaterThan(0);
       expect(TOOL_PRESETS["local-code"].tools.length).toBeGreaterThan(0);
       expect(TOOL_PRESETS.artifact.tools.length).toBeGreaterThan(0);
       expect(TOOL_PRESETS.review.tools.length).toBeGreaterThan(0);
+      expect(TOOL_PRESETS.deployment.tools.length).toBeGreaterThan(0);
+      expect(TOOL_PRESETS.research.tools.length).toBeGreaterThan(0);
     });
 
     it("all presets only reference valid tool names", () => {
@@ -185,6 +189,25 @@ describe("agent-service", () => {
           expect(ALL_TOOL_NAMES).toContain(tool);
         }
       }
+    });
+
+    it("rejects unknown custom tool names", () => {
+      expect(() => createAgent({
+        name: "Invalid Tools",
+        adapterName: "custom",
+        modelProvider: "deepseek",
+        modelId: "deepseek-chat",
+        toolNames: ["fs_read", "made_up_tool"]
+      })).toThrow("Unknown Agent tools");
+    });
+
+    it("requires key and base URL for openai-compatible agents", () => {
+      expect(() => createAgent({
+        name: "Compatible",
+        adapterName: "custom",
+        modelProvider: "openai-compatible",
+        modelId: "custom-model"
+      })).toThrow("API key");
     });
   });
 });

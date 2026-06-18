@@ -1,6 +1,7 @@
 "use client";
 
-import { File, FileText, Image, Loader2, Rocket, TerminalSquare } from "lucide-react";
+import { Check, Copy, ExternalLink, File, FileText, Image, Loader2, Rocket, TerminalSquare } from "lucide-react";
+import { useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ToolUseCard } from "@/components/tool-card";
@@ -74,12 +75,31 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
 
   if (part.type === "deploy_status") {
+    const previewUrl = part.deployment.publicUrl ?? part.deployment.previewPath;
     return (
       <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-white text-blue-600">
           <Rocket className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1 font-medium">{part.deployment.title}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{part.deployment.title}</span>
+          <span className="block truncate text-xs text-blue-700">
+            {part.deployment.deploymentType === "external_static" ? "外部静态发布" : "本地预览"}
+          </span>
+        </span>
+        {part.deployment.status === "ready" && previewUrl ? (
+          <div className="flex gap-1">
+            <button
+              type="button"
+              className="grid h-8 w-8 place-items-center rounded-md bg-white text-blue-700 hover:bg-blue-100"
+              onClick={() => window.open(previewUrl, "_blank")}
+              title="打开预览"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </button>
+            <CopyPreviewButton text={previewUrl} />
+          </div>
+        ) : null}
         <span className="rounded-full bg-white px-2 py-1 text-xs">{part.deployment.status}</span>
       </div>
     );
@@ -128,6 +148,24 @@ function MessagePartView({ part }: { part: MessagePart }) {
     <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700">
       未知消息：{JSON.stringify(part)}
     </div>
+  );
+}
+
+function CopyPreviewButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="grid h-8 w-8 place-items-center rounded-md bg-white text-blue-700 hover:bg-blue-100"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      }}
+      title="复制预览地址"
+    >
+      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+    </button>
   );
 }
 

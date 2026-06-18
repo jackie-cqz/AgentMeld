@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { getArtifactById, createNewArtifactVersion, getVersionChain } from "@/server/artifact-service";
+import {
+  createNewArtifactVersion,
+  getArtifactById,
+  getArtifactVersionFamily
+} from "@/server/artifact-service";
 import type { ArtifactContent } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +19,14 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   if (!artifact) {
     return Response.json({ error: "Artifact not found." }, { status: 404 });
   }
-  const versions = getVersionChain(id);
-  return Response.json({ artifact, versions });
+  const family = getArtifactVersionFamily(id);
+  return Response.json({
+    artifact,
+    family,
+    versions: family?.versions ?? [],
+    currentId: family?.currentId ?? id,
+    latestId: family?.latestId ?? id
+  });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

@@ -1,10 +1,19 @@
-import { getConversation, listMessages, listArtifacts } from "@/server/repositories";
-import { runCompaction } from "@/server/conversation-context";
+import { getAgent, getConversation, listMessages, listArtifacts } from "@/server/repositories";
+import { getContextBudgetPreview, runCompaction } from "@/server/conversation-context";
 import { eventBus } from "@/server/event-bus";
 import { newMessageId } from "@/shared/ids";
 import { getDatabase } from "@/db/client";
 
 export const dynamic = "force-dynamic";
+
+export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  const preview = getContextBudgetPreview(id);
+  if (!preview) {
+    return Response.json({ error: "Conversation not found." }, { status: 404 });
+  }
+  return Response.json({ preview });
+}
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
@@ -69,6 +78,12 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   }).filter((m) => m.content.length > 0);
 
   const lastSource = sourceMessages[sourceMessages.length - 1];
+  const compactionAgent = conversation.agentIds
+    .map((agentId) => getAgent(agentId))
+    .find((agent) => agent?.adapterName === "custom" && agent.modelProvider === "deepseek")
+    ?? conversation.agentIds
+      .map((agentId) => getAgent(agentId))
+      .find((agent) => agent?.adapterName === "custom");
 
   // Run compaction asynchronously — return 202 immediately
   const compactionPromise = runCompaction(
@@ -76,7 +91,11 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     rendered,
     lastSource.id,
     lastSource.createdAt,
-    sourceMessages.length
+    sourceMessages.length,
+    compactionAgent?.modelProvider ?? "deepseek",
+    compactionAgent?.modelId ?? "deepseek-chat",
+    compactionAgent?.apiKey,
+    compactionAgent?.apiBaseUrl
   );
 
   // Post a system message noting compaction has started
@@ -87,7 +106,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     systemMsgId, id, "system", null, null,
-    JSON.stringify([{ type: "text", content: `🧹 正在压缩上下文（${sourceMessages.length} 条早期消息）...` }]),
+    JSON.stringify([{ type: "text", content: `正在压缩上下文（${sourceMessages.length} 条早期消息）...` }]),
     "complete", JSON.stringify([]), null, now, now
   );
 
@@ -101,7 +120,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       role: "system",
       agentId: null,
       runId: null,
-      parts: [{ type: "text", content: `🧹 正在压缩上下文（${sourceMessages.length} 条早期消息）...` }],
+      parts: [{ type: "text", content: `正在压缩上下文（${sourceMessages.length} 条早期消息）...` }],
       status: "complete",
       parentMessageId: null,
       mentionedAgentIds: [],
@@ -115,7 +134,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     .then((result) => {
       const doneTime = Date.now();
       const doneMsgId = newMessageId();
-      const content = `✅ 上下文压缩完成：${sourceMessages.length} 条消息 → ${result.tokenEstimate} token 摘要。后续对话将自动引用此摘要。`;
+      const content = `上下文压缩完成：${sourceMessages.length} 条消息生成约 ${result.tokenEstimate} token 摘要。后续对话将自动引用此摘要。`;
 
       getDatabase().prepare(`
         INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
@@ -148,7 +167,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     .catch((err) => {
       const errTime = Date.now();
       const errMsgId = newMessageId();
-      const content = `⚠️ 上下文压缩失败：${err instanceof Error ? err.message.slice(0, 200) : "未知错误"}`;
+      const content = `上下文压缩失败：${err instanceof Error ? err.message.slice(0, 200) : "未知错误"}`;
 
       getDatabase().prepare(`
         INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)

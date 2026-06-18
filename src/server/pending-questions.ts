@@ -1,19 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-
-export interface PendingQuestion {
-  id: string;
-  conversationId: string;
-  agentId: string;
-  runId: string;
-  questions: Array<{
-    question: string;
-    header: string;
-    options: Array<{ label: string; description?: string }>;
-    multiSelect?: boolean;
-  }>;
-  createdAt: number;
-}
+import type { PendingQuestion } from "@/shared/types";
 
 type AnswerResolver = (answers: Record<string, string>) => void;
 
@@ -60,11 +47,11 @@ export function registerPendingQuestion(
     store.set(id, entry);
 
     eventBus.publish({
-      type: "ask_user.pending" as never,
+      type: "ask_user.pending",
       conversationId,
       timestamp: Date.now(),
       pendingQuestion: entry.question
-    } as never);
+    });
   });
 }
 
@@ -78,10 +65,21 @@ export function getPendingQuestionsForConversation(conversationId: string): Pend
     .filter((q) => q.conversationId === conversationId);
 }
 
+export function getAllPendingQuestions(): PendingQuestion[] {
+  return Array.from(getStore().values()).map((entry) => entry.question);
+}
+
 export function answerQuestion(id: string, answers: Record<string, string>): boolean {
   const entry = getStore().get(id);
   if (!entry) return false;
   entry.resolver(answers);
+  eventBus.publish({
+    type: "ask_user.answered",
+    conversationId: entry.question.conversationId,
+    timestamp: Date.now(),
+    pendingId: id,
+    answers
+  });
   return true;
 }
 
@@ -91,6 +89,13 @@ export function cancelPendingQuestionsForRun(runId: string): void {
     if (entry.question.runId === runId) {
       entry.resolver({});
       store.delete(id);
+      eventBus.publish({
+        type: "ask_user.cancelled",
+        conversationId: entry.question.conversationId,
+        timestamp: Date.now(),
+        pendingId: id,
+        runId
+      });
     }
   }
 }

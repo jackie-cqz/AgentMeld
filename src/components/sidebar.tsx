@@ -11,36 +11,34 @@ import {
   Plus,
   Search,
   Settings,
-  SlidersHorizontal
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { AgentsPanel } from "@/components/agents-panel";
 import { ArtifactLibrary } from "@/components/artifact-library";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { useAppStore } from "@/stores/app-store";
+import { selectAgentList, selectConversationList } from "@/stores/selectors";
 import type { Agent } from "@/shared/types";
 
 export function Sidebar() {
-  const agents = useAppStore((state) => state.agents);
-  const conversations = useAppStore((state) => state.conversations);
-  const conversationOrder = useAppStore((state) => state.conversationOrder);
+  const agents = useAppStore(useShallow(selectAgentList));
+  const conversations = useAppStore(useShallow(selectConversationList));
   const activeConversationId = useAppStore((state) => state.activeConversationId);
   const setActiveConversation = useAppStore((state) => state.setActiveConversation);
   const createConversation = useAppStore((state) => state.createConversation);
   const activeTab = useAppStore((state) => state.sidebarTab);
   const setActiveTab = useAppStore((state) => state.setSidebarTab);
+  const setSearchOpen = useAppStore((state) => state.setSearchOpen);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
 
   const orderedConversations = useMemo(
     () =>
-      conversationOrder
-        .map((id) => conversations[id])
-        .filter(Boolean)
-        .filter((conversation) => conversation.title.toLowerCase().includes(query.trim().toLowerCase())),
-    [conversationOrder, conversations, query]
+      conversations.filter((conversation) => conversation.title.toLowerCase().includes(query.trim().toLowerCase())),
+    [conversations, query]
   );
 
   return (
@@ -130,8 +128,13 @@ export function Sidebar() {
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
-            <button className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" title="筛选">
-              <SlidersHorizontal className="h-4 w-4" />
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              title="搜索消息 Ctrl/⌘K"
+            >
+              <Search className="h-4 w-4" />
             </button>
           </div>
 
@@ -183,7 +186,7 @@ export function Sidebar() {
 
       {dialogOpen ? (
         <CreateConversationDialog
-          agents={Object.values(agents)}
+          agents={agents}
           onClose={() => setDialogOpen(false)}
           onCreate={(payload) =>
             void createConversation(payload).then(() => {

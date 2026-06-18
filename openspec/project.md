@@ -24,6 +24,7 @@ OpenSpec capability specs under `openspec/specs/` are the concise, testable cont
 | `desktop-electron` | `specs/12-desktop-electron.md` |
 | `conversation-context` | `specs/13-conversation-context.md` |
 | `mobile-companion` | `specs/14-mobile-remote.md` |
+| `message-search` | `specs/16-message-search.md` |
 
 ## Technology
 

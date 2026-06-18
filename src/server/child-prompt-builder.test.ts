@@ -59,7 +59,7 @@ describe("buildChildTaskPrompt", () => {
     const input: BuildChildPromptInput = {
       ...emptyInput,
       resolvedInputs: [
-        { fromTaskId: "t0", outputId: "analysis", required: true, artifactId: "art_001" },
+        { fromTaskId: "t0", outputId: "analysis", required: true, artifactId: "art_001", missing: false },
         { fromTaskId: "t0", outputId: "notes", required: false, missing: true }
       ]
     };

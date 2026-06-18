@@ -57,16 +57,25 @@ export const fsWriteTool: ToolDef = {
       return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
     }
 
+    let oldContent: string | null = null;
+    let oldBytes = 0;
+    try {
+      oldContent = fs.readFileSync(absolutePath, "utf-8");
+      oldBytes = Buffer.byteLength(oldContent, "utf-8");
+    } catch {
+      // File doesn't exist yet.
+    }
+
     // Sandbox quota check
     try {
       const usage = scanWorkspaceUsage(ctx.workspacePath);
-      if (usage.totalBytes + contentBytes > SANDBOX_MAX_BYTES) {
+      if (usage.totalBytes - oldBytes + contentBytes > SANDBOX_MAX_BYTES) {
         return {
           ok: false,
           error: `Workspace quota exceeded: ${usage.totalBytes} bytes used, max ${SANDBOX_MAX_BYTES}.`
         };
       }
-      if (usage.totalFiles >= SANDBOX_MAX_FILES) {
+      if (oldContent === null && usage.totalFiles >= SANDBOX_MAX_FILES) {
         return {
           ok: false,
           error: `Workspace file limit exceeded: ${usage.totalFiles} files, max ${SANDBOX_MAX_FILES}.`
@@ -74,14 +83,6 @@ export const fsWriteTool: ToolDef = {
       }
     } catch {
       // If scan fails, proceed (e.g. workspace dir doesn't exist yet).
-    }
-
-    // Read old content if file exists
-    let oldContent: string | null = null;
-    try {
-      oldContent = fs.readFileSync(absolutePath, "utf-8");
-    } catch {
-      // File doesn't exist yet — fine.
     }
 
     // Determine approval mode from conversation

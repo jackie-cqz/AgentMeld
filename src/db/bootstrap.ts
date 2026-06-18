@@ -138,10 +138,61 @@ export function ensureDatabase() {
 
   migrateLegacyTables();
   createIndexes();
+  createMessageSearchIndex();
   seedBuiltinAgents();
   seedAppSettings();
   seedWelcomeConversation();
   bootstrapped = true;
+}
+
+function createMessageSearchIndex() {
+  const db = getDatabase();
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        tokenize = 'trigram'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ai
+      AFTER INSERT ON messages
+      WHEN new.status != 'streaming'
+      BEGIN
+        INSERT OR REPLACE INTO messages_fts(rowid, content)
+        SELECT new.rowid, GROUP_CONCAT(json_extract(value, '$.content'), ' ')
+        FROM json_each(new.parts)
+        WHERE json_extract(value, '$.type') = 'text'
+        HAVING COUNT(*) > 0;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_au
+      AFTER UPDATE ON messages
+      BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+        INSERT OR REPLACE INTO messages_fts(rowid, content)
+        SELECT new.rowid, GROUP_CONCAT(json_extract(value, '$.content'), ' ')
+        FROM json_each(new.parts)
+        WHERE new.status != 'streaming'
+          AND json_extract(value, '$.type') = 'text'
+        HAVING COUNT(*) > 0;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ad
+      AFTER DELETE ON messages
+      BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+      END;
+
+      INSERT OR REPLACE INTO messages_fts(rowid, content)
+      SELECT m.rowid, GROUP_CONCAT(json_extract(j.value, '$.content'), ' ')
+      FROM messages m, json_each(m.parts) AS j
+      WHERE m.status != 'streaming'
+        AND json_extract(j.value, '$.type') = 'text'
+      GROUP BY m.rowid;
+    `);
+  } catch {
+    // Search service falls back to JSON text-part LIKE queries when FTS5 is unavailable.
+  }
 }
 
 export function resetBootstrapForTests() {

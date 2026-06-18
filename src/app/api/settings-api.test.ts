@@ -6,6 +6,7 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { GET, PATCH } from "@/app/api/settings/route";
+import { getSettings } from "@/server/settings-service";
 
 let tempDir: string;
 
@@ -42,10 +43,14 @@ describe("GET /api/settings", () => {
     const res = await GET();
     expect(res.status).toBe(200);
 
-    const body = (await res.json()) as { settings: { openaiApiKey: string | null } };
+    const body = (await res.json()) as {
+      settings: { openaiApiKey: string | null };
+      keySources: { openai: string };
+    };
     // Key should be masked — only last 4 chars visible
     expect(body.settings.openaiApiKey).not.toBe("sk-proj-abc123456789");
     expect(body.settings.openaiApiKey).toContain("6789");
+    expect(body.keySources.openai).toBe("app_settings");
   });
 
   it("returns null keys as null in response", async () => {
@@ -95,5 +100,15 @@ describe("PATCH /api/settings", () => {
     const body = (await res.json()) as { settings: { companionMode: string; deploymentPublishEnabled: boolean } };
     expect(body.settings.companionMode).toBe("lan");
     expect(body.settings.deploymentPublishEnabled).toBe(true);
+  });
+
+  it("does not overwrite a stored key when the masked value is submitted", async () => {
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "sk-deepseek-original" }));
+    const maskedResponse = await GET();
+    const maskedBody = (await maskedResponse.json()) as { settings: { deepseekApiKey: string } };
+
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: maskedBody.settings.deepseekApiKey }));
+
+    expect(getSettings().deepseekApiKey).toBe("sk-deepseek-original");
   });
 });

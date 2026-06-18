@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Code2, Copy, Download, ExternalLink, Eye, FileText, Globe, History, Image, Pencil, Play, X } from "lucide-react";
+import { ChevronDown, Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Play, Save, X } from "lucide-react";
 import {
   useMemo,
   useState,
@@ -8,7 +8,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { ArtifactVersionCompare } from "@/components/artifact-version-compare";
+import { PptPreview } from "@/components/ppt-preview";
 import { useAppStore } from "@/stores/app-store";
+import { selectConversationArtifacts, selectSelectedArtifact } from "@/stores/selectors";
 import type { Artifact, ArtifactContent } from "@/shared/types";
 
 const MIN_PANEL_WIDTH = 420;
@@ -16,19 +20,16 @@ const MAX_PANEL_WIDTH = 960;
 
 export function ArtifactPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
-  const artifactsByConversation = useAppStore((s) => s.artifactsByConversation);
-  const activeArtifactId = useAppStore((s) => s.activeArtifactId);
+  const artifacts = useAppStore(useShallow((s) => selectConversationArtifacts(s, s.activeConversationId)));
+  const activeArtifact = useAppStore(selectSelectedArtifact);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
   const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
   const panelWidth = useAppStore((s) => s.artifactPanelWidth);
   const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
-  const [mode, setMode] = useState<"preview" | "source">("preview");
+  const [mode, setMode] = useState<"preview" | "source" | "edit">("preview");
 
-  const artifacts = activeConversationId ? artifactsByConversation[activeConversationId] ?? [] : [];
   const fallbackArtifact = artifacts[0] ?? null;
-  const selectedArtifact = activeArtifactId
-    ? artifacts.find((a) => a.id === activeArtifactId) ?? fallbackArtifact
-    : fallbackArtifact;
+  const selectedArtifact = activeArtifact?.conversationId === activeConversationId ? activeArtifact : fallbackArtifact;
 
   const handleResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -159,10 +160,21 @@ export function ArtifactPanel() {
             type="button"
             onClick={() => setMode("source")}
           >
-            <Pencil className="h-4 w-4" />编辑
+            <Code2 className="h-4 w-4" />源码
           </button>
+          {selectedArtifact && (selectedArtifact.type === "document" || selectedArtifact.type === "web_app") ? (
+            <button
+              className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
+                mode === "edit" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+              }`}
+              type="button"
+              onClick={() => setMode("edit")}
+            >
+              <Pencil className="h-4 w-4" />编辑
+            </button>
+          ) : null}
         </div>
-        <VersionHistoryButton artifactId={selectedArtifact?.id ?? null} />
+        <VersionHistoryButton artifact={selectedArtifact} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-[#f4f6fb]">
@@ -176,9 +188,12 @@ export function ArtifactPanel() {
   );
 }
 
-function ArtifactPreview({ artifact, mode }: { artifact: Artifact; mode: "preview" | "source" }) {
+function ArtifactPreview({ artifact, mode }: { artifact: Artifact; mode: "preview" | "source" | "edit" }) {
   if (mode === "source") {
     return <SourceView artifact={artifact} />;
+  }
+  if (mode === "edit") {
+    return <ArtifactEditor key={artifact.id} artifact={artifact} />;
   }
   if (artifact.type === "web_app") {
     return <WebAppPreview artifactId={artifact.id} />;
@@ -189,7 +204,118 @@ function ArtifactPreview({ artifact, mode }: { artifact: Artifact; mode: "previe
   if (artifact.type === "image") {
     return <ImagePreview artifact={artifact} />;
   }
+  if (artifact.content.type === "ppt") {
+    return <PptPreview content={artifact.content} title={artifact.title} />;
+  }
   return <SourceView artifact={artifact} />;
+}
+
+function ArtifactEditor({ artifact }: { artifact: Artifact }) {
+  const applyEvent = useAppStore((state) => state.applyEvent);
+  const setActiveArtifact = useAppStore((state) => state.setActiveArtifact);
+  const [title, setTitle] = useState(artifact.title);
+  const [documentContent, setDocumentContent] = useState(
+    artifact.content.type === "document" ? artifact.content.content : ""
+  );
+  const [files, setFiles] = useState<Record<string, string>>(
+    artifact.content.type === "web_app" ? artifact.content.files : {}
+  );
+  const [activeFile, setActiveFile] = useState(
+    artifact.content.type === "web_app"
+      ? artifact.content.entry in artifact.content.files
+        ? artifact.content.entry
+        : Object.keys(artifact.content.files)[0] ?? ""
+      : ""
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    const content: ArtifactContent = artifact.content.type === "document"
+      ? { ...artifact.content, content: documentContent }
+      : artifact.content.type === "web_app"
+        ? { ...artifact.content, files }
+        : artifact.content;
+    try {
+      const response = await fetch(`/api/artifacts/${artifact.id}/versions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim() || artifact.title, content })
+      });
+      const data = await response.json() as { artifact?: Artifact; error?: string };
+      if (!response.ok || !data.artifact) throw new Error(data.error ?? "保存新版本失败。");
+      applyEvent({
+        type: "artifact.create",
+        conversationId: data.artifact.conversationId,
+        timestamp: Date.now(),
+        artifact: data.artifact
+      });
+      setActiveArtifact(data.artifact.id);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "保存新版本失败。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-full flex-col gap-3 p-4">
+      <div className="flex items-center gap-2">
+        <input
+          className="h-9 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium outline-none focus:border-blue-400"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          aria-label="产物标题"
+        />
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          保存为 v{artifact.version + 1}
+        </button>
+      </div>
+
+      {artifact.content.type === "document" ? (
+        <textarea
+          className="min-h-[520px] flex-1 resize-y rounded-md border border-slate-200 bg-white p-4 font-mono text-sm leading-6 outline-none focus:border-blue-400"
+          value={documentContent}
+          onChange={(event) => setDocumentContent(event.target.value)}
+        />
+      ) : null}
+
+      {artifact.content.type === "web_app" ? (
+        <div className="flex min-h-[520px] flex-1 overflow-hidden rounded-md border border-slate-200 bg-white">
+          <div className="w-44 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-50 p-2">
+            {Object.keys(files).map((fileName) => (
+              <button
+                key={fileName}
+                type="button"
+                onClick={() => setActiveFile(fileName)}
+                className={`mb-1 w-full truncate rounded px-2 py-1.5 text-left font-mono text-xs ${
+                  activeFile === fileName ? "bg-blue-100 text-blue-800" : "text-slate-600 hover:bg-slate-100"
+                }`}
+                title={fileName}
+              >
+                {fileName}
+              </button>
+            ))}
+          </div>
+          <textarea
+            className="min-w-0 flex-1 resize-none p-4 font-mono text-xs leading-6 outline-none"
+            value={files[activeFile] ?? ""}
+            onChange={(event) => setFiles((current) => ({ ...current, [activeFile]: event.target.value }))}
+            aria-label={activeFile || "Web App 文件"}
+          />
+        </div>
+      ) : null}
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+    </div>
+  );
 }
 
 function WebAppPreview({ artifactId }: { artifactId: string }) {
@@ -235,7 +361,7 @@ function ImagePreview({ artifact }: { artifact: Artifact }) {
     <div className="p-4">
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900">
-          <Image className="h-4 w-4" />{artifact.title}
+          <ImageIcon className="h-4 w-4" />{artifact.title}
         </div>
         {img?.url ? (
           <>
@@ -364,17 +490,35 @@ function deployArtifactAction(artifactId: string) {
     .catch(() => {});
 }
 
-function VersionHistoryButton({ artifactId }: { artifactId: string | null }) {
+function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {
   const [open, setOpen] = useState(false);
-  const [versions, setVersions] = useState<Array<{ id: string; version: number; title: string; createdAt: number }>>([]);
+  const [tab, setTab] = useState<"versions" | "compare">("versions");
+  const [versions, setVersions] = useState<Artifact[]>([]);
+  const [latestId, setLatestId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
 
   const load = () => {
-    if (!artifactId) return;
-    fetch("/api/artifacts/" + artifactId + "/versions")
-      .then((r) => r.json())
-      .then((data) => setVersions(data.versions ?? []))
-      .catch(() => {});
+    if (!artifact) return;
+    setLoading(true);
+    setError(null);
+    fetch("/api/artifacts/" + artifact.id + "/versions")
+      .then(async (response) => {
+        const data = await response.json() as {
+          versions?: Artifact[];
+          latestId?: string;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error ?? "版本加载失败。");
+        setVersions(data.versions ?? []);
+        setLatestId(data.latestId ?? null);
+      })
+      .catch((loadError) => {
+        setError(loadError instanceof Error ? loadError.message : "版本加载失败。");
+      })
+      .finally(() => setLoading(false));
+    setTab("versions");
     setOpen(true);
   };
 
@@ -384,6 +528,7 @@ function VersionHistoryButton({ artifactId }: { artifactId: string | null }) {
         className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
         type="button"
         onClick={load}
+        disabled={!artifact}
         title="版本历史"
       >
         <History className="h-4 w-4" />
@@ -391,25 +536,56 @@ function VersionHistoryButton({ artifactId }: { artifactId: string | null }) {
       </button>
       {open ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/20" onClick={() => setOpen(false)}>
-          <div className="w-80 rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
+          <div className="w-[min(760px,calc(100vw-32px))] rounded-lg border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-900">版本历史</h3>
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+              <button type="button" title="关闭" onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
             </div>
-            {versions.length === 0 ? (
-              <p className="text-sm text-slate-500">加载中...</p>
+            <div className="mb-3 flex border-b border-slate-200">
+              <button
+                type="button"
+                onClick={() => setTab("versions")}
+                className={`border-b-2 px-3 py-2 text-sm ${tab === "versions" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}
+              >
+                版本
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("compare")}
+                disabled={versions.length < 2}
+                className={`border-b-2 px-3 py-2 text-sm disabled:opacity-40 ${tab === "compare" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}
+              >
+                对比
+              </button>
+            </div>
+            {loading ? (
+              <p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />加载版本...</p>
+            ) : error ? (
+              <p className="text-sm text-red-600">{error}</p>
+            ) : tab === "compare" && artifact ? (
+              <ArtifactVersionCompare versions={versions} currentId={artifact.id} />
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
+              <div className="max-h-[55vh] space-y-2 overflow-y-auto">
                 {versions.map((v) => (
                   <button
                     key={v.id}
                     onClick={() => { setActiveArtifact(v.id); setOpen(false); }}
-                    className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left hover:bg-slate-50"
+                    className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left hover:bg-slate-50 ${
+                      v.id === artifact?.id ? "border-blue-300 bg-blue-50" : "border-slate-200"
+                    }`}
                   >
-                    <span className="text-sm font-medium text-slate-900">{v.title}</span>
-                    <span className="text-xs text-slate-500">v{v.version}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-slate-900">{v.title}</span>
+                      <span className="mt-0.5 block text-xs text-slate-400">{new Date(v.createdAt).toLocaleString()}</span>
+                    </span>
+                    <span className="ml-3 flex shrink-0 items-center gap-1 text-xs">
+                      {v.id === artifact?.id ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">当前</span> : null}
+                      {v.id === latestId ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">最新</span> : null}
+                      <span className="text-slate-500">v{v.version}</span>
+                    </span>
                   </button>
                 ))}
+                {versions.length === 0 ? <p className="text-sm text-slate-500">没有可用版本。</p> : null}
               </div>
             )}
           </div>

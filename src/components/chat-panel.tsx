@@ -2,21 +2,31 @@
 
 import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, RotateCcw, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
 import { MessageParts } from "@/components/message-parts";
+import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { useAppStore } from "@/stores/app-store";
+import {
+  selectActiveConversation,
+  selectConversationMessages,
+  selectConversationRuns,
+  selectLatestUserMessageId
+} from "@/stores/selectors";
 import type { Agent, Message } from "@/shared/types";
 import type { AdapterName, ModelProvider } from "@/shared/types";
 
 export function ChatPanel() {
   const agents = useAppStore((state) => state.agents);
-  const conversations = useAppStore((state) => state.conversations);
   const activeConversationId = useAppStore((state) => state.activeConversationId);
-  const messagesByConversation = useAppStore((state) => state.messagesByConversation);
-  const runsByConversation = useAppStore((state) => state.runsByConversation);
+  const conversation = useAppStore(selectActiveConversation);
+  const messages = useAppStore(useShallow((state) => selectConversationMessages(state, state.activeConversationId)));
+  const runs = useAppStore(useShallow((state) => selectConversationRuns(state, state.activeConversationId)));
+  const latestUserId = useAppStore((state) => selectLatestUserMessageId(state, state.activeConversationId));
+  const highlightedMessageId = useAppStore((state) => state.highlightedMessageId);
   const connectionStatus = useAppStore((state) => state.connectionStatus);
   const setRightPanelOpen = useAppStore((state) => state.setRightPanelOpen);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -41,9 +51,6 @@ export function ChatPanel() {
     setEditingAgent(null);
   };
 
-  const conversation = activeConversationId ? conversations[activeConversationId] : null;
-  const messages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
-  const runs = activeConversationId ? runsByConversation[activeConversationId] ?? [] : [];
   const runningCount = runs.filter((run) => run.status === "running").length;
   const tokenTotal = runs.reduce((sum, run) => sum + (run.usage?.inputTokens ?? 0) + (run.usage?.outputTokens ?? 0), 0);
 
@@ -55,6 +62,15 @@ export function ChatPanel() {
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, runningCount]);
+
+  useEffect(() => {
+    if (!highlightedMessageId) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`message-${highlightedMessageId}`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversationId, highlightedMessageId, messages.length]);
 
   if (!conversation) {
     return (
@@ -122,13 +138,16 @@ export function ChatPanel() {
               发送一条消息，启动这个群聊里的 Agent 协作。
             </div>
           ) : null}
-          {(() => {
-            const latestUserMsg = [...messages].reverse().find((m) => m.role === "user");
-            const latestUserId = latestUserMsg?.id ?? null;
-            return messages.map((message) => (
-              <MessageBubble key={message.id} message={message} agent={message.agentId ? agents[message.agentId] : null} isLatestUser={message.id === latestUserId} onEditAgent={handleEditAgent} />
-            ));
-          })()}
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              agent={message.agentId ? agents[message.agentId] : null}
+              isLatestUser={message.id === latestUserId}
+              highlighted={message.id === highlightedMessageId}
+              onEditAgent={handleEditAgent}
+            />
+          ))}
         </div>
       </div>
 
@@ -155,7 +174,19 @@ export function ChatPanel() {
   );
 }
 
-function MessageBubble({ message, agent, isLatestUser, onEditAgent }: { message: Message; agent: Agent | null; isLatestUser?: boolean; onEditAgent?: (agent: Agent) => void }) {
+function MessageBubble({
+  message,
+  agent,
+  isLatestUser,
+  highlighted,
+  onEditAgent
+}: {
+  message: Message;
+  agent: Agent | null;
+  isLatestUser?: boolean;
+  highlighted?: boolean;
+  onEditAgent?: (agent: Agent) => void;
+}) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
@@ -164,7 +195,12 @@ function MessageBubble({ message, agent, isLatestUser, onEditAgent }: { message:
   };
 
   return (
-    <article className={`flex gap-3 group ${isUser ? "justify-end" : "justify-start"}`}>
+    <article
+      id={`message-${message.id}`}
+      className={`group flex gap-3 rounded-md transition-colors duration-500 ${
+        highlighted ? "bg-amber-100/80 ring-2 ring-amber-300 ring-offset-4" : ""
+      } ${isUser ? "justify-end" : "justify-start"}`}
+    >
       {!isUser ? <Avatar label={isSystem ? "系统" : agent?.name ?? "A"} muted={isSystem} onClick={!isSystem && agent && onEditAgent ? () => onEditAgent(agent) : undefined} /> : null}
       <div className={`${isUser ? "max-w-[54%]" : "max-w-[78%]"} min-w-0`}>
         {!isUser ? (
@@ -184,6 +220,7 @@ function MessageBubble({ message, agent, isLatestUser, onEditAgent }: { message:
           }`}
         >
           <MessageParts parts={message.parts} />
+          {!isUser && message.runId ? <DispatchProgress messageId={message.id} /> : null}
         </div>
         {isUser && isLatestUser && message.status === "complete" ? (
           <div className="mt-1 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition">

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getSettings, updateSettings } from "@/server/settings-service";
+import { getApiKeySources, getSettings, updateSettings } from "@/server/settings-service";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ export async function GET() {
     arkApiKey: maskKey(settings.arkApiKey)
   };
 
-  return Response.json({ settings: masked });
+  return Response.json({ settings: masked, keySources: getApiKeySources(settings) });
 }
 
 export async function PATCH(request: Request) {
@@ -37,11 +37,22 @@ export async function PATCH(request: Request) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = updateSettings(parsed.data);
+  const updated = updateSettings(removeMaskedKeys(parsed.data));
   return Response.json({ settings: updated });
 }
 
 function maskKey(key: string | null): string | null {
   if (!key || key.length <= 4) return key;
   return "*".repeat(key.length - 4) + key.slice(-4);
+}
+
+export function removeMaskedKeys<T extends Record<string, unknown>>(patch: T): T {
+  const next = { ...patch };
+  for (const key of ["anthropicApiKey", "openaiApiKey", "deepseekApiKey", "arkApiKey"] as const) {
+    const value = next[key];
+    if (typeof value === "string" && /^\*+[^*]{0,4}$/.test(value)) {
+      delete next[key];
+    }
+  }
+  return next;
 }

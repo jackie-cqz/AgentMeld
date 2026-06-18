@@ -74,6 +74,28 @@ When a command approval gate is triggered, Agent-Conference MUST publish a pendi
 - **THEN** Agent-Conference publishes `bash_command.resolved`
 - **AND** frontend reducers remove that pending command id.
 
+### Requirement: Ask-user events SHALL drive pending question UI
+
+When an agent requests user input, Agent-Conference MUST publish typed pending, answered, and cancelled events so all connected clients can render and clear the question state.
+
+#### Scenario: Agent waits for user input
+- **WHEN** the `ask_user` tool registers a pending question
+- **THEN** Agent-Conference publishes `ask_user.pending` with the question, choices, agent id, and run id.
+
+#### Scenario: Pending question is completed or cancelled
+- **WHEN** the user answers the question or the owning run is aborted
+- **THEN** Agent-Conference publishes `ask_user.answered` or `ask_user.cancelled`
+- **AND** frontend reducers remove that pending question id.
+
+### Requirement: Context compaction events SHALL expose failures
+
+Context compaction MUST publish start, progress, completion, and failure state through the shared stream protocol.
+
+#### Scenario: Compaction provider is unavailable
+- **WHEN** a key is missing or the provider request fails
+- **THEN** Agent-Conference publishes `compaction.error`
+- **AND** frontend reducers mark the conversation compaction state as failed.
+
 ### Requirement: Errors SHALL be visible in conversation state
 
 Failures MUST be represented in both AgentRun status and conversation-visible message content.

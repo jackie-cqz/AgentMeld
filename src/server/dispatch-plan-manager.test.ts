@@ -8,7 +8,7 @@ import {
   getPendingPlansForConversation,
   registerPendingPlan,
   rejectPlan,
-  revisePlan
+  revisePlanWithFeedback
 } from "@/server/dispatch-plan-manager";
 import type { DispatchPlanItem } from "@/shared/types";
 
@@ -62,21 +62,17 @@ describe("dispatch-plan-manager", () => {
     expect(result.approved).toBe(false);
   });
 
-  it("revising returns the revised plan", async () => {
+  it("revising returns feedback text", async () => {
     const promise = registerPendingPlan("conv_1", "run_1", samplePlan);
-
-    const revisedPlan: DispatchPlanItem[] = [
-      { id: "t1", agentId: "ag_1", task: "Revised task", dependsOn: [] }
-    ];
 
     setTimeout(() => {
       const plans = getAllPendingPlans();
-      revisePlan(plans[0].id, revisedPlan);
+      revisePlanWithFeedback(plans[0].id, "t3 is unnecessary, please remove.");
     }, 10);
 
     const result = await promise;
     expect(result.approved).toBe(true);
-    expect(result.revisedPlan).toEqual(revisedPlan);
+    expect(result.feedback).toBe("t3 is unnecessary, please remove.");
   });
 
   it("getPendingPlan returns undefined for unknown id", () => {

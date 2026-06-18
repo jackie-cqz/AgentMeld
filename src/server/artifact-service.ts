@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getDataDir, getDatabase } from "@/db/client";
 import { createArtifact, getArtifact, listArtifacts } from "@/server/repositories";
+import { resolveStaticFilePath } from "@/server/static-file-utils";
 import { newArtifactId } from "@/shared/ids";
 import type { Artifact, ArtifactContent, ArtifactType } from "@/shared/types";
 
@@ -16,6 +17,13 @@ interface CreateArtifactInput {
 interface UpdateArtifactInput {
   title?: string;
   content?: ArtifactContent;
+}
+
+export interface ArtifactVersionFamily {
+  rootId: string;
+  currentId: string;
+  latestId: string;
+  versions: Artifact[];
 }
 
 export function getArtifactById(artifactId: string): Artifact | null {
@@ -97,10 +105,52 @@ export function getVersionChain(artifactId: string): Artifact[] {
 }
 
 export function getLatestVersion(artifactId: string): Artifact | null {
-  const chain = getVersionChain(artifactId);
-  if (chain.length === 0) return null;
-  // The first in chain is the latest (newest)
-  return chain[0];
+  return getArtifactVersionFamily(artifactId)?.versions.at(-1) ?? null;
+}
+
+export function getArtifactVersionFamily(artifactId: string): ArtifactVersionFamily | null {
+  const current = getArtifact(artifactId);
+  if (!current) return null;
+
+  const artifacts = listArtifacts(current.conversationId);
+  const artifactsById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+  let root = current;
+  const visited = new Set<string>();
+
+  while (root.parentArtifactId && !visited.has(root.id)) {
+    visited.add(root.id);
+    const parent = artifactsById.get(root.parentArtifactId);
+    if (!parent) break;
+    root = parent;
+  }
+
+  const belongsToFamily = (artifact: Artifact): boolean => {
+    let candidate: Artifact | undefined = artifact;
+    const candidateVisited = new Set<string>();
+    while (candidate && !candidateVisited.has(candidate.id)) {
+      if (candidate.id === root.id) return true;
+      candidateVisited.add(candidate.id);
+      candidate = candidate.parentArtifactId
+        ? artifactsById.get(candidate.parentArtifactId)
+        : undefined;
+    }
+    return false;
+  };
+
+  const versions = artifacts
+    .filter(belongsToFamily)
+    .sort((left, right) =>
+      left.version - right.version ||
+      left.createdAt - right.createdAt ||
+      left.id.localeCompare(right.id)
+    );
+
+  return {
+    rootId: root.id,
+    currentId: current.id,
+    latestId: versions.at(-1)?.id ?? current.id,
+    versions
+  };
 }
 
 export function getWebAppPreviewDir(artifactId: string): string {
@@ -117,9 +167,11 @@ export function ensureWebAppPreview(artifact: Artifact): string {
   if (!fs.existsSync(previewDir)) {
     fs.mkdirSync(previewDir, { recursive: true });
     for (const [fileName, content] of Object.entries(webContent.files)) {
-      // Prevent path traversal in file names
-      const safeName = path.basename(fileName);
-      const filePath = path.join(previewDir, safeName);
+      const filePath = resolveStaticFilePath(previewDir, fileName);
+      if (!filePath) {
+        throw new Error(`Web app artifact "${artifact.id}" contains unsafe file path "${fileName}".`);
+      }
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, String(content), "utf-8");
     }
   }

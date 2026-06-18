@@ -28,6 +28,24 @@ Zustand reducers MUST update conversation, message, artifact, pending write, pen
 - **THEN** the store marks streaming messages from that run as terminal
 - **AND** appends local error `tool_result` parts for any unmatched `tool_use` call ids.
 
+#### Scenario: A pending user question arrives
+- **WHEN** `ask_user.pending` arrives
+- **THEN** the store upserts the pending question by id
+- **AND** adds its id to the conversation pending-question bucket.
+
+#### Scenario: Context compaction reports progress
+- **WHEN** `compaction.start`, `compaction.progress`, or `compaction.end` arrives
+- **THEN** the store updates the compaction state for that conversation without modifying message order.
+
+### Requirement: Frontend entity state SHALL be normalized
+
+Messages, runs, and artifacts MUST be stored in by-id maps with conversation id buckets. Components SHALL consume derived selectors rather than retaining duplicate entity arrays.
+
+#### Scenario: Bootstrap data is loaded
+- **WHEN** the bootstrap API returns per-conversation message, run, and artifact arrays
+- **THEN** the frontend normalizes them into entity maps and stable id buckets
+- **AND** missing conversation buckets become empty arrays.
+
 ### Requirement: Artifact preview SHALL be separate from chat rendering
 
 The UI MUST render artifact previews in a dedicated panel and render chat artifact references as cards or links.
@@ -48,6 +66,19 @@ For `web_app` artifacts and ready deployment status parts, the UI MUST provide o
 - **WHEN** a `deploy_status` part has `deploymentType='external_static'`
 - **THEN** the card labels it as an external static publish
 - **AND** shows the local preview fallback when available.
+
+### Requirement: Pending decisions SHALL be inspectable
+
+Pending questions, file writes, bash commands, and dispatch plans MUST render in the active conversation without requiring a refresh.
+
+#### Scenario: A file write needs approval
+- **WHEN** `fs_write.pending` arrives
+- **THEN** the UI shows the target path, agent/run metadata, and a line diff
+- **AND** approve and reject actions remain available while the diff is expanded.
+
+#### Scenario: An orchestrator plan is executing
+- **WHEN** dispatch plan and task lifecycle events arrive
+- **THEN** the message displays task status, assigned agent, dependencies, and expected outputs.
 
 ### Requirement: Agent builder SHALL expose adapter-specific fields
 

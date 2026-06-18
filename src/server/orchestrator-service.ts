@@ -68,7 +68,19 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
     createSystemMessage(input.conversationId, `📋 **执行计划**\n\n${planText}\n\n⏳ 等待审批...（点击上方卡片 approve / reject / revise）`);
 
     const planItems: DispatchPlanItem[] = plan.tasks.map((t) => ({
-      id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn
+      id: t.id,
+      agentId: t.agentId,
+      task: t.prompt,
+      dependsOn: t.dependsOn,
+      title: t.title,
+      prompt: t.prompt,
+      inputs: t.inputs,
+      expectedOutputs: t.expectedOutputs,
+      acceptanceCriteria: t.acceptanceCriteria,
+      maxAttempts: t.maxAttempts,
+      targetPaths: t.targetPaths,
+      requiredCommands: t.requiredCommands,
+      requiredEvidence: t.requiredEvidence
     }));
 
     const result = await registerPendingPlan(input.conversationId, input.orchestratorRunId, planItems);
@@ -78,9 +90,8 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
       return;
     }
 
-    if (result.revisedPlan) {
-      const feedback = result.revisedPlan.length > 0 ? result.revisedPlan[0].task : "请调整计划。";
-      revisionContext = buildReviseContext(feedback);
+    if (result.feedback) {
+      revisionContext = buildReviseContext(result.feedback);
       continue;
     }
 
@@ -88,9 +99,7 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
     reviewing = false;
     createSystemMessage(input.conversationId, "✅ 计划已批准，正在执行子任务...");
 
-    const finalPlan: ParsedTask[] = result.revisedPlan
-      ? mergeRevisedPlan(plan.tasks, result.revisedPlan)
-      : plan.tasks;
+    const finalPlan: ParsedTask[] = plan.tasks;
 
     await executeOrchestratorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
@@ -131,6 +140,21 @@ export async function executeOrchestratorPlan(
 
   const validTasks = plan.filter((t) => availableAgents.includes(t.agentId));
   const waves = topologicalWaves(validTasks);
+
+  // P1.4: Publish dispatch.plan when execution begins
+  const planItems: DispatchPlanItem[] = validTasks.map((t) => ({
+    id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn,
+    title: t.title, prompt: t.prompt, inputs: t.inputs, expectedOutputs: t.expectedOutputs,
+    acceptanceCriteria: t.acceptanceCriteria, maxAttempts: t.maxAttempts,
+    targetPaths: t.targetPaths, requiredCommands: t.requiredCommands, requiredEvidence: t.requiredEvidence
+  }));
+  eventBus.publish({
+    type: "dispatch.plan",
+    conversationId,
+    timestamp: Date.now(),
+    runId: orchestratorRunId,
+    plan: planItems
+  });
 
   for (const wave of waves) {
     if (abortSignal.aborted) {
@@ -174,7 +198,7 @@ export async function executeOrchestratorPlan(
 
   // Stage 3: AGGREGATE — with multi-round support
   const MAX_DISPATCH_ROUNDS = 2;
-  let allResults = results;
+  const allResults = results;
   for (let round = 1; round <= MAX_DISPATCH_ROUNDS; round++) {
     const hasFailures = Array.from(allResults.values()).some((r) => r.status !== "complete" && r.status !== "skipped");
     if (!hasFailures) break;
@@ -305,6 +329,18 @@ async function runChildTask(
         createdAt: Date.now(), updatedAt: Date.now()
       };
 
+      // P1.4: Publish task.start with attempt number
+      eventBus.publish({
+        type: "dispatch.task.start",
+        conversationId,
+        timestamp: Date.now(),
+        parentRunId,
+        childRunId: "",
+        taskId: task.id,
+        agentId: task.agentId,
+        attempt
+      });
+
       const { runId: attemptRunId, promise } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
       try {
         await promise;
@@ -322,17 +358,35 @@ async function runChildTask(
     const report = getTaskReport(finalRunId);
     const evaluation = finalEvaluation;
 
-    // Collect outputKey → artifactId bindings
+    // P1.5: Strict output handoff — verify reported artifacts exist in DB
     if (report?.artifacts) {
       for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
-        outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+        const art = getArtifact(artifactId);
+        if (art && art.conversationId === conversationId) {
+          outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+        }
+        // Invalid or missing artifacts are silently dropped — downstream will see missing input
       }
     }
 
-    // Map "blocked" → "failed" for dispatch.end event (event type doesn't include blocked)
+    // P1.4: Map "blocked" → "failed" for dispatch.end event
     const dispatchStatus: "complete" | "failed" | "aborted" | "skipped" =
       evaluation.status === "blocked" ? "failed" : evaluation.status;
 
+    // P1.4: Publish task.end with agentId
+    eventBus.publish({
+      type: "dispatch.task.end",
+      conversationId,
+      timestamp: Date.now(),
+      parentRunId,
+      childRunId: finalRunId,
+      taskId: task.id,
+      agentId: task.agentId,
+      status: dispatchStatus,
+      error: evaluation.error
+    });
+
+    // Legacy dispatch.end — keep for backward compatibility
     eventBus.publish({
       type: "dispatch.end", conversationId, timestamp: Date.now(),
       parentRunId, childRunId: finalRunId, taskId: task.id,
@@ -903,23 +957,4 @@ function buildDemoPlan(availableAgentIds: string[], triggerMsg: Message): { reas
 interface FileConflict {
   path: string;
   contributors: string[];
-}
-
-function mergeRevisedPlan(original: ParsedTask[], revised: DispatchPlanItem[]): ParsedTask[] {
-  return revised.map((item) => {
-    const orig = original.find((t) => t.id === item.id);
-    return orig
-      ? { ...orig, prompt: item.task, dependsOn: item.dependsOn }
-      : {
-          id: item.id,
-          agentId: item.agentId,
-          title: item.id,
-          prompt: item.task,
-          dependsOn: item.dependsOn,
-          inputs: [],
-          expectedOutputs: [],
-          acceptanceCriteria: [],
-          maxAttempts: 1
-        };
-  });
 }

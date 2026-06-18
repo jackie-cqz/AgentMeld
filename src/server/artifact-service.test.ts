@@ -3,10 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
-import { getDataDir, resetDatabaseForTests as resetClientForTests } from "@/db/client";
+import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import {
-  createConversation,
-  sendMessage
+  createConversation
 } from "@/server/conversation-service";
 import { eventBus } from "@/server/event-bus";
 import {
@@ -14,6 +13,7 @@ import {
   createNewArtifactVersion,
   getAllArtifacts,
   getArtifactById,
+  getArtifactVersionFamily,
   getArtifactsForConversation,
   getVersionChain,
   ensureWebAppPreview
@@ -174,6 +174,33 @@ describe("artifact-service", () => {
     });
   });
 
+  describe("getArtifactVersionFamily", () => {
+    it("returns root, current, latest, and descendants from any selected version", () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const v1 = createNewArtifact({
+        conversationId: conv.id,
+        type: "document",
+        title: "V1",
+        content: { type: "document", content: "c1" }
+      });
+      const v2 = createNewArtifactVersion(v1.id, {
+        title: "V2",
+        content: { type: "document", content: "c2" }
+      })!;
+      const v3 = createNewArtifactVersion(v2.id, {
+        title: "V3",
+        content: { type: "document", content: "c3" }
+      })!;
+
+      const family = getArtifactVersionFamily(v2.id);
+
+      expect(family?.rootId).toBe(v1.id);
+      expect(family?.currentId).toBe(v2.id);
+      expect(family?.latestId).toBe(v3.id);
+      expect(family?.versions.map((version) => version.id)).toEqual([v1.id, v2.id, v3.id]);
+    });
+  });
+
   describe("ensureWebAppPreview", () => {
     it("writes web_app files to the preview directory", () => {
       const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
@@ -189,6 +216,44 @@ describe("artifact-service", () => {
       expect(fs.existsSync(previewDir)).toBe(true);
       const html = fs.readFileSync(path.join(previewDir, "index.html"), "utf-8");
       expect(html).toBe("<h1>Hi</h1>");
+    });
+
+    it("preserves nested file paths", () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const art = createNewArtifact({
+        conversationId: conv.id,
+        type: "web_app",
+        title: "Nested Preview",
+        content: {
+          type: "web_app",
+          files: {
+            "index.html": "<script src=\"assets/app.js\"></script>",
+            "assets/app.js": "document.body.dataset.ready = 'true';"
+          },
+          entry: "index.html"
+        }
+      });
+
+      const previewDir = ensureWebAppPreview(art);
+
+      expect(fs.readFileSync(path.join(previewDir, "assets", "app.js"), "utf-8"))
+        .toContain("dataset.ready");
+    });
+
+    it("rejects unsafe file paths", () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const art = createNewArtifact({
+        conversationId: conv.id,
+        type: "web_app",
+        title: "Unsafe Preview",
+        content: {
+          type: "web_app",
+          files: { "index.html": "<h1>Hi</h1>", "../evil.js": "bad" },
+          entry: "index.html"
+        }
+      });
+
+      expect(() => ensureWebAppPreview(art)).toThrow("unsafe file path");
     });
 
     it("throws for non-web_app artifacts", () => {

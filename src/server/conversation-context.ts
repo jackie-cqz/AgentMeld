@@ -1,10 +1,10 @@
-import { getConversation, getMessage, listArtifacts, listMessages } from "@/server/repositories";
+import { getConversation, listArtifacts, listMessages } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
 import { newContextSummaryId } from "@/shared/ids";
-import type { Artifact, Message, MessagePart } from "@/shared/types";
+import type { Message, MessagePart } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,6 +22,16 @@ export interface BuildHistoryOptions {
   includePinned?: boolean;
   excludeMessageId?: string;
   tokenBudget?: number;
+}
+
+export interface ContextBudgetPreview {
+  estimatedTokens: number;
+  summaryIncluded: boolean;
+  summaryTokens: number;
+  pinnedMessageCount: number;
+  recentMessageCount: number;
+  omittedMessageCount: number;
+  totalCompleteMessages: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +139,44 @@ export async function buildHistoryFor(
   }
 
   return result;
+}
+
+export function getContextBudgetPreview(
+  conversationId: string,
+  maxTurns = 20
+): ContextBudgetPreview | null {
+  const conversation = getConversation(conversationId);
+  if (!conversation) return null;
+
+  const summary = getLatestContextSummary(conversationId);
+  const messages = listMessages(conversationId).filter((message) => message.status === "complete");
+  const pinnedIds = new Set(conversation.pinnedMessageIds);
+  const pinnedMessages = messages.filter((message) => pinnedIds.has(message.id));
+  const afterCovered = summary
+    ? messages.filter((message) => message.createdAt > summary.coveredUntilCreatedAt)
+    : messages;
+  const recentMessages = afterCovered
+    .filter((message) => !pinnedIds.has(message.id))
+    .slice(-maxTurns);
+
+  const includedIds = new Set([
+    ...pinnedMessages.map((message) => message.id),
+    ...recentMessages.map((message) => message.id)
+  ]);
+  const summaryTokens = summary ? estimateTokens(summary.summary) : 0;
+  const messageTokens = [...pinnedMessages, ...recentMessages]
+    .filter((message, index, all) => all.findIndex((item) => item.id === message.id) === index)
+    .reduce((total, message) => total + estimateTokens(renderSearchableText(message.parts)), 0);
+
+  return {
+    estimatedTokens: summaryTokens + messageTokens,
+    summaryIncluded: Boolean(summary),
+    summaryTokens,
+    pinnedMessageCount: pinnedMessages.length,
+    recentMessageCount: recentMessages.length,
+    omittedMessageCount: messages.filter((message) => !includedIds.has(message.id)).length,
+    totalCompleteMessages: messages.length
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +353,9 @@ export async function runCompaction(
   coveredUntilCreatedAt: number,
   sourceMessageCount: number,
   modelProvider: string = "deepseek",
-  modelId: string = "deepseek-chat"
+  modelId: string = "deepseek-chat",
+  apiKeyOverride?: string | null,
+  apiBaseUrl?: string | null
 ): Promise<{ summary: string; tokenEstimate: number }> {
   const existingSummary = getLatestContextSummary(conversationId);
 
@@ -330,11 +380,11 @@ export async function runCompaction(
 
   // Resolve API key
   const settings = getSettings();
-  const apiKey = resolveApiKey(modelProvider, null, settings);
+  const apiKey = resolveApiKey(modelProvider, apiKeyOverride ?? null, settings);
   if (!apiKey) {
-    // No API key — fall back to concatenation-based summary
-    const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
-    return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+    const error = `缺少 ${modelProvider} API Key，无法压缩上下文。请在设置或会话 Agent 中配置 Key。`;
+    publishCompactionError(conversationId, error);
+    throw new Error(error);
   }
 
   // Call LLM for smart compaction
@@ -347,7 +397,7 @@ export async function runCompaction(
   });
 
   try {
-    const response = await fetch(`${resolveBaseUrl(modelProvider)}/v1/chat/completions`, {
+    const response = await fetch(`${resolveBaseUrl(modelProvider, apiBaseUrl)}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -366,34 +416,27 @@ export async function runCompaction(
     });
 
     if (!response.ok) {
-      const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
-      return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+      const responseText = await response.text().catch(() => "");
+      throw new Error(`上下文压缩模型请求失败（HTTP ${response.status}）${responseText ? `：${responseText.slice(0, 160)}` : ""}`);
     }
 
     const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const summary = data.choices?.[0]?.message?.content?.trim() ?? buildFallbackSummary(messages, sourceMessageCount);
+    const summary = data.choices?.[0]?.message?.content?.trim();
+    if (!summary) {
+      throw new Error("上下文压缩模型没有返回摘要内容。");
+    }
 
     return storeCompactionResult(conversationId, summary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, modelProvider, modelId);
-  } catch {
-    const fallbackSummary = buildFallbackSummary(messages, sourceMessageCount);
-    return storeCompactionResult(conversationId, fallbackSummary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, null, null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "上下文压缩失败。";
+    publishCompactionError(conversationId, message);
+    throw error instanceof Error ? error : new Error(message);
   }
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers for compaction
 // ---------------------------------------------------------------------------
-
-function buildFallbackSummary(
-  messages: Array<{ role: string; agentName?: string; content: string }>,
-  count: number
-): string {
-  const texts = messages
-    .map((m) => m.content)
-    .filter(Boolean)
-    .slice(0, 30);
-  return `[压缩了 ${count} 条消息] ${texts.join(" | ").slice(0, 2000)}`;
-}
 
 async function storeCompactionResult(
   conversationId: string,
@@ -444,15 +487,34 @@ async function storeCompactionResult(
   return { summary, tokenEstimate };
 }
 
-function resolveBaseUrl(provider: string): string {
+function publishCompactionError(conversationId: string, error: string) {
+  eventBus.publish({
+    type: "compaction.error",
+    conversationId,
+    timestamp: Date.now(),
+    error
+  });
+}
+
+function resolveBaseUrl(provider: string, override?: string | null): string {
+  if (override?.trim()) {
+    return override.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1";
+  }
   switch (provider) {
     case "deepseek":
-      return process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
+      return (process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com").replace(/\/+$/, "") + "/v1";
     case "openai":
-      return process.env.OPENAI_BASE_URL ?? "https://api.open.com";
+      return (process.env.OPENAI_BASE_URL ?? "https://api.openai.com").replace(/\/+$/, "") + "/v1";
     case "anthropic":
-      return process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com";
+      return (process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/+$/, "") + "/v1";
     default:
-      return "https://api.deepseek.com";
+      return "https://api.deepseek.com/v1";
   }
+}
+
+function renderSearchableText(parts: MessagePart[]): string {
+  return parts
+    .filter((part) => part.type === "text" || part.type === "code")
+    .map((part) => part.content)
+    .join("\n");
 }

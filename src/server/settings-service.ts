@@ -1,6 +1,15 @@
 import { getDatabase } from "@/db/client";
 import type { AppSettings, CompanionMode } from "@/shared/types";
 
+export type ApiKeySource = "app_settings" | "environment" | "missing";
+
+export interface ApiKeySources {
+  anthropic: ApiKeySource;
+  openai: ApiKeySource;
+  deepseek: ApiKeySource;
+  "volcano-ark": ApiKeySource;
+}
+
 export function getSettings(): AppSettings {
   const db = getDatabase();
   const row = db.prepare("SELECT * FROM app_settings WHERE id = 'singleton'").get() as Record<string, unknown> | undefined;
@@ -53,6 +62,31 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   );
 
   return updated;
+}
+
+export function getApiKeySources(settings = getSettings()): ApiKeySources {
+  return {
+    anthropic: settings.anthropicApiKey
+      ? "app_settings"
+      : process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY
+        ? "environment"
+        : "missing",
+    openai: settings.openaiApiKey
+      ? "app_settings"
+      : process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY
+        ? "environment"
+        : "missing",
+    deepseek: settings.deepseekApiKey
+      ? "app_settings"
+      : process.env.DEEPSEEK_API_KEY
+        ? "environment"
+        : "missing",
+    "volcano-ark": settings.arkApiKey
+      ? "app_settings"
+      : process.env.ARK_API_KEY
+        ? "environment"
+        : "missing"
+  };
 }
 
 /**

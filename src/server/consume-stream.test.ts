@@ -97,6 +97,7 @@ describe("consumeStream", () => {
     const events: StreamEvent[] = [
       {
         type: "run.usage", conversationId: "c1", timestamp: 1,
+        runId: "",
         usage: { modelId: "deepseek-chat", inputTokens: 100, outputTokens: 50 }
       }
     ];
@@ -172,5 +173,83 @@ describe("consumeStream", () => {
 
     // Stream should stop immediately, returning empty parts
     expect(result.parts).toHaveLength(0);
+  });
+
+  it("persists deploy.status as deploy_status part", async () => {
+    const deployEvent: StreamEvent = {
+      type: "deploy.status",
+      conversationId: "c1",
+      timestamp: 1,
+      messageId: "",
+      deployment: {
+        id: "dep_1",
+        artifactId: "art_1",
+        title: "My Preview",
+        version: 1,
+        status: "ready",
+        previewPath: "/preview/dep_1",
+        createdAt: 1
+      }
+    };
+
+    const events: StreamEvent[] = [
+      {
+        type: "part.start", conversationId: "c1", timestamp: 0,
+        messageId: "", partIndex: 0,
+        part: { type: "text", content: "" }
+      },
+      {
+        type: "part.delta", conversationId: "c1", timestamp: 0,
+        messageId: "", partIndex: 0,
+        delta: { type: "text.append", text: "deploying" }
+      },
+      deployEvent
+    ];
+
+    const result = await consumeStream({
+      stream: eventsToStream(events),
+      messageId: "msg_1",
+      runId: "run_1"
+    });
+
+    // Should have text part + deploy_status part
+    const deployParts = result.parts.filter((p) => p.type === "deploy_status");
+    expect(deployParts).toHaveLength(1);
+    expect(deployParts[0]).toMatchObject({
+      type: "deploy_status",
+      deployment: expect.objectContaining({ id: "dep_1", status: "ready" })
+    });
+  });
+
+  it("upserts deploy_status: second deploy.status for same id replaces first", async () => {
+    const first: StreamEvent = {
+      type: "deploy.status", conversationId: "c1", timestamp: 1,
+      messageId: "",
+      deployment: {
+        id: "dep_1", artifactId: "art_1", title: "v1", version: 1,
+        status: "failed", previewPath: "", error: "pending", createdAt: 1
+      }
+    };
+    const second: StreamEvent = {
+      type: "deploy.status", conversationId: "c1", timestamp: 2,
+      messageId: "",
+      deployment: {
+        id: "dep_1", artifactId: "art_1", title: "v1", version: 1,
+        status: "ready", previewPath: "/p/dep_1", createdAt: 2
+      }
+    };
+
+    const result = await consumeStream({
+      stream: eventsToStream([first, second]),
+      messageId: "msg_1",
+      runId: "run_1"
+    });
+
+    const deployParts = result.parts.filter((p) => p.type === "deploy_status");
+    expect(deployParts).toHaveLength(1); // updated, not duplicated
+    expect(deployParts[0]).toMatchObject({
+      type: "deploy_status",
+      deployment: expect.objectContaining({ status: "ready" })
+    });
   });
 });

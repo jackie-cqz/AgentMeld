@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Loader2, Zap, Brain, FileText, ChevronDown } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
+import { selectCompactionState, selectConversationMessages, selectConversationRuns } from "@/stores/selectors";
 import { estimateTokens } from "@/shared/token-estimate";
 
 interface Props {
@@ -10,11 +12,23 @@ interface Props {
   onClose: () => void;
 }
 
+interface ContextBudgetPreview {
+  estimatedTokens: number;
+  summaryIncluded: boolean;
+  summaryTokens: number;
+  pinnedMessageCount: number;
+  recentMessageCount: number;
+  omittedMessageCount: number;
+  totalCompleteMessages: number;
+}
+
 export function ContextStatsPanel({ conversationId, onClose }: Props) {
-  const messagesByConversation = useAppStore((s) => s.messagesByConversation);
-  const runsByConversation = useAppStore((s) => s.runsByConversation);
+  const messages = useAppStore(useShallow((s) => selectConversationMessages(s, conversationId)));
+  const runs = useAppStore(useShallow((s) => selectConversationRuns(s, conversationId)));
+  const compactionState = useAppStore((s) => selectCompactionState(s, conversationId));
   const [compacting, setCompacting] = useState(false);
   const [compactResult, setCompactResult] = useState<string | null>(null);
+  const [budgetPreview, setBudgetPreview] = useState<ContextBudgetPreview | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on click outside
@@ -28,8 +42,12 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [onClose]);
 
-  const messages = messagesByConversation[conversationId] ?? [];
-  const runs = runsByConversation[conversationId] ?? [];
+  useEffect(() => {
+    fetch(`/api/conversations/${conversationId}/compact`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data: { preview?: ContextBudgetPreview }) => setBudgetPreview(data.preview ?? null))
+      .catch(() => setBudgetPreview(null));
+  }, [conversationId, compactionState?.updatedAt]);
 
   // Stats
   const totalMessages = messages.length;
@@ -50,9 +68,10 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
   }, 0);
 
   const runningCount = runs.filter((r) => r.status === "running").length;
+  const isCompacting = compacting || compactionState?.status === "running";
 
   const handleCompact = async () => {
-    if (compacting) return;
+    if (isCompacting) return;
     setCompacting(true);
     setCompactResult(null);
     try {
@@ -111,6 +130,20 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
           </div>
         </div>
 
+        {budgetPreview ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="text-xs font-medium text-slate-700">下轮上下文预算预览</div>
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+              <BudgetRow label="估算 Token" value={formatNumber(budgetPreview.estimatedTokens)} />
+              <BudgetRow label="长期摘要" value={budgetPreview.summaryIncluded ? formatNumber(budgetPreview.summaryTokens) : "未生成"} />
+              <BudgetRow label="置顶消息" value={String(budgetPreview.pinnedMessageCount)} />
+              <BudgetRow label="近期消息" value={String(budgetPreview.recentMessageCount)} />
+              <BudgetRow label="省略消息" value={String(budgetPreview.omittedMessageCount)} />
+              <BudgetRow label="完整消息" value={String(budgetPreview.totalCompleteMessages)} />
+            </div>
+          </div>
+        ) : null}
+
         {/* Model context window gauge */}
         <div className="rounded-lg bg-slate-50 p-3">
           <div className="mb-1.5 flex items-center justify-between text-xs">
@@ -138,13 +171,13 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
       <div className="border-t border-slate-100 px-4 py-3">
         <button
           onClick={handleCompact}
-          disabled={compacting}
+          disabled={isCompacting}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#4169ff] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#3558e5] disabled:opacity-60"
         >
-          {compacting ? (
+          {isCompacting ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              正在压缩...
+              {compactionState?.stage ? formatCompactionStage(compactionState.stage) : "正在压缩..."}
             </>
           ) : (
             <>
@@ -156,10 +189,30 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
         {compactResult && (
           <p className="mt-2 text-xs leading-relaxed text-slate-500">{compactResult}</p>
         )}
+        {compactionState?.status === "running" && compactionState.detail ? (
+          <p className="mt-2 text-xs leading-relaxed text-blue-600">{compactionState.detail}</p>
+        ) : null}
+        {compactionState?.status === "complete" && compactionState.tokenEstimate !== null ? (
+          <p className="mt-2 text-xs leading-relaxed text-emerald-600">
+            最近压缩完成，摘要约 {formatNumber(compactionState.tokenEstimate)} tokens。
+          </p>
+        ) : null}
+        {compactionState?.status === "error" && compactionState.detail ? (
+          <p className="mt-2 text-xs leading-relaxed text-red-600">{compactionState.detail}</p>
+        ) : null}
         <p className="mt-2 text-xs leading-relaxed text-slate-400">
           将早期消息压缩为 AI 摘要，保留关键决策和产物引用，降低后续对话 token 消耗。
         </p>
       </div>
+    </div>
+  );
+}
+
+function BudgetRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-slate-500">{label}</span>
+      <span className="font-mono font-medium text-slate-800">{value}</span>
     </div>
   );
 }
@@ -188,4 +241,10 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+function formatCompactionStage(stage: "reading" | "summarizing" | "storing") {
+  if (stage === "reading") return "读取上下文...";
+  if (stage === "summarizing") return "生成摘要...";
+  return "保存摘要...";
 }

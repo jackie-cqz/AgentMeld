@@ -11,6 +11,7 @@ import { eventBus } from "@/server/event-bus";
 import { GET as getArtifacts, POST as postArtifacts } from "@/app/api/artifacts/route";
 import { GET as getArtifact, PATCH as patchArtifact, DELETE as deleteArtifact } from "@/app/api/artifacts/[id]/route";
 import { GET as previewArtifact } from "@/app/api/artifacts/[id]/preview/route";
+import { GET as previewArtifactFile } from "@/app/api/artifacts/[id]/preview/[...path]/route";
 
 let tempDir: string;
 
@@ -164,5 +165,36 @@ describe("GET /api/artifacts/[id]/preview", () => {
     const csp = res.headers.get("Content-Security-Policy");
     expect(csp).toBeTruthy();
     expect(csp).toContain("script-src 'unsafe-inline'");
+  });
+
+  it("serves nested assets and bases a nested entry at its directory", async () => {
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const art = createNewArtifact({
+      conversationId: conv.id,
+      type: "web_app",
+      title: "Nested Preview API Test",
+      content: {
+        type: "web_app",
+        files: {
+          "pages/index.html": "<html><head></head><body><script src=\"app.js\"></script></body></html>",
+          "pages/app.js": "window.previewReady = true;"
+        },
+        entry: "pages/index.html"
+      }
+    });
+
+    const rootResponse = await previewArtifact(
+      new Request(`http://localhost/api/artifacts/${art.id}/preview`),
+      { params: Promise.resolve({ id: art.id }) }
+    );
+    expect(await rootResponse.text()).toContain(`/preview/pages/`);
+
+    const assetResponse = await previewArtifactFile(
+      new Request(`http://localhost/api/artifacts/${art.id}/preview/pages/app.js`),
+      { params: Promise.resolve({ id: art.id, path: ["pages", "app.js"] }) }
+    );
+    expect(assetResponse.status).toBe(200);
+    expect(assetResponse.headers.get("Content-Type")).toContain("javascript");
+    expect(await assetResponse.text()).toContain("previewReady");
   });
 });

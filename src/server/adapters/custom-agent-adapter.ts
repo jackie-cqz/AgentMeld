@@ -4,6 +4,7 @@ import type { AgentPlatformAdapter, AdapterInput } from "@/server/adapters/types
 import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { getSettings, resolveApiKey } from "@/server/settings-service";
+import { getArtifact } from "@/server/repositories";
 
 const MAX_TOOL_ROUNDS = 8;
 
@@ -275,27 +276,19 @@ export const customAgentAdapter: AgentPlatformAdapter = {
           isError: !result.ok
         });
 
-        // If tool created an artifact, emit artifact.create
+        // If tool created an artifact, emit artifact.create with the complete DB row
         if (result.ok && typeof result.value === "object" && result.value !== null) {
           const val = result.value as Record<string, unknown>;
           if (typeof val.artifactId === "string" && tc.name === "write_artifact") {
-            yield {
-              type: "artifact.create",
-              conversationId,
-              timestamp: Date.now(),
-              artifact: {
-                id: val.artifactId as string,
+            const loaded = getArtifact(val.artifactId as string);
+            if (loaded) {
+              yield {
+                type: "artifact.create",
                 conversationId,
-                createdByAgentId: input.agent.id,
-                type: (val.type as never) || "document",
-                title: (val.title as string) || "Untitled",
-                content: (val as never),
-                version: 1,
-                parentArtifactId: null,
-                createdAt: Date.now(),
-                updatedAt: Date.now()
-              }
-            };
+                timestamp: Date.now(),
+                artifact: loaded
+              };
+            }
           }
         }
       }

@@ -28,7 +28,6 @@ function makeStubAgent(overrides: Partial<Agent> = {}): Agent {
     isBuiltin: true,
     isOrchestrator: true,
     supportsVision: false,
-    conversationId: "conv_x",
     createdAt: 0,
     updatedAt: 0,
     ...overrides

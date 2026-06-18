@@ -45,3 +45,20 @@ Compacting conversation history MUST clear SDK session caches whose internal sta
 #### Scenario: Conversation is compacted
 - **WHEN** compaction writes a new summary and deletes old messages
 - **THEN** Claude Code and Codex session ids for that conversation are cleared.
+
+### Requirement: Context compaction SHALL fail visibly
+
+Compaction MUST NOT silently replace an unavailable model with an unstructured concatenation fallback.
+
+#### Scenario: DeepSeek key is missing
+- **WHEN** the user starts compaction without an applicable per-agent, app-settings, or environment key
+- **THEN** the service emits `compaction.error`
+- **AND** the UI displays the configuration error.
+
+### Requirement: Context budget SHALL be inspectable
+
+The UI SHALL expose an estimated next-run context composition.
+
+#### Scenario: User opens context statistics
+- **WHEN** the conversation contains summarized, pinned, recent, and omitted messages
+- **THEN** the panel shows summary inclusion, pinned count, recent count, omitted count, and estimated tokens.

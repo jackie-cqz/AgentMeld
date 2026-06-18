@@ -242,8 +242,12 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       signal: abortController.signal
     });
 
-    // Update message with final parts
-    message = { ...message, parts, updatedAt: Date.now() };
+    // If stream produced no parts but was aborted, add a visible part
+    let finalParts = parts;
+    if (abortController.signal.aborted && finalParts.length === 0) {
+      finalParts = [{ type: "text", content: "⚠️ 运行已被中止。" }];
+    }
+    message = { ...message, parts: finalParts, updatedAt: Date.now() };
 
     // 9. Finalize
     const finalUsage: NonNullable<AgentRun["usage"]> = streamUsage ?? {
@@ -259,6 +263,12 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       modelId: agent.modelId ?? "unknown",
       inputTokens: 0,
       outputTokens: 0
+    };
+    // Ensure the agent message has visible error content, not empty parts
+    message = {
+      ...message,
+      parts: message.parts.length > 0 ? message.parts : [{ type: "text", content: `⚠️ Agent 运行失败：${errorText}` }],
+      updatedAt: Date.now()
     };
     createErrorMessage(input.conversationId, message.id, `Agent run failed: ${errorText}`);
     completeRun(run, message, "failed", errorText, fallbackUsage);

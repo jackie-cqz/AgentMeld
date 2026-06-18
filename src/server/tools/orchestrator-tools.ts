@@ -68,6 +68,28 @@ export const planTasksTool: ToolDef = {
             maxAttempts: {
               type: "number",
               description: "Max retry attempts (default 1)."
+            },
+            targetPaths: {
+              type: "array",
+              items: { type: "string" },
+              description: "Files the assigned agent is expected to create or modify."
+            },
+            requiredCommands: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["command"],
+                properties: {
+                  command: { type: "string" },
+                  timeoutMs: { type: "number", description: "Optional timeout in ms." }
+                }
+              },
+              description: "Commands the assigned agent should run for validation."
+            },
+            requiredEvidence: {
+              type: "array",
+              items: { type: "string" },
+              description: "Human-readable items the agent should include in its report_task_result."
             }
           }
         }
@@ -137,6 +159,48 @@ export const reportTaskResultTool: ToolDef = {
         type: "array",
         items: { type: "string" },
         description: "List of blocking issues (for failed/blocked status)."
+      },
+      artifacts: {
+        type: "object",
+        description: "Map of outputKey → artifactId for expected outputs produced by this task.",
+        additionalProperties: { type: "string" }
+      },
+      files: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["path"],
+          properties: {
+            path: { type: "string", description: "Workspace-relative file path." },
+            action: { type: "string", enum: ["created", "modified", "deleted", "read"] },
+            summary: { type: "string", description: "What this file contains or why it was changed." }
+          }
+        }
+      },
+      commands: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["command", "exitCode"],
+          properties: {
+            command: { type: "string" },
+            exitCode: { type: "number" },
+            passed: { type: "boolean", description: "Whether the command succeeded (exitCode 0)." },
+            summary: { type: "string" }
+          }
+        }
+      },
+      tests: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["command", "passed"],
+          properties: {
+            command: { type: "string" },
+            passed: { type: "boolean" },
+            summary: { type: "string" }
+          }
+        }
       }
     }
   },
@@ -155,7 +219,10 @@ export const reportTaskResultTool: ToolDef = {
         summary: parsed.data.summary,
         acceptanceResults: parsed.data.acceptanceResults ?? [],
         blockers: parsed.data.blockers ?? [],
-        artifacts: {}
+        artifacts: parsed.data.artifacts ?? {},
+        files: parsed.data.files ?? [],
+        commands: parsed.data.commands ?? [],
+        tests: parsed.data.tests ?? []
       });
     }
 
@@ -207,7 +274,17 @@ export const planArgsSchema = z.object({
           )
           .optional(),
         acceptanceCriteria: z.array(z.string()).optional(),
-        maxAttempts: z.number().min(1).max(5).optional()
+        maxAttempts: z.number().min(1).max(5).optional(),
+        targetPaths: z.array(z.string()).optional(),
+        requiredCommands: z
+          .array(
+            z.object({
+              command: z.string(),
+              timeoutMs: z.number().optional()
+            })
+          )
+          .optional(),
+        requiredEvidence: z.array(z.string()).optional()
       })
     )
     .min(1)
@@ -220,7 +297,36 @@ export const reportSchema = z.object({
   acceptanceResults: z
     .array(z.object({ criterion: z.string(), passed: z.boolean(), evidence: z.string() }))
     .optional(),
-  blockers: z.array(z.string()).optional()
+  blockers: z.array(z.string()).optional(),
+  artifacts: z.record(z.string(), z.string()).optional(),
+  files: z
+    .array(
+      z.object({
+        path: z.string(),
+        action: z.enum(["created", "modified", "deleted", "read"]).optional(),
+        summary: z.string().optional()
+      })
+    )
+    .optional(),
+  commands: z
+    .array(
+      z.object({
+        command: z.string(),
+        exitCode: z.number(),
+        passed: z.boolean().optional(),
+        summary: z.string().optional()
+      })
+    )
+    .optional(),
+  tests: z
+    .array(
+      z.object({
+        command: z.string(),
+        passed: z.boolean(),
+        summary: z.string().optional()
+      })
+    )
+    .optional()
 });
 
 export interface ParsedTask {
@@ -269,7 +375,10 @@ export function parsePlanArgs(args: unknown): ParsedPlan | string {
     inputs: (t.inputs ?? []).map((i) => ({ ...i, required: i.required ?? true })),
     expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: o.required ?? true })),
     acceptanceCriteria: t.acceptanceCriteria ?? [],
-    maxAttempts: t.maxAttempts ?? 1
+    maxAttempts: t.maxAttempts ?? 1,
+    targetPaths: t.targetPaths ?? [],
+    requiredCommands: t.requiredCommands ?? [],
+    requiredEvidence: t.requiredEvidence ?? []
   }));
 
   return { reasoning: parsed.data.reasoning, tasks };

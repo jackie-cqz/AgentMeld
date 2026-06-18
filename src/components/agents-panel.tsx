@@ -2,16 +2,16 @@
 
 import { Bot, Plus, Trash2, Pencil } from "lucide-react";
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
+import { selectAgentList } from "@/stores/selectors";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import type { AdapterName, ModelProvider } from "@/shared/types";
 
 export function AgentsPanel() {
-  const agents = useAppStore((s) => s.agents);
+  const agentList = useAppStore(useShallow(selectAgentList));
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
   const [showCreate, setShowCreate] = useState(false);
-
-  const agentList = Object.values(agents);
 
   const handleCreate = async (payload: {
     name: string;
