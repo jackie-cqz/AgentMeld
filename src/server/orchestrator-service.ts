@@ -119,6 +119,15 @@ export interface TaskResult {
   childRunId?: string;
 }
 
+/** Structured conflict info per P0 */
+export interface StructuredConflict {
+  path: string;
+  contributors: Array<{ taskId: string; agentId: string; runId: string; hash: string }>;
+  wave: number;
+}
+
+export type CompletionStatus = "all_complete" | "partial" | "recovered" | "has_failures";
+
 export async function executeOrchestratorPlan(
   conversationId: string,
   plan: ParsedTask[],
@@ -127,36 +136,26 @@ export async function executeOrchestratorPlan(
   triggerMessage: Message,
   orchestratorAgentId: string,
   signal?: AbortSignal
-): Promise<Map<string, TaskResult>> {
+): Promise<{ results: Map<string, TaskResult>; completionStatus: CompletionStatus; conflicts: StructuredConflict[] }> {
   const results = new Map<string, TaskResult>();
   const outputBindings = new Map<string, string>();
+  const allConflicts: StructuredConflict[] = [];
   const abortSignal = signal ?? new AbortController().signal;
 
   const validation = validatePlan(plan);
   if (validation) {
     createSystemMessage(conversationId, `Plan validation failed: ${validation}`);
-    return results;
+    return { results, completionStatus: "has_failures", conflicts: [] };
   }
 
   const validTasks = plan.filter((t) => availableAgents.includes(t.agentId));
   const waves = topologicalWaves(validTasks);
 
-  // P1.4: Publish dispatch.plan when execution begins
-  const planItems: DispatchPlanItem[] = validTasks.map((t) => ({
-    id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn,
-    title: t.title, prompt: t.prompt, inputs: t.inputs, expectedOutputs: t.expectedOutputs,
-    acceptanceCriteria: t.acceptanceCriteria, maxAttempts: t.maxAttempts,
-    targetPaths: t.targetPaths, requiredCommands: t.requiredCommands, requiredEvidence: t.requiredEvidence
-  }));
-  eventBus.publish({
-    type: "dispatch.plan",
-    conversationId,
-    timestamp: Date.now(),
-    runId: orchestratorRunId,
-    plan: planItems
-  });
+  // ── Stage 1: DISPATCH — execute waves with per-wave conflict detection ──
+  publishDispatchPlan(conversationId, orchestratorRunId, validTasks);
 
-  for (const wave of waves) {
+  for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
+    const wave = waves[waveIndex];
     if (abortSignal.aborted) {
       for (const task of wave) {
         results.set(task.id, { taskId: task.id, status: "aborted", summary: "Parent run aborted." });
@@ -164,10 +163,9 @@ export async function executeOrchestratorPlan(
       break;
     }
 
+    // Filter: skip tasks whose upstream dependencies failed/were blocked
     const wavePromises: Promise<void>[] = [];
-
     for (const task of wave) {
-      // Check upstream dependencies
       let shouldSkip = false;
       let skipReason = "";
       for (const dep of task.dependsOn) {
@@ -181,6 +179,12 @@ export async function executeOrchestratorPlan(
 
       if (shouldSkip) {
         results.set(task.id, { taskId: task.id, status: "skipped", summary: skipReason });
+        // Publish skip event for skipped dependencies
+        eventBus.publish({
+          type: "dispatch.task.end", conversationId, timestamp: Date.now(),
+          parentRunId: orchestratorRunId, childRunId: "", taskId: task.id,
+          agentId: task.agentId, status: "skipped", error: skipReason
+        });
         continue;
       }
 
@@ -194,48 +198,117 @@ export async function executeOrchestratorPlan(
     }
 
     await Promise.all(wavePromises);
-  }
 
-  // Stage 3: AGGREGATE — with multi-round support
-  const MAX_DISPATCH_ROUNDS = 2;
-  const allResults = results;
-  for (let round = 1; round <= MAX_DISPATCH_ROUNDS; round++) {
-    const hasFailures = Array.from(allResults.values()).some((r) => r.status !== "complete" && r.status !== "skipped");
-    if (!hasFailures) break;
-
-    if (round < MAX_DISPATCH_ROUNDS) {
-      // Retry failed tasks once
-      createSystemMessage(conversationId, `🔄 第 ${round + 1} 轮：重试失败任务...`);
-      const failedTasks = plan.filter((t) => {
-        const r = allResults.get(t.id);
-        return r && r.status === "failed";
-      });
-      for (const task of failedTasks) {
-        const r = await runChildTask(conversationId, task, triggerMessage, orchestratorRunId, outputBindings, abortSignal);
-        allResults.set(task.id, r);
+    // P0.1: Per-wave conflict detection — immediately after wave completes
+    const waveRunWrites: RunFileWrites[] = [];
+    for (const task of wave) {
+      const r = results.get(task.id);
+      if (r?.childRunId) {
+        const writes = getFileWrites(r.childRunId);
+        if (writes.size > 0) {
+          waveRunWrites.push({ taskId: task.id, agentId: task.agentId, runId: r.childRunId, writes });
+        }
       }
+    }
+
+    const waveConflicts = detectWaveConflicts(waveRunWrites);
+    if (waveConflicts.length > 0) {
+      // P0.2: Build structured conflict results
+      const structuredConflicts: StructuredConflict[] = waveConflicts.map((c) => ({
+        path: c.path,
+        contributors: c.contributors.map((w) => {
+          const t = wave.find((x) => x.id === w.taskId);
+          const writes = waveRunWrites.find((rw) => rw.runId === w.runId);
+          const hash = writes?.writes.get(c.path) ?? "unknown";
+          return { taskId: w.taskId, agentId: w.agentId, runId: w.runId, hash };
+        }),
+        wave: waveIndex
+      }));
+      allConflicts.push(...structuredConflicts);
+
+      // P0.3: Mark conflicting tasks as blocked, prevent downstream
+      const conflictTaskIds = new Set(waveConflicts.flatMap((c) => c.contributors.map((w) => w.taskId)));
+      for (const taskId of conflictTaskIds) {
+        const existing = results.get(taskId);
+        if (existing && existing.status === "complete") {
+          results.set(taskId, {
+            ...existing,
+            status: "blocked",
+            summary: `File conflict detected: another task in the same wave wrote to the same file with different content. ${existing.summary}`
+          });
+        }
+      }
+
+      const conflictMsg = waveConflicts.map((c) =>
+        `- ${c.path}: ${c.contributors.map((w) => w.taskId).join(", ")}`
+      ).join("\n");
+      createSystemMessage(conversationId, `⚠️ Wave ${waveIndex} 文件冲突：\n${conflictMsg}`);
+    }
+
+    // Clean up file writes for this wave's tasks
+    for (const task of wave) {
+      const r = results.get(task.id);
+      if (r?.childRunId) clearFileWrites(r.childRunId);
     }
   }
 
-  // Code conflict detection — collect per-run file writes and check same-wave conflicts
-  const runWrites: RunFileWrites[] = [];
-  for (const [, result] of allResults) {
-    if (result.childRunId) {
-      const writes = getFileWrites(result.childRunId);
-      if (writes.size > 0) {
-        const task = plan.find((t) => t.id === result.taskId);
-        runWrites.push({ taskId: result.taskId, agentId: task?.agentId ?? "", runId: result.childRunId, writes });
+  // ── Stage 2: RECOVERY — LLM-driven re-plan for failures ──
+  let recovered = false;
+  const hasFailures = Array.from(results.values()).some(
+    (r) => r.status === "failed" || r.status === "blocked"
+  );
+
+  if (hasFailures && !abortSignal.aborted) {
+    createSystemMessage(conversationId, "🔄 检测到失败任务，尝试生成恢复计划...");
+
+    // P0.5: Build replan context from failures, conflicts, and missing artifacts
+    const replanContext = buildReplanContext(plan, results);
+    const conflictSummary = allConflicts.length > 0
+      ? `\n文件冲突：\n${allConflicts.map((c) => `- ${c.path} (wave ${c.wave}): ${c.contributors.map((w) => w.taskId).join(", ")}`).join("\n")}`
+      : "";
+
+    const recoveryPrompt = `${replanContext}${conflictSummary}\n\n<original_request>\n${extractTextFromMessage(triggerMessage)}\n</original_request>\n\n请生成只包含修复任务的新计划。已成功的任务不需要重新执行。`;
+
+    // Use the orchestrator to generate a recovery plan
+    try {
+      const recoveryResult = await generateRecoveryPlan(
+        conversationId, orchestratorAgentId, orchestratorRunId,
+        recoveryPrompt, plan, results, abortSignal
+      );
+
+      if (recoveryResult && recoveryResult.tasks.length > 0) {
+        createSystemMessage(conversationId, `🔧 恢复计划：${recoveryResult.tasks.length} 个修复任务`);
+
+        // Execute recovery tasks — they can depend on already-completed tasks
+        const recoveryWaves = topologicalWaves(recoveryResult.tasks.filter((t) => availableAgents.includes(t.agentId)));
+        for (const wave of recoveryWaves) {
+          if (abortSignal.aborted) break;
+          const recoveryPromises = wave.map((task) =>
+            runChildTask(conversationId, task, triggerMessage, orchestratorRunId, outputBindings, abortSignal)
+              .then((r) => {
+                results.set(task.id, r);
+                createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} [恢复] ${task.title}: ${r.summary}`);
+              })
+          );
+          await Promise.all(recoveryPromises);
+        }
+        recovered = true;
       }
+    } catch {
+      createSystemMessage(conversationId, "⚠️ 恢复计划生成失败，将使用已有结果进行聚合。");
     }
   }
-  const conflicts = detectWaveConflicts(runWrites);
-  if (conflicts.length > 0) {
-    const conflictMsg = conflicts.map((c) => `- ${c.path}: ${c.contributors.join(", ")}`).join("\n");
-    createSystemMessage(conversationId, `⚠️ 代码冲突检测：\n${conflictMsg}`);
-  }
 
-  await runAggregateStage(conversationId, plan, allResults, outputBindings, orchestratorAgentId, orchestratorRunId, triggerMessage, abortSignal);
-  return allResults;
+  // ── Stage 3: AGGREGATE — accurate completion status ──
+  const completionStatus = determineCompletionStatus(results, recovered);
+
+  await runAggregateStage(
+    conversationId, plan, results, outputBindings,
+    orchestratorAgentId, orchestratorRunId, triggerMessage,
+    completionStatus, abortSignal
+  );
+
+  return { results, completionStatus, conflicts: allConflicts };
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +543,7 @@ async function runAggregateStage(
   orchestratorAgentId: string,
   orchestratorRunId: string,
   triggerMessage: Message,
+  completionStatus: CompletionStatus,
   signal: AbortSignal
 ): Promise<void> {
   const agents = listAgents();
@@ -494,9 +568,15 @@ async function runAggregateStage(
     return;
   }
 
-  // Build aggregate prompt
-  const { systemPrompt: aggregateSystemPrompt, userPrompt: aggregateUserPrompt } =
+  // Build aggregate prompt with completion status
+  const statusLabel =
+    completionStatus === "all_complete" ? "全部完成 ✅" :
+    completionStatus === "recovered" ? "已修复完成 🔧" :
+    completionStatus === "partial" ? "部分完成 ⚠️" :
+    "仍有失败 ❌";
+  const { systemPrompt: baseSystem, userPrompt: aggregateUserPrompt } =
     buildOrchestratorAggregatePrompt(agent, plan, results, outputBindings, triggerMessage, conversationId);
+  const aggregateSystemPrompt = `${baseSystem}\n\n## 执行结果\n整体状态：${statusLabel}${completionStatus === "has_failures" ? "\n请明确说明整体未完成，不要把局部成功说成全部完成。" : ""}`;
 
   // Tools: remove plan_tasks and ask_user
   const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
@@ -954,7 +1034,123 @@ function buildDemoPlan(availableAgentIds: string[], triggerMsg: Message): { reas
   };
 }
 
-interface FileConflict {
-  path: string;
-  contributors: string[];
+// ---------------------------------------------------------------------------
+// P0 helpers: dispatch, recovery, completion status
+// ---------------------------------------------------------------------------
+
+function publishDispatchPlan(conversationId: string, orchestratorRunId: string, tasks: ParsedTask[]): void {
+  const planItems: DispatchPlanItem[] = tasks.map((t) => ({
+    id: t.id, agentId: t.agentId, task: t.prompt, dependsOn: t.dependsOn,
+    title: t.title, prompt: t.prompt, inputs: t.inputs, expectedOutputs: t.expectedOutputs,
+    acceptanceCriteria: t.acceptanceCriteria, maxAttempts: t.maxAttempts,
+    targetPaths: t.targetPaths, requiredCommands: t.requiredCommands, requiredEvidence: t.requiredEvidence
+  }));
+  eventBus.publish({
+    type: "dispatch.plan", conversationId, timestamp: Date.now(),
+    runId: orchestratorRunId, plan: planItems
+  });
+}
+
+/**
+ * Generate a recovery plan using the Orchestrator LLM.
+ * Only includes fix/replacement tasks; already-successful tasks are preserved.
+ */
+async function generateRecoveryPlan(
+  conversationId: string,
+  orchestratorAgentId: string,
+  orchestratorRunId: string,
+  recoveryPrompt: string,
+  originalPlan: ParsedTask[],
+  results: Map<string, TaskResult>,
+  signal: AbortSignal
+): Promise<{ reasoning: string; tasks: ParsedTask[] } | null> {
+  const agents = listAgents();
+  const agent = agents.find((a) => a.id === orchestratorAgentId);
+  if (!agent || agent.adapterName !== "custom") return null;
+
+  const conversation = getConversation(conversationId);
+  const workspace = getWorkspaceForConversation(conversationId);
+  if (!conversation || !workspace) return null;
+
+  const settings = getSettings();
+  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  if (!apiKey) return null;
+
+  const otherAgents = agents.filter((a) => !a.isOrchestrator);
+  const workspacePath = workspace.mode === "local" && workspace.boundPath
+    ? workspace.boundPath : workspace.rootPath;
+
+  const systemPrompt = `${agent.systemPrompt}
+
+## 当前阶段
+你处于「恢复阶段」。上一轮执行中部分任务失败，你需要生成一个修复计划。
+- 已成功的任务不需要重新执行。
+- 只生成需要修复或替换的任务。
+- 修复任务可以使用已有的成功任务作为上游依赖。
+- 每个修复任务必须独立可执行。
+
+## 可用 Agent
+${otherAgents.map((a) => `- id: "${a.id}", name: "${a.name}", capabilities: [${a.capabilities.join(", ")}]`).join("\n")}
+
+## 约束
+- 每个任务必须有唯一的 id（使用 r1, r2, ... 避免与原始 t1, t2 冲突）
+- dependsOn 可以引用原始任务 id（t1, t2, ...）或修复任务 id（r1, r2, ...）`;
+
+  const adapterInput: AdapterInput = {
+    conversationId,
+    runId: orchestratorRunId,
+    agent: { ...agent, toolNames: ["plan_tasks"], systemPrompt },
+    conversation,
+    workspace,
+    triggerMessage: { id: "", conversationId, role: "user", agentId: null, runId: null,
+      parts: [{ type: "text", content: recoveryPrompt }], status: "complete",
+      mentionedAgentIds: [], parentMessageId: null, createdAt: Date.now(), updatedAt: Date.now() },
+    recentMessages: [],
+    toolNames: ["plan_tasks"],
+    systemPrompt: "",
+    workspacePath,
+    apiKey
+  };
+
+  const adapter = getAdapter(agent.adapterName);
+  let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
+
+  try {
+    for await (const event of adapter.run(adapterInput, signal)) {
+      if (
+        event.type === "tool.call" &&
+        "toolName" in event &&
+        (event as { toolName: string }).toolName === "plan_tasks"
+      ) {
+        const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
+        if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
+          capturedPlan = { reasoning: args.reasoning || "Recovery", tasks: args.tasks };
+          break;
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  if (!capturedPlan) return null;
+
+  const planResult = parsePlanArgs(capturedPlan);
+  if (typeof planResult === "string") return null;
+
+  return planResult;
+}
+
+/** P0: Determine accurate completion status after all execution stages */
+function determineCompletionStatus(
+  results: Map<string, TaskResult>,
+  recovered: boolean
+): CompletionStatus {
+  const statuses = Array.from(results.values()).map((r) => r.status);
+  const hasFailures = statuses.some((s) => s === "failed" || s === "blocked");
+  const allComplete = statuses.every((s) => s === "complete" || s === "skipped");
+
+  if (allComplete) return recovered ? "recovered" : "all_complete";
+  if (hasFailures) return "has_failures";
+  return "partial";
 }
