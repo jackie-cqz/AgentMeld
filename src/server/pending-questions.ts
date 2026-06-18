@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
+import { persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingQuestion } from "@/shared/types";
 
 type AnswerResolver = (answers: Record<string, string>) => void;
@@ -28,18 +29,21 @@ export function registerPendingQuestion(
 ): Promise<Record<string, string>> {
   const store = getStore();
   const id = `pq_${nanoid(12)}`;
+  const now = Date.now();
+
+  // P2: Persist to DB
+  persistApproval({
+    id, conversationId, agentId, runId,
+    approvalType: "ask_user",
+    payloadJson: JSON.stringify(questions),
+    now
+  });
 
   return new Promise((resolve) => {
     const entry: QuestionEntry = {
-      question: {
-        id,
-        conversationId,
-        agentId,
-        runId,
-        questions,
-        createdAt: Date.now()
-      },
+      question: { id, conversationId, agentId, runId, questions, createdAt: now },
       resolver: (answers) => {
+        resolveApproval(id, true, Date.now());
         store.delete(id);
         resolve(answers);
       }
@@ -49,7 +53,7 @@ export function registerPendingQuestion(
     eventBus.publish({
       type: "ask_user.pending",
       conversationId,
-      timestamp: Date.now(),
+      timestamp: now,
       pendingQuestion: entry.question
     });
   });

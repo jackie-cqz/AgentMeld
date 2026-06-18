@@ -124,6 +124,20 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      approval_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload_json TEXT NOT NULL,
+      resolved_by TEXT,
+      resolved_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS conversation_context_summaries (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -257,6 +271,10 @@ function createIndexes() {
       ON conversation_context_summaries(conversation_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_orch_task_results_run
       ON orchestration_task_results(orchestrator_run_id);
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_conv
+      ON pending_approvals(conversation_id, status);
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_run
+      ON pending_approvals(run_id);
   `);
 
   // P1: Migration for existing DBs that may lack the new columns/table

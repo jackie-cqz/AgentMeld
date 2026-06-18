@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
+import { persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
 type Resolver = (outcome: { approved: boolean; feedback?: string }) => void;
@@ -27,22 +28,31 @@ export function registerPendingPlan(
 ): Promise<{ approved: boolean; feedback?: string }> {
   const store = getStore();
   const id = `dp_${nanoid(12)}`;
+  const now = Date.now();
+
+  // P2: Persist to DB
+  persistApproval({
+    id, conversationId, agentId: plan[0]?.agentId ?? "", runId,
+    approvalType: "dispatch_plan",
+    payloadJson: JSON.stringify(plan.slice(0, 10)),
+    now
+  });
 
   return new Promise((resolve) => {
     const entry: PlanEntry = {
-      plan: { id, conversationId, runId, plan, createdAt: Date.now() },
+      plan: { id, conversationId, runId, plan, createdAt: now },
       resolver: (outcome) => {
+        resolveApproval(id, outcome.approved, Date.now());
         store.delete(id);
         resolve(outcome);
       }
     };
     store.set(id, entry);
 
-    // Publish SSE event so UI shows the card
     eventBus.publish({
       type: "dispatch.plan.pending",
       conversationId,
-      timestamp: Date.now(),
+      timestamp: now,
       pendingPlan: entry.plan
     });
   });

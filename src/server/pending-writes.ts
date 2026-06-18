@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingWrite } from "@/shared/types";
 
 type Resolver = (approved: boolean) => void;
@@ -30,21 +31,26 @@ export function registerPendingWrite(
 ): Promise<boolean> {
   const store = getStore();
   const id = `pw_${nanoid(12)}`;
+  const now = Date.now();
+
+  // P2: Persist approval to DB
+  persistApproval({
+    id, conversationId, agentId, runId,
+    approvalType: "fs_write",
+    payloadJson: JSON.stringify({ filePath, absolutePath, oldContent: oldContent?.slice(0, 200) ?? null, newContent: newContent.slice(0, 500) }),
+    now
+  });
 
   return new Promise<boolean>((resolve) => {
     const entry: PendingEntry = {
       write: {
-        id,
-        conversationId,
-        agentId,
-        runId,
-        path: filePath,
-        absolutePath,
-        oldContent,
-        newContent,
-        createdAt: Date.now()
+        id, conversationId, agentId, runId,
+        path: filePath, absolutePath, oldContent, newContent,
+        createdAt: now
       },
       resolver: (approved: boolean) => {
+        // P2: Conditional update — only succeeds if still pending
+        resolveApproval(id, approved, Date.now());
         store.delete(id);
         resolve(approved);
       }

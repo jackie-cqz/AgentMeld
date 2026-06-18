@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
+import { persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingBashCommand } from "@/shared/types";
 
 type Resolver = (approved: boolean) => void;
@@ -30,31 +31,31 @@ export function registerPendingBash(
 ): Promise<boolean> {
   const store = getStore();
   const id = `pb_${nanoid(12)}`;
+  const now = Date.now();
+
+  // P2: Persist to DB
+  persistApproval({
+    id, conversationId, agentId, runId,
+    approvalType: "bash",
+    payloadJson: JSON.stringify({ command: command.slice(0, 500), cwd, reason }),
+    now
+  });
 
   return new Promise<boolean>((resolve) => {
     const entry: BashEntry = {
-      command: {
-        id,
-        conversationId,
-        agentId,
-        runId,
-        command,
-        cwd,
-        reason,
-        createdAt: Date.now()
-      },
+      command: { id, conversationId, agentId, runId, command, cwd, reason, createdAt: now },
       resolver: (approved: boolean) => {
+        resolveApproval(id, approved, Date.now());
         store.delete(id);
         resolve(approved);
       }
     };
     store.set(id, entry);
 
-    // Publish SSE event for UI
     eventBus.publish({
       type: "bash_command.pending",
       conversationId,
-      timestamp: Date.now(),
+      timestamp: now,
       pendingCommand: entry.command
     });
   });

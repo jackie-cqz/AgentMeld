@@ -351,6 +351,63 @@ function isTerminalRunStatus(status: AgentRunStatus) {
   return status === "complete" || status === "failed" || status === "aborted";
 }
 
+// ── P2: Unified approval persistence ──
+
+export function persistApproval(record: {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  runId: string;
+  approvalType: string;
+  payloadJson: string;
+  now: number;
+}) {
+  getDatabase()
+    .prepare(`
+      INSERT INTO pending_approvals (id, conversation_id, agent_id, run_id, approval_type, status, payload_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+    `)
+    .run(record.id, record.conversationId, record.agentId, record.runId,
+      record.approvalType, record.payloadJson, record.now, record.now);
+}
+
+/**
+ * Conditionally resolve an approval. Returns true only if the approval
+ * was still 'pending' — prevents duplicate resolution.
+ */
+export function resolveApproval(id: string, approved: boolean, now: number): boolean {
+  const result = getDatabase()
+    .prepare(`
+      UPDATE pending_approvals
+      SET status = ?, resolved_by = ?, resolved_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `)
+    .run(approved ? "approved" : "rejected", approved ? "approved" : "rejected", now, now, id);
+  return result.changes > 0;
+}
+
+/** Mark all pending approvals for a run as cancelled */
+export function cancelApprovalsForRun(runId: string, now: number) {
+  getDatabase()
+    .prepare(`
+      UPDATE pending_approvals
+      SET status = 'cancelled', updated_at = ?
+      WHERE run_id = ? AND status = 'pending'
+    `)
+    .run(now, runId);
+}
+
+/** Startup recovery: mark all pending approvals as interrupted */
+export function interruptAllPendingApprovals(now: number) {
+  getDatabase()
+    .prepare(`
+      UPDATE pending_approvals
+      SET status = 'interrupted', updated_at = ?
+      WHERE status = 'pending'
+    `)
+    .run(now);
+}
+
 export function listArtifacts(conversationId: string): Artifact[] {
   const rows = getDatabase()
     .prepare("SELECT * FROM artifacts WHERE conversation_id = ? ORDER BY updated_at DESC")
