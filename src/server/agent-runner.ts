@@ -10,6 +10,7 @@ import {
   getConversation,
   getWorkspaceForConversation,
   listMessages,
+  listChildRunIds,
   updateMessageStatus,
   updateRunStatus
 } from "@/server/repositories";
@@ -32,6 +33,14 @@ export function abortRun(runId: string): boolean {
   const controller = activeRuns.get(runId);
   if (!controller) return false;
   controller.abort();
+
+  // P1.4: Cascade abort — abort all child runs too
+  const childIds = listChildRunIds(runId);
+  for (const childId of childIds) {
+    const childController = activeRuns.get(childId);
+    if (childController) childController.abort();
+  }
+
   return true;
 }
 

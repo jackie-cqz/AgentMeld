@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact } from "@/server/repositories";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistOrchestrationTask } from "@/server/repositories";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact } from "@/server/child-prompt-builder";
@@ -152,6 +152,7 @@ export async function executeOrchestratorPlan(
   const waves = topologicalWaves(validTasks);
 
   // ── Stage 1: DISPATCH — execute waves with per-wave conflict detection ──
+  updateRunStage(orchestratorRunId, "dispatch", Date.now());
   publishDispatchPlan(conversationId, orchestratorRunId, validTasks);
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
@@ -193,6 +194,20 @@ export async function executeOrchestratorPlan(
           .then((r) => {
             results.set(task.id, r);
             createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} ${task.title}: ${r.summary}`);
+            // P1: Persist task result to DB
+            persistOrchestrationTask({
+              id: `${orchestratorRunId}_${task.id}`,
+              orchestratorRunId,
+              conversationId,
+              taskId: task.id,
+              agentId: task.agentId,
+              title: task.title,
+              status: r.status,
+              summary: r.summary,
+              childRunId: r.childRunId ?? null,
+              attempt: 1,
+              now: Date.now()
+            });
           })
       );
     }
@@ -253,6 +268,7 @@ export async function executeOrchestratorPlan(
   }
 
   // ── Stage 2: RECOVERY — LLM-driven re-plan for failures ──
+  updateRunStage(orchestratorRunId, "recovery", Date.now());
   let recovered = false;
   const hasFailures = Array.from(results.values()).some(
     (r) => r.status === "failed" || r.status === "blocked"
@@ -288,6 +304,20 @@ export async function executeOrchestratorPlan(
               .then((r) => {
                 results.set(task.id, r);
                 createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} [恢复] ${task.title}: ${r.summary}`);
+                // P1: Persist recovery task result
+                persistOrchestrationTask({
+                  id: `${orchestratorRunId}_${task.id}`,
+                  orchestratorRunId,
+                  conversationId,
+                  taskId: task.id,
+                  agentId: task.agentId,
+                  title: task.title,
+                  status: r.status,
+                  summary: r.summary,
+                  childRunId: r.childRunId ?? null,
+                  attempt: 1,
+                  now: Date.now()
+                });
               })
           );
           await Promise.all(recoveryPromises);
@@ -300,6 +330,7 @@ export async function executeOrchestratorPlan(
   }
 
   // ── Stage 3: AGGREGATE — accurate completion status ──
+  updateRunStage(orchestratorRunId, "aggregate", Date.now());
   const completionStatus = determineCompletionStatus(results, recovered);
 
   await runAggregateStage(

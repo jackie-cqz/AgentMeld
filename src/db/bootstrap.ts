@@ -98,10 +98,28 @@ export function ensureDatabase() {
       trigger_message_id TEXT,
       parent_run_id TEXT,
       status TEXT NOT NULL,
+      stage TEXT,
       error TEXT,
       usage TEXT,
+      interrupted INTEGER NOT NULL DEFAULT 0,
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS orchestration_task_results (
+      id TEXT PRIMARY KEY,
+      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      title TEXT,
+      status TEXT NOT NULL,
+      summary TEXT,
+      child_run_id TEXT,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      error_category TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -142,6 +160,10 @@ export function ensureDatabase() {
   seedBuiltinAgents();
   seedAppSettings();
   seedWelcomeConversation();
+
+  // P1: Recover orphaned runs from previous process (must be after tables exist)
+  import("@/server/run-recovery").then((m) => m.recoverOrphanedRuns()).catch(() => {});
+
   bootstrapped = true;
 }
 
@@ -233,7 +255,13 @@ function createIndexes() {
     CREATE INDEX IF NOT EXISTS idx_runs_parent ON agent_runs(parent_run_id);
     CREATE INDEX IF NOT EXISTS idx_context_summaries_conv_created
       ON conversation_context_summaries(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_orch_task_results_run
+      ON orchestration_task_results(orchestrator_run_id);
   `);
+
+  // P1: Migration for existing DBs that may lack the new columns/table
+  try { db.exec(`ALTER TABLE agent_runs ADD COLUMN stage TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE agent_runs ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
 }
 
 function seedBuiltinAgents() {

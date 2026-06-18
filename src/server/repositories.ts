@@ -256,8 +256,8 @@ export function createRun(input: CreateRunInput): AgentRun {
       `
         INSERT INTO agent_runs (
           id, conversation_id, agent_id, trigger_message_id, parent_run_id,
-          status, error, usage, started_at, finished_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, stage, error, usage, interrupted, started_at, finished_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -269,6 +269,8 @@ export function createRun(input: CreateRunInput): AgentRun {
       input.status,
       null,
       null,
+      null,
+      0,
       input.now,
       null,
       input.now,
@@ -284,6 +286,65 @@ export function updateRunStatus(runId: string, status: AgentRunStatus, usage: Us
   getDatabase()
     .prepare("UPDATE agent_runs SET status = ?, usage = ?, finished_at = ?, updated_at = ? WHERE id = ?")
     .run(status, usage ? JSON.stringify(usage) : null, isTerminalRunStatus(status) ? now : null, now, runId);
+}
+
+export function updateRunStage(runId: string, stage: string, now: number) {
+  getDatabase()
+    .prepare("UPDATE agent_runs SET stage = ?, updated_at = ? WHERE id = ?")
+    .run(stage, now, runId);
+}
+
+export function markRunInterrupted(runId: string, now: number) {
+  getDatabase()
+    .prepare("UPDATE agent_runs SET status = 'failed', interrupted = 1, error = 'Run interrupted: server restarted while running.', finished_at = ?, updated_at = ? WHERE id = ?")
+    .run(now, now, runId);
+}
+
+export function listOrphanedRunningRuns(): AgentRun[] {
+  const rows = getDatabase()
+    .prepare("SELECT * FROM agent_runs WHERE status = 'running'")
+    .all() as AgentRunRow[];
+  return rows.map(mapRun);
+}
+
+export function listChildRunIds(parentRunId: string): string[] {
+  const rows = getDatabase()
+    .prepare("SELECT id FROM agent_runs WHERE parent_run_id = ? AND status = 'running'")
+    .all(parentRunId) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
+// ── Orchestration task persistence ──
+
+export function persistOrchestrationTask(record: {
+  id: string;
+  orchestratorRunId: string;
+  conversationId: string;
+  taskId: string;
+  agentId: string;
+  title?: string | null;
+  status: string;
+  summary?: string | null;
+  childRunId?: string | null;
+  attempt: number;
+  errorCategory?: string | null;
+  now: number;
+}) {
+  getDatabase()
+    .prepare(`
+      INSERT OR REPLACE INTO orchestration_task_results (
+        id, orchestrator_run_id, conversation_id, task_id, agent_id,
+        title, status, summary, child_run_id, attempt, error_category,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      record.id, record.orchestratorRunId, record.conversationId,
+      record.taskId, record.agentId, record.title ?? null,
+      record.status, record.summary ?? null, record.childRunId ?? null,
+      record.attempt, record.errorCategory ?? null,
+      record.now, record.now
+    );
 }
 
 function isTerminalRunStatus(status: AgentRunStatus) {

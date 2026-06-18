@@ -66,10 +66,28 @@ export interface AgentRunRow {
   trigger_message_id: string | null;
   parent_run_id: string | null;
   status: string;
+  stage?: string | null;
   error?: string | null;
   usage: string | null;
+  interrupted?: number | null;
   started_at?: number | null;
   finished_at?: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrchestrationTaskRow {
+  id: string;
+  orchestrator_run_id: string;
+  conversation_id: string;
+  task_id: string;
+  agent_id: string;
+  title?: string | null;
+  status: string;
+  summary?: string | null;
+  child_run_id?: string | null;
+  attempt: number;
+  error_category?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -206,8 +224,10 @@ export function mapRun(row: AgentRunRow): AgentRun {
     triggerMessageId: row.trigger_message_id,
     parentRunId: row.parent_run_id,
     status: row.status as AgentRun["status"],
+    stage: (row.stage as AgentRun["stage"]) ?? null,
     error: row.error ?? null,
     usage: row.usage ? parseJson<UsagePayload | null>(row.usage, null) : null,
+    interrupted: row.interrupted === 1,
     startedAt: row.started_at ?? row.created_at,
     finishedAt: row.finished_at ?? null,
     createdAt: row.created_at,

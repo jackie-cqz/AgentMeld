@@ -217,10 +217,28 @@ export interface AgentRun {
   triggerMessageId: string | null;
   parentRunId: string | null;
   status: AgentRunStatus;
+  stage: string | null;
   error: string | null;
   usage: UsagePayload | null;
+  interrupted: boolean;
   startedAt: number;
   finishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface OrchestrationTaskRecord {
+  id: string;
+  orchestratorRunId: string;
+  conversationId: string;
+  taskId: string;
+  agentId: string;
+  title: string | null;
+  status: string;
+  summary: string | null;
+  childRunId: string | null;
+  attempt: number;
+  errorCategory: string | null;
   createdAt: number;
   updatedAt: number;
 }
