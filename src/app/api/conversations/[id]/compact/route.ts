@@ -53,40 +53,43 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       .map((agentId) => getAgent(agentId))
       .find((agent) => agent?.adapterName === "custom");
 
-  // P2: Rolling summary — process chunks sequentially, each building on the last
+  // P2: Rolling summary — process chunks sequentially with shared abort signal
+  const abortSignal = new AbortController();
   const compactionPromise = (async () => {
     const provider = compactionAgent?.modelProvider ?? "deepseek";
     const model = compactionAgent?.modelId ?? "deepseek-chat";
     const key = compactionAgent?.apiKey;
     const url = compactionAgent?.apiBaseUrl;
 
-    // Single chunk or first chunk → normal compaction
+    // Publish single start event (not per-chunk)
+    eventBus.publish({ type: "compaction.start", conversationId: id, timestamp: Date.now(), sourceMessageCount: sourceMessages.length });
+
     if (serializedChunks.length <= 1) {
       const msgs = serializedChunks.length === 1 ? serializedChunks[0].messages : [];
       if (msgs.length === 0) throw new Error("No messages to compact.");
-      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url);
+      if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
+      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url, undefined, false, abortSignal.signal);
     }
 
-    // Multi-chunk: rolling compaction
-    // chunk1 → summary1, summary1 + chunk2 → summary2, ..., → final stored
+    // Multi-chunk: rolling — intermediate chunks skip start events and DB store
     let rollingSummary: string | null = null;
     for (let i = 0; i < serializedChunks.length; i++) {
+      if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
       const chunk = serializedChunks[i];
       const isLast = i === serializedChunks.length - 1;
       const result = await runCompaction(
-        id,
-        chunk.messages,
+        id, chunk.messages,
         isLast ? coveredUntilMessageId : chunk.endMessageId,
         isLast ? coveredUntilCreatedAt : sourceMessages.find((m) => m.id === chunk.endMessageId)?.createdAt ?? coveredUntilCreatedAt,
-        sourceMessages.length,
-        provider, model, key, url,
-        rollingSummary,
-        !isLast  // skipDbStore for intermediate chunks
+        sourceMessages.length, provider, model, key, url,
+        rollingSummary, !isLast, abortSignal.signal, !isLast
       );
       rollingSummary = result.summary;
     }
     return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
   })();
+  // Store the controller for cancellation
+  (compactionPromise as unknown as { _abort: AbortController })._abort = abortSignal;
 
   // Post a system message noting compaction has started
   const now = Date.now();

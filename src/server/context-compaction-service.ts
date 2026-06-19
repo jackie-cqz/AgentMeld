@@ -154,43 +154,32 @@ export function chunkCompactionMessages(messages: Message[], artifactTitles: Map
 
     // P2: Split oversized single messages by paragraph boundaries
     if (msgTokens > CHUNK_TARGET_TOKENS) {
-      // Flush current chunk first
       if (currentChunk.length > 0) {
         chunks.push({
-          messages: currentChunk,
-          startMessageId: currentChunk[0].id,
-          endMessageId: currentChunk[currentChunk.length - 1].id,
-          estimatedTokens: currentTokens
+          messages: currentChunk, startMessageId: currentChunk[0].id,
+          endMessageId: currentChunk[currentChunk.length - 1].id, estimatedTokens: currentTokens
         });
-        currentChunk = [];
-        currentTokens = 0;
+        currentChunk = []; currentTokens = 0;
       }
-      // Split by paragraph: find natural break at ~8K token mark
+      // Split serialized content by paragraphs, each fragment carries _overrideContent
       const parts = serialized.split("\n\n");
-      let partialChunk: typeof messages = [];
+      let partialChunk: Message[] = [];
       let partialTokens = 0;
       for (const part of parts) {
         const partTokens = estimateTokens(part);
         if (partialTokens + partTokens > CHUNK_TARGET_TOKENS && partialChunk.length > 0) {
           chunks.push({
-            messages: partialChunk,
-            startMessageId: partialChunk[0].id,
-            endMessageId: partialChunk[partialChunk.length - 1].id,
-            estimatedTokens: partialTokens
+            messages: partialChunk, startMessageId: partialChunk[0].id,
+            endMessageId: partialChunk[partialChunk.length - 1].id, estimatedTokens: partialTokens
           });
-          partialChunk = [];
-          partialTokens = 0;
+          partialChunk = []; partialTokens = 0;
         }
-        // Fake a message for the partial chunk (use same message id with a fragment marker)
-        // We use the real message object with a content override
-        const fragment: typeof msg = { ...msg };
+        // Fragment carries the actual split content via parts override
+        const fragment: Message = { ...msg, parts: [{ type: "text" as const, content: part }] };
         partialChunk.push(fragment);
         partialTokens += partTokens;
       }
-      if (partialChunk.length > 0) {
-        currentChunk = partialChunk;
-        currentTokens = partialTokens;
-      }
+      if (partialChunk.length > 0) { currentChunk = partialChunk; currentTokens = partialTokens; }
       continue;
     }
 

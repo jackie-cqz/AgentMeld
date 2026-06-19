@@ -344,20 +344,23 @@ export async function runCompaction(
   apiKeyOverride?: string | null,
   apiBaseUrl?: string | null,
   existingSummaryOverride?: string | null,
-  skipDbStore: boolean = false
+  skipDbStore: boolean = false,
+  externalSignal?: AbortSignal,
+  skipStartEvent: boolean = false
 ): Promise<{ summary: string; tokenEstimate: number }> {
-  // P2: Use provided rolling summary (multi-chunk) or DB summary (single-chunk)
   const existingSummary = existingSummaryOverride !== null && existingSummaryOverride !== undefined
     ? { summary: existingSummaryOverride }
     : getLatestContextSummary(conversationId);
 
-  // Publish start event
-  eventBus.publish({
-    type: "compaction.start",
-    conversationId,
-    timestamp: Date.now(),
-    sourceMessageCount
-  });
+  // Publish start event (skip for intermediate rolling chunks)
+  if (!skipStartEvent) {
+    eventBus.publish({
+      type: "compaction.start",
+      conversationId,
+      timestamp: Date.now(),
+      sourceMessageCount
+    });
+  }
 
   // Build prompts
   eventBus.publish({
@@ -404,7 +407,7 @@ export async function runCompaction(
         max_tokens: 1024,
         temperature: 0.3
       }),
-      signal: AbortSignal.timeout(30000)
+      signal: externalSignal ?? AbortSignal.timeout(30000)
     });
 
     if (!response.ok) {

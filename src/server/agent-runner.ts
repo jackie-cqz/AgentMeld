@@ -15,7 +15,7 @@ import {
   updateRunStatus
 } from "@/server/repositories";
 import { buildHistoryFor } from "@/server/conversation-context";
-import { getLatestSummary } from "@/server/context-compaction-service";
+import { getLatestSummary, calculateContextBudget } from "@/server/context-compaction-service";
 import { executeOrchestrator } from "@/server/orchestrator-service";
 import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
@@ -212,18 +212,44 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   if (!input.parentRunId) {
     try {
       const limits = getModelLimits(agent.modelProvider);
-      // P1: Include summary tokens in the budget calculation
+      const conversation = getConversation(input.conversationId);
       const summary = getLatestSummary(input.conversationId);
+
+      // P1: Calculate unified context budget
+      const systemTokens = estimateTokens(systemPrompt);
       const summaryTokens = summary ? estimateTokens(summary.summary) : 0;
-      const promptEstimate = estimateTokens(systemPrompt)
-        + estimateTokens(extractTextFromMessage(input.triggerMessage))
-        + summaryTokens
-        + 512; // protocol margin
-      const historyBudget = Math.max(0, limits.contextWindow - limits.outputReserve - promptEstimate);
-      history = await buildHistoryFor(agent.id, input.conversationId, {
-        excludeMessageId: input.triggerMessage.id,
-        tokenBudget: historyBudget
-      });
+      const currentTurnTokens = estimateTokens(extractTextFromMessage(input.triggerMessage));
+
+      // P1: Pinned overflow check — if pinned alone exceeds budget, fail fast
+      let pinnedTokens = 0;
+      if (conversation) {
+        const pinnedIds = new Set(conversation.pinnedMessageIds);
+        const allMessages = listMessages(input.conversationId);
+        const pinned = allMessages.filter((m) => pinnedIds.has(m.id));
+        pinnedTokens = pinned.reduce((s, m) => s + estimateTokens(extractTextFromMessage(m)), 0);
+      }
+
+      const budget = calculateContextBudget(
+        limits.contextWindow, limits.outputReserve,
+        systemTokens, summaryTokens, pinnedTokens, currentTurnTokens
+      );
+
+      // P1: Pinned overflow — don't silently send a guaranteed-to-fail request
+      if (budget.remainingTokens <= 0 && pinnedTokens > 0) {
+        console.warn("[agent-runner] Pinned messages exceed context budget." +
+          ` pinned=${pinnedTokens} system=${systemTokens} summary=${summaryTokens} window=${limits.contextWindow}`);
+        // Proceed with pinned messages only as durable context, skip recent
+        history = await buildHistoryFor(agent.id, input.conversationId, {
+          excludeMessageId: input.triggerMessage.id,
+          tokenBudget: 0  // 0 budget = only summary + pinned, no recent
+        });
+      } else {
+        // Pass compute余额 to history builder
+        history = await buildHistoryFor(agent.id, input.conversationId, {
+          excludeMessageId: input.triggerMessage.id,
+          tokenBudget: Math.max(0, budget.remainingTokens)
+        });
+      }
     } catch (err) {
       console.warn("[agent-runner] buildHistoryFor failed, continuing without history", err);
       history = [];
