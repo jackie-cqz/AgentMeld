@@ -158,7 +158,7 @@ export function updateConversation(conversationId: string, input: UpdateConversa
       typeof input.archived === "boolean" ? (input.archived ? 1 : 0) : current.archived ? 1 : 0,
       JSON.stringify(input.pinnedMessageIds ?? current.pinnedMessageIds),
       input.fsWriteApprovalMode ?? current.fsWriteApprovalMode,
-      input.now,
+      input.now ?? Date.now(),
       conversationId
     );
 
@@ -382,8 +382,21 @@ export function resolveApproval(id: string, approved: boolean, now: number): boo
       SET status = ?, resolved_by = ?, resolved_at = ?, updated_at = ?
       WHERE id = ? AND status = 'pending'
     `)
-    .run(approved ? "approved" : "rejected", approved ? "approved" : "rejected", now, now, id);
-  return result.changes > 0;
+    .run(approved ? "approved" : "rejected", approved ? "approved" : "rejected", now, now, id) as {
+      changes?: number;
+    };
+  return (result.changes ?? 0) > 0;
+}
+
+export function cancelApproval(id: string, now: number): boolean {
+  const result = getDatabase()
+    .prepare(`
+      UPDATE pending_approvals
+      SET status = 'cancelled', updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `)
+    .run(now, id) as { changes?: number };
+  return (result.changes ?? 0) > 0;
 }
 
 /** Mark all pending approvals for a run as cancelled */

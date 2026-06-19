@@ -16,7 +16,7 @@ import {
 import { useState } from "react";
 import type { MessagePart } from "@/shared/types";
 
-export function ToolUseCard({ parts }: { parts: MessagePart[] }) {
+export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; messageStatus?: string }) {
   // Group parts: find tool_use and matching tool_result
   const toolCalls = new Map<string, { use: MessagePart & { type: "tool_use" }; result?: MessagePart & { type: "tool_result" } }>();
 
@@ -36,10 +36,12 @@ export function ToolUseCard({ parts }: { parts: MessagePart[] }) {
 
   if (toolCalls.size === 0) return null;
 
+  const msgDone = messageStatus === "complete" || messageStatus === "error";
+
   return (
     <div className="space-y-2">
       {Array.from(toolCalls.values()).map(({ use, result }) => (
-        <ToolCallItem key={use.callId} toolUse={use} toolResult={result} />
+        <ToolCallItem key={use.callId} toolUse={use} toolResult={result} forceDone={msgDone && !result} />
       ))}
     </div>
   );
@@ -47,17 +49,19 @@ export function ToolUseCard({ parts }: { parts: MessagePart[] }) {
 
 function ToolCallItem({
   toolUse,
-  toolResult
+  toolResult,
+  forceDone
 }: {
   toolUse: MessagePart & { type: "tool_use" };
   toolResult?: (MessagePart & { type: "tool_result" }) | undefined;
+  forceDone?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isBash = toolUse.toolName === "bash";
   const isWrite = toolUse.toolName === "fs_write" || toolUse.toolName === "write_artifact";
-  const isComplete = !!toolResult;
-  const isError = toolResult?.isError;
-  const isPending = !toolResult;
+  const isComplete = !!toolResult || forceDone;
+  const isError = !forceDone && toolResult?.isError;
+  const isPending = !isComplete;
 
   const args = toolUse.args as Record<string, unknown> | undefined;
 

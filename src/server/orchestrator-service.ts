@@ -12,6 +12,7 @@ import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
+import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { newMessageId } from "@/shared/ids";
@@ -97,6 +98,7 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
       inputs: t.inputs,
       expectedOutputs: t.expectedOutputs,
       acceptanceCriteria: t.acceptanceCriteria,
+      maxAttempts: t.maxAttempts,
       targetPaths: t.targetPaths,
       requiredCommands: t.requiredCommands,
       requiredEvidence: t.requiredEvidence
@@ -124,13 +126,13 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
     const finalPlan: ParsedTask[] = compiledPlan.map((t) => ({
       id: t.id,
       agentId: t.agentId,
-      title: t.id,
+      title: t.title ?? t.id,
       prompt: t.task,
       dependsOn: t.dependsOn,
-      inputs: (t.inputs ?? []).map((i) => ({ ...i, required: true })),
-      expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: true })),
+      inputs: (t.inputs ?? []).map((i) => ({ ...i, required: i.required ?? true })),
+      expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: o.required ?? true })),
       acceptanceCriteria: t.acceptanceCriteria ?? [],
-      maxAttempts: 1,
+      maxAttempts: t.maxAttempts ?? 1,
       targetPaths: t.targetPaths,
       requiredCommands: t.requiredCommands,
       requiredEvidence: t.requiredEvidence
@@ -455,6 +457,7 @@ async function runChildTask(
     const maxAttempts = task.maxAttempts || 1;
     let finalRunId = "";
     let finalEvaluation = evaluateChildTaskResult(task, undefined);
+    let finalReport: ReturnType<typeof getTaskReport>;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptPrompt = attempt > 1
@@ -488,13 +491,17 @@ async function runChildTask(
       }
 
       const report = getTaskReport(attemptRunId);
-      finalEvaluation = evaluateChildTaskResult(task, report);
+      const evidence = getRunToolEvidence(attemptRunId);
+      finalEvaluation = evaluateChildTaskResult(task, report, evidence);
       finalRunId = attemptRunId;
+      finalReport = report;
+      clearRunToolEvidence(attemptRunId);
+      clearTaskResultsForRun(attemptRunId);
 
       if (finalEvaluation.status === "complete") break;
     }
 
-    const report = getTaskReport(finalRunId);
+    const report = finalReport;
     const evaluation = finalEvaluation;
 
     // P1.5: Strict output handoff — verify reported artifacts exist in DB
@@ -532,8 +539,6 @@ async function runChildTask(
       status: dispatchStatus,
       error: evaluation.error
     });
-
-    clearTaskResultsForRun(finalRunId);
 
     return {
       taskId: task.id,
@@ -656,7 +661,7 @@ async function runAggregateStage(
     triggerMessage: { ...triggerMessage, parts: [{ type: "text", content: aggregateUserPrompt }] },
     recentMessages: [],
     toolNames: aggregateTools,
-    systemPrompt: "",
+    systemPrompt: aggregateSystemPrompt,
     workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
     apiKey
   };
@@ -754,11 +759,19 @@ export function buildOrchestratorPlanPrompt(
   otherAgents: Agent[],
   workspacePath: string
 ): string {
+  const allowedAgentIds = otherAgents.map((worker) => worker.id);
   const agentList = otherAgents.length > 0
     ? otherAgents.map((a) =>
-        `- { id: "${a.id}", name: "${a.name}", capabilities: [${a.capabilities.join(", ")}], tools: [${a.toolNames.join(", ")}], description: "${a.description}" }`
+        JSON.stringify({
+          id: a.id,
+          name: a.name,
+          capabilities: a.capabilities,
+          tools: a.toolNames,
+          description: a.description
+        })
       ).join("\n")
     : "(无其他可用 Agent)";
+  const exampleTasks = buildPlanTaskExample(otherAgents);
 
   const blocks: string[] = [];
 
@@ -778,30 +791,35 @@ export function buildOrchestratorPlanPrompt(
   // Block 3: PLAN dynamic instructions
   blocks.push(`## 你的工作流
 1. 阅读用户最新请求与上下文。
-2. 如果存在会阻塞正确规划的关键歧义，且能归纳为 2-4 个清晰选项，
-   先调用 ask_user 让用户选择；拿到答案后继续。
-3. 调用 plan_tasks 工具，输出结构化 plan。
-4. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
+2. 在调用任何工具前，先基于语义判断当前请求属于：
+   - NEEDS_CLARIFICATION：存在多个合理方案，且不同选择会显著改变最终产物。
+   - READY_TO_PLAN：信息足以形成可靠计划，或用户已明确授权你自行做决定。
+3. 对“创建应用 / 网站 / 工具 / 游戏 / 页面”类请求，重点检查：
+   核心范围与功能、关键交互或业务规则、视觉方向、技术与交付约束。
+   不要求每一项都明确；只关注会改变任务拆分、Agent 分工或验收标准的高影响选择。
+4. 如果判断为 NEEDS_CLARIFICATION：
+   - 第一个工具调用必须是 ask_user，不能直接调用 plan_tasks。
+   - 提出 1-3 个高价值选择题，每题提供互斥且可执行的选项。
+   - 不要自行把常见默认值当作用户已经确认的选择。
+   例如“帮我做一个番茄时钟”通常仍有计时规则、功能范围或视觉方向等高影响选择，
+   应先判断这些选择是否需要用户确认。
+5. 如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
+   例如用户已明确“React+TS、25+5、极简、不需要后端”，或明确说“细节你决定”。
+6. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
 
 ## 可用 Agent
 
+<available_agents>
 ${agentList}
+</available_agents>
 
-## 🚫 agentId 严格规则（违反将直接报错）
-agentId 字段只能填写上面「可用 Agent」列表里出现的 id 值，一个字符都不能改。
+<allowed_agent_ids>${JSON.stringify(allowedAgentIds)}</allowed_agent_ids>
 
-正确示例：
-  "agentId": "ag_mock_builder"   ← 这是列表里「前端工程师」的真实 id
-  "agentId": "ag_pm"             ← 这是列表里「PM 小灰」的真实 id
-
-错误示例（系统会拒绝，不要这样写）：
-  "agentId": "web_dev"           ← ❌ 列表中不存在
-  "agentId": "app_developer"     ← ❌ 列表中不存在
-  "agentId": "frontend"          ← ❌ 列表中不存在
-  "agentId": "developer"         ← ❌ 列表中不存在
-  "agentId": "coder"             ← ❌ 列表中不存在
-
-Agent 名称只是给人看的描述，agentId 才是系统识别的唯一标识。你必须到上面列表里找到匹配的 Agent，复制它的 id 字段的值。
+## agentId 严格规则
+- 每个 tasks[].agentId 必须逐字复制自 <allowed_agent_ids>。
+- 不要填写 Agent 名称、职责名称、能力名称或自行编造的别名。
+- 如果没有合适的可用 Agent，不要虚构 ID；应调整计划或直接说明无法分派。
+- 提交 plan_tasks 前，逐项检查每个 agentId 都能在 <allowed_agent_ids> 中精确找到。
 
 ## 拆解原则
 - 充分利用每个 Agent 的 capabilities，不要把任务派给不合适的人。
@@ -809,7 +827,7 @@ Agent 名称只是给人看的描述，agentId 才是系统识别的唯一标识
   必要上下文要写进 task）。
 - 计划阶段只能调用 ask_user、plan_tasks 和只读侦察工具
   （fs_list / fs_read / read_artifact / read_attachment）；不要写文件或执行命令。
-- 若用户需求已足够明确，不要为了形式感提问，直接 plan_tasks。
+- NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
 
 ## 依赖关系（执行顺序的唯一来源，务必读完）
 - 系统【只】按每个任务的 dependsOn 决定顺序：
@@ -827,19 +845,29 @@ Agent 名称只是给人看的描述，agentId 才是系统识别的唯一标识
 - If a task needs an upstream artifact, declare inputs with fromTaskId and outputId.
 - For tasks with quality requirements, add concise acceptanceCriteria.
 
-示例（设计 → 前端 → 审查，逐级依赖；agentId 用上面可用列表里的真实 id）：
-tasks: [
-  { "id": "t1", "agentId": "<设计师 id>", "task": "产出 UI 设计稿" },
-  { "id": "t2", "agentId": "<前端 id>", "task": "按设计稿实现页面",
-    "dependsOn": ["t1"] },
-  { "id": "t3", "agentId": "<Reviewer id>", "task": "审查 t2 的实现",
-    "dependsOn": ["t2"] }
-]`);
+示例（只演示字段和依赖关系，agentId 均来自本次 <allowed_agent_ids>）：
+${exampleTasks}`);
 
   // Block 4: Tool guidance (cut-down for PLAN stage — no fs_write, no bash)
   blocks.push(buildPlanStageToolGuidance());
 
   return blocks.join("\n");
+}
+
+function buildPlanTaskExample(otherAgents: Agent[]): string {
+  if (otherAgents.length === 0) {
+    return "当前没有可分派 Agent，不要调用 plan_tasks。";
+  }
+
+  const tasks = otherAgents.slice(0, 3).map((worker, index) => ({
+    id: `t${index + 1}`,
+    agentId: worker.id,
+    title: `交给 ${worker.name}`,
+    prompt: `完成与 ${worker.name} 能力匹配的子任务。`,
+    dependsOn: index === 0 ? [] : [`t${index}`]
+  }));
+
+  return JSON.stringify({ reasoning: "按能力和依赖顺序分派。", tasks }, null, 2);
 }
 
 /** Tool guidance for PLAN stage only — covers just the 6 allowed tools */
@@ -856,10 +884,11 @@ function buildPlanStageToolGuidance(): string {
   lines.push("只在确实需要多 Agent 协作时调用此工具——简单对话直接文字回复即可。");
 
   lines.push("\n### ask_user");
-  lines.push("用途：当继续执行前需要用户在有限方案中选择时，发起结构化问答；不要只在普通文本里问。");
-  lines.push("正确案例：产品范围不清，调用 ask_user({ questions: [...] })。");
+  lines.push("用途：当多个合理选择会显著改变最终产物、任务拆分或验收标准时，先发起结构化问答。");
+  lines.push("判断方式：由你基于用户语义判断 NEEDS_CLARIFICATION 或 READY_TO_PLAN，不依赖固定关键词。");
+  lines.push("典型案例：用户只说“帮我做一个番茄时钟”，评估计时规则、功能范围或视觉方向是否需要确认。");
   lines.push("参数规则：每次 1-4 个 questions，每题 2-4 个 options。");
-  lines.push("不要滥用：开放式讨论、非关键细节、或可以保守决策时，直接说明假设并继续。");
+  lines.push("不要滥用：用户已提供足够约束，或明确授权你自行决定时，不要重复询问。");
 
   lines.push("\n### read_artifact");
   lines.push("用途：需要基于已有产物继续设计、实现、审查或修改时，先读取完整产物内容。");
@@ -987,7 +1016,6 @@ async function runOrchestratorAssess(
   // Build the PLAN stage system prompt from the extracted pure function
   const assessSystemPrompt = buildOrchestratorPlanPrompt(agent, otherAgents, workspacePath);
   const assessToolNames = [...ORCHESTRATOR_PLAN_TOOLS];
-
   const adapterInput: AdapterInput = {
     conversationId: input.conversationId,
     runId: input.orchestratorRunId,
@@ -997,7 +1025,7 @@ async function runOrchestratorAssess(
     triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
     recentMessages: [],
     toolNames: assessToolNames,
-    systemPrompt: "",
+    systemPrompt: assessSystemPrompt,
     workspacePath,
     apiKey
   };
@@ -1008,7 +1036,6 @@ async function runOrchestratorAssess(
   // Stream events AND watch for plan_tasks via onEvent callback
   // We capture on tool.result (success) rather than tool.call, because the tool handler
   // may auto-correct agent IDs before returning success.
-  let capturedPlanArgs: { reasoning?: string; tasks?: Array<Record<string, unknown>> } | null = null;
   let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
   let planCallId: string | null = null;
   let planWasAttempted = false;
@@ -1020,30 +1047,28 @@ async function runOrchestratorAssess(
       runId: input.orchestratorRunId,
       signal,
       onEvent: (event) => {
-        // Remember plan_tasks call args
+        // Remember the call id; the corrected plan arrives in tool.result.
         if (
           event.type === "tool.call" &&
           "toolName" in event &&
           (event as { toolName: string }).toolName === "plan_tasks"
         ) {
-          const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
-          if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
-            capturedPlanArgs = args;
-            planCallId = (event as { callId: string }).callId;
-            planWasAttempted = true;
-          }
+          planCallId = (event as { callId: string }).callId;
+          planWasAttempted = true;
         }
 
-        // When plan_tasks tool.result arrives with success, capture and stop
+        // Capture the validated, auto-corrected tasks returned by the tool.
         if (
           event.type === "tool.result" &&
           "callId" in event &&
           (event as { callId: string }).callId === planCallId &&
-          capturedPlanArgs &&
           !(event as { isError?: boolean }).isError
         ) {
-          capturedPlan = { reasoning: capturedPlanArgs.reasoning || "Plan", tasks: capturedPlanArgs.tasks! };
-          return { stop: true };
+          const toolPlan = readPlanToolResult((event as { result: unknown }).result);
+          if (toolPlan) {
+            capturedPlan = toolPlan;
+            return { stop: true };
+          }
         }
 
         // If plan_tasks failed, clear capture so LLM can retry
@@ -1053,7 +1078,6 @@ async function runOrchestratorAssess(
           (event as { callId: string }).callId === planCallId &&
           (event as { isError?: boolean }).isError
         ) {
-          capturedPlanArgs = null;
           planCallId = null;
         }
       }
@@ -1194,7 +1218,9 @@ async function generateRecoveryPlan(
   const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
   if (!apiKey) return null;
 
-  const otherAgents = agents.filter((a) => !a.isOrchestrator);
+  const otherAgents = agents.filter(
+    (candidate) => !candidate.isOrchestrator && conversation.agentIds.includes(candidate.id)
+  );
   const workspacePath = workspace.mode === "local" && workspace.boundPath
     ? workspace.boundPath : workspace.rootPath;
 
@@ -1211,8 +1237,10 @@ async function generateRecoveryPlan(
 
 ${otherAgents.map((a) => `- id: "${a.id}", name: "${a.name}", capabilities: [${a.capabilities.join(", ")}]`).join("\n")}
 
-## 🚫 agentId 严格规则
-agentId 只能填上面列表里的真实 id 值。❌ 禁止编造：web_dev, app_developer, frontend, developer, coder 等都不在列表中。
+## agentId 严格规则
+- tasks[].agentId 只能逐字复制自上面的可用 Agent id。
+- 不要使用 Agent 名称、职责名称、能力名称或自行编造的别名。
+- 提交 plan_tasks 前逐项确认 agentId 属于当前可用 Agent 列表。
 
 ## 约束
 - 每个任务必须有唯一的 id（使用 r1, r2, ... 避免与原始 t1, t2 冲突）
@@ -1229,13 +1257,14 @@ agentId 只能填上面列表里的真实 id 值。❌ 禁止编造：web_dev, a
       mentionedAgentIds: [], parentMessageId: null, createdAt: Date.now(), updatedAt: Date.now() },
     recentMessages: [],
     toolNames: ["plan_tasks"],
-    systemPrompt: "",
+    systemPrompt,
     workspacePath,
     apiKey
   };
 
   const adapter = getAdapter(agent.adapterName);
   let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
+  let planCallId: string | null = null;
 
   try {
     for await (const event of adapter.run(adapterInput, signal)) {
@@ -1244,11 +1273,17 @@ agentId 只能填上面列表里的真实 id 值。❌ 禁止编造：web_dev, a
         "toolName" in event &&
         (event as { toolName: string }).toolName === "plan_tasks"
       ) {
-        const args = (event as { args: unknown }).args as { reasoning?: string; tasks?: Array<Record<string, unknown>> };
-        if (args?.tasks && Array.isArray(args.tasks) && args.tasks.length > 0) {
-          capturedPlan = { reasoning: args.reasoning || "Recovery", tasks: args.tasks };
-          break;
-        }
+        planCallId = (event as { callId: string }).callId;
+        continue;
+      }
+      if (
+        event.type === "tool.result" &&
+        "callId" in event &&
+        (event as { callId: string }).callId === planCallId &&
+        !(event as { isError?: boolean }).isError
+      ) {
+        capturedPlan = readPlanToolResult((event as { result: unknown }).result);
+        if (capturedPlan) break;
       }
     }
   } catch {
@@ -1260,7 +1295,55 @@ agentId 只能填上面列表里的真实 id 值。❌ 禁止编造：web_dev, a
   const planResult = parsePlanArgs(capturedPlan);
   if (typeof planResult === "string") return null;
 
-  return planResult;
+  const resolvedExternalTaskIds = originalPlan
+    .filter((task) => results.get(task.id)?.status === "complete")
+    .map((task) => task.id);
+  const compiled = compileAndValidateDispatchPlan(
+    planResult.tasks,
+    conversation.agentIds,
+    orchestratorAgentId,
+    resolvedExternalTaskIds
+  );
+  if (typeof compiled === "string") return null;
+
+  return {
+    reasoning: planResult.reasoning,
+    tasks: compiled.map((task) => ({
+      id: task.id,
+      agentId: task.agentId,
+      title: task.title ?? task.id,
+      prompt: task.task,
+      dependsOn: task.dependsOn,
+      inputs: (task.inputs ?? []).map((input) => ({
+        ...input,
+        required: input.required ?? true
+      })),
+      expectedOutputs: (task.expectedOutputs ?? []).map((output) => ({
+        ...output,
+        required: output.required ?? true
+      })),
+      acceptanceCriteria: task.acceptanceCriteria ?? [],
+      maxAttempts: task.maxAttempts ?? 1,
+      targetPaths: task.targetPaths ?? [],
+      requiredCommands: task.requiredCommands ?? [],
+      requiredEvidence: task.requiredEvidence ?? []
+    }))
+  };
+}
+
+function readPlanToolResult(
+  result: unknown
+): { reasoning: string; tasks: Array<Record<string, unknown>> } | null {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
+  const record = result as Record<string, unknown>;
+  if (!Array.isArray(record.tasks) || record.tasks.length === 0) return null;
+  if (!record.tasks.every((task) => typeof task === "object" && task !== null && !Array.isArray(task))) {
+    return null;
+  }
+  return {
+    reasoning: typeof record.reasoning === "string" ? record.reasoning : "Plan",
+    tasks: record.tasks as Array<Record<string, unknown>>
+  };
 }
 
 /** P0: Determine accurate completion status after all execution stages */

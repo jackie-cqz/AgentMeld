@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingWrite } from "@/shared/types";
 
 type Resolver = (approved: boolean) => void;
@@ -49,9 +49,6 @@ export function registerPendingWrite(
         createdAt: now
       },
       resolver: (approved: boolean) => {
-        // P2: Conditional update — only succeeds if still pending
-        resolveApproval(id, approved, Date.now());
-        store.delete(id);
         resolve(approved);
       }
     };
@@ -72,33 +69,39 @@ export function getPendingWritesForConversation(conversationId: string): Pending
 }
 
 export function approvePendingWrite(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver(true);
-  return true;
+  return resolvePendingWrite(id, true);
 }
 
 export function rejectPendingWrite(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver(false);
-  return true;
+  return resolvePendingWrite(id, false);
 }
 
 export function cancelPendingWritesForRun(runId: string): void {
   const store = getStore();
   for (const [id, entry] of store) {
     if (entry.write.runId === runId) {
-      entry.resolver(false);
+      cancelApproval(id, Date.now());
       store.delete(id);
+      entry.resolver(false);
     }
   }
 }
 
 export function clearPendingWritesForTests(): void {
   const store = getStore();
-  for (const [, entry] of store) {
+  for (const [id, entry] of store) {
+    resolveApproval(id, false, Date.now());
     entry.resolver(false);
   }
   store.clear();
+}
+
+function resolvePendingWrite(id: string, approved: boolean): boolean {
+  const store = getStore();
+  const entry = store.get(id);
+  if (!entry) return false;
+  if (!resolveApproval(id, approved, Date.now())) return false;
+  store.delete(id);
+  entry.resolver(approved);
+  return true;
 }

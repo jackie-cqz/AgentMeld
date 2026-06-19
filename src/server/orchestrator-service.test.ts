@@ -66,9 +66,14 @@ describe("buildOrchestratorPlanPrompt", () => {
     expect(prompt).toContain('"ag_pm"');
     expect(prompt).toContain("PM 小灰");
     expect(prompt).toContain('"ag_reviewer"');
+    expect(prompt).toContain('<allowed_agent_ids>["ag_pm","ag_reviewer"]</allowed_agent_ids>');
     expect(prompt).toContain("## 拆解原则");
     expect(prompt).toContain("## 依赖关系");
     expect(prompt).toContain("dependsOn");
+    expect(prompt).toContain("NEEDS_CLARIFICATION");
+    expect(prompt).toContain("READY_TO_PLAN");
+    expect(prompt).toContain("第一个工具调用必须是 ask_user");
+    expect(prompt).toContain("细节你决定");
 
     // Block 4: tool guidance
     expect(prompt).toContain("## AgentHub 工具调用规范");
@@ -85,11 +90,19 @@ describe("buildOrchestratorPlanPrompt", () => {
     expect(prompt).toContain("(无其他可用 Agent)");
   });
 
-  it("includes dependency example with placeholder agent ids", () => {
+  it("uses only current worker ids in the dependency example", () => {
     const orch = makeStubAgent();
-    const prompt = buildOrchestratorPlanPrompt(orch, [], "/tmp/ws");
+    const workers = [
+      makeStubWorker("ag_designer_live", "设计师", ["design"], []),
+      makeStubWorker("ag_frontend_live", "前端", ["frontend"], [])
+    ];
+    const prompt = buildOrchestratorPlanPrompt(orch, workers, "/tmp/ws");
     expect(prompt).toContain('"id": "t1"');
-    expect(prompt).toContain('"dependsOn": ["t1"]');
+    expect(prompt).toContain('"t1"');
+    expect(prompt).toContain('"agentId": "ag_designer_live"');
+    expect(prompt).toContain('"agentId": "ag_frontend_live"');
+    expect(prompt).not.toContain("<设计师 id>");
+    expect(prompt).not.toContain("ag_mock_builder");
   });
 
   it("does NOT include fs_write or bash guidance", () => {

@@ -440,41 +440,42 @@ function MarkdownRenderer({ content }: { content: string }) {
   const lines = content.split("\n");
   const elements: ReactNode[] = [];
   let i = 0;
+  let kid = 0; // Separate key counter — never shared with line index i
   while (i < lines.length) {
     const line = lines[i];
     if (/^#{1,6}\s/.test(line)) {
       const level = line.match(/^(#{1,6})/)![1].length;
       const text = line.replace(/^#{1,6}\s+/, "");
       const cls = level <= 2 ? "text-lg font-semibold" : level === 3 ? "text-base font-medium" : "text-sm font-medium";
-      if (level === 1) elements.push(<h1 key={i} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h1>);
-      else if (level === 2) elements.push(<h2 key={i} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h2>);
-      else elements.push(<h3 key={i} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h3>);
-      i++; continue;
+      if (level === 1) elements.push(<h1 key={kid} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h1>);
+      else if (level === 2) elements.push(<h2 key={kid} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h2>);
+      else elements.push(<h3 key={kid} className={`mt-4 mb-2 first:mt-0 ${cls} text-stone-900`}>{text}</h3>);
+      i++; kid++; continue;
     }
     if (/^[-*]\s/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i])) { items.push(lines[i].replace(/^[-*]\s+/, "")); i++; }
-      elements.push(<ul key={i} className="my-2 list-disc space-y-1 pl-5 text-stone-700">{items.map((item, idx) => <li key={idx}>{item}</li>)}</ul>);
-      continue;
+      elements.push(<ul key={kid} className="my-2 list-disc space-y-1 pl-5 text-stone-700">{items.map((item, idx) => <li key={idx}>{item}</li>)}</ul>);
+      kid++; continue;
     }
     if (/^\d+\.\s/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\d+\.\s/.test(lines[i])) { items.push(lines[i].replace(/^\d+\.\s+/, "")); i++; }
-      elements.push(<ol key={i} className="my-2 list-decimal space-y-1 pl-5 text-stone-700">{items.map((item, idx) => <li key={idx}>{item}</li>)}</ol>);
-      continue;
+      elements.push(<ol key={kid} className="my-2 list-decimal space-y-1 pl-5 text-stone-700">{items.map((item, idx) => <li key={idx}>{item}</li>)}</ol>);
+      kid++; continue;
     }
     if (line.startsWith("```")) {
       const codeLines: string[] = []; i++;
       while (i < lines.length && !lines[i].startsWith("```")) { codeLines.push(lines[i]); i++; }
       i++;
-      elements.push(<pre key={i} className="my-3 overflow-auto rounded-md bg-stone-950 p-3 text-sm text-stone-50"><code>{codeLines.join("\n")}</code></pre>);
-      continue;
+      elements.push(<pre key={kid} className="my-3 overflow-auto rounded-md bg-stone-950 p-3 text-sm text-stone-50"><code>{codeLines.join("\n")}</code></pre>);
+      kid++; continue;
     }
     const formatted = line.replace(/`([^`]+)`/g, (_m, code) => `<code class="rounded bg-stone-200 px-1 py-0.5 text-sm font-mono text-stone-800">${code}</code>`);
     const bolded = formatted.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    if (line.trim() === "") { elements.push(<div key={i} className="h-3" />); i++; continue; }
-    elements.push(<p key={i} className="my-1 leading-7 text-stone-700" dangerouslySetInnerHTML={{ __html: bolded }} />);
-    i++;
+    if (line.trim() === "") { elements.push(<div key={kid} className="h-3" />); i++; kid++; continue; }
+    elements.push(<p key={kid} className="my-1 leading-7 text-stone-700" dangerouslySetInnerHTML={{ __html: bolded }} />);
+    i++; kid++;
   }
   return <div>{elements}</div>;
 }

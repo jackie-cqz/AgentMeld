@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingBashCommand } from "@/shared/types";
 
 type Resolver = (approved: boolean) => void;
@@ -45,8 +45,6 @@ export function registerPendingBash(
     const entry: BashEntry = {
       command: { id, conversationId, agentId, runId, command, cwd, reason, createdAt: now },
       resolver: (approved: boolean) => {
-        resolveApproval(id, approved, Date.now());
-        store.delete(id);
         resolve(approved);
       }
     };
@@ -74,33 +72,39 @@ export function getPendingBashCommandsForConversation(conversationId: string): P
 }
 
 export function approvePendingBash(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver(true);
-  return true;
+  return resolvePendingBash(id, true);
 }
 
 export function rejectPendingBash(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver(false);
-  return true;
+  return resolvePendingBash(id, false);
 }
 
 export function cancelPendingBashForRun(runId: string): void {
   const store = getStore();
   for (const [id, entry] of store) {
     if (entry.command.runId === runId) {
-      entry.resolver(false);
+      cancelApproval(id, Date.now());
       store.delete(id);
+      entry.resolver(false);
     }
   }
 }
 
 export function clearPendingBashForTests(): void {
   const store = getStore();
-  for (const [, entry] of store) {
+  for (const [id, entry] of store) {
+    resolveApproval(id, false, Date.now());
     entry.resolver(false);
   }
   store.clear();
+}
+
+function resolvePendingBash(id: string, approved: boolean): boolean {
+  const store = getStore();
+  const entry = store.get(id);
+  if (!entry) return false;
+  if (!resolveApproval(id, approved, Date.now())) return false;
+  store.delete(id);
+  entry.resolver(approved);
+  return true;
 }

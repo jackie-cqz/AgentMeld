@@ -27,7 +27,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { action, feedback } = parsed.data;
 
   if (action === "reject") {
-    rejectPlan(id);
+    if (!rejectPlan(id)) {
+      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    }
     eventBus.publish({
       type: "dispatch.plan.resolved",
       conversationId: entry.plan.conversationId,
@@ -41,7 +43,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (action === "revise") {
     const effectiveFeedback = feedback?.trim() || "请调整计划。";
-    revisePlanWithFeedback(id, effectiveFeedback);
+    if (!revisePlanWithFeedback(id, effectiveFeedback)) {
+      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    }
     eventBus.publish({
       type: "dispatch.plan.resolved",
       conversationId: entry.plan.conversationId,
@@ -83,7 +87,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (typeof validationResult === "string") {
     // Plan fails validation at approval gate — reject it
-    rejectPlan(id);
+    if (!rejectPlan(id)) {
+      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    }
     eventBus.publish({
       type: "dispatch.plan.resolved",
       conversationId: entry.plan.conversationId,
@@ -100,7 +106,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   // Plan validated — approve
-  approvePlan(id);
+  if (!approvePlan(id)) {
+    return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+  }
   eventBus.publish({
     type: "dispatch.plan.resolved",
     conversationId: entry.plan.conversationId,

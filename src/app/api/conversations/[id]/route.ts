@@ -1,17 +1,14 @@
 import { z } from "zod";
-import {
-  deleteConversation,
-  getConversationPayload,
-  patchConversation
-} from "@/server/conversation-service";
+import { ensureDatabase } from "@/db/bootstrap";
+import { deleteConversation, getConversationPayload } from "@/server/conversation-service";
+import { updateConversation } from "@/server/repositories";
 
 export const dynamic = "force-dynamic";
 
-const patchConversationSchema = z.object({
-  title: z.string().trim().min(1).max(80).optional(),
+const patchSchema = z.object({
   archived: z.boolean().optional(),
-  pinnedMessageIds: z.array(z.string().min(1)).max(5).optional(),
-  fsWriteApprovalMode: z.enum(["auto", "review"]).optional()
+  title: z.string().optional(),
+  pinnedMessageIds: z.array(z.string()).optional()
 });
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -24,22 +21,19 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  ensureDatabase();
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
-  const parsed = patchConversationSchema.safeParse(body);
+  const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  try {
-    const conversation = patchConversation(id, parsed.data);
-    if (!conversation) {
-      return Response.json({ error: "Conversation not found." }, { status: 404 });
-    }
-    return Response.json({ conversation });
-  } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Failed to update conversation." }, { status: 400 });
+  const updated = updateConversation(id, parsed.data);
+  if (!updated) {
+    return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
+  return Response.json({ conversation: updated });
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -48,5 +42,5 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
   if (!deleted) {
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
-  return new Response(null, { status: 204 });
+  return Response.json({ deleted: true });
 }

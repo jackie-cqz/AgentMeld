@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validatePlan, topologicalWaves, parsePlanArgs, planArgsSchema, reportSchema } from "@/server/tools/orchestrator-tools";
+import { correctAgentIds, validatePlan, topologicalWaves, parsePlanArgs } from "@/server/tools/orchestrator-tools";
 import { toolRegistry } from "@/server/tools/registry";
 
 describe("plan_tasks tool", () => {
@@ -16,6 +16,18 @@ describe("plan_tasks tool", () => {
     }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId: "r", abortSignal: new AbortController().signal });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toMatchObject({
+        reasoning: "Test plan",
+        correctedCount: 0,
+        tasks: [
+          {
+            id: "t1",
+            agentId: "ag_test"
+          }
+        ]
+      });
+    }
   });
 
   it("rejects plan with duplicate task IDs", async () => {
@@ -58,6 +70,33 @@ describe("plan_tasks tool", () => {
     }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId: "r", abortSignal: new AbortController().signal });
 
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("correctAgentIds", () => {
+  const agents = [
+    { id: "ag_frontend", name: "前端工程师", capabilities: ["frontend", "react"] },
+    { id: "ag_designer", name: "设计师", capabilities: ["design", "ui"] }
+  ];
+
+  it("keeps an already valid agent id unchanged", () => {
+    const tasks = [{ agentId: "ag_designer", prompt: "实现 HTML 和 CSS 页面" }];
+    const corrected = correctAgentIds(tasks, new Map(), agents);
+
+    expect(corrected).toBe(0);
+    expect(tasks[0].agentId).toBe("ag_designer");
+  });
+
+  it("corrects a known alias to an available agent", () => {
+    const tasks = [{ agentId: "frontend", prompt: "实现页面" }];
+    const corrected = correctAgentIds(
+      tasks,
+      new Map([["frontend", "ag_frontend"]]),
+      agents
+    );
+
+    expect(corrected).toBe(1);
+    expect(tasks[0].agentId).toBe("ag_frontend");
   });
 });
 
@@ -177,6 +216,15 @@ describe("topologicalWaves", () => {
     expect(waves).toHaveLength(2);
     expect(waves[0]).toHaveLength(1); // t1
     expect(waves[1]).toHaveLength(2); // t2, t3 in parallel
+  });
+
+  it("treats dependencies from a previous recovery round as already resolved", () => {
+    const tasks = [
+      { id: "r1", agentId: "a1", dependsOn: ["t1"], title: "", prompt: "", inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 2 }
+    ];
+    const waves = topologicalWaves(tasks);
+    expect(waves).toHaveLength(1);
+    expect(waves[0][0].id).toBe("r1");
   });
 });
 

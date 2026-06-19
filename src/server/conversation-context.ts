@@ -3,6 +3,7 @@ import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
+import { getLatestSummary, calculateContextBudget, validateSummaryBoundary, selectCompactionWindow } from "@/server/context-compaction-service";
 import { newContextSummaryId } from "@/shared/ids";
 import type { Message, MessagePart } from "@/shared/types";
 
@@ -52,16 +53,19 @@ export async function buildHistoryFor(
   if (!conversation) return [];
 
   const isGroup = conversation.agentIds.length > 1;
-  const summary = getLatestContextSummary(conversationId);
+  const summary = getLatestSummary(conversationId);
 
   // 2. Get recent complete messages (after summary covered range if exists)
   const allMessages = listMessages(conversationId).filter(
     (m) => m.status === "complete" && m.id !== excludeMessageId
   );
 
-  // If summary exists, only include messages after the covered range
+  // P0: Use messageId as primary boundary (not createdAt)
   const afterCovered = summary
-    ? allMessages.filter((m) => m.createdAt > summary.coveredUntilCreatedAt)
+    ? (() => {
+        const coverIdx = allMessages.findIndex((m) => m.id === summary.coveredUntilMessageId);
+        return coverIdx >= 0 ? allMessages.slice(coverIdx + 1) : allMessages;
+      })()
     : allMessages;
 
   // 3. Split recent + pinned
@@ -255,30 +259,9 @@ function renderAgentPublicText(
   return chunks.join("\n").trim();
 }
 
-interface ContextSummary {
-  id: string;
-  summary: string;
-  coveredUntilMessageId: string;
-  coveredUntilCreatedAt: number;
-  sourceMessageCount: number;
-}
-
-function getLatestContextSummary(conversationId: string): ContextSummary | null {
-  try {
-    const row = getDatabase()
-      .prepare("SELECT * FROM conversation_context_summaries WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1")
-      .get(conversationId) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      id: row.id as string,
-      summary: row.summary as string,
-      coveredUntilMessageId: row.covered_until_message_id as string,
-      coveredUntilCreatedAt: row.covered_until_created_at as number,
-      sourceMessageCount: row.source_message_count as number
-    };
-  } catch {
-    return null;
-  }
+/** @deprecated Use getLatestSummary from context-compaction-service instead */
+function getLatestContextSummary(conversationId: string) {
+  return getLatestSummary(conversationId);
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +433,13 @@ async function storeCompactionResult(
   const now = Date.now();
   const tokenEstimate = Math.ceil(summary.length / 4);
 
+  // P0: Validate boundary before saving
+  const boundaryError = validateSummaryBoundary(conversationId, coveredUntilMessageId);
+  if (boundaryError) {
+    publishCompactionError(conversationId, boundaryError);
+    throw new Error(boundaryError);
+  }
+
   eventBus.publish({
     type: "compaction.progress",
     conversationId,
@@ -458,7 +448,6 @@ async function storeCompactionResult(
     detail: "正在保存压缩结果..."
   });
 
-  // Store in DB
   const db = getDatabase();
   db.prepare(`
     INSERT INTO conversation_context_summaries (
@@ -473,7 +462,6 @@ async function storeCompactionResult(
     modelProvider, modelId, now
   );
 
-  // Publish completion event
   eventBus.publish({
     type: "compaction.end",
     conversationId,

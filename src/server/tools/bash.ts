@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { z } from "zod";
 import { currentPlatform, type Platform } from "@/server/platform";
 import { registerPendingBash } from "@/server/pending-bash";
+import { recordCommandEvidence } from "@/server/dispatch-tool-evidence";
 import { findBannedPattern, getBannedPatterns } from "@/server/security";
 import {
   assertPathWithinWorkspace,
@@ -100,6 +101,7 @@ export const bashTool: ToolDef = {
     // 1. Check banned patterns
     const banned = findBannedPattern(command, platform);
     if (banned) {
+      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return { ok: false, error: `Command blocked by security policy (pattern: ${banned.source}).` };
     }
 
@@ -108,6 +110,7 @@ export const bashTool: ToolDef = {
     try {
       cwd = assertPathWithinWorkspace(ctx.workspacePath, ".");
     } catch (error) {
+      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return { ok: false, error: error instanceof Error ? error.message : "Workspace validation failed." };
     }
 
@@ -118,6 +121,7 @@ export const bashTool: ToolDef = {
         `Command requires user approval: ${command.slice(0, 80)}`
       );
       if (!approved) {
+        if (ctx.parentRunId) recordCommandFailure(ctx.runId, command, cwd);
         return { ok: false, error: "User rejected command execution." };
       }
     }
@@ -136,6 +140,15 @@ export const bashTool: ToolDef = {
     }
 
     const result = await executeCommand(shellCommand, shellArgs, cwd, ctx.abortSignal);
+    if (ctx.parentRunId) {
+      recordCommandEvidence(ctx.runId, {
+        command,
+        cwd,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        isError: result.exitCode === null && !result.timedOut
+      });
+    }
 
     return {
       ok: true,
@@ -150,6 +163,16 @@ export const bashTool: ToolDef = {
     };
   }
 };
+
+function recordCommandFailure(runId: string, command: string, cwd?: string): void {
+  recordCommandEvidence(runId, {
+    command,
+    cwd,
+    exitCode: null,
+    timedOut: false,
+    isError: true
+  });
+}
 
 interface CommandResult {
   exitCode: number | null;

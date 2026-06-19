@@ -7,7 +7,7 @@ import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ToolUseCard } from "@/components/tool-card";
 import type { MessagePart } from "@/shared/types";
 
-export function MessageParts({ parts }: { parts: MessagePart[] }) {
+export function MessageParts({ parts, messageStatus }: { parts: MessagePart[]; messageStatus?: string }) {
   if (parts.length === 0) {
     return <div className="h-5 w-40 animate-pulse rounded bg-stone-200" />;
   }
@@ -21,7 +21,7 @@ export function MessageParts({ parts }: { parts: MessagePart[] }) {
       {nonToolParts.map((part, index) => (
         <MessagePartView key={`${part.type}-${index}`} part={part} />
       ))}
-      {toolCallIds.size > 0 ? <ToolUseCard parts={parts} /> : null}
+      {toolCallIds.size > 0 ? <ToolUseCard parts={parts} messageStatus={messageStatus} /> : null}
     </div>
   );
 }

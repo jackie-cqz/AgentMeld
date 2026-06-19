@@ -20,6 +20,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Pending question not found." }, { status: 404 });
   }
 
-  answerQuestion(id, parsed.data.answers);
+  if (!answerQuestion(id, parsed.data.answers)) {
+    return Response.json({ error: "Pending question was already answered." }, { status: 409 });
+  }
   return Response.json({ answered: true });
 }

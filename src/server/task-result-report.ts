@@ -68,12 +68,87 @@ export function evaluateChildTaskResult(
   }
 
   // ⑥ targetPaths have evidence?
-  if (evidence) {
-    const writtenPaths = new Set(evidence.fileWrites.map((f) => f.path));
-    for (const tp of task.acceptanceCriteria ? [] : []) {
-      // task.acceptanceCriteria check done above; targetPaths check is optional
-    }
+  const actualPaths = evidence?.fileWrites.map((file) => file.path) ?? [];
+  const reportedPaths = (report.files ?? [])
+    .filter((file) => file.action !== "read")
+    .map((file) => file.path);
+  const missingTargetPaths = (task.targetPaths ?? []).filter(
+    (targetPath) => ![...actualPaths, ...reportedPaths].some(
+      (candidatePath) => evidencePathMatches(targetPath, candidatePath)
+    )
+  );
+  if (missingTargetPaths.length > 0) {
+    return {
+      status: "failed",
+      error: `缺少目标文件证据: ${missingTargetPaths.join(", ")}`
+    };
+  }
+
+  // ⑦ requiredCommands completed successfully?
+  const actualCommands = evidence?.commands ?? [];
+  const reportedCommands = [
+    ...(report.commands ?? []).map((command) => ({
+      command: command.command,
+      passed: command.exitCode === 0 && command.passed !== false
+    })),
+    ...(report.tests ?? []).map((test) => ({
+      command: test.command,
+      passed: test.passed
+    }))
+  ];
+  const missingCommands = (task.requiredCommands ?? []).filter((required) => {
+    const normalized = normalizeCommand(required.command);
+    const actualPassed = actualCommands.some(
+      (command) =>
+        normalizeCommand(command.command) === normalized &&
+        !command.isError &&
+        !command.timedOut &&
+        command.exitCode === 0
+    );
+    const reportedPassed = reportedCommands.some(
+      (command) => normalizeCommand(command.command) === normalized && command.passed
+    );
+    return !actualPassed && !reportedPassed;
+  });
+  if (missingCommands.length > 0) {
+    return {
+      status: "failed",
+      error: `缺少成功命令证据: ${missingCommands.map((command) => command.command).join(", ")}`
+    };
+  }
+
+  // ⑧ requiredEvidence mentioned in the structured report?
+  const reportEvidenceText = [
+    report.summary,
+    ...(report.acceptanceResults ?? []).flatMap((result) => [result.criterion, result.evidence]),
+    ...(report.files ?? []).flatMap((file) => [file.path, file.summary ?? ""]),
+    ...(report.commands ?? []).flatMap((command) => [command.command, command.summary ?? ""]),
+    ...(report.tests ?? []).flatMap((test) => [test.command, test.summary ?? ""]),
+    ...(report.blockers ?? [])
+  ].join("\n").toLowerCase();
+  const missingEvidence = (task.requiredEvidence ?? []).filter(
+    (requirement) => !reportEvidenceText.includes(requirement.trim().toLowerCase())
+  );
+  if (missingEvidence.length > 0) {
+    return {
+      status: "failed",
+      error: `缺少必需证据说明: ${missingEvidence.join(", ")}`
+    };
   }
 
   return { status: "complete" };
+}
+
+function normalizeEvidencePath(value: string): string {
+  return value.trim().replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function evidencePathMatches(targetPath: string, candidatePath: string): boolean {
+  const target = normalizeEvidencePath(targetPath);
+  const candidate = normalizeEvidencePath(candidatePath);
+  return candidate === target || candidate.startsWith(`${target}/`);
+}
+
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ").toLowerCase();
 }

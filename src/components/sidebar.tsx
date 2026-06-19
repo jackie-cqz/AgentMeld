@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  Archive,
+  Pencil,
+  Pin,
   BarChart3,
   Bot,
   ChevronRight,
@@ -11,16 +14,19 @@ import {
   Plus,
   Search,
   Settings,
+  Sun,
+  Trash2
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AgentsPanel } from "@/components/agents-panel";
+import { AnalyticsPanel } from "@/components/analytics-panel";
 import { ArtifactLibrary } from "@/components/artifact-library";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList, selectConversationList } from "@/stores/selectors";
-import type { Agent } from "@/shared/types";
+import type { Agent, Conversation } from "@/shared/types";
 
 export function Sidebar() {
   const agents = useAppStore(useShallow(selectAgentList));
@@ -31,18 +37,198 @@ export function Sidebar() {
   const activeTab = useAppStore((state) => state.sidebarTab);
   const setActiveTab = useAppStore((state) => state.setSidebarTab);
   const setSearchOpen = useAppStore((state) => state.setSearchOpen);
+  const darkMode = useAppStore((state) => state.darkMode);
+  const toggleDarkMode = useAppStore((state) => state.toggleDarkMode);
+  const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
+  const toggleSidebarCollapsed = useAppStore((state) => state.toggleSidebarCollapsed);
+  const updateConversation = useAppStore((state) => state.updateConversation);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Right-click context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; conversation: Conversation } | null>(null);
+  // Inline editing: conversation id being edited + edit value
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const contextRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
 
-  const orderedConversations = useMemo(
-    () =>
-      conversations.filter((conversation) => conversation.title.toLowerCase().includes(query.trim().toLowerCase())),
-    [conversations, query]
-  );
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [contextMenu]);
+
+  // Focus inline edit input
+  useEffect(() => {
+    if (editingId) setTimeout(() => editInputRef.current?.focus(), 50);
+  }, [editingId]);
+
+  const loadBootstrap = useAppStore((state) => state.loadBootstrap);
+
+  const handleDelete = async (conv: Conversation) => {
+    if (!confirm(`确定删除会话「${conv.title}」吗？此操作不可撤销。`)) return;
+    await fetch(`/api/conversations/${conv.id}`, { method: "DELETE" });
+    await loadBootstrap();
+    setContextMenu(null);
+  };
+
+  const startRename = (conv: Conversation) => {
+    setEditingId(conv.id);
+    setEditValue(conv.title);
+    setContextMenu(null);
+  };
+
+  const submitRename = async () => {
+    if (!editingId) return;
+    const trimmed = editValue.trim();
+    if (!trimmed || trimmed === conversations.find((c) => c.id === editingId)?.title) { setEditingId(null); return; }
+    await fetch(`/api/conversations/${editingId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: trimmed })
+    });
+    updateConversation(editingId, { title: trimmed });
+    setEditingId(null);
+  };
+
+  const handleArchive = async (conv: Conversation) => {
+    await fetch(`/api/conversations/${conv.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: !conv.archived })
+    });
+    updateConversation(conv.id, { archived: !conv.archived });
+    setContextMenu(null);
+  };
+
+  const handlePin = async (conv: Conversation) => {
+    const isPinned = (conv.pinnedMessageIds?.length ?? 0) > 0;
+    await fetch(`/api/conversations/${conv.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinnedMessageIds: isPinned ? [] : ["__pinned__"] })
+    });
+    updateConversation(conv.id, { pinnedMessageIds: isPinned ? [] : ["__pinned__"] });
+    setContextMenu(null);
+  };
+
+  const orderedConversations = useMemo(() => {
+    const filtered = conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()));
+    // Sort pinned to top
+    return [...filtered].sort((a, b) => {
+      const aPinned = (a.pinnedMessageIds?.length ?? 0) > 0;
+      const bPinned = (b.pinnedMessageIds?.length ?? 0) > 0;
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      return 0;
+    });
+  }, [conversations, query]);
 
   return (
-    <aside className="relative flex h-screen w-[344px] shrink-0 flex-col border-r border-slate-200 bg-white">
+    <aside className={`relative flex h-screen shrink-0 flex-col border-r transition-all duration-200 ${darkMode ? "border-slate-700 bg-slate-900 text-slate-100" : "border-slate-200 bg-white"} ${sidebarCollapsed ? "w-[56px]" : "w-[344px]"}`}>
+      {/* Collapsed narrow bar */}
+      {sidebarCollapsed ? (
+        <div className="flex h-full flex-col items-center gap-2 py-3">
+          {/* Row 1: expand + settings + dark mode */}
+          <div className="flex flex-col items-center gap-2">
+            <button
+              onClick={toggleSidebarCollapsed}
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+              type="button"
+              title="展开侧栏"
+            >
+              <PanelLeft className="h-5 w-5 rotate-180" />
+            </button>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+              type="button"
+              title="设置"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={toggleDarkMode}
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+              type="button"
+              title={darkMode ? "浅色模式" : "深色模式"}
+            >
+              {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {/* Divider 1 */}
+          <div className={`h-px w-8 ${darkMode ? "bg-slate-700" : "bg-slate-200"}`} />
+
+          {/* Nav icons */}
+          <button
+            onClick={() => setActiveTab("conversations")}
+            className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "conversations" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            type="button"
+            title="对话"
+          >
+            <MessageSquare className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setActiveTab("artifacts")}
+            className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "artifacts" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            type="button"
+            title="产物库"
+          >
+            <Layers className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setActiveTab("agents")}
+            className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "agents" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            type="button"
+            title="Agents"
+          >
+            <Bot className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setActiveTab("analytics")}
+            className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "analytics" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
+            type="button"
+            title="分析"
+          >
+            <BarChart3 className="h-4 w-4" />
+          </button>
+
+          {/* Divider 2 — only when conversations tab active */}
+          {activeTab === "conversations" ? (
+            <>
+              <div className={`h-px w-8 ${darkMode ? "bg-slate-700" : "bg-slate-200"}`} />
+              {/* Conversation avatars */}
+              <div className="flex-1 overflow-y-auto px-1">
+                <div className="flex flex-col items-center gap-2">
+                  {conversations.map((conv) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => {
+                        setActiveConversation(conv.id);
+                        setActiveTab("conversations");
+                      }}
+                      className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold transition ${
+                        conv.id === activeConversationId
+                          ? "bg-[#4264ff] text-white ring-2 ring-blue-200"
+                          : "bg-slate-200 text-slate-600 hover:bg-slate-300"
+                      }`}
+                      type="button"
+                      title={conv.title}
+                    >
+                      {getConversationInitials(conv.title)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : (
+        <>
       <div className="border-b border-slate-200 px-4 pb-4 pt-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -61,13 +247,15 @@ export function Sidebar() {
               <Settings className="h-5 w-5" />
             </button>
             <button
+              onClick={toggleDarkMode}
               className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
               type="button"
-              title="主题"
+              title={darkMode ? "浅色模式" : "深色模式"}
             >
-              <Moon className="h-5 w-5" />
+              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
             <button
+              onClick={toggleSidebarCollapsed}
               className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
               type="button"
               title="折叠侧栏"
@@ -153,17 +341,35 @@ export function Sidebar() {
                     setActiveConversation(conversation.id);
                     setActiveTab("conversations");
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, conversation });
+                  }}
                 >
                   <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#635bff] text-sm font-semibold text-white">
                     {getConversationInitials(conversation.title)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      {conversation.id === activeConversationId ? (
-                        <span className="text-amber-500">◆</span>
-                      ) : null}
-                      <div className="truncate text-sm font-semibold text-slate-950">{conversation.title}</div>
-                    </div>
+                    {editingId === conversation.id ? (
+                      <input
+                        ref={editInputRef}
+                        className="mb-1 h-7 w-full rounded border border-[#4264ff] bg-white px-2 text-sm font-semibold text-slate-950 outline-none"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") submitRename(); if (e.key === "Escape") setEditingId(null); }}
+                        onBlur={submitRename}
+                      />
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        {conversation.pinnedMessageIds && conversation.pinnedMessageIds.length > 0 ? (
+                          <Pin className="h-3 w-3 shrink-0 text-amber-500" />
+                        ) : null}
+                        {conversation.id === activeConversationId ? (
+                          <span className="text-amber-500">◆</span>
+                        ) : null}
+                        <div className="truncate text-sm font-semibold text-slate-950">{conversation.title}</div>
+                      </div>
+                    )}
                     <div className="mt-1 text-xs text-slate-500">
                       {conversation.mode === "group" ? "群聊" : "单聊"} · {conversation.agentIds.length} 位 Agent
                     </div>
@@ -179,9 +385,7 @@ export function Sidebar() {
       ) : activeTab === "artifacts" ? (
         <ArtifactLibrary />
       ) : (
-        <div className="grid flex-1 place-items-center text-sm text-slate-500">
-          分析 — 开发中
-        </div>
+        <AnalyticsPanel />
       )}
 
       {dialogOpen ? (
@@ -197,6 +401,49 @@ export function Sidebar() {
       ) : null}
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </>
+      )}
+
+      {/* Right-click context menu */}
+      {contextMenu ? (
+        <div
+          ref={contextRef}
+          className="fixed z-50 min-w-[160px] rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <div className="truncate border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
+            {contextMenu.conversation.title}
+          </div>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            onClick={() => handlePin(contextMenu.conversation)}
+          >
+            <Pin className="h-4 w-4" />
+            {(contextMenu.conversation.pinnedMessageIds?.length ?? 0) > 0 ? "取消置顶" : "置顶"}
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            onClick={() => startRename(contextMenu.conversation)}
+          >
+            <Pencil className="h-4 w-4" />
+            重命名
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            onClick={() => handleArchive(contextMenu.conversation)}
+          >
+            <Archive className="h-4 w-4" />
+            {contextMenu.conversation.archived ? "取消归档" : "归档"}
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+            onClick={() => handleDelete(contextMenu.conversation)}
+          >
+            <Trash2 className="h-4 w-4" />
+            删除
+          </button>
+        </div>
+      ) : null}
     </aside>
   );
 }

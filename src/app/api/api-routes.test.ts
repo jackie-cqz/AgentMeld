@@ -170,7 +170,7 @@ describe("DELETE /api/conversations/[id]", () => {
 
     const req = new Request("http://localhost/api/test", { method: "DELETE" });
     const res = await deleteConversation(req, { params: Promise.resolve({ id: conversation.id }) });
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
   });
 });
 

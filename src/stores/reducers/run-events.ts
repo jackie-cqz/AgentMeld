@@ -10,8 +10,10 @@ export function applyRunEvent(state: StoreDraft, event: StreamEvent) {
       triggerMessageId: event.triggerMessageId,
       parentRunId: event.parentRunId ?? null,
       status: "running",
+      stage: null,
       error: null,
       usage: null,
+      interrupted: false,
       startedAt: event.timestamp,
       finishedAt: null,
       createdAt: event.timestamp,
@@ -43,4 +45,3 @@ export function applyRunEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-

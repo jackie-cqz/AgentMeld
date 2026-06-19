@@ -12,6 +12,10 @@ import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
 import { getAllPendingBashCommands, rejectPendingBash } from "@/server/pending-bash";
 import { SANDBOX_MAX_FILES } from "@/server/workspace-utils";
+import {
+  clearAllToolEvidenceForTests,
+  getRunToolEvidence
+} from "@/server/dispatch-tool-evidence";
 
 let tempDir: string;
 let workspacePath: string;
@@ -28,6 +32,7 @@ beforeEach(async () => {
   eventBus.clearForTests();
   clearPendingWritesForTests();
   clearPendingBashForTests();
+  clearAllToolEvidenceForTests();
   ensureDatabase();
 
   // Create a conversation with auto approval for fs_write tests
@@ -54,6 +59,7 @@ afterEach(() => {
   eventBus.clearForTests();
   clearPendingWritesForTests();
   clearPendingBashForTests();
+  clearAllToolEvidenceForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -63,6 +69,7 @@ function ctx(overrides?: Partial<ToolContext>): ToolContext {
     workspacePath,
     agentId: "ag_mock_builder",
     runId: "run_test",
+    parentRunId: "run_parent",
     abortSignal: new AbortController().signal,
     ...overrides
   };
@@ -196,6 +203,11 @@ describe("fs_write", () => {
     // Verify file was written
     const written = fs.readFileSync(path.join(workspacePath, "output.txt"), "utf-8");
     expect(written).toBe("generated content");
+    expect(getRunToolEvidence("run_test").fileWrites).toContainEqual({
+      path: "output.txt",
+      absolutePath: path.join(workspacePath, "output.txt"),
+      action: "created"
+    });
   });
 
   it("writes to a nested path creating parent directories", async () => {
@@ -250,6 +262,14 @@ describe("bash", () => {
       expect(value.exitCode).toBe(0);
       expect(value.output).toContain("hello");
     }
+    expect(getRunToolEvidence("run_test").commands).toEqual([
+      expect.objectContaining({
+        command: cmd,
+        exitCode: 0,
+        timedOut: false,
+        isError: false
+      })
+    ]);
   }, 10000);
 
   it("executes in the workspace directory", async () => {

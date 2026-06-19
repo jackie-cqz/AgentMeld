@@ -1,22 +1,8 @@
-import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { DispatchPlanItem } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
 // 8.1 parseDispatchPlanToolArgs — strict LLM output validation
 // ---------------------------------------------------------------------------
-
-export interface DispatchPlanItem {
-  id: string;
-  agentId: string;
-  task: string;
-  dependsOn: string[];
-  expectedOutputs?: Array<{ id: string; type: string; description?: string }>;
-  inputs?: Array<{ fromTaskId: string; outputId: string; description?: string }>;
-  acceptanceCriteria?: string[];
-  targetPaths?: string[];
-  expectedWorkspaceChanges?: string[];
-  requiredCommands?: Array<{ command: string; description?: string; cwd?: string; timeoutMs?: number }>;
-  requiredEvidence?: string[];
-}
 
 export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
   if (!isRecord(args) || !Array.isArray(args.tasks)) {
@@ -33,17 +19,24 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
       : [];
 
     const expectedOutputs = Array.isArray(raw.expectedOutputs)
-      ? raw.expectedOutputs.map((o) => ({
-          id: readNonEmptyString((o as Record<string, unknown>).id, `task "${id}" expectedOutput id`),
-          type: String((o as Record<string, unknown>).type || "document"),
-          description: (o as Record<string, unknown>).description as string | undefined
-        }))
+      ? raw.expectedOutputs.map((o) => {
+          const output = o as Record<string, unknown>;
+          return {
+            id: readNonEmptyString(output.id, `task "${id}" expectedOutput id`),
+            type: readArtifactOutputType(output.type, `task "${id}" expectedOutput type`),
+            required: typeof output.required === "boolean" ? output.required : undefined,
+            description: output.description as string | undefined
+          };
+        })
       : undefined;
 
     const inputs = Array.isArray(raw.inputs)
       ? raw.inputs.map((i) => ({
           fromTaskId: readNonEmptyString((i as Record<string, unknown>).fromTaskId, `task "${id}" input fromTaskId`),
           outputId: readNonEmptyString((i as Record<string, unknown>).outputId, `task "${id}" input outputId`),
+          required: typeof (i as Record<string, unknown>).required === "boolean"
+            ? (i as Record<string, unknown>).required as boolean
+            : undefined,
           description: (i as Record<string, unknown>).description as string | undefined
         }))
       : undefined;
@@ -52,7 +45,9 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
       ? raw.acceptanceCriteria.map((c) => String(c))
       : undefined;
 
-    return { id, agentId, task, dependsOn, expectedOutputs, inputs, acceptanceCriteria };
+    const maxAttempts = typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined;
+
+    return { id, agentId, task, dependsOn, expectedOutputs, inputs, acceptanceCriteria, maxAttempts };
   });
 }
 
@@ -71,7 +66,8 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
 export function compileAndValidateDispatchPlan(
   rawTasks: Array<{ id: string; agentId: string; task?: string; prompt?: string; title?: string; dependsOn?: string[]; inputs?: unknown[]; expectedOutputs?: unknown[]; acceptanceCriteria?: string[]; maxAttempts?: number; targetPaths?: string[]; requiredCommands?: unknown[]; requiredEvidence?: string[] }>,
   availableAgentIds: string[],
-  orchestratorAgentId: string
+  orchestratorAgentId: string,
+  resolvedExternalTaskIds: string[] = []
 ): DispatchPlanItem[] | string {
   // Convert to DispatchPlanItem format
   const items: DispatchPlanItem[] = rawTasks.map((t) => ({
@@ -79,19 +75,27 @@ export function compileAndValidateDispatchPlan(
     agentId: t.agentId,
     task: t.task ?? t.prompt ?? "",
     dependsOn: t.dependsOn ?? [],
+    title: t.title,
+    prompt: t.prompt,
     expectedOutputs: t.expectedOutputs as DispatchPlanItem["expectedOutputs"],
     inputs: t.inputs as DispatchPlanItem["inputs"],
     acceptanceCriteria: t.acceptanceCriteria,
+    maxAttempts: t.maxAttempts,
     targetPaths: t.targetPaths,
     requiredCommands: t.requiredCommands as DispatchPlanItem["requiredCommands"],
     requiredEvidence: t.requiredEvidence
   }));
 
   // Compile: auto-add dependencies, resolve inputs
-  const compiled = compileDispatchPlan(items, availableAgentIds, orchestratorAgentId);
+  const compiled = compileDispatchPlan(items);
 
   // Validate: agentId existence, no self-dispatch, no cycles, etc.
-  const error = validateDispatchPlan(compiled, availableAgentIds, orchestratorAgentId);
+  const error = validateDispatchPlan(
+    compiled,
+    availableAgentIds,
+    orchestratorAgentId,
+    resolvedExternalTaskIds
+  );
   if (error) return error;
 
   return compiled;
@@ -101,13 +105,7 @@ export function compileAndValidateDispatchPlan(
 // 8.3 compileDispatchPlan — auto-add dependencies from text heuristics
 // ---------------------------------------------------------------------------
 
-export function compileDispatchPlan(
-  plan: DispatchPlanItem[],
-  availableAgentIds: string[],
-  orchestratorAgentId: string
-): DispatchPlanItem[] {
-  const availableSet = new Set(availableAgentIds);
-
+export function compileDispatchPlan(plan: DispatchPlanItem[]): DispatchPlanItem[] {
   return plan.map((item, index) => {
     // Keep explicit dependsOn
     const deps = new Set(item.dependsOn);
@@ -135,12 +133,7 @@ export function compileDispatchPlan(
       }
     }
 
-    // Filter out non-existent deps
-    const validDeps = Array.from(deps).filter((d) =>
-      plan.some((p) => p.id === d)
-    );
-
-    return { ...item, dependsOn: validDeps };
+    return { ...item, dependsOn: Array.from(deps) };
   });
 }
 
@@ -151,12 +144,14 @@ export function compileDispatchPlan(
 export function validateDispatchPlan(
   plan: DispatchPlanItem[],
   availableAgentIds: string[],
-  orchestratorAgentId: string
+  orchestratorAgentId: string,
+  resolvedExternalTaskIds: string[] = []
 ): string | null {
   if (plan.length === 0) return "Plan must contain at least one task.";
 
   const availableSet = new Set(availableAgentIds);
   const taskIds = new Set(plan.map((t) => t.id));
+  const knownDependencyIds = new Set([...taskIds, ...resolvedExternalTaskIds]);
 
   // Duplicate IDs
   if (taskIds.size !== plan.length) return "Duplicate task IDs found.";
@@ -176,7 +171,7 @@ export function validateDispatchPlan(
     const seenDeps = new Set<string>();
     for (const dep of task.dependsOn) {
       if (dep === task.id) return `Task "${task.id}" depends on itself.`;
-      if (!taskIds.has(dep)) return `Task "${task.id}" depends on unknown task "${dep}".`;
+      if (!knownDependencyIds.has(dep)) return `Task "${task.id}" depends on unknown task "${dep}".`;
       if (seenDeps.has(dep)) return `Task "${task.id}" has duplicate dependency "${dep}".`;
       seenDeps.add(dep);
     }
@@ -192,7 +187,7 @@ export function validateDispatchPlan(
     // Validate inputs reference existing tasks
     if (task.inputs) {
       for (const input of task.inputs) {
-        if (!taskIds.has(input.fromTaskId)) {
+        if (!knownDependencyIds.has(input.fromTaskId)) {
           return `Task "${task.id}" input references unknown task "${input.fromTaskId}".`;
         }
         const upstream = plan.find((t) => t.id === input.fromTaskId);
@@ -222,6 +217,16 @@ function readNonEmptyString(value: unknown, context: string): string {
     throw new Error(`Invalid dispatch plan: ${context} must be a non-empty string. Got: ${JSON.stringify(value)}`);
   }
   return value.trim();
+}
+
+function readArtifactOutputType(
+  value: unknown,
+  context: string
+): "web_app" | "document" | "image" | "ppt" {
+  if (value === "web_app" || value === "document" || value === "image" || value === "ppt") {
+    return value;
+  }
+  throw new Error(`Invalid dispatch plan: ${context} is invalid. Got: ${JSON.stringify(value)}`);
 }
 
 function isReviewTask(task: DispatchPlanItem): boolean {

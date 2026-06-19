@@ -109,6 +109,8 @@ export interface AppState {
   lastHeartbeatAt: number | null;
   isBootstrapping: boolean;
   composerDraft: string;
+  darkMode: boolean;
+  sidebarCollapsed: boolean;
 
   loadBootstrap: () => Promise<void>;
   createConversation: (payload?: CreateConversationPayload) => Promise<void>;
@@ -120,6 +122,9 @@ export interface AppState {
   setArtifactPanelWidth: (width: number | ((prev: number) => number)) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setComposerDraft: (draft: string) => void;
+  toggleDarkMode: () => void;
+  toggleSidebarCollapsed: () => void;
+  updateConversation: (id: string, patch: Partial<Conversation>) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   runSearch: () => Promise<void>;

@@ -67,21 +67,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
     const model = input.agent.modelId || "gpt-4.1-mini";
 
-    // Build tools
-    const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
-    if (input.toolNames.length > 0) {
-      const resolved = toolRegistry.resolve(input.toolNames);
-      for (const tool of resolved) {
-        tools.push({
-          type: "function",
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters as Record<string, unknown>
-          }
-        });
-      }
-    }
+    const tools = buildChatCompletionTools(input);
 
     // Build messages
     const messages = buildMessages(input);
@@ -236,6 +222,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
           : input.workspace.rootPath,
         agentId: input.agent.id,
         runId: input.runId,
+        parentRunId: input.parentRunId ?? null,
         abortSignal: signal
       };
 
@@ -328,6 +315,51 @@ export const customAgentAdapter: AgentPlatformAdapter = {
     };
   }
 };
+
+export function buildChatCompletionTools(
+  input: AdapterInput
+): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  if (input.toolNames.length === 0) return [];
+
+  const allowedWorkerIds = input.conversation.agentIds.filter(
+    (agentId) => agentId !== input.agent.id
+  );
+
+  return toolRegistry.resolve(input.toolNames).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.name === "plan_tasks" && input.agent.isOrchestrator
+        ? constrainPlanTaskAgentIds(tool.parameters, allowedWorkerIds)
+        : tool.parameters
+    }
+  }));
+}
+
+function constrainPlanTaskAgentIds(
+  parameters: Record<string, unknown>,
+  allowedAgentIds: string[]
+): Record<string, unknown> {
+  const cloned = JSON.parse(JSON.stringify(parameters)) as Record<string, unknown>;
+  const properties = asRecord(cloned.properties);
+  const tasks = asRecord(properties?.tasks);
+  const items = asRecord(tasks?.items);
+  const itemProperties = asRecord(items?.properties);
+  const agentId = asRecord(itemProperties?.agentId);
+  if (!agentId) return cloned;
+
+  agentId.enum = allowedAgentIds;
+  agentId.description =
+    `Exact worker agent ID. Must be one of: ${allowedAgentIds.join(", ") || "(none)"}.`;
+  return cloned;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
 
 function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];

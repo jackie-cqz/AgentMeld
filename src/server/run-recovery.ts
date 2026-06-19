@@ -3,6 +3,7 @@ import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { clearFileWrites } from "@/server/dispatch-file-writes";
 import { clearTaskResultsForRun } from "@/server/dispatch-task-results";
+import { clearRunToolEvidence } from "@/server/dispatch-tool-evidence";
 
 /**
  * P1+P2: Run lifecycle + approval recovery — called at startup.
@@ -30,6 +31,7 @@ export function recoverOrphanedRuns() {
     cancelPendingQuestionsForRun(run.id);
     clearFileWrites(run.id);
     clearTaskResultsForRun(run.id);
+    clearRunToolEvidence(run.id);
   }
 
   console.log(`[run-recovery] Marked ${orphaned.length} orphaned runs as interrupted.`);

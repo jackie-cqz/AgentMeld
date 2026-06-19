@@ -23,6 +23,17 @@ The orchestration flow MUST produce a compiled and validated task plan before la
 - **WHEN** the orchestrator calls `plan_tasks`
 - **THEN** AgentRunner parses, compiles, and validates task ids, agent ids, dependencies, and acyclicity.
 
+#### Scenario: Product creation request is underspecified
+- **WHEN** the user asks to create an app, website, tool, game, or page
+- **AND** the Orchestrator model semantically judges that unresolved high-impact choices would materially change the result
+- **THEN** the Orchestrator SHALL call `ask_user` before `plan_tasks`
+- **AND** SHALL continue planning after the structured answers are returned.
+
+#### Scenario: Product creation request is sufficiently specified
+- **WHEN** the Orchestrator model judges that the request contains enough constraints for a reliable plan
+- **OR** the user explicitly delegates remaining choices to the system
+- **THEN** the Orchestrator SHALL call `plan_tasks` without unnecessary clarification.
+
 #### Scenario: Plan text implies missing dependencies
 - **WHEN** task text references earlier task outputs but `dependsOn` omits them
 - **THEN** AgentRunner adds high-confidence inferred dependencies before dispatch

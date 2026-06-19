@@ -8,6 +8,7 @@ import { MessageParts } from "@/components/message-parts";
 import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
+import { ConversationTimeline } from "@/components/conversation-timeline";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { useAppStore } from "@/stores/app-store";
 import {
@@ -21,6 +22,7 @@ import type { AdapterName, ModelProvider } from "@/shared/types";
 
 export function ChatPanel() {
   const agents = useAppStore((state) => state.agents);
+  const darkMode = useAppStore((state) => state.darkMode);
   const activeConversationId = useAppStore((state) => state.activeConversationId);
   const conversation = useAppStore(selectActiveConversation);
   const messages = useAppStore(useShallow((state) => selectConversationMessages(state, state.activeConversationId)));
@@ -81,8 +83,8 @@ export function ChatPanel() {
   }
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-white">
-      <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+    <main className={`flex min-w-0 flex-1 flex-col ${darkMode ? "bg-slate-900" : "bg-white"}`}>
+      <header className={`flex h-[72px] shrink-0 items-center justify-between border-b px-4 ${darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}>
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex -space-x-2">
             {activeAgents.slice(0, 3).map((agent) => (
@@ -131,7 +133,8 @@ export function ChatPanel() {
         </div>
       </header>
 
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto bg-white px-4 py-6">
+      <div className="relative flex-1 overflow-hidden">
+        <div ref={scrollerRef} className="h-full overflow-y-auto px-4 py-6">
         <div className="mx-auto max-w-[760px] space-y-7">
           {messages.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
@@ -149,6 +152,8 @@ export function ChatPanel() {
             />
           ))}
         </div>
+      </div>
+      <ConversationTimeline messages={messages} scrollerRef={scrollerRef} />
       </div>
 
       <PendingApprovalPanel />
@@ -219,7 +224,7 @@ function MessageBubble({
                 : "border border-slate-200 bg-white text-slate-900 shadow-sm"
           }`}
         >
-          <MessageParts parts={message.parts} />
+          <MessageParts parts={message.parts} messageStatus={message.status} />
           {!isUser && message.runId ? <DispatchProgress messageId={message.id} /> : null}
         </div>
         {isUser && isLatestUser && message.status === "complete" ? (

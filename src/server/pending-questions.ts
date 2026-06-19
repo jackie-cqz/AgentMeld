@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingQuestion } from "@/shared/types";
 
 type AnswerResolver = (answers: Record<string, string>) => void;
@@ -43,8 +43,6 @@ export function registerPendingQuestion(
     const entry: QuestionEntry = {
       question: { id, conversationId, agentId, runId, questions, createdAt: now },
       resolver: (answers) => {
-        resolveApproval(id, true, Date.now());
-        store.delete(id);
         resolve(answers);
       }
     };
@@ -74,8 +72,11 @@ export function getAllPendingQuestions(): PendingQuestion[] {
 }
 
 export function answerQuestion(id: string, answers: Record<string, string>): boolean {
-  const entry = getStore().get(id);
+  const store = getStore();
+  const entry = store.get(id);
   if (!entry) return false;
+  if (!resolveApproval(id, true, Date.now())) return false;
+  store.delete(id);
   entry.resolver(answers);
   eventBus.publish({
     type: "ask_user.answered",
@@ -91,8 +92,9 @@ export function cancelPendingQuestionsForRun(runId: string): void {
   const store = getStore();
   for (const [id, entry] of store) {
     if (entry.question.runId === runId) {
-      entry.resolver({});
+      cancelApproval(id, Date.now());
       store.delete(id);
+      entry.resolver({});
       eventBus.publish({
         type: "ask_user.cancelled",
         conversationId: entry.question.conversationId,
@@ -106,7 +108,8 @@ export function cancelPendingQuestionsForRun(runId: string): void {
 
 export function clearPendingQuestionsForTests(): void {
   const store = getStore();
-  for (const [, entry] of store) {
+  for (const [id, entry] of store) {
+    resolveApproval(id, false, Date.now());
     entry.resolver({});
   }
   store.clear();

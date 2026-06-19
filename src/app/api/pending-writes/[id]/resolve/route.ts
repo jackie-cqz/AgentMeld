@@ -23,7 +23,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   if (parsed.data.approved) {
-    approvePendingWrite(id);
+    if (!approvePendingWrite(id)) {
+      return Response.json({ error: "Pending write was already resolved." }, { status: 409 });
+    }
     eventBus.publish({
       type: "fs_write.resolved",
       conversationId: entry.write.conversationId,
@@ -34,7 +36,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, applied: true });
   }
 
-  rejectPendingWrite(id);
+  if (!rejectPendingWrite(id)) {
+    return Response.json({ error: "Pending write was already resolved." }, { status: 409 });
+  }
   eventBus.publish({
     type: "fs_write.resolved",
     conversationId: entry.write.conversationId,

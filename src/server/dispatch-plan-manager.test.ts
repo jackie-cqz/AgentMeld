@@ -23,22 +23,22 @@ const samplePlan: DispatchPlanItem[] = [
 
 describe("dispatch-plan-manager", () => {
   it("registers a pending plan", () => {
-    const promise = registerPendingPlan("conv_1", "run_1", samplePlan);
+    const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
     expect(promise).toBeInstanceOf(Promise);
     expect(getAllPendingPlans()).toHaveLength(1);
   });
 
   it("filters plans by conversation", () => {
-    registerPendingPlan("conv_1", "run_1", samplePlan);
-    registerPendingPlan("conv_2", "run_2", []);
+    registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
+    registerPendingPlan("conv_plan_2", "run_plan_2", []);
 
-    expect(getPendingPlansForConversation("conv_1")).toHaveLength(1);
-    expect(getPendingPlansForConversation("conv_2")).toHaveLength(1);
-    expect(getPendingPlansForConversation("conv_3")).toHaveLength(0);
+    expect(getPendingPlansForConversation("conv_plan_1")).toHaveLength(1);
+    expect(getPendingPlansForConversation("conv_plan_2")).toHaveLength(1);
+    expect(getPendingPlansForConversation("conv_plan_3")).toHaveLength(0);
   });
 
   it("approving resolves the promise with approved=true", async () => {
-    const promise = registerPendingPlan("conv_1", "run_1", samplePlan);
+    const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
 
     setTimeout(() => {
       const plans = getAllPendingPlans();
@@ -50,8 +50,17 @@ describe("dispatch-plan-manager", () => {
     expect(getAllPendingPlans()).toHaveLength(0);
   });
 
+  it("allows a pending plan to be resolved only once", async () => {
+    const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
+    const id = getAllPendingPlans()[0].id;
+
+    expect(approvePlan(id)).toBe(true);
+    expect(rejectPlan(id)).toBe(false);
+    await expect(promise).resolves.toEqual({ approved: true });
+  });
+
   it("rejecting resolves the promise with approved=false", async () => {
-    const promise = registerPendingPlan("conv_1", "run_1", samplePlan);
+    const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
 
     setTimeout(() => {
       const plans = getAllPendingPlans();
@@ -63,7 +72,7 @@ describe("dispatch-plan-manager", () => {
   });
 
   it("revising returns feedback text", async () => {
-    const promise = registerPendingPlan("conv_1", "run_1", samplePlan);
+    const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
 
     setTimeout(() => {
       const plans = getAllPendingPlans();
@@ -80,9 +89,9 @@ describe("dispatch-plan-manager", () => {
   });
 
   it("cancelPendingPlansForRun removes plans", () => {
-    registerPendingPlan("conv_1", "run_1", samplePlan);
-    registerPendingPlan("conv_1", "run_2", []);
-    cancelPendingPlansForRun("run_1");
+    registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
+    registerPendingPlan("conv_plan_1", "run_plan_2", []);
+    cancelPendingPlansForRun("run_plan_1");
     expect(getAllPendingPlans()).toHaveLength(1);
   });
 });

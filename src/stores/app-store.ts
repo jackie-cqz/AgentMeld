@@ -57,6 +57,8 @@ export const useAppStore = create<AppState>()(
     lastHeartbeatAt: null,
     isBootstrapping: true,
     composerDraft: "",
+    darkMode: false,
+    sidebarCollapsed: false,
 
     async loadBootstrap() {
       set((state) => {
@@ -154,6 +156,27 @@ export const useAppStore = create<AppState>()(
     setComposerDraft(draft) {
       set((state) => {
         state.composerDraft = draft;
+      });
+    },
+
+    toggleDarkMode() {
+      set((state) => {
+        state.darkMode = !state.darkMode;
+      });
+    },
+
+    toggleSidebarCollapsed() {
+      set((state) => {
+        state.sidebarCollapsed = !state.sidebarCollapsed;
+      });
+    },
+
+    updateConversation(id, patch) {
+      set((state) => {
+        const conv = state.conversations[id];
+        if (conv) Object.assign(conv, patch);
+        // Move to top of order when updated
+        state.conversationOrder = [id, ...state.conversationOrder.filter((oid) => oid !== id)];
       });
     },
 

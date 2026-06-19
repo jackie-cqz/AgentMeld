@@ -6,6 +6,7 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { getAdapter, clearRegistryForTests } from "@/server/adapters/registry";
+import { buildChatCompletionTools } from "@/server/adapters/custom-agent-adapter";
 import type { AdapterInput } from "@/server/adapters/types";
 import type { Agent, Conversation, Workspace, Message } from "@/shared/types";
 
@@ -104,6 +105,41 @@ afterEach(() => {
 });
 
 describe("custom-agent-adapter", () => {
+  it("constrains Orchestrator plan agentId to current conversation workers", () => {
+    const base = buildAdapterInput();
+    const input = buildAdapterInput({
+      agent: {
+        ...base.agent,
+        id: "ag_orchestrator",
+        isOrchestrator: true,
+        toolNames: ["plan_tasks"]
+      },
+      conversation: {
+        ...base.conversation,
+        mode: "group",
+        agentIds: ["ag_orchestrator", "ag_pm", "ag_frontend"]
+      },
+      toolNames: ["plan_tasks"]
+    });
+
+    const tools = buildChatCompletionTools(input);
+    const planTool = tools.find(
+      (tool) => tool.type === "function" && tool.function.name === "plan_tasks"
+    );
+    expect(planTool?.type).toBe("function");
+    if (!planTool || planTool.type !== "function") {
+      throw new Error("plan_tasks function tool was not built.");
+    }
+    const parameters = planTool.function.parameters as Record<string, unknown>;
+    const properties = parameters.properties as Record<string, unknown>;
+    const tasks = properties.tasks as Record<string, unknown>;
+    const items = tasks.items as Record<string, unknown>;
+    const itemProperties = items.properties as Record<string, unknown>;
+    const agentId = itemProperties.agentId as Record<string, unknown>;
+
+    expect(agentId.enum).toEqual(["ag_pm", "ag_frontend"]);
+  });
+
   it("is registered in the adapter registry", () => {
     const adapter = getAdapter("custom");
     expect(adapter).toBeDefined();

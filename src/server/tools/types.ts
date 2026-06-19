@@ -3,6 +3,7 @@ export interface ToolContext {
   workspacePath: string;
   agentId: string;
   runId: string;
+  parentRunId?: string | null;
   abortSignal: AbortSignal;
 }
 

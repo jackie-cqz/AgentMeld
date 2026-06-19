@@ -1,5 +1,6 @@
-import { getAgent, getConversation, listMessages, listArtifacts } from "@/server/repositories";
+import { getAgent, getConversation } from "@/server/repositories";
 import { getContextBudgetPreview, runCompaction } from "@/server/conversation-context";
+import { selectCompactionWindow, serializeMessageForCompaction, chunkCompactionMessages, getArtifactTitleMap } from "@/server/context-compaction-service";
 import { eventBus } from "@/server/event-bus";
 import { newMessageId } from "@/shared/ids";
 import { getDatabase } from "@/db/client";
@@ -23,61 +24,22 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
 
-  const allMessages = listMessages(id).filter((m) => m.status === "complete");
-  if (allMessages.length < 6) {
-    return Response.json({
-      compacted: false,
-      reason: `消息太少（${allMessages.length} 条），至少需要 6 条。`
-    });
+  // P0: Use selectCompactionWindow for boundary-correct selection
+  const window = selectCompactionWindow(id);
+  if (window.blockingReason) {
+    return Response.json({ compacted: false, reason: window.blockingReason });
   }
 
-  // Skip pinned messages — they're important and should stay in context
-  const pinnedIds = new Set(conversation.pinnedMessageIds ?? []);
-  const compactable = allMessages.filter((m) => !pinnedIds.has(m.id));
+  const { sourceMessages, coveredUntilMessageId, coveredUntilCreatedAt } = window;
+  const artifactTitles = getArtifactTitleMap(id);
 
-  // Keep the last 8 messages; compress everything before that
-  const keepRecent = Math.min(8, Math.max(2, compactable.length - 6));
-  const sourceMessages = compactable.slice(0, compactable.length - keepRecent);
+  // P2: Full serialization (no 800-char truncation) + chunking
+  const rendered = sourceMessages.map((m) => ({
+    role: m.role,
+    agentName: m.agentId && conversation.agentIds.includes(m.agentId) ? m.agentId : undefined,
+    content: serializeMessageForCompaction(m, artifactTitles)
+  })).filter((m) => m.content.length > 0);
 
-  if (sourceMessages.length < 3) {
-    return Response.json({
-      compacted: false,
-      reason: "可压缩消息不足（需至少 3 条非置顶消息）。"
-    });
-  }
-
-  // Get artifact titles for rendering
-  const artifactTitles = new Map<string, string>();
-  try {
-    const artifacts = listArtifacts(id);
-    for (const art of artifacts) {
-      artifactTitles.set(art.id, art.title);
-    }
-  } catch {
-    // proceed without artifact titles
-  }
-
-  // Serialize messages for the compaction prompt
-  const rendered = sourceMessages.map((m) => {
-    const text = m.parts
-      .filter((p) => p.type === "text")
-      .map((p) => p.content)
-      .join(" ");
-    const artifactRefs = m.parts
-      .filter((p) => p.type === "artifact_ref")
-      .map((p) => `[产物: ${artifactTitles.get(p.artifactId) ?? "unknown"} (${p.artifactId})]`);
-
-    const content = [text, ...artifactRefs].filter(Boolean).join("\n");
-    const agentName = m.agentId ? conversation.agentIds.includes(m.agentId) ? m.agentId : undefined : undefined;
-
-    return {
-      role: m.role,
-      agentName,
-      content: content.slice(0, 800)
-    };
-  }).filter((m) => m.content.length > 0);
-
-  const lastSource = sourceMessages[sourceMessages.length - 1];
   const compactionAgent = conversation.agentIds
     .map((agentId) => getAgent(agentId))
     .find((agent) => agent?.adapterName === "custom" && agent.modelProvider === "deepseek")
@@ -89,8 +51,8 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   const compactionPromise = runCompaction(
     id,
     rendered,
-    lastSource.id,
-    lastSource.createdAt,
+    coveredUntilMessageId,
+    coveredUntilCreatedAt,
     sourceMessages.length,
     compactionAgent?.modelProvider ?? "deepseek",
     compactionAgent?.modelId ?? "deepseek-chat",

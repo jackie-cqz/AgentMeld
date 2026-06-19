@@ -227,6 +227,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   const adapterInput: AdapterInput = {
     conversationId: input.conversationId,
     runId: run.id,
+    parentRunId: input.parentRunId ?? null,
     agent,
     conversation,
     workspace,
@@ -449,4 +450,3 @@ function extractTextFromMessage(msg: Message): string {
     .join("\n")
     .trim();
 }
-

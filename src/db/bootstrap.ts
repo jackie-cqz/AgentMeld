@@ -261,7 +261,8 @@ function migrateLegacyTables() {
 }
 
 function createIndexes() {
-  getDatabase().exec(`
+  const db = getDatabase();
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
     CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_artifacts_conv ON artifacts(conversation_id);

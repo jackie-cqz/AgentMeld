@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
 type Resolver = (outcome: { approved: boolean; feedback?: string }) => void;
@@ -42,8 +42,6 @@ export function registerPendingPlan(
     const entry: PlanEntry = {
       plan: { id, conversationId, runId, plan, createdAt: now },
       resolver: (outcome) => {
-        resolveApproval(id, outcome.approved, Date.now());
-        store.delete(id);
         resolve(outcome);
       }
     };
@@ -71,40 +69,46 @@ export function getPendingPlansForConversation(conversationId: string): PendingD
 }
 
 export function approvePlan(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver({ approved: true });
-  return true;
+  return resolvePlan(id, { approved: true });
 }
 
 export function rejectPlan(id: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver({ approved: false });
-  return true;
+  return resolvePlan(id, { approved: false });
 }
 
 export function revisePlanWithFeedback(id: string, feedback: string): boolean {
-  const entry = getStore().get(id);
-  if (!entry) return false;
-  entry.resolver({ approved: true, feedback });
-  return true;
+  return resolvePlan(id, { approved: true, feedback });
 }
 
 export function cancelPendingPlansForRun(runId: string): void {
   const store = getStore();
   for (const [id, entry] of store) {
     if (entry.plan.runId === runId) {
-      entry.resolver({ approved: false });
+      cancelApproval(id, Date.now());
       store.delete(id);
+      entry.resolver({ approved: false });
     }
   }
 }
 
 export function clearPendingPlansForTests(): void {
   const store = getStore();
-  for (const [, entry] of store) {
+  for (const [id, entry] of store) {
+    resolveApproval(id, false, Date.now());
     entry.resolver({ approved: false });
   }
   store.clear();
+}
+
+function resolvePlan(
+  id: string,
+  outcome: { approved: boolean; feedback?: string }
+): boolean {
+  const store = getStore();
+  const entry = store.get(id);
+  if (!entry) return false;
+  if (!resolveApproval(id, outcome.approved, Date.now())) return false;
+  store.delete(id);
+  entry.resolver(outcome);
+  return true;
 }

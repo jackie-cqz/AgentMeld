@@ -107,29 +107,30 @@ export const planTasksTool: ToolDef = {
 
     // Look up conversation agents and all agents for auto-correction
     let agentMap = new Map<string, string>();
-    let allAgents: Array<{ id: string; name: string; capabilities: string[] }> = [];
+    let availableAgents: Array<{ id: string; name: string; capabilities: string[] }> = [];
     try {
       const { listAgents } = await import("@/server/repositories");
-      allAgents = listAgents();
+      const allAgents = listAgents();
       const conv = getConversation(ctx.conversationId);
       if (conv) {
-        agentMap = buildAgentAliasMap(conv.agentIds, allAgents);
+        availableAgents = allAgents.filter(
+          (agent) => conv.agentIds.includes(agent.id) && !agent.isOrchestrator
+        );
+        agentMap = buildAgentAliasMap(conv.agentIds, availableAgents);
       }
     } catch { /* proceed without auto-correction */ }
 
     // Auto-correct task agentIds (exact alias + fuzzy task-based guessing)
     const tasks = rawTasks.map((t) => ({ ...t }));
-    const correctedCount = correctAgentIds(tasks, agentMap, allAgents);
-
-    // Rebuild data with corrected tasks for validation
-    const correctedData = { reasoning, tasks };
-    const correctedArgs = { ...args, tasks: correctedData.tasks };
+    const correctedCount = correctAgentIds(tasks, agentMap, availableAgents);
 
     // Validate corrected plan
     let availableAgentIds: string[] | undefined;
     try {
       const conv = getConversation(ctx.conversationId);
-      if (conv) availableAgentIds = conv.agentIds;
+      if (conv) {
+        availableAgentIds = availableAgents.map((agent) => agent.id);
+      }
     } catch { /* proceed */ }
 
     const validation = validatePlan(tasks, availableAgentIds);
@@ -137,17 +138,14 @@ export const planTasksTool: ToolDef = {
       return { ok: false, error: validation };
     }
 
-    const msg = correctedCount > 0
-      ? `Plan accepted (${correctedCount} agent ID(s) auto-corrected).`
-      : "Plan accepted.";
-
     return {
       ok: true,
       value: {
         acknowledged: true,
         taskCount: tasks.length,
         reasoning,
-        _corrected: correctedCount > 0
+        tasks,
+        correctedCount
       }
     };
   }
@@ -446,9 +444,12 @@ function guessAgentFromTask(agentId: string, taskPrompt: string, availableAgents
   return bestScore >= 3 ? bestId : null;
 }
 
-function correctAgentIds(tasks: Array<{ agentId: string; prompt?: string; task?: string }>, aliasMap: Map<string, string>, allAgents: Array<{ id: string; name: string; capabilities: string[] }>): number {
+export function correctAgentIds(tasks: Array<{ agentId: string; prompt?: string; task?: string }>, aliasMap: Map<string, string>, allAgents: Array<{ id: string; name: string; capabilities: string[] }>): number {
   let count = 0;
   for (const t of tasks) {
+    if (allAgents.some((agent) => agent.id === t.agentId)) {
+      continue;
+    }
     const lower = t.agentId.toLowerCase();
     // 1. Exact alias match
     const corrected = aliasMap.get(lower);
@@ -503,7 +504,7 @@ export function validatePlan(
   if (tasks.length === 0) return "Plan must contain at least one task.";
 
   // Unknown agentId
-  if (availableAgentIds && availableAgentIds.length > 0) {
+  if (availableAgentIds) {
     for (const t of tasks) {
       if (!availableAgentIds.includes(t.agentId)) {
         return `Task "${t.id}" references unknown agent "${t.agentId}". Available agents: ${availableAgentIds.join(", ")}`;
@@ -556,8 +557,9 @@ export function topologicalWaves(tasks: ParsedTask[]): ParsedTask[][] {
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
 
   for (const t of tasks) {
-    inDegree.set(t.id, t.dependsOn.length);
-    for (const dep of t.dependsOn) {
+    const internalDependencies = t.dependsOn.filter((dependencyId) => taskMap.has(dependencyId));
+    inDegree.set(t.id, internalDependencies.length);
+    for (const dep of internalDependencies) {
       const list = dependents.get(dep) ?? [];
       list.push(t.id);
       dependents.set(dep, list);

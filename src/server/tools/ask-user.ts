@@ -20,7 +20,9 @@ export const askUserTool: ToolDef = {
   name: "ask_user",
   description:
     "Ask the user structured multiple-choice questions to clarify requirements. " +
-    "Use only when the agent cannot make a reasonable default decision. " +
+    "Use this before planning when the model judges that unresolved high-impact choices would " +
+    "materially change scope, behavior, visuals, technical delivery, task decomposition, or acceptance. " +
+    "Do not use it when the request is already specific or the user delegated those choices. " +
     "Each question has 2-4 options. 1-4 questions per call. " +
     "The agent run will pause until the user answers.",
   parameters: {

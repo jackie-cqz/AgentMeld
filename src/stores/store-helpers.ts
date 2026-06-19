@@ -92,13 +92,17 @@ export function finalizeRunMessages(
   runId: string,
   status: AgentRunStatus
 ) {
-  if (status !== "failed" && status !== "aborted") return;
-  const terminalStatus = status === "aborted" ? "aborted" : "error";
+  const terminalStatus = status === "failed" ? "error"
+    : status === "aborted" ? "aborted"
+    : "complete";
   for (const id of state.messageIdsByConversation[conversationId] ?? []) {
     const message = state.messages[id];
     if (!message || message.runId !== runId) continue;
     if (message.status === "streaming") message.status = terminalStatus;
 
+    // Fill any unpaired tool_use with a synthetic tool_result.
+    // This handles dropped/missed SSE tool.result events so tool cards
+    // don't stay stuck in "执行中" forever — for all run outcomes.
     const toolUseParts = message.parts.filter((part) => part.type === "tool_use");
     const toolResultCallIds = new Set(
       message.parts.filter((part) => part.type === "tool_result").map((part) => part.callId)
@@ -108,8 +112,8 @@ export function finalizeRunMessages(
         message.parts.push({
           type: "tool_result",
           callId: toolUse.callId,
-          result: `Run ${status}: tool call did not complete.`,
-          isError: true
+          result: status === "complete" ? "Tool call completed." : `Run ${status}: tool call did not complete.`,
+          isError: status !== "complete"
         });
       }
     }
