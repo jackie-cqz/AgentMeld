@@ -30,7 +30,10 @@ export function ChatPanel() {
   const latestUserId = useAppStore((state) => selectLatestUserMessageId(state, state.activeConversationId));
   const highlightedMessageId = useAppStore((state) => state.highlightedMessageId);
   const connectionStatus = useAppStore((state) => state.connectionStatus);
+  const rightPanelOpen = useAppStore((state) => state.rightPanelOpen);
+  const rightPanelMode = useAppStore((state) => state.rightPanelMode);
   const setRightPanelOpen = useAppStore((state) => state.setRightPanelOpen);
+  const setRightPanelMode = useAppStore((state) => state.setRightPanelMode);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [showContextStats, setShowContextStats] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
@@ -102,8 +105,11 @@ export function ChatPanel() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <HeaderIcon title="调度视图"><GitBranch className="h-4 w-4" /></HeaderIcon>
-          <HeaderIcon title="打开 Artifact Workspace" onClick={() => setRightPanelOpen(true)}><Layers className="h-4 w-4" /></HeaderIcon>
+          <HeaderIcon title="工作区文件" onClick={() => setRightPanelMode("files")}><GitBranch className="h-4 w-4" /></HeaderIcon>
+          <HeaderIcon title="Artifact Workspace" onClick={() => {
+            setRightPanelMode("artifact");
+            setRightPanelOpen(!rightPanelOpen || rightPanelMode !== "artifact");
+          }}><Layers className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="文件"><Folder className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="添加 Agent"><UserPlus className="h-4 w-4" /></HeaderIcon>
           <div className="relative">

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { ArtifactPanel } from "@/components/artifact-panel";
 import { ChatPanel } from "@/components/chat-panel";
 import { GlobalSearch } from "@/components/global-search";
+import { WorkspaceFileBrowser } from "@/components/workspace-file-browser";
 import { Sidebar } from "@/components/sidebar";
 import { StreamProvider } from "@/components/stream-provider";
 import { useAppStore } from "@/stores/app-store";
@@ -19,6 +20,8 @@ export function AppShell() {
 function ShellContent() {
   const isBootstrapping = useAppStore((state) => state.isBootstrapping);
   const rightPanelOpen = useAppStore((state) => state.rightPanelOpen);
+  const rightPanelMode = useAppStore((state) => state.rightPanelMode);
+  const activeConversationId = useAppStore((state) => state.activeConversationId);
   const darkMode = useAppStore((state) => state.darkMode);
 
   // Toggle dark class on <html> for Tailwind dark: variants + component conditional styles
@@ -40,7 +43,17 @@ function ShellContent() {
     <main className={`flex h-screen overflow-hidden ${darkMode ? "bg-slate-900 text-slate-100" : "bg-[#f7f8fb] text-slate-950"}`}>
       <Sidebar />
       <ChatPanel />
-      {rightPanelOpen ? <ArtifactPanel /> : null}
+      {rightPanelOpen ? (
+        rightPanelMode === "files" && activeConversationId ? (
+          <WorkspaceFileBrowser
+            conversationId={activeConversationId}
+            darkMode={darkMode}
+            onClose={() => useAppStore.getState().setRightPanelOpen(false)}
+          />
+        ) : (
+          <ArtifactPanel />
+        )
+      ) : null}
       <GlobalSearch />
     </main>
   );

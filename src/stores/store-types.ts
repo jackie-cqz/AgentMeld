@@ -104,6 +104,7 @@ export interface AppState {
   activeArtifactId: string | null;
   sidebarTab: SidebarTab;
   rightPanelOpen: boolean;
+  rightPanelMode: "artifact" | "files";
   artifactPanelWidth: number;
   connectionStatus: ConnectionStatus;
   lastHeartbeatAt: number | null;
@@ -119,6 +120,7 @@ export interface AppState {
   setActiveArtifact: (artifactId: string | null) => void;
   setSidebarTab: (tab: SidebarTab) => void;
   setRightPanelOpen: (open: boolean) => void;
+  setRightPanelMode: (mode: "artifact" | "files") => void;
   setArtifactPanelWidth: (width: number | ((prev: number) => number)) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setComposerDraft: (draft: string) => void;

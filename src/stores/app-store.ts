@@ -52,6 +52,7 @@ export const useAppStore = create<AppState>()(
     activeArtifactId: null,
     sidebarTab: "conversations",
     rightPanelOpen: true,
+    rightPanelMode: "artifact",
     artifactPanelWidth: DEFAULT_ARTIFACT_PANEL_WIDTH,
     connectionStatus: "connecting",
     lastHeartbeatAt: null,
@@ -137,6 +138,13 @@ export const useAppStore = create<AppState>()(
     setRightPanelOpen(open) {
       set((state) => {
         state.rightPanelOpen = open;
+      });
+    },
+
+    setRightPanelMode(mode) {
+      set((state) => {
+        state.rightPanelMode = mode;
+        state.rightPanelOpen = true;
       });
     },
 
