@@ -64,14 +64,15 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     // Publish single start event (not per-chunk)
     eventBus.publish({ type: "compaction.start", conversationId: id, timestamp: Date.now(), sourceMessageCount: sourceMessages.length });
 
+    // Route already published compaction.start; all runCompaction calls skip their own start event
     if (serializedChunks.length <= 1) {
       const msgs = serializedChunks.length === 1 ? serializedChunks[0].messages : [];
       if (msgs.length === 0) throw new Error("No messages to compact.");
       if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
-      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url, undefined, false, abortSignal.signal);
+      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url, undefined, false, abortSignal.signal, true);
     }
 
-    // Multi-chunk: rolling — intermediate chunks skip start events and DB store
+    // Multi-chunk: rolling — all chunks skip start events (route already published)
     let rollingSummary: string | null = null;
     for (let i = 0; i < serializedChunks.length; i++) {
       if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
@@ -82,14 +83,12 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         isLast ? coveredUntilMessageId : chunk.endMessageId,
         isLast ? coveredUntilCreatedAt : sourceMessages.find((m) => m.id === chunk.endMessageId)?.createdAt ?? coveredUntilCreatedAt,
         sourceMessages.length, provider, model, key, url,
-        rollingSummary, !isLast, abortSignal.signal, !isLast
+        rollingSummary, !isLast, abortSignal.signal, true
       );
       rollingSummary = result.summary;
     }
     return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
   })();
-  // Store the controller for cancellation
-  (compactionPromise as unknown as { _abort: AbortController })._abort = abortSignal;
 
   // Post a system message noting compaction has started
   const now = Date.now();

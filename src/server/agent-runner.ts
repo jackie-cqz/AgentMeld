@@ -244,10 +244,12 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
           tokenBudget: 0  // 0 budget = only summary + pinned, no recent
         });
       } else {
-        // Pass compute余额 to history builder
+        // Pass recent-only budget: buildHistoryFor includes pinned in its total,
+        // but pinned is immune to truncation. Add pinnedTokens back so the
+        // effective recent budget = remainingTokens.
         history = await buildHistoryFor(agent.id, input.conversationId, {
           excludeMessageId: input.triggerMessage.id,
-          tokenBudget: Math.max(0, budget.remainingTokens)
+          tokenBudget: Math.max(0, budget.remainingTokens + pinnedTokens)
         });
       }
     } catch (err) {

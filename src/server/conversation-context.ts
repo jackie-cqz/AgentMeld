@@ -116,13 +116,13 @@ export async function buildHistoryFor(
 
   // 7. Token budget truncation
   const budget = options?.tokenBudget;
-  if (budget && budget > 0) {
+  if (budget !== undefined && budget >= 0) {
     let totalTokens = items.reduce((s, it) => s + it.tokens, 0);
-    // Drop oldest non-pinned items first
+    // Drop oldest non-pinned items first. budget=0 → drop all non-pinned.
     for (let i = 0; i < items.length && totalTokens > budget; i++) {
       if (items[i].pinned) continue;
       totalTokens -= items[i].tokens;
-      items[i] = { ...items[i], tokens: -1 }; // mark as dropped
+      items[i] = { ...items[i], tokens: -1 };
     }
   }
 
