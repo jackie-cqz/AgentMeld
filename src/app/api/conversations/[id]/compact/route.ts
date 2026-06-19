@@ -33,12 +33,18 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   const { sourceMessages, coveredUntilMessageId, coveredUntilCreatedAt } = window;
   const artifactTitles = getArtifactTitleMap(id);
 
-  // P2: Full serialization (no 800-char truncation) + chunking
-  const rendered = sourceMessages.map((m) => ({
-    role: m.role,
-    agentName: m.agentId && conversation.agentIds.includes(m.agentId) ? m.agentId : undefined,
-    content: serializeMessageForCompaction(m, artifactTitles)
-  })).filter((m) => m.content.length > 0);
+  // P2: Full serialization (no 800-char truncation) + chunk into ~10K token groups
+  const { chunks } = chunkCompactionMessages(sourceMessages, artifactTitles);
+  const serializedChunks = chunks.map((c) => ({
+    messages: c.messages.map((m) => ({
+      role: m.role,
+      agentName: m.agentId && conversation.agentIds.includes(m.agentId) ? m.agentId : undefined,
+      content: serializeMessageForCompaction(m, artifactTitles)
+    })).filter((m) => m.content.length > 0),
+    startMessageId: c.startMessageId,
+    endMessageId: c.endMessageId,
+    estimatedTokens: c.estimatedTokens
+  }));
 
   const compactionAgent = conversation.agentIds
     .map((agentId) => getAgent(agentId))
@@ -47,18 +53,40 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       .map((agentId) => getAgent(agentId))
       .find((agent) => agent?.adapterName === "custom");
 
-  // Run compaction asynchronously — return 202 immediately
-  const compactionPromise = runCompaction(
-    id,
-    rendered,
-    coveredUntilMessageId,
-    coveredUntilCreatedAt,
-    sourceMessages.length,
-    compactionAgent?.modelProvider ?? "deepseek",
-    compactionAgent?.modelId ?? "deepseek-chat",
-    compactionAgent?.apiKey,
-    compactionAgent?.apiBaseUrl
-  );
+  // P2: Rolling summary — process chunks sequentially, each building on the last
+  const compactionPromise = (async () => {
+    const provider = compactionAgent?.modelProvider ?? "deepseek";
+    const model = compactionAgent?.modelId ?? "deepseek-chat";
+    const key = compactionAgent?.apiKey;
+    const url = compactionAgent?.apiBaseUrl;
+
+    // Single chunk or first chunk → normal compaction
+    if (serializedChunks.length <= 1) {
+      const msgs = serializedChunks.length === 1 ? serializedChunks[0].messages : [];
+      if (msgs.length === 0) throw new Error("No messages to compact.");
+      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url);
+    }
+
+    // Multi-chunk: rolling compaction
+    // chunk1 → summary1, summary1 + chunk2 → summary2, ..., → final stored
+    let rollingSummary: string | null = null;
+    for (let i = 0; i < serializedChunks.length; i++) {
+      const chunk = serializedChunks[i];
+      const isLast = i === serializedChunks.length - 1;
+      const result = await runCompaction(
+        id,
+        chunk.messages,
+        isLast ? coveredUntilMessageId : chunk.endMessageId,
+        isLast ? coveredUntilCreatedAt : sourceMessages.find((m) => m.id === chunk.endMessageId)?.createdAt ?? coveredUntilCreatedAt,
+        sourceMessages.length,
+        provider, model, key, url,
+        rollingSummary,
+        !isLast  // skipDbStore for intermediate chunks
+      );
+      rollingSummary = result.summary;
+    }
+    return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
+  })();
 
   // Post a system message noting compaction has started
   const now = Date.now();
@@ -163,6 +191,6 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   return Response.json({
     compacted: true,
     sourceMessageCount: sourceMessages.length,
-    coveredUntilMessageId: lastSource.id
+    coveredUntilMessageId: coveredUntilMessageId
   });
 }

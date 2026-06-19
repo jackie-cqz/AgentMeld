@@ -15,6 +15,7 @@ import {
   updateRunStatus
 } from "@/server/repositories";
 import { buildHistoryFor } from "@/server/conversation-context";
+import { getLatestSummary } from "@/server/context-compaction-service";
 import { executeOrchestrator } from "@/server/orchestrator-service";
 import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
@@ -211,8 +212,13 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   if (!input.parentRunId) {
     try {
       const limits = getModelLimits(agent.modelProvider);
+      // P1: Include summary tokens in the budget calculation
+      const summary = getLatestSummary(input.conversationId);
+      const summaryTokens = summary ? estimateTokens(summary.summary) : 0;
       const promptEstimate = estimateTokens(systemPrompt)
-        + estimateTokens(extractTextFromMessage(input.triggerMessage)) + 512;
+        + estimateTokens(extractTextFromMessage(input.triggerMessage))
+        + summaryTokens
+        + 512; // protocol margin
       const historyBudget = Math.max(0, limits.contextWindow - limits.outputReserve - promptEstimate);
       history = await buildHistoryFor(agent.id, input.conversationId, {
         excludeMessageId: input.triggerMessage.id,

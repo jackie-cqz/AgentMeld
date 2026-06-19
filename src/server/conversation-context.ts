@@ -156,8 +156,12 @@ export function getContextBudgetPreview(
   const messages = listMessages(conversationId).filter((message) => message.status === "complete");
   const pinnedIds = new Set(conversation.pinnedMessageIds);
   const pinnedMessages = messages.filter((message) => pinnedIds.has(message.id));
+  // P0: Use messageId boundary, not createdAt
   const afterCovered = summary
-    ? messages.filter((message) => message.createdAt > summary.coveredUntilCreatedAt)
+    ? (() => {
+        const coverIdx = messages.findIndex((m) => m.id === summary.coveredUntilMessageId);
+        return coverIdx >= 0 ? messages.slice(coverIdx + 1) : messages;
+      })()
     : messages;
   const recentMessages = afterCovered
     .filter((message) => !pinnedIds.has(message.id))
@@ -338,9 +342,14 @@ export async function runCompaction(
   modelProvider: string = "deepseek",
   modelId: string = "deepseek-chat",
   apiKeyOverride?: string | null,
-  apiBaseUrl?: string | null
+  apiBaseUrl?: string | null,
+  existingSummaryOverride?: string | null,
+  skipDbStore: boolean = false
 ): Promise<{ summary: string; tokenEstimate: number }> {
-  const existingSummary = getLatestContextSummary(conversationId);
+  // P2: Use provided rolling summary (multi-chunk) or DB summary (single-chunk)
+  const existingSummary = existingSummaryOverride !== null && existingSummaryOverride !== undefined
+    ? { summary: existingSummaryOverride }
+    : getLatestContextSummary(conversationId);
 
   // Publish start event
   eventBus.publish({
@@ -407,6 +416,13 @@ export async function runCompaction(
     const summary = data.choices?.[0]?.message?.content?.trim();
     if (!summary) {
       throw new Error("上下文压缩模型没有返回摘要内容。");
+    }
+
+    // P2: Intermediate chunks don't store to DB — only the last chunk does
+    if (skipDbStore) {
+      const tokenEstimate = Math.ceil(summary.length / 4);
+      eventBus.publish({ type: "compaction.progress", conversationId, timestamp: Date.now(), stage: "storing", detail: "中间 chunk 摘要已生成..." });
+      return { summary, tokenEstimate };
     }
 
     return storeCompactionResult(conversationId, summary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, modelProvider, modelId);

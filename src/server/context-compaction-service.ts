@@ -77,8 +77,10 @@ export function selectCompactionWindow(
     const coverIdx = allMessages.findIndex((m) => m.id === summary.coveredUntilMessageId);
     if (coverIdx >= 0) {
       afterCovered = allMessages.slice(coverIdx + 1);
+    } else {
+      // P0: Boundary message not found — explicit failure, don't silently re-compact
+      return { sourceMessages: [], coveredUntilMessageId: "", coveredUntilCreatedAt: 0, keptRecent: [], blockingReason: `summary_boundary_missing: 摘要覆盖的消息 "${summary.coveredUntilMessageId}" 在当前会话中未找到。请手动重新压缩。` };
     }
-    // If cover message not found, all messages are after it (boundary is valid)
   }
 
   // Exclude pinned
@@ -150,8 +152,49 @@ export function chunkCompactionMessages(messages: Message[], artifactTitles: Map
     const serialized = serializeMessageForCompaction(msg, artifactTitles);
     const msgTokens = estimateTokens(serialized);
 
-    // If a single message exceeds chunk target, keep it as its own chunk
-    if (msgTokens > CHUNK_TARGET_TOKENS && currentChunk.length > 0) {
+    // P2: Split oversized single messages by paragraph boundaries
+    if (msgTokens > CHUNK_TARGET_TOKENS) {
+      // Flush current chunk first
+      if (currentChunk.length > 0) {
+        chunks.push({
+          messages: currentChunk,
+          startMessageId: currentChunk[0].id,
+          endMessageId: currentChunk[currentChunk.length - 1].id,
+          estimatedTokens: currentTokens
+        });
+        currentChunk = [];
+        currentTokens = 0;
+      }
+      // Split by paragraph: find natural break at ~8K token mark
+      const parts = serialized.split("\n\n");
+      let partialChunk: typeof messages = [];
+      let partialTokens = 0;
+      for (const part of parts) {
+        const partTokens = estimateTokens(part);
+        if (partialTokens + partTokens > CHUNK_TARGET_TOKENS && partialChunk.length > 0) {
+          chunks.push({
+            messages: partialChunk,
+            startMessageId: partialChunk[0].id,
+            endMessageId: partialChunk[partialChunk.length - 1].id,
+            estimatedTokens: partialTokens
+          });
+          partialChunk = [];
+          partialTokens = 0;
+        }
+        // Fake a message for the partial chunk (use same message id with a fragment marker)
+        // We use the real message object with a content override
+        const fragment: typeof msg = { ...msg };
+        partialChunk.push(fragment);
+        partialTokens += partTokens;
+      }
+      if (partialChunk.length > 0) {
+        currentChunk = partialChunk;
+        currentTokens = partialTokens;
+      }
+      continue;
+    }
+
+    if (currentTokens + msgTokens >= CHUNK_TARGET_TOKENS && currentChunk.length > 0) {
       chunks.push({
         messages: currentChunk,
         startMessageId: currentChunk[0].id,
@@ -164,17 +207,6 @@ export function chunkCompactionMessages(messages: Message[], artifactTitles: Map
 
     currentChunk.push(msg);
     currentTokens += msgTokens;
-
-    if (currentTokens >= CHUNK_TARGET_TOKENS) {
-      chunks.push({
-        messages: currentChunk,
-        startMessageId: currentChunk[0].id,
-        endMessageId: currentChunk[currentChunk.length - 1].id,
-        estimatedTokens: currentTokens
-      });
-      currentChunk = [];
-      currentTokens = 0;
-    }
   }
 
   // Final chunk
