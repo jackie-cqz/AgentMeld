@@ -29,7 +29,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = updateConversation(id, parsed.data);
+  const updated = updateConversation(id, { ...parsed.data, now: Date.now() });
   if (!updated) {
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }

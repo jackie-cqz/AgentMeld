@@ -980,6 +980,17 @@ export function buildContinuationPrompt(
   return `${basePrompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${lastError}. Fix the issues and try again.`;
 }
 
+function publishOrchestratorFailed(input: OrchestratorInput, error: string) {
+  eventBus.publish({
+    type: "run.end",
+    conversationId: input.conversationId,
+    timestamp: Date.now(),
+    runId: input.orchestratorRunId,
+    status: "failed",
+    error
+  });
+}
+
 type AssessResult =
   | { mode: "direct" }
   | { mode: "plan"; plan: { reasoning: string; tasks: ParsedTask[] } };
@@ -991,22 +1002,25 @@ async function runOrchestratorAssess(
   const agents = listAgents();
   const agent = agents.find((a) => a.id === input.orchestratorAgentId);
   if (!agent || agent.adapterName !== "custom") {
-    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-    return { mode: "plan", plan: demoPlan };
+    createSystemMessage(input.conversationId, "⚠️ Orchestrator 需要使用 Custom Adapter。");
+    publishOrchestratorFailed(input, "Orchestrator agent is not a custom adapter.");
+    return { mode: "direct" };
   }
 
   const conversation = getConversation(input.conversationId);
   const workspace = getWorkspaceForConversation(input.conversationId);
   if (!conversation || !workspace) {
-    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-    return { mode: "plan", plan: demoPlan };
+    createSystemMessage(input.conversationId, "⚠️ 会话或工作区未找到。");
+    publishOrchestratorFailed(input, "Conversation or workspace not found.");
+    return { mode: "direct" };
   }
 
   const settings = getSettings();
   const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
   if (!apiKey) {
-    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-    return { mode: "plan", plan: demoPlan };
+    createSystemMessage(input.conversationId, "⚠️ 缺少 DeepSeek API Key，请在设置中配置。");
+    publishOrchestratorFailed(input, "No API key configured.");
+    return { mode: "direct" };
   }
 
   const otherAgents = agents.filter((a) => !a.isOrchestrator && input.availableAgentIds.includes(a.id));
@@ -1087,11 +1101,11 @@ async function runOrchestratorAssess(
     if (capturedPlan) {
       // proceed to plan validation below
     } else {
-      // Stream error without a plan — fall back to demo plan
+      // Stream error without a plan — fail the run
       const errorMsg = err instanceof Error ? err.message : String(err);
       createSystemMessage(input.conversationId, `⚠️ Orchestrator 调用失败：${errorMsg.slice(0, 200)}`);
-      const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-      return { mode: "plan", plan: demoPlan };
+      publishOrchestratorFailed(input, `provider: ${errorMsg.slice(0, 200)}`);
+      return { mode: "direct" };
     }
   }
 
@@ -1099,17 +1113,18 @@ async function runOrchestratorAssess(
   if (capturedPlan) {
     const planResult = parsePlanArgs(capturedPlan);
     if (typeof planResult === "string") {
-      createSystemMessage(input.conversationId, `⚠️ Plan 校验失败：${planResult}，使用 demo plan`);
-      const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-      return { mode: "plan", plan: demoPlan };
+      createSystemMessage(input.conversationId, `⚠️ Plan 校验失败：${planResult}`);
+      publishOrchestratorFailed(input, `invalid_plan: ${planResult}`);
+      return { mode: "direct" };
     }
     return { mode: "plan", plan: planResult };
   }
 
-  // Plan was attempted but failed → fall back to demo plan
+  // Plan was attempted but failed — fail the run
   if (planWasAttempted) {
-    const demoPlan = buildDemoPlan(input.availableAgentIds, input.triggerMessage);
-    return { mode: "plan", plan: demoPlan };
+    createSystemMessage(input.conversationId, "⚠️ Orchestrator 未能生成有效计划，请重试或简化需求。");
+    publishOrchestratorFailed(input, "orchestrator_contract: plan_tasks failed");
+    return { mode: "direct" };
   }
 
   // No plan_tasks detected → LLM responded directly (simple chat)

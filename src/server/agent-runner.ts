@@ -11,6 +11,7 @@ import {
   getWorkspaceForConversation,
   listMessages,
   listChildRunIds,
+  updateMessageParts,
   updateMessageStatus,
   updateRunStatus
 } from "@/server/repositories";
@@ -234,14 +235,23 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         systemTokens, summaryTokens, pinnedTokens, currentTurnTokens
       );
 
-      // P1: Pinned overflow — don't silently send a guaranteed-to-fail request
+      // P0.4: Pinned overflow — reject before calling adapter
+      const fixedCost = systemTokens + summaryTokens + pinnedTokens + currentTurnTokens + budget.protocolMargin + limits.outputReserve;
+      if (fixedCost > limits.contextWindow && pinnedTokens > 0) {
+        // Pinned context alone exceeds the model window — don't call adapter
+        const errorText = `上下文超出模型窗口限制。置顶消息占用约 ${pinnedTokens} tokens（${conversation?.pinnedMessageIds.length ?? 0} 条），系统提示 ${systemTokens} tokens，摘要 ${summaryTokens} tokens，当前消息 ${currentTurnTokens} tokens。总计约 ${fixedCost} tokens，超过 ${limits.contextWindow} 窗口。请取消部分置顶消息或缩短当前输入后重试。`;
+        message = { ...message, parts: [{ type: "text", content: `⚠️ ${errorText}` }], updatedAt: Date.now() };
+        updateMessageParts(message.id, message.parts, Date.now());
+        completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "unknown", inputTokens: 0, outputTokens: 0 });
+        activeRuns.delete(run.id);
+        return;
+      }
+
       if (budget.remainingTokens <= 0 && pinnedTokens > 0) {
-        console.warn("[agent-runner] Pinned messages exceed context budget." +
-          ` pinned=${pinnedTokens} system=${systemTokens} summary=${summaryTokens} window=${limits.contextWindow}`);
-        // Proceed with pinned messages only as durable context, skip recent
+        // Recent budget exhausted but pinned+system+summary still within window
         history = await buildHistoryFor(agent.id, input.conversationId, {
           excludeMessageId: input.triggerMessage.id,
-          tokenBudget: 0  // 0 budget = only summary + pinned, no recent
+          tokenBudget: 0
         });
       } else {
         // Pass recent-only budget: buildHistoryFor includes pinned in its total,
