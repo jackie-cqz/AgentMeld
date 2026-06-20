@@ -138,6 +138,29 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS context_compaction_jobs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      base_summary_id TEXT,
+      result_summary_id TEXT,
+      source_start_message_id TEXT NOT NULL,
+      source_end_message_id TEXT NOT NULL,
+      source_message_count INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL DEFAULT 0,
+      completed_chunk_count INTEGER NOT NULL DEFAULT 0,
+      model_provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      error_category TEXT,
+      error TEXT,
+      retryable INTEGER NOT NULL DEFAULT 0,
+      started_at INTEGER,
+      finished_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS conversation_context_summaries (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -276,6 +299,14 @@ function createIndexes() {
       ON pending_approvals(conversation_id, status);
     CREATE INDEX IF NOT EXISTS idx_pending_approvals_run
       ON pending_approvals(run_id);
+
+    CREATE INDEX IF NOT EXISTS idx_compaction_jobs_conversation
+      ON context_compaction_jobs(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_compaction_jobs_status
+      ON context_compaction_jobs(status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_compaction_jobs_active
+      ON context_compaction_jobs(conversation_id)
+      WHERE status IN ('queued', 'running');
   `);
 
   // P1: Migration for existing DBs that may lack the new columns/table

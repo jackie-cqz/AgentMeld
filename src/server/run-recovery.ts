@@ -1,4 +1,5 @@
 import { markRunInterrupted, listOrphanedRunningRuns, interruptAllPendingApprovals, cancelApprovalsForRun } from "@/server/repositories";
+import { recoverCompactionJobs } from "@/server/context-compaction-service";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { clearFileWrites } from "@/server/dispatch-file-writes";
@@ -18,6 +19,12 @@ export function recoverOrphanedRuns() {
 
   // P2: First, mark all pending approvals in DB as interrupted
   interruptAllPendingApprovals(now);
+
+  // P1: Recover orphaned compaction jobs
+  const recoveredJobs = recoverCompactionJobs(now);
+  if (recoveredJobs > 0) {
+    console.log(`[run-recovery] Marked ${recoveredJobs} orphaned compaction jobs as interrupted.`);
+  }
 
   const orphaned = listOrphanedRunningRuns();
   if (orphaned.length === 0) return;

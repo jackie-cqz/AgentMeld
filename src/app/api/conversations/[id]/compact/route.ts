@@ -1,8 +1,14 @@
 import { getAgent, getConversation } from "@/server/repositories";
 import { getContextBudgetPreview, runCompaction } from "@/server/conversation-context";
-import { selectCompactionWindow, serializeMessageForCompaction, chunkCompactionMessages, getArtifactTitleMap } from "@/server/context-compaction-service";
+import {
+  selectCompactionWindow, serializeMessageForCompaction, chunkCompactionMessages, getArtifactTitleMap,
+  createCompactionJob, startCompactionJob, completeCompactionJob, failCompactionJob,
+  abortCompactionJob, getActiveCompactionJob, getCompactionJob, listCompactionJobs,
+  setCompactionJobController, removeCompactionJobController, updateCompactionJobProgress,
+  type CompactionJob
+} from "@/server/context-compaction-service";
 import { eventBus } from "@/server/event-bus";
-import { newMessageId } from "@/shared/ids";
+import { newMessageId, newContextSummaryId } from "@/shared/ids";
 import { getDatabase } from "@/db/client";
 
 export const dynamic = "force-dynamic";
@@ -13,18 +19,26 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   if (!preview) {
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
-  return Response.json({ preview });
+  const activeJob = getActiveCompactionJob(id);
+  const recentJobs = listCompactionJobs(id);
+  return Response.json({ preview, activeJob, recentJobs });
 }
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
+  const now = Date.now();
 
   const conversation = getConversation(id);
   if (!conversation) {
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
 
-  // P0: Use selectCompactionWindow for boundary-correct selection
+  // P1: Check for existing active job
+  const existingJob = getActiveCompactionJob(id);
+  if (existingJob) {
+    return Response.json({ job: existingJob, compacted: false, reason: "已有进行中的压缩任务。" });
+  }
+
   const window = selectCompactionWindow(id);
   if (window.blockingReason) {
     return Response.json({ compacted: false, reason: window.blockingReason });
@@ -32,167 +46,82 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
   const { sourceMessages, coveredUntilMessageId, coveredUntilCreatedAt } = window;
   const artifactTitles = getArtifactTitleMap(id);
-
-  // P2: Full serialization (no 800-char truncation) + chunk into ~10K token groups
   const { chunks } = chunkCompactionMessages(sourceMessages, artifactTitles);
-  const serializedChunks = chunks.map((c) => ({
-    messages: c.messages.map((m) => ({
-      role: m.role,
-      agentName: m.agentId && conversation.agentIds.includes(m.agentId) ? m.agentId : undefined,
-      content: serializeMessageForCompaction(m, artifactTitles)
-    })).filter((m) => m.content.length > 0),
-    startMessageId: c.startMessageId,
-    endMessageId: c.endMessageId,
-    estimatedTokens: c.estimatedTokens
-  }));
 
   const compactionAgent = conversation.agentIds
     .map((agentId) => getAgent(agentId))
     .find((agent) => agent?.adapterName === "custom" && agent.modelProvider === "deepseek")
-    ?? conversation.agentIds
-      .map((agentId) => getAgent(agentId))
-      .find((agent) => agent?.adapterName === "custom");
+    ?? conversation.agentIds.map((agentId) => getAgent(agentId)).find((agent) => agent?.adapterName === "custom");
+  const provider = compactionAgent?.modelProvider ?? "deepseek";
+  const model = compactionAgent?.modelId ?? "deepseek-chat";
 
-  // P2: Rolling summary — process chunks sequentially with shared abort signal
-  const abortSignal = new AbortController();
+  // P1: Create persistent job
+  const jobId = `ccj_${newMessageId()}`;
+  const jobResult = createCompactionJob(jobId, id, chunks[0]?.startMessageId ?? coveredUntilMessageId, coveredUntilMessageId, sourceMessages.length, chunks.length, provider, model, now);
+  if (typeof jobResult === "string") {
+    return Response.json({ compacted: false, reason: jobResult });
+  }
+
+  const serializedChunks = chunks.map((c) => ({
+    messages: c.messages.map((m) => ({
+      role: m.role, agentName: m.agentId && conversation.agentIds.includes(m.agentId) ? m.agentId : undefined,
+      content: serializeMessageForCompaction(m, artifactTitles)
+    })).filter((m) => m.content.length > 0),
+    startMessageId: c.startMessageId, endMessageId: c.endMessageId, estimatedTokens: c.estimatedTokens
+  }));
+
+  // P1: Abort controller for cancellation
+  const abortCtrl = new AbortController();
+  setCompactionJobController(jobId, abortCtrl);
+
+  // P1: Execute in background with job state updates
   const compactionPromise = (async () => {
-    const provider = compactionAgent?.modelProvider ?? "deepseek";
-    const model = compactionAgent?.modelId ?? "deepseek-chat";
-    const key = compactionAgent?.apiKey;
-    const url = compactionAgent?.apiBaseUrl;
+    startCompactionJob(jobId, Date.now());
 
-    // Publish single start event (not per-chunk)
-    eventBus.publish({ type: "compaction.start", conversationId: id, timestamp: Date.now(), sourceMessageCount: sourceMessages.length });
+    try {
+      eventBus.publish({ type: "compaction.start", conversationId: id, timestamp: Date.now(), sourceMessageCount: sourceMessages.length });
 
-    // Route already published compaction.start; all runCompaction calls skip their own start event
-    if (serializedChunks.length <= 1) {
-      const msgs = serializedChunks.length === 1 ? serializedChunks[0].messages : [];
-      if (msgs.length === 0) throw new Error("No messages to compact.");
-      if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
-      return runCompaction(id, msgs, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessages.length, provider, model, key, url, undefined, false, abortSignal.signal, true);
+      let rollingSummary: string | null = null;
+      for (let i = 0; i < serializedChunks.length; i++) {
+        if (abortCtrl.signal.aborted) throw Object.assign(new Error("Compaction aborted."), { category: "aborted" });
+        const chunk = serializedChunks[i];
+        const isLast = i === serializedChunks.length - 1;
+        const result = await runCompaction(id, chunk.messages,
+          isLast ? coveredUntilMessageId : chunk.endMessageId,
+          isLast ? coveredUntilCreatedAt : sourceMessages.find((m) => m.id === chunk.endMessageId)?.createdAt ?? coveredUntilCreatedAt,
+          sourceMessages.length, provider, model, compactionAgent?.apiKey, compactionAgent?.apiBaseUrl,
+          rollingSummary, !isLast, abortCtrl.signal, true);
+        rollingSummary = result.summary;
+        if (!isLast) updateCompactionJobProgress(jobId, i + 1, Date.now());
+      }
+
+      completeCompactionJob(jobId, "summary_ref", Date.now());
+      removeCompactionJobController(jobId);
+      postSystemMessage(id, `上下文压缩完成：${sourceMessages.length} 条消息 → 约 ${Math.ceil((rollingSummary?.length ?? 0) / 4)} tokens。`);
+      return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      const category = (err as { category?: string }).category ?? "provider_server";
+      const retryable = category === "provider_rate_limit" || category === "provider_timeout" || category === "provider_server";
+      failCompactionJob(jobId, category, msg.slice(0, 500), retryable, Date.now());
+      removeCompactionJobController(jobId);
+      postSystemMessage(id, `上下文压缩失败：${msg.slice(0, 200)}`);
+      throw err;
     }
-
-    // Multi-chunk: rolling — all chunks skip start events (route already published)
-    let rollingSummary: string | null = null;
-    for (let i = 0; i < serializedChunks.length; i++) {
-      if (abortSignal.signal.aborted) throw new Error("Compaction aborted.");
-      const chunk = serializedChunks[i];
-      const isLast = i === serializedChunks.length - 1;
-      const result = await runCompaction(
-        id, chunk.messages,
-        isLast ? coveredUntilMessageId : chunk.endMessageId,
-        isLast ? coveredUntilCreatedAt : sourceMessages.find((m) => m.id === chunk.endMessageId)?.createdAt ?? coveredUntilCreatedAt,
-        sourceMessages.length, provider, model, key, url,
-        rollingSummary, !isLast, abortSignal.signal, true
-      );
-      rollingSummary = result.summary;
-    }
-    return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
   })();
 
-  // Post a system message noting compaction has started
+  // Don't await — return job immediately
+  return Response.json({ compacted: true, job: jobResult, sourceMessageCount: sourceMessages.length, coveredUntilMessageId }, { status: 202 });
+}
+
+function postSystemMessage(conversationId: string, content: string) {
   const now = Date.now();
-  const systemMsgId = newMessageId();
-  getDatabase().prepare(`
-    INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    systemMsgId, id, "system", null, null,
-    JSON.stringify([{ type: "text", content: `正在压缩上下文（${sourceMessages.length} 条早期消息）...` }]),
-    "complete", JSON.stringify([]), null, now, now
-  );
+  const msgId = newMessageId();
+  getDatabase().prepare(`INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(msgId, conversationId, "system", null, null, JSON.stringify([{ type: "text", content }]), "complete", JSON.stringify([]), null, now, now);
+  eventBus.publish({ type: "message.added", conversationId, timestamp: now, message: { id: msgId, conversationId, role: "system", agentId: null, runId: null, parts: [{ type: "text", content }], status: "complete", parentMessageId: null, mentionedAgentIds: [], createdAt: now, updatedAt: now } });
+}
 
-  eventBus.publish({
-    type: "message.added",
-    conversationId: id,
-    timestamp: now,
-    message: {
-      id: systemMsgId,
-      conversationId: id,
-      role: "system",
-      agentId: null,
-      runId: null,
-      parts: [{ type: "text", content: `正在压缩上下文（${sourceMessages.length} 条早期消息）...` }],
-      status: "complete",
-      parentMessageId: null,
-      mentionedAgentIds: [],
-      createdAt: now,
-      updatedAt: now
-    }
-  });
-
-  // Wait for compaction in background — don't block response
-  compactionPromise
-    .then((result) => {
-      const doneTime = Date.now();
-      const doneMsgId = newMessageId();
-      const content = `上下文压缩完成：${sourceMessages.length} 条消息生成约 ${result.tokenEstimate} token 摘要。后续对话将自动引用此摘要。`;
-
-      getDatabase().prepare(`
-        INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        doneMsgId, id, "system", null, null,
-        JSON.stringify([{ type: "text", content }]),
-        "complete", JSON.stringify([]), null, doneTime, doneTime
-      );
-
-      eventBus.publish({
-        type: "message.added",
-        conversationId: id,
-        timestamp: doneTime,
-        message: {
-          id: doneMsgId,
-          conversationId: id,
-          role: "system",
-          agentId: null,
-          runId: null,
-          parts: [{ type: "text", content }],
-          status: "complete",
-          parentMessageId: null,
-          mentionedAgentIds: [],
-          createdAt: doneTime,
-          updatedAt: doneTime
-        }
-      });
-    })
-    .catch((err) => {
-      const errTime = Date.now();
-      const errMsgId = newMessageId();
-      const content = `上下文压缩失败：${err instanceof Error ? err.message.slice(0, 200) : "未知错误"}`;
-
-      getDatabase().prepare(`
-        INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, parent_message_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        errMsgId, id, "system", null, null,
-        JSON.stringify([{ type: "text", content }]),
-        "complete", JSON.stringify([]), null, errTime, errTime
-      );
-
-      eventBus.publish({
-        type: "message.added",
-        conversationId: id,
-        timestamp: errTime,
-        message: {
-          id: errMsgId,
-          conversationId: id,
-          role: "system",
-          agentId: null,
-          runId: null,
-          parts: [{ type: "text", content }],
-          status: "complete",
-          parentMessageId: null,
-          mentionedAgentIds: [],
-          createdAt: errTime,
-          updatedAt: errTime
-        }
-      });
-    });
-
-  return Response.json({
-    compacted: true,
-    sourceMessageCount: sourceMessages.length,
-    coveredUntilMessageId: coveredUntilMessageId
-  });
+function updateCompactionJobProgress(jobId: string, completedChunks: number, now: number) {
+  // imported from context-compaction-service
 }

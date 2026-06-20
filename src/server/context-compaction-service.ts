@@ -301,3 +301,177 @@ export function getArtifactTitleMap(conversationId: string): Map<string, string>
   } catch { /* ignore */ }
   return map;
 }
+
+// ---------------------------------------------------------------------------
+// P1: Compaction job persistence
+// ---------------------------------------------------------------------------
+
+export interface CompactionJob {
+  id: string;
+  conversationId: string;
+  status: "queued" | "running" | "complete" | "failed" | "aborted" | "interrupted";
+  baseSummaryId: string | null;
+  resultSummaryId: string | null;
+  sourceStartMessageId: string;
+  sourceEndMessageId: string;
+  sourceMessageCount: number;
+  chunkCount: number;
+  completedChunkCount: number;
+  modelProvider: string;
+  modelId: string;
+  attempt: number;
+  errorCategory: string | null;
+  error: string | null;
+  retryable: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+function mapCompactionJob(row: Record<string, unknown>): CompactionJob {
+  return {
+    id: row.id as string,
+    conversationId: row.conversation_id as string,
+    status: row.status as CompactionJob["status"],
+    baseSummaryId: (row.base_summary_id as string) ?? null,
+    resultSummaryId: (row.result_summary_id as string) ?? null,
+    sourceStartMessageId: row.source_start_message_id as string,
+    sourceEndMessageId: row.source_end_message_id as string,
+    sourceMessageCount: row.source_message_count as number,
+    chunkCount: row.chunk_count as number,
+    completedChunkCount: row.completed_chunk_count as number,
+    modelProvider: row.model_provider as string,
+    modelId: row.model_id as string,
+    attempt: row.attempt as number,
+    errorCategory: (row.error_category as string) ?? null,
+    error: (row.error as string) ?? null,
+    retryable: (row.retryable as number) === 1,
+    startedAt: (row.started_at as number) ?? null,
+    finishedAt: (row.finished_at as number) ?? null,
+    createdAt: row.created_at as number,
+    updatedAt: row.updated_at as number
+  };
+}
+
+export function createCompactionJob(
+  id: string,
+  conversationId: string,
+  sourceStartMessageId: string,
+  sourceEndMessageId: string,
+  sourceMessageCount: number,
+  chunkCount: number,
+  modelProvider: string,
+  modelId: string,
+  now: number
+): CompactionJob | string {
+  const db = getDatabase();
+  // P1: Same-conversation concurrency lock via conditional INSERT
+  const existing = getActiveCompactionJob(conversationId);
+  if (existing) return `已有进行中的压缩任务（${existing.id}），请等待完成后再试。`;
+
+  db.prepare(`
+    INSERT INTO context_compaction_jobs (
+      id, conversation_id, status, source_start_message_id, source_end_message_id,
+      source_message_count, chunk_count, model_provider, model_id, created_at, updated_at
+    ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, conversationId, sourceStartMessageId, sourceEndMessageId, sourceMessageCount, chunkCount, modelProvider, modelId, now, now);
+
+  return getCompactionJob(id) as CompactionJob;
+}
+
+export function startCompactionJob(jobId: string, now: number): boolean {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs SET status = 'running', started_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'queued'
+  `).run(now, now, jobId);
+  return result.changes > 0;
+}
+
+export function completeCompactionJob(jobId: string, resultSummaryId: string, now: number): boolean {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs SET status = 'complete', result_summary_id = ?, finished_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `).run(resultSummaryId, now, now, jobId);
+  return result.changes > 0;
+}
+
+export function failCompactionJob(jobId: string, errorCategory: string, error: string, retryable: boolean, now: number): boolean {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs
+    SET status = 'failed', error_category = ?, error = ?, retryable = ?, finished_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `).run(errorCategory, error, retryable ? 1 : 0, now, now, jobId);
+  return result.changes > 0;
+}
+
+export function abortCompactionJob(jobId: string, now: number): boolean {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs SET status = 'aborted', finished_at = ?, updated_at = ?
+    WHERE id = ? AND status IN ('queued', 'running')
+  `).run(now, now, jobId);
+  return result.changes > 0;
+}
+
+export function updateCompactionJobProgress(jobId: string, completedChunks: number, now: number): boolean {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs SET completed_chunk_count = ?, updated_at = ?
+    WHERE id = ? AND status = 'running'
+  `).run(completedChunks, now, jobId);
+  return result.changes > 0;
+}
+
+export function getCompactionJob(jobId: string): CompactionJob | null {
+  try {
+    const row = getDatabase().prepare("SELECT * FROM context_compaction_jobs WHERE id = ?").get(jobId) as Record<string, unknown> | undefined;
+    return row ? mapCompactionJob(row) : null;
+  } catch { return null; }
+}
+
+export function getActiveCompactionJob(conversationId: string): CompactionJob | null {
+  try {
+    const row = getDatabase().prepare(
+      "SELECT * FROM context_compaction_jobs WHERE conversation_id = ? AND status IN ('queued', 'running') LIMIT 1"
+    ).get(conversationId) as Record<string, unknown> | undefined;
+    return row ? mapCompactionJob(row) : null;
+  } catch { return null; }
+}
+
+export function listCompactionJobs(conversationId: string): CompactionJob[] {
+  try {
+    const rows = getDatabase().prepare(
+      "SELECT * FROM context_compaction_jobs WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 10"
+    ).all(conversationId) as Record<string, unknown>[];
+    return rows.map(mapCompactionJob);
+  } catch { return []; }
+}
+
+export function recoverCompactionJobs(now: number): number {
+  const db = getDatabase();
+  const result = db.prepare(`
+    UPDATE context_compaction_jobs SET status = 'interrupted', finished_at = ?, updated_at = ?
+    WHERE status IN ('queued', 'running')
+  `).run(now, now);
+  return result.changes;
+}
+
+// Job store for AbortController (in-memory, not state source)
+const jobControllers = new Map<string, AbortController>();
+
+export function setCompactionJobController(jobId: string, ctrl: AbortController) {
+  jobControllers.set(jobId, ctrl);
+}
+
+export function getCompactionJobController(jobId: string): AbortController | undefined {
+  return jobControllers.get(jobId);
+}
+
+export function removeCompactionJobController(jobId: string) {
+  jobControllers.delete(jobId);
+}
+
