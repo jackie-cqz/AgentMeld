@@ -102,6 +102,8 @@ export function ensureDatabase() {
       error TEXT,
       usage TEXT,
       interrupted INTEGER NOT NULL DEFAULT 0,
+      error_category TEXT,
+      retryable INTEGER NOT NULL DEFAULT 0,
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
       created_at INTEGER NOT NULL,
@@ -351,6 +353,8 @@ function createIndexes() {
   // P1: Migration for existing DBs that may lack the new columns/table
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN stage TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE agent_runs ADD COLUMN error_category TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE agent_runs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
 }
 
 function seedBuiltinAgents() {

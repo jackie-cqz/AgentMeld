@@ -70,6 +70,8 @@ export interface AgentRunRow {
   error?: string | null;
   usage: string | null;
   interrupted?: number | null;
+  error_category?: string | null;
+  retryable?: number | null;
   started_at?: number | null;
   finished_at?: number | null;
   created_at: number;
@@ -228,6 +230,8 @@ export function mapRun(row: AgentRunRow): AgentRun {
     error: row.error ?? null,
     usage: row.usage ? parseJson<UsagePayload | null>(row.usage, null) : null,
     interrupted: row.interrupted === 1,
+    errorCategory: (row.error_category as string) ?? null,
+    retryable: row.retryable === 1,
     startedAt: row.started_at ?? row.created_at,
     finishedAt: row.finished_at ?? null,
     createdAt: row.created_at,

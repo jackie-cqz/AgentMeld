@@ -282,10 +282,10 @@ export function createRun(input: CreateRunInput): AgentRun {
   return run;
 }
 
-export function updateRunStatus(runId: string, status: AgentRunStatus, usage: UsagePayload | null, now: number) {
+export function updateRunStatus(runId: string, status: AgentRunStatus, usage: UsagePayload | null, now: number, errorCategory?: string | null, retryable?: boolean) {
   getDatabase()
-    .prepare("UPDATE agent_runs SET status = ?, usage = ?, finished_at = ?, updated_at = ? WHERE id = ?")
-    .run(status, usage ? JSON.stringify(usage) : null, isTerminalRunStatus(status) ? now : null, now, runId);
+    .prepare("UPDATE agent_runs SET status = ?, usage = ?, finished_at = ?, updated_at = ?, error_category = ?, retryable = ? WHERE id = ?")
+    .run(status, usage ? JSON.stringify(usage) : null, isTerminalRunStatus(status) ? now : null, now, errorCategory ?? null, retryable ? 1 : 0, runId);
 }
 
 export function updateRunStage(runId: string, stage: string, now: number) {

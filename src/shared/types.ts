@@ -221,6 +221,8 @@ export interface AgentRun {
   error: string | null;
   usage: UsagePayload | null;
   interrupted: boolean;
+  errorCategory: string | null;
+  retryable: boolean;
   startedAt: number;
   finishedAt: number | null;
   createdAt: number;

@@ -242,7 +242,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         const errorText = `上下文超出模型窗口限制。置顶消息占用约 ${pinnedTokens} tokens（${conversation?.pinnedMessageIds.length ?? 0} 条），系统提示 ${systemTokens} tokens，摘要 ${summaryTokens} tokens，当前消息 ${currentTurnTokens} tokens。总计约 ${fixedCost} tokens，超过 ${limits.contextWindow} 窗口。请取消部分置顶消息或缩短当前输入后重试。`;
         message = { ...message, parts: [{ type: "text", content: `⚠️ ${errorText}` }], updatedAt: Date.now() };
         updateMessageParts(message.id, message.parts, Date.now());
-        completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "unknown", inputTokens: 0, outputTokens: 0 });
+        completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "unknown", inputTokens: 0, outputTokens: 0 }, "context_overflow", false);
         activeRuns.delete(run.id);
         return;
       }
@@ -339,12 +339,14 @@ function completeRun(
   message: Message,
   status: AgentRun["status"],
   error: string | null,
-  usage: NonNullable<AgentRun["usage"]>
+  usage: NonNullable<AgentRun["usage"]>,
+  errorCategory?: string | null,
+  retryable?: boolean
 ): void {
   const now = Date.now();
 
   updateMessageStatus(message.id, status === "failed" ? "error" : "complete", now);
-  updateRunStatus(run.id, status, usage, now);
+  updateRunStatus(run.id, status, usage, now, errorCategory ?? null, retryable ?? false);
 
   eventBus.publish({
     type: "run.usage",
