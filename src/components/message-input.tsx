@@ -16,6 +16,8 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
   const draft = useAppStore((state) => state.composerDraftByConversation[conversationId] ?? "");
   const setDraft = useAppStore((state) => state.setComposerDraft);
   const sendMessage = useAppStore((state) => state.sendMessage);
+  const approvalMode = useAppStore((state) => state.conversations[conversationId]?.fsWriteApprovalMode ?? "auto");
+  const loadBootstrap = useAppStore((state) => state.loadBootstrap);
   const pendingDispatchPlans = useAppStore(
     useShallow((state) => selectConversationPendingDispatchPlans(state, conversationId))
   );
@@ -132,9 +134,27 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
                 <IconButton title="附件入口">
                   <Paperclip className="h-4 w-4" />
                 </IconButton>
-                <IconButton title="审批模式">
-                  <ShieldCheck className="h-4 w-4" />
-                </IconButton>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const newMode = approvalMode === "auto" ? "review" : "auto";
+                    await fetch(`/api/conversations/${conversationId}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ fsWriteApprovalMode: newMode })
+                    });
+                    await loadBootstrap();
+                  }}
+                  className={`flex h-10 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${
+                    approvalMode === "review"
+                      ? "border-amber-200 bg-amber-50 text-amber-700"
+                      : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  }`}
+                  title={`当前：${approvalMode === "auto" ? "自动写入" : "需审批"}，点击切换`}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {approvalMode === "auto" ? "Auto" : "Review"}
+                </button>
               </>
             ) : null}
             <button
