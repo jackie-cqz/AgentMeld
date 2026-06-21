@@ -185,13 +185,28 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
           {plan.plan.map((item) => {
             const agent = agents[item.agentId];
             return (
-              <div key={item.id} className="flex items-center gap-2 text-xs text-stone-600">
-                <span className="font-mono text-stone-400">{item.id}</span>
-                <span>{item.task.slice(0, 60)}</span>
-                <span className="text-stone-400">→</span>
-                <span className="font-medium">{agent?.name ?? item.agentId}</span>
-                {item.dependsOn.length > 0 ? (
-                  <span className="text-stone-400">depends: {item.dependsOn.join(", ")}</span>
+              <div key={item.id} className="rounded-md border border-stone-100 bg-stone-50 px-2 py-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-stone-400">{item.id}</span>
+                  <span>{item.task.slice(0, 80)}</span>
+                  <span className="shrink-0 text-stone-400">→</span>
+                  <span className="font-medium text-stone-700">{agent?.name ?? item.agentId}</span>
+                  {item.dependsOn.length > 0 ? (
+                    <span className="shrink-0 text-stone-400">依赖 {item.dependsOn.join(", ")}</span>
+                  ) : null}
+                </div>
+                {(item.acceptanceCriteria?.length ?? 0) > 0 || (item.expectedOutputs?.length ?? 0) > 0 || (item.targetPaths?.length ?? 0) > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {item.acceptanceCriteria?.map((c, idx) => (
+                      <span key={idx} className="rounded bg-purple-50 px-1 py-0.5 text-[10px] text-purple-600">验收: {c}</span>
+                    ))}
+                    {item.expectedOutputs?.map((o) => (
+                      <span key={o.id} className="rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-600">{o.id} · {o.type}</span>
+                    ))}
+                    {item.targetPaths?.map((p) => (
+                      <span key={p} className="rounded bg-amber-50 px-1 py-0.5 font-mono text-[10px] text-amber-600">{p}</span>
+                    ))}
+                  </div>
                 ) : null}
               </div>
             );
