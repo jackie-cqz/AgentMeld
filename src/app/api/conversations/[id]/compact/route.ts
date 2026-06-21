@@ -95,7 +95,8 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         if (!isLast) updateCompactionJobProgress(jobId, i + 1, Date.now());
       }
 
-      completeCompactionJob(jobId, "summary_ref", Date.now());
+      const summaryId = newMessageId();
+      completeCompactionJob(jobId, summaryId, Date.now());
       removeCompactionJobController(jobId);
       postSystemMessage(id, `上下文压缩完成：${sourceMessages.length} 条消息 → 约 ${Math.ceil((rollingSummary?.length ?? 0) / 4)} tokens。`);
       return { summary: rollingSummary!, tokenEstimate: Math.ceil((rollingSummary?.length ?? 0) / 4) };
@@ -106,7 +107,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       failCompactionJob(jobId, category, msg.slice(0, 500), retryable, Date.now());
       removeCompactionJobController(jobId);
       postSystemMessage(id, `上下文压缩失败：${msg.slice(0, 200)}`);
-      throw err;
+      return { summary: "", tokenEstimate: 0 };
     }
   })();
 
@@ -122,6 +123,3 @@ function postSystemMessage(conversationId: string, content: string) {
   eventBus.publish({ type: "message.added", conversationId, timestamp: now, message: { id: msgId, conversationId, role: "system", agentId: null, runId: null, parts: [{ type: "text", content }], status: "complete", parentMessageId: null, mentionedAgentIds: [], createdAt: now, updatedAt: now } });
 }
 
-function updateCompactionJobProgress(jobId: string, completedChunks: number, now: number) {
-  // imported from context-compaction-service
-}

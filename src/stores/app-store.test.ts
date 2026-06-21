@@ -522,6 +522,8 @@ function createRun(): AgentRun {
     status: "running",
     stage: null,
     error: null,
+    errorCategory: null,
+    retryable: false,
     usage: null,
     interrupted: false,
     startedAt: 1,

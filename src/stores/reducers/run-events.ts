@@ -12,6 +12,8 @@ export function applyRunEvent(state: StoreDraft, event: StreamEvent) {
       status: "running",
       stage: null,
       error: null,
+      errorCategory: null,
+      retryable: false,
       usage: null,
       interrupted: false,
       startedAt: event.timestamp,

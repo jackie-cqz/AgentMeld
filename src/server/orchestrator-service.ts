@@ -535,7 +535,7 @@ async function runChildTask(
           outputBindings.set(`${task.id}.${outputKey}`, artifactId);
           // P2: Persist output binding to DB
           persistOutputBinding({
-            orchestratorRunId, planId: `plan_${orchestratorRunId}_init`,
+            orchestratorRunId: parentRunId, planId: `plan_${parentRunId}_init`,
             producerTaskId: task.id, outputKey, artifactId, now: Date.now()
           });
         }
