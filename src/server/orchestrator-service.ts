@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistOrchestrationTask } from "@/server/repositories";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistOrchestrationTask, persistOrchestrationPlan, persistOutputBinding, persistOrchestrationConflict } from "@/server/repositories";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/orchestrator-tools";
@@ -80,6 +80,18 @@ export async function executeOrchestrator(input: OrchestratorInput): Promise<voi
 
     // Validated plan (compiled with auto-deps)
     const compiledPlan = validationResult;
+
+    // P2: Persist plan to DB
+    const planId = `plan_${input.orchestratorRunId}_${revisionContext ? "rev" : "init"}`;
+    persistOrchestrationPlan({
+      id: planId, orchestratorRunId: input.orchestratorRunId, conversationId: input.conversationId,
+      planJson: JSON.stringify(compiledPlan),
+      revision: revisionContext ? 1 : 0,
+      status: "pending",
+      userFeedback: revisionContext || null,
+      stageAtCreation: revisionContext ? "review" : "plan",
+      now: Date.now()
+    });
 
     // Publish plan for review (use validated agent IDs)
     const planText = compiledPlan.map((t) =>
@@ -277,6 +289,17 @@ export async function executeOrchestratorPlan(
         wave: waveIndex
       }));
       allConflicts.push(...structuredConflicts);
+
+      // P2: Persist conflicts to DB
+      for (const c of structuredConflicts) {
+        persistOrchestrationConflict({
+          id: `conflict_${orchestratorRunId}_${c.path.replace(/[^a-zA-Z0-9]/g, "_")}`,
+          orchestratorRunId, planId: `plan_${orchestratorRunId}_init`,
+          path: c.path, wave: c.wave,
+          contributorsJson: JSON.stringify(c.contributors),
+          now: Date.now()
+        });
+      }
 
       // P0.3: Mark conflicting tasks as blocked, prevent downstream
       const conflictTaskIds = new Set(waveConflicts.flatMap((c) => c.contributors.map((w) => w.taskId)));
@@ -510,8 +533,12 @@ async function runChildTask(
         const art = getArtifact(artifactId);
         if (art && art.conversationId === conversationId) {
           outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+          // P2: Persist output binding to DB
+          persistOutputBinding({
+            orchestratorRunId, planId: `plan_${orchestratorRunId}_init`,
+            producerTaskId: task.id, outputKey, artifactId, now: Date.now()
+          });
         }
-        // Invalid or missing artifacts are silently dropped — downstream will see missing input
       }
     }
 

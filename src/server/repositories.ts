@@ -462,3 +462,75 @@ export function createArtifact(input: CreateArtifactInput): Artifact {
   if (!artifact) throw new Error("Artifact insert failed.");
   return artifact;
 }
+
+// ── P2: Orchestration state persistence ──
+
+export function persistOrchestrationPlan(record: {
+  id: string;
+  orchestratorRunId: string;
+  conversationId: string;
+  planJson: string;
+  revision?: number;
+  status?: string;
+  userFeedback?: string | null;
+  stageAtCreation?: string | null;
+  resumedFromRunId?: string | null;
+  now: number;
+}) {
+  getDatabase().prepare(`
+    INSERT INTO orchestration_plans (id, orchestrator_run_id, conversation_id, revision, plan_json, status, user_feedback, stage_at_creation, resumed_from_run_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    record.id, record.orchestratorRunId, record.conversationId,
+    record.revision ?? 0, record.planJson, record.status ?? "active",
+    record.userFeedback ?? null, record.stageAtCreation ?? null,
+    record.resumedFromRunId ?? null, record.now
+  );
+}
+
+export function persistOutputBinding(record: {
+  orchestratorRunId: string;
+  planId: string;
+  producerTaskId: string;
+  outputKey: string;
+  artifactId: string;
+  now: number;
+}) {
+  getDatabase().prepare(`
+    INSERT OR REPLACE INTO orchestration_output_bindings (orchestrator_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(record.orchestratorRunId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
+}
+
+export function persistOrchestrationConflict(record: {
+  id: string;
+  orchestratorRunId: string;
+  planId: string;
+  path: string;
+  wave: number;
+  contributorsJson: string;
+  now: number;
+}) {
+  getDatabase().prepare(`
+    INSERT INTO orchestration_conflicts (id, orchestrator_run_id, plan_id, path, wave, contributors_json, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'detected', ?)
+  `).run(record.id, record.orchestratorRunId, record.planId, record.path, record.wave, record.contributorsJson, record.now);
+}
+
+export function listOrchestrationPlans(orchestratorRunId: string): Array<Record<string, unknown>> {
+  return getDatabase().prepare(
+    "SELECT * FROM orchestration_plans WHERE orchestrator_run_id = ? ORDER BY revision ASC"
+  ).all(orchestratorRunId) as Array<Record<string, unknown>>;
+}
+
+export function listOutputBindings(planId: string): Array<Record<string, unknown>> {
+  return getDatabase().prepare(
+    "SELECT * FROM orchestration_output_bindings WHERE plan_id = ?"
+  ).all(planId) as Array<Record<string, unknown>>;
+}
+
+export function listOrchestrationConflicts(orchestratorRunId: string): Array<Record<string, unknown>> {
+  return getDatabase().prepare(
+    "SELECT * FROM orchestration_conflicts WHERE orchestrator_run_id = ?"
+  ).all(orchestratorRunId) as Array<Record<string, unknown>>;
+}

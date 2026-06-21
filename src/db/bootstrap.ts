@@ -138,6 +138,41 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS orchestration_plans (
+      id TEXT PRIMARY KEY,
+      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      plan_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      user_feedback TEXT,
+      stage_at_creation TEXT,
+      resumed_from_run_id TEXT,
+      created_at INTEGER NOT NULL,
+      resolved_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS orchestration_output_bindings (
+      orchestrator_run_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL,
+      producer_task_id TEXT NOT NULL,
+      output_key TEXT NOT NULL,
+      artifact_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (plan_id, producer_task_id, output_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS orchestration_conflicts (
+      id TEXT PRIMARY KEY,
+      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      wave INTEGER NOT NULL,
+      contributors_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'detected',
+      created_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS context_compaction_jobs (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
@@ -299,6 +334,10 @@ function createIndexes() {
       ON pending_approvals(conversation_id, status);
     CREATE INDEX IF NOT EXISTS idx_pending_approvals_run
       ON pending_approvals(run_id);
+
+    CREATE INDEX IF NOT EXISTS idx_orch_plans_run ON orchestration_plans(orchestrator_run_id);
+    CREATE INDEX IF NOT EXISTS idx_orch_bindings_plan ON orchestration_output_bindings(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_orch_conflicts_run ON orchestration_conflicts(orchestrator_run_id);
 
     CREATE INDEX IF NOT EXISTS idx_compaction_jobs_conversation
       ON context_compaction_jobs(conversation_id, created_at);
