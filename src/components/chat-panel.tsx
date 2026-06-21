@@ -9,6 +9,7 @@ import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
 import { ConversationTimeline } from "@/components/conversation-timeline";
+import { ConversationTabBar } from "@/components/conversation-tab-bar";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { useAppStore } from "@/stores/app-store";
 import {
@@ -141,6 +142,8 @@ export function ChatPanel() {
           </div>
         </div>
       </header>
+
+      <ConversationTabBar conversationId={conversation.id} />
 
       <div className="relative flex-1 overflow-hidden">
         <div ref={scrollerRef} className="h-full overflow-y-auto px-4 py-6">

@@ -71,7 +71,11 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
     }
   };
 
+  const openConversationFile = useAppStore((s) => s.openConversationFile);
+
   const openFile = async (filePath: string) => {
+    // P3: Open file in central tab via store
+    openConversationFile(conversationId, filePath);
     setSelectedFile(filePath);
     setContentLoading(true);
     try {

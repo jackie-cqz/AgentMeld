@@ -188,6 +188,34 @@ export const useAppStore = create<AppState>()(
       });
     },
 
+    openConversationFile(conversationId, filePath) {
+      set((state) => {
+        const files = state.openFilesByConversation[conversationId] ?? [];
+        if (!files.includes(filePath)) {
+          state.openFilesByConversation[conversationId] = [...files, filePath];
+          state.activeTabByConversation[conversationId] = `file:${filePath}`;
+        } else {
+          state.activeTabByConversation[conversationId] = `file:${filePath}`;
+        }
+      });
+    },
+
+    closeConversationFile(conversationId, filePath) {
+      set((state) => {
+        const files = (state.openFilesByConversation[conversationId] ?? []).filter((f) => f !== filePath);
+        state.openFilesByConversation[conversationId] = files;
+        if (state.activeTabByConversation[conversationId] === `file:${filePath}`) {
+          state.activeTabByConversation[conversationId] = files.length > 0 ? `file:${files[files.length - 1]}` : "chat";
+        }
+      });
+    },
+
+    setActiveConversationTab(conversationId, tabId) {
+      set((state) => {
+        state.activeTabByConversation[conversationId] = tabId;
+      });
+    },
+
     setSearchOpen(open) {
       set((state) => {
         state.searchState.isOpen = open;

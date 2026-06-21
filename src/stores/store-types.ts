@@ -127,6 +127,9 @@ export interface AppState {
   toggleDarkMode: () => void;
   toggleSidebarCollapsed: () => void;
   updateConversation: (id: string, patch: Partial<Conversation>) => void;
+  openConversationFile: (conversationId: string, filePath: string) => void;
+  closeConversationFile: (conversationId: string, filePath: string) => void;
+  setActiveConversationTab: (conversationId: string, tabId: string) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   runSearch: () => Promise<void>;
