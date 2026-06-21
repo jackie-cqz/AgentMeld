@@ -158,6 +158,7 @@ export interface Conversation {
   fsWriteApprovalMode: FsWriteApprovalMode;
   pinnedMessageIds: string[];
   archived: boolean;
+  pinnedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }

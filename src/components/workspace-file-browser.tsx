@@ -30,25 +30,29 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
 
-  const loadDir = useCallback(async (dirPath: string) => {
-    try {
-      const res = await fetch(`/api/conversations/${conversationId}/workspace-files?path=${encodeURIComponent(dirPath || ".")}`);
-      if (!res.ok) throw new Error("Failed to list files");
-      const data = await res.json() as { entries: FileEntry[] };
-      if (dirPath === ".") {
-        setEntries(data.entries);
-      } else {
-        setDirContents((prev) => new Map(prev).set(dirPath, data.entries));
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    }
+  const fetchDirectory = useCallback(async (dirPath: string) => {
+    const res = await fetch(`/api/conversations/${conversationId}/workspace-files?path=${encodeURIComponent(dirPath || ".")}`);
+    if (!res.ok) throw new Error("Failed to list files");
+    const data = await res.json() as { entries: FileEntry[] };
+    return data.entries;
   }, [conversationId]);
 
   useEffect(() => {
-    setLoading(true);
-    loadDir(".").finally(() => setLoading(false));
-  }, [loadDir]);
+    let cancelled = false;
+    void fetchDirectory(".")
+      .then((rootEntries) => {
+        if (!cancelled) setEntries(rootEntries);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchDirectory]);
 
   const toggleDir = async (dirName: string) => {
     const isExpanded = expandedDirs.has(dirName);
@@ -57,7 +61,12 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
     } else {
       setExpandedDirs((prev) => new Set(prev).add(dirName));
       if (!dirContents.has(dirName)) {
-        await loadDir(dirName);
+        try {
+          const children = await fetchDirectory(dirName);
+          setDirContents((prev) => new Map(prev).set(dirName, children));
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Unknown error");
+        }
       }
     }
   };

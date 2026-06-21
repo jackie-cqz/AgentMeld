@@ -46,6 +46,7 @@ function ShellContent() {
       {rightPanelOpen ? (
         rightPanelMode === "files" && activeConversationId ? (
           <WorkspaceFileBrowser
+            key={activeConversationId}
             conversationId={activeConversationId}
             darkMode={darkMode}
             onClose={() => useAppStore.getState().setRightPanelOpen(false)}

@@ -1,7 +1,7 @@
 import { getDatabase } from "@/db/client";
 import { getConversation, listMessages, listArtifacts } from "@/server/repositories";
 import { estimateTokens } from "@/shared/token-estimate";
-import type { Message, MessagePart } from "@/shared/types";
+import type { Message } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -311,6 +311,7 @@ export interface CompactionJob {
   conversationId: string;
   status: "queued" | "running" | "complete" | "failed" | "aborted" | "interrupted";
   baseSummaryId: string | null;
+  previousJobId: string | null;
   resultSummaryId: string | null;
   sourceStartMessageId: string;
   sourceEndMessageId: string;
@@ -335,6 +336,7 @@ function mapCompactionJob(row: Record<string, unknown>): CompactionJob {
     conversationId: row.conversation_id as string,
     status: row.status as CompactionJob["status"],
     baseSummaryId: (row.base_summary_id as string) ?? null,
+    previousJobId: (row.previous_job_id as string) ?? null,
     resultSummaryId: (row.result_summary_id as string) ?? null,
     sourceStartMessageId: row.source_start_message_id as string,
     sourceEndMessageId: row.source_end_message_id as string,
@@ -363,7 +365,12 @@ export function createCompactionJob(
   chunkCount: number,
   modelProvider: string,
   modelId: string,
-  now: number
+  now: number,
+  options?: {
+    baseSummaryId?: string | null;
+    previousJobId?: string | null;
+    attempt?: number;
+  }
 ): CompactionJob | string {
   const db = getDatabase();
   // P1: Same-conversation concurrency lock via conditional INSERT
@@ -372,10 +379,25 @@ export function createCompactionJob(
 
   db.prepare(`
     INSERT INTO context_compaction_jobs (
-      id, conversation_id, status, source_start_message_id, source_end_message_id,
-      source_message_count, chunk_count, model_provider, model_id, created_at, updated_at
-    ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, conversationId, sourceStartMessageId, sourceEndMessageId, sourceMessageCount, chunkCount, modelProvider, modelId, now, now);
+      id, conversation_id, status, base_summary_id, previous_job_id,
+      source_start_message_id, source_end_message_id, source_message_count,
+      chunk_count, model_provider, model_id, attempt, created_at, updated_at
+    ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    conversationId,
+    options?.baseSummaryId ?? null,
+    options?.previousJobId ?? null,
+    sourceStartMessageId,
+    sourceEndMessageId,
+    sourceMessageCount,
+    chunkCount,
+    modelProvider,
+    modelId,
+    options?.attempt ?? 1,
+    now,
+    now
+  );
 
   return getCompactionJob(id) as CompactionJob;
 }
@@ -386,7 +408,7 @@ export function startCompactionJob(jobId: string, now: number): boolean {
     UPDATE context_compaction_jobs SET status = 'running', started_at = ?, updated_at = ?
     WHERE id = ? AND status = 'queued'
   `).run(now, now, jobId);
-  return result.changes > 0;
+  return getRunChanges(result) > 0;
 }
 
 export function completeCompactionJob(jobId: string, resultSummaryId: string, now: number): boolean {
@@ -395,7 +417,7 @@ export function completeCompactionJob(jobId: string, resultSummaryId: string, no
     UPDATE context_compaction_jobs SET status = 'complete', result_summary_id = ?, finished_at = ?, updated_at = ?
     WHERE id = ? AND status = 'running'
   `).run(resultSummaryId, now, now, jobId);
-  return result.changes > 0;
+  return getRunChanges(result) > 0;
 }
 
 export function failCompactionJob(jobId: string, errorCategory: string, error: string, retryable: boolean, now: number): boolean {
@@ -405,7 +427,7 @@ export function failCompactionJob(jobId: string, errorCategory: string, error: s
     SET status = 'failed', error_category = ?, error = ?, retryable = ?, finished_at = ?, updated_at = ?
     WHERE id = ? AND status = 'running'
   `).run(errorCategory, error, retryable ? 1 : 0, now, now, jobId);
-  return result.changes > 0;
+  return getRunChanges(result) > 0;
 }
 
 export function abortCompactionJob(jobId: string, now: number): boolean {
@@ -414,7 +436,7 @@ export function abortCompactionJob(jobId: string, now: number): boolean {
     UPDATE context_compaction_jobs SET status = 'aborted', finished_at = ?, updated_at = ?
     WHERE id = ? AND status IN ('queued', 'running')
   `).run(now, now, jobId);
-  return result.changes > 0;
+  return getRunChanges(result) > 0;
 }
 
 export function updateCompactionJobProgress(jobId: string, completedChunks: number, now: number): boolean {
@@ -423,7 +445,7 @@ export function updateCompactionJobProgress(jobId: string, completedChunks: numb
     UPDATE context_compaction_jobs SET completed_chunk_count = ?, updated_at = ?
     WHERE id = ? AND status = 'running'
   `).run(completedChunks, now, jobId);
-  return result.changes > 0;
+  return getRunChanges(result) > 0;
 }
 
 export function getCompactionJob(jobId: string): CompactionJob | null {
@@ -457,7 +479,15 @@ export function recoverCompactionJobs(now: number): number {
     UPDATE context_compaction_jobs SET status = 'interrupted', finished_at = ?, updated_at = ?
     WHERE status IN ('queued', 'running')
   `).run(now, now);
-  return result.changes;
+  return getRunChanges(result);
+}
+
+function getRunChanges(result: unknown): number {
+  if (typeof result !== "object" || result === null || !("changes" in result)) {
+    return 0;
+  }
+  const changes = (result as { changes: unknown }).changes;
+  return typeof changes === "bigint" ? Number(changes) : typeof changes === "number" ? changes : 0;
 }
 
 // Job store for AbortController (in-memory, not state source)
@@ -474,4 +504,3 @@ export function getCompactionJobController(jobId: string): AbortController | und
 export function removeCompactionJobController(jobId: string) {
   jobControllers.delete(jobId);
 }
-

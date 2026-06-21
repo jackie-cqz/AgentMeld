@@ -1,7 +1,7 @@
 # Bug #001：Adapter 未将动态 Agent 列表发送给 DeepSeek
 
-> 发现日期：2026-06-19  
-> 严重程度：高  
+> 发现日期：2026-06-19
+> 严重程度：高
 > 影响范围：Orchestrator PLAN / Recovery / Aggregate 三个阶段
 
 ---

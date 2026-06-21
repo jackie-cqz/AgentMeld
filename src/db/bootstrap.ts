@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { BUILTIN_AGENTS } from "@/db/builtin-agents";
 import { getDataDir, getDatabase } from "@/db/client";
+import { recoverOrphanedRuns } from "@/server/run-recovery";
 import { newConversationId, newWorkspaceId } from "@/shared/ids";
 
 let bootstrapped = false;
@@ -180,6 +181,7 @@ export function ensureDatabase() {
       conversation_id TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'queued',
       base_summary_id TEXT,
+      previous_job_id TEXT,
       result_summary_id TEXT,
       source_start_message_id TEXT NOT NULL,
       source_end_message_id TEXT NOT NULL,
@@ -236,9 +238,8 @@ export function ensureDatabase() {
   seedWelcomeConversation();
 
   // P1: Recover orphaned runs from previous process (must be after tables exist)
-  import("@/server/run-recovery").then((m) => m.recoverOrphanedRuns()).catch(() => {});
-
   bootstrapped = true;
+  recoverOrphanedRuns();
 }
 
 function createMessageSearchIndex() {
@@ -355,6 +356,8 @@ function createIndexes() {
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN error_category TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN pinned_at INTEGER`); } catch { /* already exists */ }
+  ensureColumn("context_compaction_jobs", "previous_job_id", "TEXT");
 }
 
 function seedBuiltinAgents() {

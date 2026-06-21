@@ -82,4 +82,3 @@ export function applyMessageEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-

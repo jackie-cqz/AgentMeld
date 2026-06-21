@@ -62,4 +62,3 @@ export function applyDispatchEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-

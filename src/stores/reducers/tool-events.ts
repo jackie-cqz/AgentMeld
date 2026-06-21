@@ -38,4 +38,3 @@ export function applyToolEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-

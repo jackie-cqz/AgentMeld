@@ -244,4 +244,3 @@ Tests:
 - [ ] Plan revision uses human feedback, not fake replacement tasks.
 - [ ] Orchestrator tests cover happy path, missing output, retry, skipped dependency, and revision.
 - [ ] `pnpm typecheck`, `pnpm lint`, and `pnpm test` pass.
-

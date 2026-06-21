@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 const patchSchema = z.object({
   archived: z.boolean().optional(),
   title: z.string().optional(),
+  pinnedAt: z.number().nullable().optional(),
   pinnedMessageIds: z.array(z.string()).optional()
 });
 

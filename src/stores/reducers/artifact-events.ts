@@ -31,4 +31,3 @@ export function applyArtifactEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-

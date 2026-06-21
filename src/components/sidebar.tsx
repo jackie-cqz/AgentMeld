@@ -105,13 +105,13 @@ export function Sidebar() {
   };
 
   const handlePin = async (conv: Conversation) => {
-    const isPinned = (conv.pinnedMessageIds?.length ?? 0) > 0;
+    const isPinned = conv.pinnedAt !== null;
     await fetch(`/api/conversations/${conv.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinnedMessageIds: isPinned ? [] : ["__pinned__"] })
+      body: JSON.stringify({ pinnedAt: isPinned ? null : Date.now() })
     });
-    updateConversation(conv.id, { pinnedMessageIds: isPinned ? [] : ["__pinned__"] });
+    updateConversation(conv.id, { pinnedAt: isPinned ? null : Date.now() });
     setContextMenu(null);
   };
 
@@ -119,10 +119,11 @@ export function Sidebar() {
     const filtered = conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()));
     // Sort pinned to top
     return [...filtered].sort((a, b) => {
-      const aPinned = (a.pinnedMessageIds?.length ?? 0) > 0;
-      const bPinned = (b.pinnedMessageIds?.length ?? 0) > 0;
+      const aPinned = a.pinnedAt !== null;
+      const bPinned = b.pinnedAt !== null;
       if (aPinned && !bPinned) return -1;
       if (!aPinned && bPinned) return 1;
+      if (aPinned && bPinned) return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
       return 0;
     });
   }, [conversations, query]);
@@ -361,7 +362,7 @@ export function Sidebar() {
                       />
                     ) : (
                       <div className="flex items-center gap-2">
-                        {conversation.pinnedMessageIds && conversation.pinnedMessageIds.length > 0 ? (
+                        {conversation.pinnedAt !== null ? (
                           <Pin className="h-3 w-3 shrink-0 text-amber-500" />
                         ) : null}
                         {conversation.id === activeConversationId ? (
@@ -419,7 +420,7 @@ export function Sidebar() {
             onClick={() => handlePin(contextMenu.conversation)}
           >
             <Pin className="h-4 w-4" />
-            {(contextMenu.conversation.pinnedMessageIds?.length ?? 0) > 0 ? "取消置顶" : "置顶"}
+            {contextMenu.conversation.pinnedAt !== null ? "取消置顶" : "置顶"}
           </button>
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"

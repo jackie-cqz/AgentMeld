@@ -42,6 +42,7 @@ interface CreateConversationInput {
 interface UpdateConversationInput {
   title?: string;
   archived?: boolean;
+  pinnedAt?: number | null;
   pinnedMessageIds?: string[];
   fsWriteApprovalMode?: FsWriteApprovalMode;
   now: number;
@@ -149,13 +150,14 @@ export function updateConversation(conversationId: string, input: UpdateConversa
     .prepare(
       `
         UPDATE conversations
-        SET title = ?, archived = ?, pinned_message_ids = ?, fs_write_approval_mode = ?, updated_at = ?
+        SET title = ?, archived = ?, pinned_at = ?, pinned_message_ids = ?, fs_write_approval_mode = ?, updated_at = ?
         WHERE id = ?
       `
     )
     .run(
       input.title ?? current.title,
       typeof input.archived === "boolean" ? (input.archived ? 1 : 0) : current.archived ? 1 : 0,
+      input.pinnedAt !== undefined ? input.pinnedAt : current.pinnedAt ?? null,
       JSON.stringify(input.pinnedMessageIds ?? current.pinnedMessageIds),
       input.fsWriteApprovalMode ?? current.fsWriteApprovalMode,
       input.now ?? Date.now(),

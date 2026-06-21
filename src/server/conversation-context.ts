@@ -3,7 +3,7 @@ import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
-import { getLatestSummary, calculateContextBudget, validateSummaryBoundary, selectCompactionWindow } from "@/server/context-compaction-service";
+import { getLatestSummary, validateSummaryBoundary } from "@/server/context-compaction-service";
 import { newContextSummaryId } from "@/shared/ids";
 import type { Message, MessagePart } from "@/shared/types";
 
@@ -347,7 +347,7 @@ export async function runCompaction(
   skipDbStore: boolean = false,
   externalSignal?: AbortSignal,
   skipStartEvent: boolean = false
-): Promise<{ summary: string; tokenEstimate: number }> {
+): Promise<{ summary: string; tokenEstimate: number; summaryId: string | null }> {
   const existingSummary = existingSummaryOverride !== null && existingSummaryOverride !== undefined
     ? { summary: existingSummaryOverride }
     : getLatestContextSummary(conversationId);
@@ -425,7 +425,7 @@ export async function runCompaction(
     if (skipDbStore) {
       const tokenEstimate = Math.ceil(summary.length / 4);
       eventBus.publish({ type: "compaction.progress", conversationId, timestamp: Date.now(), stage: "storing", detail: "中间 chunk 摘要已生成..." });
-      return { summary, tokenEstimate };
+      return { summary, tokenEstimate, summaryId: null };
     }
 
     return storeCompactionResult(conversationId, summary, coveredUntilMessageId, coveredUntilCreatedAt, sourceMessageCount, modelProvider, modelId);
@@ -448,9 +448,10 @@ async function storeCompactionResult(
   sourceMessageCount: number,
   modelProvider: string | null,
   modelId: string | null
-): Promise<{ summary: string; tokenEstimate: number }> {
+): Promise<{ summary: string; tokenEstimate: number; summaryId: string }> {
   const now = Date.now();
   const tokenEstimate = Math.ceil(summary.length / 4);
+  const summaryId = newContextSummaryId();
 
   // P0: Validate boundary before saving
   const boundaryError = validateSummaryBoundary(conversationId, coveredUntilMessageId);
@@ -475,7 +476,7 @@ async function storeCompactionResult(
       model_provider, model_id, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    newContextSummaryId(), conversationId, summary,
+    summaryId, conversationId, summary,
     coveredUntilMessageId, coveredUntilCreatedAt,
     sourceMessageCount, tokenEstimate,
     modelProvider, modelId, now
@@ -491,7 +492,7 @@ async function storeCompactionResult(
     tokenEstimate
   });
 
-  return { summary, tokenEstimate };
+  return { summary, tokenEstimate, summaryId };
 }
 
 function publishCompactionError(conversationId: string, error: string) {

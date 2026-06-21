@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
-import { createConversation } from "@/server/conversation-service";
+import { createConversation, sendMessage } from "@/server/conversation-service";
 import { createDeepSeekMockServer } from "@/server/deepseek-mock-server";
-import { getDatabase } from "@/db/client";
+import { getRun, listMessages } from "@/server/repositories";
+import { updateAgent } from "@/server/agent-service";
 
 let tempDir: string;
 let mockServer: ReturnType<typeof createDeepSeekMockServer>;
@@ -149,16 +150,45 @@ describe("DeepSeek adapter integration", () => {
     mockServer = createDeepSeekMockServer({ port: 19810 });
     await mockServer.start();
 
-    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
-    // Verify conversation was created
-    expect(conv.id).toBeTruthy();
-
-    // Verify the mock server responds
-    const res = await fetch(`${mockServer.url}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: "hi" }], stream: true })
+    updateAgent("ag_mock_builder", {
+      apiKey: "test-key",
+      apiBaseUrl: `${mockServer.url}/v1`,
+      toolNames: []
     });
-    expect(res.status).toBe(200);
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const sent = await sendMessage({
+      conversationId: conv.id,
+      content: "Build a pomodoro timer"
+    });
+    expect(sent.runIds).toHaveLength(1);
+
+    const run = await waitForRun(sent.runIds[0]);
+    expect(run.status).toBe("complete");
+    expect(run.usage).toMatchObject({
+      modelId: "deepseek-chat",
+      inputTokens: 100,
+      outputTokens: 50
+    });
+
+    const agentMessage = listMessages(conv.id).find((message) => message.runId === run.id);
+    expect(agentMessage?.status).toBe("complete");
+    expect(agentMessage?.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          content: expect.stringContaining("Pomodoro Timer")
+        })
+      ])
+    );
   });
 });
+
+async function waitForRun(runId: string) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const run = getRun(runId);
+    if (run && run.status !== "running") return run;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for run ${runId}.`);
+}

@@ -192,4 +192,3 @@ Tests:
 - [ ] Aborted and failed runs are visible and not misreported as successful messages.
 - [ ] Compaction progress is visible from SSE events.
 - [ ] `pnpm typecheck`, `pnpm lint`, and `pnpm test` pass.
-

@@ -105,11 +105,14 @@ export function ChatPanel() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <HeaderIcon title="工作区文件" onClick={() => setRightPanelMode("files")}><GitBranch className="h-4 w-4" /></HeaderIcon>
+          <HeaderIcon title="工作区文件" onClick={() => {
+            if (rightPanelMode === "files" && rightPanelOpen) setRightPanelOpen(false);
+            else setRightPanelMode("files");
+          }} active={rightPanelMode === "files" && rightPanelOpen}><GitBranch className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="Artifact Workspace" onClick={() => {
-            setRightPanelMode("artifact");
-            setRightPanelOpen(!rightPanelOpen || rightPanelMode !== "artifact");
-          }}><Layers className="h-4 w-4" /></HeaderIcon>
+            if (rightPanelMode === "artifact" && rightPanelOpen) setRightPanelOpen(false);
+            else { setRightPanelMode("artifact"); setRightPanelOpen(true); }
+          }} active={rightPanelMode === "artifact" && rightPanelOpen}><Layers className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="文件"><Folder className="h-4 w-4" /></HeaderIcon>
           <HeaderIcon title="添加 Agent"><UserPlus className="h-4 w-4" /></HeaderIcon>
           <div className="relative">
@@ -269,9 +272,9 @@ function Avatar({ label, dark, muted, className = "", onClick }: { label: string
   return <div className={base}>{label.slice(0, 2)}</div>;
 }
 
-function HeaderIcon({ children, title, onClick }: { children: ReactNode; title: string; onClick?: () => void }) {
+function HeaderIcon({ children, title, onClick, active }: { children: ReactNode; title: string; onClick?: () => void; active?: boolean }) {
   return (
-    <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100" type="button" title={title} onClick={onClick}>
+    <button className={`grid h-9 w-9 place-items-center rounded-lg ${active ? "bg-[#eef2ff] text-[#4264ff]" : "text-slate-600 hover:bg-slate-100"}`} type="button" title={title} onClick={onClick}>
       {children}
     </button>
   );

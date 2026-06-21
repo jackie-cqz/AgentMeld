@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { BarChart3, Brain, Clock, Zap } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
@@ -13,8 +13,8 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
+function timeAgo(ts: number, referenceTime: number): string {
+  const diff = referenceTime - ts;
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "刚刚";
   if (mins < 60) return `${mins} 分钟前`;
@@ -27,8 +27,9 @@ function timeAgo(ts: number): string {
 export function AnalyticsPanel() {
   const agents = useAppStore(useShallow(selectAgentList));
   const conversations = useAppStore(useShallow(selectConversationList));
-  const allRunIds = useAppStore((s) => s.runIdsByConversation) ?? {};
-  const runsById = useAppStore((s) => s.runs) ?? {};
+  const allRunIds = useAppStore((s) => s.runIdsByConversation);
+  const runsById = useAppStore((s) => s.runs);
+  const [referenceTime] = useState(() => Date.now());
 
   // Flatten all runs from normalized store
   const allRuns = useMemo(() => {
@@ -104,8 +105,8 @@ export function AnalyticsPanel() {
       .slice(0, 6);
 
     // Time-based: today / this week
-    const now = Date.now();
-    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const today = new Date(referenceTime);
+    const todayStart = today.setHours(0, 0, 0, 0);
     const weekStart = todayStart - 7 * 86400000;
     const todayTokens = allRuns
       .filter((r) => r.createdAt >= todayStart)
@@ -115,7 +116,7 @@ export function AnalyticsPanel() {
       .reduce((s, r) => s + (r.usage?.inputTokens ?? 0) + (r.usage?.outputTokens ?? 0), 0);
 
     return { totalInput, totalOutput, total, completed, failed, topAgents, topModels, topConvs, todayTokens, weekTokens };
-  }, [allRuns, agents, conversations]);
+  }, [allRuns, agents, conversations, referenceTime, runsByConvForStats]);
 
   const darkMode = useAppStore((s) => s.darkMode);
   const muted = darkMode ? "text-slate-400" : "text-slate-500";
@@ -216,7 +217,7 @@ export function AnalyticsPanel() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className={`truncate text-sm font-medium ${textMain}`}>{data.title}</div>
-                <div className="text-xs text-slate-500">{data.runs} 次运行 · {timeAgo(data.lastActive)}</div>
+                <div className="text-xs text-slate-500">{data.runs} 次运行 · {timeAgo(data.lastActive, referenceTime)}</div>
               </div>
               <div className={`text-sm font-mono font-semibold ${textMain}`}>{formatTokens(data.tokens)}</div>
             </div>

@@ -41,6 +41,7 @@ export interface ConversationRow {
   fs_write_approval_mode: string;
   pinned_message_ids: string;
   archived?: number | null;
+  pinned_at?: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -197,6 +198,7 @@ export function mapConversation(row: ConversationRow): Conversation {
     fsWriteApprovalMode: row.fs_write_approval_mode as Conversation["fsWriteApprovalMode"],
     pinnedMessageIds: parseJson<string[]>(row.pinned_message_ids, []),
     archived: row.archived === 1,
+    pinnedAt: row.pinned_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

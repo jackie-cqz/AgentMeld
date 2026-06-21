@@ -43,4 +43,3 @@ export function applyPendingEvent(state: StoreDraft, event: StreamEvent) {
 
   return false;
 }
-
