@@ -114,8 +114,8 @@ export function ChatPanel() {
             if (rightPanelMode === "artifact" && rightPanelOpen) setRightPanelOpen(false);
             else { setRightPanelMode("artifact"); setRightPanelOpen(true); }
           }} active={rightPanelMode === "artifact" && rightPanelOpen}><Layers className="h-4 w-4" /></HeaderIcon>
-          <HeaderIcon title="文件"><Folder className="h-4 w-4" /></HeaderIcon>
-          <HeaderIcon title="添加 Agent"><UserPlus className="h-4 w-4" /></HeaderIcon>
+{/* P0.3: File Library — deferred to P1 attachment feature */}
+          {/* P0.4: Add Agent manager — deferred to P1 conversation management */}
           <div className="relative">
             <button
               onClick={() => setShowContextStats((prev) => !prev)}
