@@ -57,7 +57,7 @@ export const useAppStore = create<AppState>()(
     connectionStatus: "connecting",
     lastHeartbeatAt: null,
     isBootstrapping: true,
-    composerDraft: "",
+    composerDraftByConversation: {},
     darkMode: false,
     sidebarCollapsed: false,
 
@@ -112,7 +112,7 @@ export const useAppStore = create<AppState>()(
       });
       if (!response.ok) throw new Error("Send message failed.");
       set((state) => {
-        state.composerDraft = "";
+        state.composerDraftByConversation[conversationId] = "";
       });
     },
 
@@ -161,9 +161,9 @@ export const useAppStore = create<AppState>()(
       });
     },
 
-    setComposerDraft(draft) {
+    setComposerDraft(conversationId, draft) {
       set((state) => {
-        state.composerDraft = draft;
+        state.composerDraftByConversation[conversationId] = draft;
       });
     },
 

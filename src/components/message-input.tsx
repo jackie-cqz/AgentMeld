@@ -13,7 +13,7 @@ interface MessageInputProps {
 }
 
 export function MessageInput({ conversationId, agents }: MessageInputProps) {
-  const draft = useAppStore((state) => state.composerDraft);
+  const draft = useAppStore((state) => state.composerDraftByConversation[conversationId] ?? "");
   const setDraft = useAppStore((state) => state.setComposerDraft);
   const sendMessage = useAppStore((state) => state.sendMessage);
   const pendingDispatchPlans = useAppStore(
@@ -44,7 +44,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
           feedback: draft.trim()
         })
       });
-      setDraft("");
+      setDraft(conversationId, "");
       setReviseForPlanId(null);
       return;
     }
@@ -102,7 +102,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
           </div>
         ) : pendingPlan ? (
           <button
-            onClick={() => { setReviseForPlanId(pendingPlan.id); setDraft(""); }}
+            onClick={() => { setReviseForPlanId(pendingPlan.id); setDraft(conversationId, ""); }}
             className="mb-2 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100 w-full"
           >
             📝 对计划有修改意见？点击进入修订模式
@@ -118,7 +118,7 @@ export function MessageInput({ conversationId, agents }: MessageInputProps) {
                 : "输入消息，@ 指定 Agent，Enter 发送，Shift+Enter 换行"
             }
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraft(conversationId, event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

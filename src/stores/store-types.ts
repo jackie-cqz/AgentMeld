@@ -109,7 +109,7 @@ export interface AppState {
   connectionStatus: ConnectionStatus;
   lastHeartbeatAt: number | null;
   isBootstrapping: boolean;
-  composerDraft: string;
+  composerDraftByConversation: Record<string, string>;
   darkMode: boolean;
   sidebarCollapsed: boolean;
 
@@ -123,7 +123,7 @@ export interface AppState {
   setRightPanelMode: (mode: "artifact" | "files") => void;
   setArtifactPanelWidth: (width: number | ((prev: number) => number)) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
-  setComposerDraft: (draft: string) => void;
+  setComposerDraft: (conversationId: string, draft: string) => void;
   toggleDarkMode: () => void;
   toggleSidebarCollapsed: () => void;
   updateConversation: (id: string, patch: Partial<Conversation>) => void;
