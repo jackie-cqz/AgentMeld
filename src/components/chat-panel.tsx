@@ -1,6 +1,6 @@
 "use client";
 
-import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, RotateCcw, UserPlus, Users } from "lucide-react";
+import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, Pin, RotateCcw, UserPlus, Users } from "lucide-react";
 import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
@@ -200,6 +200,8 @@ function MessageBubble({
   isLatestUser?: boolean;
   highlighted?: boolean;
   onEditAgent?: (agent: Agent) => void;
+  pinnedIds?: string[];
+  onPin?: (messageId: string) => void;
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
