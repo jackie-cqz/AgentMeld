@@ -1,0 +1,63 @@
+{
+  "name": "agentmeld",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Local-first multi-agent collaboration workspace.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "db:push": "drizzle-kit push",
+    "db:seed": "tsx src/db/seed.ts"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "@anthropic-ai/sdk": "latest",
+    "@openai/codex-sdk": "latest",
+    "@tailwindcss/postcss": "latest",
+    "better-sqlite3": "latest",
+    "class-variance-authority": "latest",
+    "clsx": "latest",
+    "drizzle-orm": "latest",
+    "immer": "latest",
+    "lucide-react": "latest",
+    "nanoid": "latest",
+    "next": "16.2.6",
+    "openai": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-markdown": "latest",
+    "remark-gfm": "latest",
+    "tailwind-merge": "latest",
+    "tailwindcss": "latest",
+    "zod": "latest",
+    "zustand": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/better-sqlite3": "latest",
+    "@types/node": "^20.19.0",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "drizzle-kit": "latest",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.2.6",
+    "tsx": "latest",
+    "typescript": "5.9.3",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
+}

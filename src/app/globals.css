@@ -1,0 +1,129 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+  --background: #f7f7f4;
+  --foreground: #191b1f;
+}
+
+html.dark {
+  color-scheme: dark;
+  --background: #0b1020;
+  --foreground: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.dark :where(.bg-white) {
+  background-color: #111827;
+}
+
+.dark :where(.bg-slate-50) {
+  background-color: #172033;
+}
+
+.dark :where(.bg-slate-100) {
+  background-color: #243047;
+}
+
+.dark :where(.bg-stone-50) {
+  background-color: #172033;
+}
+
+.dark :where([class~="bg-[#f7f8fb]"], [class~="bg-[#fbfaf7]"], [class~="bg-[#f7f6f2]"]) {
+  background-color: #0b1020;
+}
+
+.dark :where([class~="bg-[#f4f6fb]"]) {
+  background-color: #0f172a;
+}
+
+.dark :where([class~="bg-[#eff5ff]"], [class~="bg-[#eef2ff]"], [class~="bg-[#f4f7ff]"]) {
+  background-color: #1d2b5f;
+}
+
+.dark :where(.border-slate-100, .border-slate-200, .border-stone-200) {
+  border-color: #2f3b52;
+}
+
+.dark :where(.border-slate-300, .border-stone-300) {
+  border-color: #475569;
+}
+
+.dark :where(.text-slate-950, .text-slate-900, .text-stone-950) {
+  color: #f8fafc;
+}
+
+.dark :where(.text-slate-800, .text-slate-700, .text-stone-700) {
+  color: #e2e8f0;
+}
+
+.dark :where(.text-slate-600, .text-slate-500, .text-stone-600, .text-stone-500) {
+  color: #94a3b8;
+}
+
+.dark :where(.text-slate-400, .text-stone-400) {
+  color: #64748b;
+}
+
+.dark :where(input, textarea, select) {
+  background-color: #111827;
+  color: #e5e7eb;
+  border-color: #334155;
+}
+
+.dark :where(input::placeholder, textarea::placeholder) {
+  color: #64748b;
+}
+
+.dark :where(.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, .hover\:bg-stone-50:hover) {
+  background-color: #1e293b;
+}
+
+.dark :where(.hover\:text-slate-950:hover, .hover\:text-slate-900:hover, .hover\:text-slate-700:hover) {
+  color: #f8fafc;
+}
+
+.dark :where(.bg-stone-100) {
+  background-color: #243047;
+}
+
+.dark :where(.bg-stone-200) {
+  background-color: #334155;
+}
+
+.dark :where([class~="bg-[#fffdf5]"]) {
+  background-color: #172033;
+}
+
+.dark :where(.text-stone-900, .text-stone-800) {
+  color: #f1f5f9;
+}
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
