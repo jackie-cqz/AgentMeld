@@ -64,6 +64,14 @@ export const mockAdapter: AgentPlatformAdapter = {
   async *run(input: AdapterInput, signal: AbortSignal): AsyncGenerator<StreamEvent> {
     const conversationId = input.conversationId;
 
+    // Mock adapter is for development and testing only. Never used in production.
+    if (process.env.NODE_ENV === "production") {
+      yield { type: "part.start", conversationId, timestamp: Date.now(), messageId: "", partIndex: 0, part: { type: "text", content: "" } };
+      yield { type: "part.delta", conversationId, timestamp: Date.now(), messageId: "", partIndex: 0, delta: { type: "text.append", text: "Mock adapter is not available in production. Use Custom Agent with DeepSeek or OpenAI-compatible provider." } };
+      yield { type: "run.usage", conversationId, timestamp: Date.now(), runId: "", usage: { modelId: "mock", inputTokens: 0, outputTokens: 0 } };
+      return;
+    }
+
     // -- thinking part --
     yield {
       type: "part.start",

@@ -1,8 +1,5 @@
-import type { Agent, StreamEvent, AdapterName } from "@/shared/types";
+import type { StreamEvent, AdapterName } from "@/shared/types";
 import type { AgentPlatformAdapter, AdapterInput } from "@/server/adapters/types";
-import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
-import { findBannedPattern } from "@/server/security";
-import { assertPathWithinWorkspace } from "@/server/workspace-utils";
 
 /**
  * ClaudeCodeAdapter — wraps @anthropic-ai/claude-agent-sdk.
@@ -22,65 +19,15 @@ import { assertPathWithinWorkspace } from "@/server/workspace-utils";
 export const claudeCodeAdapter: AgentPlatformAdapter = {
   name: "claude-code" as AdapterName,
 
-  async *run(input: AdapterInput, signal: AbortSignal) {
+  async *run(input: AdapterInput, _signal: AbortSignal) {
     const conversationId = input.conversationId;
-    const settings = getSettings();
-    const apiKey = resolveApiKeyForAgent(
-      { adapterName: "claude-code", modelProvider: "anthropic", apiKey: input.agent.apiKey },
-      settings
-    );
-    const effectiveBaseUrl = input.apiBaseUrl ?? resolveApiBaseUrl(
-      { adapterName: "claude-code", apiBaseUrl: input.agent.apiBaseUrl },
-      settings
-    );
 
-    if (!apiKey) {
-      yield {
-        type: "part.start", conversationId, timestamp: Date.now(),
-        messageId: "", partIndex: 0,
-        part: { type: "text", content: "" }
-      };
-      yield {
-        type: "part.delta", conversationId, timestamp: Date.now(),
-        messageId: "", partIndex: 0,
-        delta: { type: "text.append", text: "⚠️ Claude Code adapter requires an Anthropic API key. Set it in Settings → Anthropic API Key, or set ANTHROPIC_API_KEY in .env.local." }
-      };
-      yield {
-        type: "run.usage", conversationId, timestamp: Date.now(), runId: "",
-        usage: { modelId: input.agent.modelId ?? "claude", inputTokens: 0, outputTokens: 0 }
-      };
-      return;
-    }
-
-    // Per §6.3: When a custom base URL is configured (third-party gateway),
-    // the apiKey becomes ANTHROPIC_AUTH_TOKEN. Clear ANTHROPIC_API_KEY to
-    // prevent the env var from overriding the gateway's auth header.
-    const isGateway = !!effectiveBaseUrl;
-    if (isGateway) {
-      // When full SDK integration lands:
-      //   process.env.ANTHROPIC_AUTH_TOKEN = apiKey;
-      //   process.env.ANTHROPIC_BASE_URL = effectiveBaseUrl;
-      //   delete process.env.ANTHROPIC_API_KEY;
-    }
-
-    // Stub: SDK would be initialized here
-    // const query = client.query({ prompt: buildClaudePrompt(input), options: { ... } });
-
-    // Yield a placeholder message for now
-    yield {
-      type: "part.start", conversationId, timestamp: Date.now(),
-      messageId: "", partIndex: 0,
-      part: { type: "text", content: "" }
-    };
-    yield {
-      type: "part.delta", conversationId, timestamp: Date.now(),
-      messageId: "", partIndex: 0,
-      delta: { type: "text.append", text: "Claude Code adapter is initialized but SDK integration is pending (P8 full implementation). Configure Custom Agent with DeepSeek or OpenAI for immediate use." }
-    };
-    yield {
-      type: "run.usage", conversationId, timestamp: Date.now(), runId: "",
-      usage: { modelId: input.agent.modelId ?? "claude", inputTokens: 0, outputTokens: 0 }
-    };
+    // This adapter is not yet available for production use.
+    // Use Custom Agent with DeepSeek or OpenAI-compatible provider instead.
+    yield { type: "part.start", conversationId, timestamp: Date.now(), messageId: "", partIndex: 0, part: { type: "text", content: "" } };
+    yield { type: "part.delta", conversationId, timestamp: Date.now(), messageId: "", partIndex: 0, delta: { type: "text.append", text: "Claude Code adapter is not yet available. Please use Custom Agent with DeepSeek or OpenAI-compatible provider." } };
+    yield { type: "run.usage", conversationId, timestamp: Date.now(), runId: "", usage: { modelId: input.agent.modelId ?? "claude", inputTokens: 0, outputTokens: 0 } };
+    return;
   }
 };
 
