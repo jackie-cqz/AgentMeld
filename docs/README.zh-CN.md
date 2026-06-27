@@ -7,6 +7,7 @@
   <img alt="SQLite local-first" src="https://img.shields.io/badge/SQLite-local--first-0b6b88?logo=sqlite&logoColor=white">
   <img alt="pnpm 10" src="https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white">
   <img alt="DeepSeek compatible" src="https://img.shields.io/badge/DeepSeek-compatible-4d6bfe">
+  <img alt="tests 445" src="https://img.shields.io/badge/tests-445_passing-22c55e">
   <a href="../LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22a06b"></a>
 </p>
 
@@ -18,16 +19,54 @@ AgentMeld 是一个本地优先的多 Agent 协作工作空间。它把多 Agent
 
 ![AgentMeld 工作空间](images/agentmeld-preview.png)
 
+## 工作流示例
+
+```
+你："帮我做一个番茄时钟"
+  → Conductor 分析需求，检查可用 Agent
+  → 若需求不明确，调用 ask_user 让用户选择（或直接 plan_tasks）
+  → 生成计划：t1: PM → PRD, t2: 设计师 → 风格指南, t3: 前端 → 编码, t4: Reviewer → 审查
+  → 你批准计划
+  → DAG 波次执行：PM 与设计师并行，前端等两者完成，Reviewer 等前端完成
+  → 每个 Agent 使用工具（fs_write、bash、write_artifact），敏感操作需审批
+  → 产物通过 output binding 向下游传递
+  → Conductor 聚合结果，生成自然语言总结
+  → 最终产物显示在右侧面板
+```
+
+> 开发者参考文档见 [skills/](../skills/)：工具系统、产物管理、上下文工程、持久化。
+
 ## 主要功能
 
-- 单 Agent 与多 Agent 群聊会话
-- Conductor 负责计划、任务分派、审查与结果聚合
-- 支持 DeepSeek 和 OpenAI-compatible 自定义 Agent
-- 结构化工具调用和敏感操作审批
-- 每个会话独立的工作区与文件浏览
-- 产物创建、版本管理、预览和本地部署
-- 基于 SSE 的实时流式更新
-- 使用本地 SQLite 持久化，不依赖托管后端
+**Agent 协作**
+- 单 Agent 与多 Agent 群聊会话，IM 风格界面
+- Conductor 负责计划、任务分派、DAG 调度与结果聚合
+- 任务失败时自动生成 Recovery Plan，只重跑必要部分
+- 每个 Agent 可独立配置 API Key、模型和 Base URL，三层优先级
+
+**工具与安全**
+- 12 个内置工具：文件读写、Shell、产物、部署、用户交互
+- 敏感操作审批关卡（fs_write、bash、plan_tasks）
+- Workspace 沙箱：路径校验、symlink 防护、磁盘配额
+- 平台特定命令黑名单（POSIX + Windows）
+
+**产物与工作区**
+- 四种产物类型：文档、Web 应用、图片、演示文稿
+- 版本链与 diff 对比
+- 本地部署预览（iframe）
+- 会话内文件浏览器，支持语法高亮
+
+**上下文工程**
+- Token 感知的历史窗口，模型特定预算计算
+- 增量上下文压缩 + 滚动 chunk 摘要
+- 置顶消息永不裁剪；超出窗口时返回明确错误
+- 会话置顶与消息置顶独立管理
+
+**可靠性**
+- 445 个测试通过（Vitest），TypeScript strict 模式，ESLint
+- 结构化 Logger，14 种错误分类，敏感数据脱敏
+- Run 生命周期持久化，启动孤儿恢复
+- 审批状态持久化到 SQLite，条件更新防并发
 
 ## 技术栈
 
