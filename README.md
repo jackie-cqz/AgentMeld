@@ -7,6 +7,7 @@
   <img alt="SQLite local-first" src="https://img.shields.io/badge/SQLite-local--first-0b6b88?logo=sqlite&logoColor=white">
   <img alt="pnpm 10" src="https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white">
   <img alt="DeepSeek compatible" src="https://img.shields.io/badge/DeepSeek-compatible-4d6bfe">
+  <img alt="tests 445" src="https://img.shields.io/badge/tests-445_passing-22c55e">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22a06b"></a>
 </p>
 
@@ -20,14 +21,52 @@ AgentMeld is a local-first workspace for coordinating multiple AI agents through
 
 ## Features
 
-- Single-agent and multi-agent conversations
-- Conductor-led planning, task dispatch, review, and result aggregation
-- DeepSeek and OpenAI-compatible custom agents
-- Structured tool calls with approvals for sensitive operations
-- Conversation-scoped workspaces and file browsing
-- Artifact creation, versioning, preview, and local deployment
-- Streaming updates over Server-Sent Events
-- Local SQLite persistence with no hosted backend requirement
+**Agent Collaboration**
+- Single-agent and multi-agent conversations with IM-style interface
+- Conductor-led planning, task dispatch, DAG scheduling, and result aggregation
+- Recovery plans when tasks fail — only re-runs what's needed
+- Per-agent API key, model, and base URL configuration with three-tier resolution
+
+**Tools & Safety**
+- 12 built-in tools: file I/O, bash, artifacts, deployment, user prompts
+- Approval gates for sensitive operations (fs_write, bash, plan_tasks)
+- Workspace sandbox with path validation, symlink protection, and quota limits
+- Platform-specific command blacklists (POSIX + Windows)
+
+**Artifacts & Workspace**
+- Four artifact types: document, web_app, image, presentation
+- Version chains with diff comparison and rollback
+- Local deployment previews via iframe
+- In-conversation file browser with syntax highlighting
+
+**Context Engineering**
+- Token-aware history window with model-specific budget calculation
+- Incremental context compaction with rolling chunk summarization
+- Pinned messages immune to truncation; overflow detection before LLM calls
+- Conversation pinning separate from message pinning
+
+**Reliability**
+- 445 tests passing (Vitest), TypeScript strict mode, ESLint
+- Structured logger with 14 error categories and sensitive-data masking
+- Run lifecycle persistence with startup orphan recovery
+- Approval state persisted to SQLite with conditional write protection
+
+## How It Works
+
+```
+You: "Build a pomodoro timer"
+  → Conductor reads the room, checks available agents
+  → asks user to clarify (ask_user) or plans immediately (plan_tasks)
+  → Plan: t1: PM → PRD, t2: Designer → style guide, t3: Frontend → code, t4: Reviewer → audit
+  → You approve the plan
+  → DAG waves execute: PM + Designer run in parallel, Frontend waits for both, Reviewer waits for Frontend
+  → Each agent uses tools (fs_write, bash, write_artifact) with optional approval gates
+  → Artifacts flow downstream via output bindings
+  → Conductor aggregates results into a natural-language summary
+  → You see the final artifact in the right panel
+```
+
+> See [skills/](skills/) for developer reference on tools, artifacts, context management, and persistence.
 
 ## Tech Stack
 
