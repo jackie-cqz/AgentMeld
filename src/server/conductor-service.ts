@@ -43,8 +43,25 @@ export interface ConductorInput {
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
-  // Stage 1: ASSESS — LLM decides whether this needs a plan or is a simple chat
+  // Stage 0: FACT EXTRACTION — extract structured facts from user message
   const userText = extractTextFromMessage(input.triggerMessage);
+  try {
+    const { extractFactsForUserTurn } = await import("@/server/context-facts/conductor-fact-extraction");
+    const factResult = await extractFactsForUserTurn({
+      conversationId: input.conversationId,
+      conductorRunId: input.conductorRunId,
+      conductorAgent: { id: input.conductorAgentId, isConductor: true } as Agent,
+      triggerMessage: input.triggerMessage,
+    });
+    if (factResult.resolutions.length > 0) {
+      console.log(`[conductor] fact extraction: ${factResult.summary}`);
+    }
+  } catch (err) {
+    // Fact extraction failure must never block the Conductor
+    console.error("[conductor] fact extraction failed:", err);
+  }
+
+  // Stage 1: ASSESS — LLM decides whether this needs a plan or is a simple chat
   const assessResult = await runConductorAssess(input, userText);
 
   // Case A: Direct response — LLM answered directly (simple chat, greeting, question)

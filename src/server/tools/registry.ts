@@ -79,6 +79,7 @@ import { deployWorkspaceTool } from "@/server/tools/deploy-workspace";
 import { readAttachmentTool } from "@/server/tools/read-attachment";
 import { planTasksTool, reportTaskResultTool } from "@/server/tools/conductor-tools";
 import { readEvidenceTool } from "@/server/tools/read-evidence";
+import { updateContextFactsTool } from "@/server/tools/update-context-facts";
 
 function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -95,6 +96,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(planTasksTool);
   registry.register(reportTaskResultTool);
   registry.register(readEvidenceTool);
+  registry.register(updateContextFactsTool);
   return registry;
 }
 
