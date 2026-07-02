@@ -1,0 +1,8 @@
+- [x] 1. Add OpenSpec delta specs for `fs_list`, plan-stage tool boundaries, and evidence-based task reports.
+- [x] 2. Update shared dispatch plan and task report types.
+- [x] 3. Implement and register `fs_list`, then inject scoped tool guidance.
+- [x] 4. Extend `plan_tasks` parsing, schema, validation, and child prompt rendering for evidence fields.
+- [x] 5. Record managed `bash` and `fs_write` evidence per run.
+- [x] 6. Extend `report_task_result` parsing/evaluation with files, commands, and test evidence checks.
+- [x] 7. Strengthen replan and aggregate prompts to preserve the original goal and surface incomplete work.
+- [x] 8. Add focused regression tests and run validation.
