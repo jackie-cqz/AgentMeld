@@ -58,8 +58,8 @@ describe("validatePlan", () => {
       }
     ];
     const errors = validatePlan(plan, agents, conversation);
-    expect(errors.some((error) => error.includes("Conductor"))).toBe(true);
-    expect(errors.some((error) => error.includes("循环"))).toBe(true);
+    expect(errors.some((error: string) => error.includes("Conductor"))).toBe(true);
+    expect(errors.some((error: string) => error.includes("循环"))).toBe(true);
   });
 });
 

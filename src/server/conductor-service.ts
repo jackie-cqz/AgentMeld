@@ -15,8 +15,18 @@ import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites
 import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
-import { newMessageId } from "@/shared/ids";
+import { newMessageId, newTaskAttemptId, newContextSnapshotId } from "@/shared/ids";
 import type { Message, DispatchPlanItem, Agent } from "@/shared/types";
+import type { TaskExecutionIdentity } from "@/shared/evidence-types";
+import type { TaskContextEnvelope, ContextManifestItem } from "@/shared/task-context-types";
+import {
+  createTaskAttempt,
+  startTaskAttempt,
+  finishTaskAttempt,
+  updateTaskAttemptVerification,
+  insertContextSnapshot,
+  listEvidenceForAttempt,
+} from "@/server/repositories/evidence-repository";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -479,11 +489,81 @@ async function runChildTask(
 
     // Retry loop — up to maxAttempts
     const maxAttempts = task.maxAttempts || 1;
+    const now = Date.now();
     let finalRunId = "";
     let finalEvaluation = evaluateChildTaskResult(task, undefined);
     let finalReport: ReturnType<typeof getTaskReport>;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // P0: Generate task execution identity for this attempt
+      const attemptId = newTaskAttemptId();
+      const contextSnapshotId = newContextSnapshotId();
+
+      const taskExecution: TaskExecutionIdentity = {
+        conductorRunId: parentRunId,
+        planId,
+        planRevision: planId.endsWith("_recovery") ? 1 : 0,
+        taskId: task.id,
+        attemptId,
+        attempt,
+        contextSnapshotId
+      };
+
+      // P1: Persist task attempt record (queued → will be updated to running)
+      createTaskAttempt({
+        id: attemptId,
+        conductorRunId: parentRunId,
+        conversationId,
+        planId,
+        planRevision: planId.endsWith("_recovery") ? 1 : 0,
+        taskId: task.id,
+        agentId: task.agentId,
+        childRunId: null,
+        attempt,
+        contextSnapshotId,
+        executionStatus: "queued",
+        verificationStatus: "not_started",
+        failureContextJson: null,
+        startedAt: null,
+        finishedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // P0: Build minimal context snapshot (full compilation in P2)
+      const lastError = finalEvaluation.error;
+      const envelope = buildMinimalContextEnvelope(
+        taskExecution,
+        task,
+        resolvedInputs,
+        upstreamArtifacts,
+        attempt > 1 && lastError
+          ? { previousAttemptId: finalAttemptId, error: lastError }
+          : undefined
+      );
+
+      // P1: Persist context snapshot to SQLite
+      try {
+        insertContextSnapshot({
+          id: contextSnapshotId,
+          conversationId,
+          conductorRunId: parentRunId,
+          planId,
+          taskId: task.id,
+          attemptId,
+          policyVersion: envelope.policyVersion,
+          schemaVersion: envelope.schemaVersion,
+          envelopeJson: JSON.stringify(envelope),
+          manifestJson: JSON.stringify(envelope.manifest),
+          tokenEstimate: envelope.budget.requiredTokens,
+          requiredTokenEstimate: envelope.budget.requiredTokens,
+          omittedTokenEstimate: envelope.budget.omittedTokens,
+          createdAt: now,
+        });
+      } catch (err) {
+        console.error(`[conductor] failed to persist context snapshot ${contextSnapshotId}:`, err);
+      }
+
       const attemptPrompt = attempt > 1
         ? buildContinuationPrompt(prompt, attempt, maxAttempts, finalEvaluation.error ?? "unknown")
         : prompt;
@@ -507,7 +587,21 @@ async function runChildTask(
         attempt
       });
 
+<<<<<<< HEAD
       const { runId: attemptRunId, promise } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
+=======
+      // P0: Pass taskExecution identity into the child run
+      const { runId: attemptRunId, promise } = startAgentRun({
+        conversationId,
+        agentId: task.agentId,
+        triggerMessage: attemptMsg,
+        parentRunId,
+        taskExecution
+      });
+
+      // P1: Mark attempt as running now that we have the childRunId
+      startTaskAttempt(attemptId, attemptRunId, Date.now());
+
       try {
         await promise;
       } catch {
@@ -522,14 +616,56 @@ async function runChildTask(
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
 
+      // P1: Update attempt execution status
+      const executionStatus = finalEvaluation.status === "complete" ? "reported_complete" : "failed";
+      finishTaskAttempt(attemptId, executionStatus, Date.now());
+
       if (finalEvaluation.status === "complete") break;
     }
 
     const report = finalReport;
     const evaluation = finalEvaluation;
 
+<<<<<<< HEAD
     // P1.5: Strict output handoff — verify reported artifacts exist in DB
     if (report?.artifacts) {
+=======
+    // P0: Check for missing required outputs — fail before binding anything
+    const missingRequiredOutputs = (task.expectedOutputs ?? [])
+      .filter((eo) => eo.required)
+      .filter((eo) => !report?.artifacts || !(eo.id in report.artifacts));
+    if (missingRequiredOutputs.length > 0 && finalEvaluation.status === "complete") {
+      const missingKeys = missingRequiredOutputs.map((eo) => eo.id).join(", ");
+      console.warn(
+        `[output-binding] task ${task.id}: required outputs missing: ${missingKeys} — marking as failed`
+      );
+      finalEvaluation = { status: "failed", error: `Missing required outputs: ${missingKeys}` };
+    }
+
+    // P1: Update verification status on the final attempt
+    const verificationStatus = finalEvaluation.status === "complete" ? "verified" : "rejected";
+    if (finalAttemptId) {
+      updateTaskAttemptVerification(
+        finalAttemptId,
+        verificationStatus,
+        finalEvaluation.status !== "complete" ? JSON.stringify({ error: finalEvaluation.error }) : null,
+        Date.now()
+      );
+    }
+
+    // P1: Strict output handoff — verify artifact_created evidence for each binding
+    if (finalEvaluation.status === "complete" && report?.artifacts) {
+      // Query SQLite evidence ledger for this attempt's artifact_created records
+      let attemptArtifactEvidence: Array<{ subjectId: string; payloadJson: string }> = [];
+      try {
+        const allEvidence = listEvidenceForAttempt(finalAttemptId);
+        attemptArtifactEvidence = allEvidence
+          .filter((e) => e.type === "artifact_created")
+          .map((e) => ({ subjectId: e.subjectId, payloadJson: e.payloadJson }));
+      } catch {
+        // Fallback to in-memory evidence if SQLite unavailable
+      }
+
       for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
         const art = getArtifact(artifactId);
         if (art && art.conversationId === conversationId) {
@@ -540,6 +676,41 @@ async function runChildTask(
             producerTaskId: task.id, outputKey, artifactId, now: Date.now()
           });
         }
+
+        // Validate artifact type matches expected output type
+        if (expectedOutput.type && art.type !== expectedOutput.type) {
+          console.warn(
+            `[output-binding] task ${task.id}: artifact type "${art.type}" does not match expected "${expectedOutput.type}" for outputKey "${outputKey}" — rejected`
+          );
+          continue;
+        }
+
+        // P1: Strict provenance — verify artifact_created evidence from THIS attempt
+        const hasArtifactEvidence = attemptArtifactEvidence.some((ev) => {
+          if (ev.subjectId !== outputKey) return false;
+          try {
+            const payload = JSON.parse(ev.payloadJson);
+            return payload.outputKey === outputKey || payload.artifactType;
+          } catch {
+            return false;
+          }
+        });
+        // Also check in-memory evidence as fallback
+        const attemptEvidence = getRunToolEvidence(finalRunId);
+        const hasToolActivity = attemptEvidence.fileWrites.length > 0 || attemptEvidence.commands.length > 0;
+
+        if (!hasArtifactEvidence && !hasToolActivity) {
+          console.warn(
+            `[output-binding] task ${task.id}: no artifact_created evidence from attempt ${finalAttemptId} for outputKey "${outputKey}" — rejected`
+          );
+          continue;
+        }
+
+        outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+        persistOutputBinding({
+          conductorRunId: parentRunId, planId,
+          producerTaskId: task.id, outputKey, artifactId, now: Date.now()
+        });
       }
     }
 

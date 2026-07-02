@@ -15,6 +15,7 @@ import {
 } from "@/server/repositories/evidence-repository";
 import { sanitizeText } from "@/server/evidence/evidence-sanitizer";
 import { newEvidenceId } from "@/shared/ids";
+import { getDatabase } from "@/db/client";
 
 const MAX_RESPONSE_LENGTH = 8192;
 const DEFAULT_PAGE_SIZE = 1;
@@ -119,18 +120,61 @@ function checkEvidenceAccess(
 ): string | null {
   if (!ctx.taskExecution) return null; // Non-task runs: basic conversation check only
 
-  // Same task: always allowed (producer)
+  // Same task + same attempt: always allowed (producer)
   if (record.taskId === ctx.taskExecution.taskId &&
       record.attemptId === ctx.taskExecution.attemptId) {
     return null;
   }
 
-  // Same conductor run: allow (may be downstream task)
-  if (record.conductorRunId === ctx.taskExecution.conductorRunId) {
+  // Different conductor run: deny
+  if (record.conductorRunId !== ctx.taskExecution.conductorRunId) {
+    return "Access denied: evidence belongs to a different conductor run.";
+  }
+
+  // Same conductor run but different task: must be a DAG downstream task
+  if (isDownstreamTask(ctx.taskExecution.taskId, record.taskId, record.planId, record.conductorRunId)) {
     return null;
   }
 
-  return "Access denied: evidence belongs to a different conductor run and you are not a direct downstream task.";
+  return "Access denied: you are not the producer nor a direct downstream task of this evidence.";
+}
+
+/**
+ * P1: Check if requestorTaskId is a direct downstream of producerTaskId
+ * per the DAG plan. Looks up the orchestration_plans table.
+ */
+function isDownstreamTask(
+  requestorTaskId: string,
+  producerTaskId: string,
+  _planId: string,
+  conductorRunId: string
+): boolean {
+  try {
+    const db = getDatabase();
+    const rows = db
+      .prepare(
+        "SELECT plan_json FROM orchestration_plans WHERE orchestrator_run_id = ? ORDER BY revision DESC LIMIT 1"
+      )
+      .all(conductorRunId) as Array<{ plan_json: string }>;
+
+    for (const row of rows) {
+      try {
+        const plan = JSON.parse(row.plan_json) as Array<{
+          id: string;
+          dependsOn?: string[];
+        }>;
+        const requestorTask = plan.find((t) => t.id === requestorTaskId);
+        if (requestorTask?.dependsOn?.includes(producerTaskId)) {
+          return true;
+        }
+      } catch {
+        // Skip unparseable plans
+      }
+    }
+  } catch {
+    // DB not available — deny downstream access
+  }
+  return false;
 }
 
 // ── Audit Logging ─────────────────────────────────────────────────────────
