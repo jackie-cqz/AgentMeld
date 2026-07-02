@@ -228,6 +228,81 @@ export function ensureDatabase() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+
+    -- P1: Evidence-aware Context Engineering tables
+
+    CREATE TABLE IF NOT EXISTS task_attempts (
+      id TEXT PRIMARY KEY,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL DEFAULT 0,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      child_run_id TEXT,
+      attempt INTEGER NOT NULL,
+      context_snapshot_id TEXT,
+      execution_status TEXT NOT NULL DEFAULT 'queued',
+      verification_status TEXT NOT NULL DEFAULT 'not_started',
+      failure_context_json TEXT,
+      started_at INTEGER,
+      finished_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(conductor_run_id, plan_id, task_id, attempt)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_context_snapshots (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL REFERENCES task_attempts(id) ON DELETE CASCADE,
+      policy_version TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      envelope_json TEXT NOT NULL,
+      manifest_json TEXT NOT NULL,
+      token_estimate INTEGER NOT NULL DEFAULT 0,
+      required_token_estimate INTEGER NOT NULL DEFAULT 0,
+      omitted_token_estimate INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_evidence (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      attempt_id TEXT NOT NULL REFERENCES task_attempts(id) ON DELETE CASCADE,
+      child_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      context_snapshot_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'valid',
+      trust_level TEXT NOT NULL DEFAULT 'verified',
+      source_kind TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      content_hash TEXT,
+      invalidated_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS criterion_verdicts (
+      id TEXT PRIMARY KEY,
+      attempt_id TEXT NOT NULL REFERENCES task_attempts(id) ON DELETE CASCADE,
+      criterion_id TEXT NOT NULL,
+      validator_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+      reason TEXT NOT NULL,
+      checked_at INTEGER NOT NULL,
+      UNIQUE(attempt_id, criterion_id)
+    );
   `);
 
   migrateLegacyTables();
@@ -325,6 +400,10 @@ function migrateLegacyTables() {
   ensureColumn("app_settings", "deployment_publish_dir", "TEXT");
   ensureColumn("app_settings", "deployment_public_base_url", "TEXT");
 
+  // P1: Orchestration task results — verification status columns
+  try { getDatabase().exec("ALTER TABLE orchestration_task_results ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'not_started'"); } catch { /* already exists */ }
+  try { getDatabase().exec("ALTER TABLE orchestration_task_results ADD COLUMN verified_attempt_id TEXT"); } catch { /* already exists */ }
+
   getDatabase().exec(`
     UPDATE agent_runs SET started_at = created_at WHERE started_at = 0;
   `);
@@ -418,6 +497,18 @@ function createIndexes() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_compaction_jobs_active
       ON context_compaction_jobs(conversation_id)
       WHERE status IN ('queued', 'running');
+
+    -- P1: Evidence-aware indexes
+    CREATE INDEX IF NOT EXISTS idx_task_evidence_attempt
+      ON task_evidence(attempt_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_task_evidence_subject
+      ON task_evidence(subject_type, subject_id, status);
+    CREATE INDEX IF NOT EXISTS idx_task_evidence_task
+      ON task_evidence(conductor_run_id, plan_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_attempts_run
+      ON task_attempts(conductor_run_id, task_id);
+    CREATE INDEX IF NOT EXISTS idx_context_snapshots_attempt
+      ON task_context_snapshots(attempt_id);
   `);
 
   // P1: Migration for existing DBs that may lack the new columns/table

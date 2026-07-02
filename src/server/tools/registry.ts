@@ -27,14 +27,31 @@ export class ToolRegistry {
     if (!tool) {
       return { ok: false, error: `Unknown tool: ${name}` };
     }
+
+    const startedAt = Date.now();
+    let result: ToolResult;
     try {
-      return await tool.handler(args, ctx);
+      result = await tool.handler(args, ctx);
     } catch (error) {
-      return {
+      result = {
         ok: false,
         error: error instanceof Error ? error.message : "Tool handler threw an unexpected error."
       };
     }
+
+    // P1: Capture evidence for every tool execution (fire-and-forget, never blocks)
+    const { captureEvidence } = await import("@/server/evidence/evidence-collector");
+    captureEvidence({
+      toolName: name,
+      args,
+      result,
+      context: ctx,
+      durationMs: Date.now() - startedAt,
+    }).catch(() => {
+      // Silently ignore — evidence capture failure must never affect task execution
+    });
+
+    return result;
   }
 
   listNames(): string[] {
@@ -57,6 +74,7 @@ import { deployArtifactTool } from "@/server/tools/deploy-artifact";
 import { deployWorkspaceTool } from "@/server/tools/deploy-workspace";
 import { readAttachmentTool } from "@/server/tools/read-attachment";
 import { planTasksTool, reportTaskResultTool } from "@/server/tools/conductor-tools";
+import { readEvidenceTool } from "@/server/tools/read-evidence";
 
 function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -72,6 +90,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(readAttachmentTool);
   registry.register(planTasksTool);
   registry.register(reportTaskResultTool);
+  registry.register(readEvidenceTool);
   return registry;
 }
 
