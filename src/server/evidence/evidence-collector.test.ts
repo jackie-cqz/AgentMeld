@@ -2,22 +2,76 @@
 // P1: Evidence collector tests
 // ---------------------------------------------------------------------------
 
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
-import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
-import { eventBus } from "@/server/event-bus";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ToolContext } from "@/server/tools/types";
+
+// ── Mocks ──────────────────────────────────────────────────────────────────
+
+const mockInsertEvidence = vi.fn();
+const mockListForRun = vi.fn((_arg?: unknown) => []);
+const mockListForAttempt = vi.fn((_arg?: unknown) => []);
+const mockGetEvidence = vi.fn((_arg?: unknown) => undefined);
+
+vi.mock("@/server/repositories/evidence-repository", () => ({
+  insertEvidence: (arg: unknown) => mockInsertEvidence(arg),
+  listEvidenceForChildRun: (arg: unknown) => mockListForRun(arg),
+  listEvidenceForAttempt: (arg: unknown) => mockListForAttempt(arg),
+  getEvidence: (arg: unknown) => mockGetEvidence(arg),
+  // re-export types for dependent imports
+}));
+
+vi.mock("@/shared/ids", () => ({
+  newEvidenceId: vi.fn(() => `ev_mock_${Math.random().toString(36).slice(2, 10)}`),
+  newTaskAttemptId: vi.fn(() => "ta_mock"),
+  newContextSnapshotId: vi.fn(() => "ctxsnap_mock"),
+  newRunId: vi.fn(() => "run_mock"),
+  newMessageId: vi.fn(() => "msg_mock"),
+  newAgentId: vi.fn(() => "ag_mock"),
+  newConversationId: vi.fn(() => "conv_mock"),
+  newArtifactId: vi.fn(() => "art_mock"),
+  newWorkspaceId: vi.fn(() => "ws_mock"),
+  newAttachmentId: vi.fn(() => "att_mock"),
+  newToolCallId: vi.fn(() => "call_mock"),
+  newContextSummaryId: vi.fn(() => "ctx_mock"),
+  newErrorMessageId: vi.fn(() => "msg_err_mock"),
+}));
+
+// Import after mocks are set up
 import { captureEvidence } from "@/server/evidence/evidence-collector";
-import {
-  listEvidenceForChildRun,
-  listEvidenceForAttempt,
-  getEvidence,
-} from "@/server/repositories/evidence-repository";
 import { sanitizeText, sanitizeCommand, sanitizeOutput } from "@/server/evidence/evidence-sanitizer";
 import { hashContent } from "@/server/evidence/evidence-hash";
-import type { ToolContext } from "@/server/tools/types";
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+  return {
+    conversationId: "conv_test",
+    workspacePath: "/tmp/test",
+    agentId: "ag_test",
+    runId: "run_test",
+    parentRunId: null,
+    taskExecution: {
+      conductorRunId: "run_cond",
+      planId: "plan_test",
+      planRevision: 0,
+      taskId: "t1",
+      attemptId: "ta_test_1",
+      attempt: 1,
+      contextSnapshotId: "ctxsnap_test_1",
+    },
+    abortSignal: new AbortController().signal,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  mockInsertEvidence.mockClear();
+  mockListForRun.mockClear();
+  mockListForAttempt.mockClear();
+  mockGetEvidence.mockClear();
+  mockListForRun.mockReturnValue([]);
+  mockListForAttempt.mockReturnValue([]);
+});
 
 // ── Pure unit tests (no DB required) ──────────────────────────────────────
 
@@ -72,51 +126,11 @@ describe("evidence-hash", () => {
   });
 });
 
-// ── DB-backed tests ───────────────────────────────────────────────────────
+// ── Evidence collector unit tests (mocked DB) ─────────────────────────────
 
-let tempDir = "";
-
-function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
-  return {
-    conversationId: "conv_test",
-    workspacePath: tempDir,
-    agentId: "ag_test",
-    runId: "run_test",
-    parentRunId: null,
-    taskExecution: {
-      conductorRunId: "run_cond",
-      planId: "plan_test",
-      planRevision: 0,
-      taskId: "t1",
-      attemptId: "ta_test_1",
-      attempt: 1,
-      contextSnapshotId: "ctxsnap_test_1",
-    },
-    abortSignal: new AbortController().signal,
-    ...overrides,
-  };
-}
-
-// P1 TODO: Re-enable after vitest SQLite shared-process DB state is resolved.
-// The evidence collector DB integration tests require a clean SQLite environment
-// that is incompatible with vitest's shared-process module caching. Run these
-// tests in forks mode or with a dedicated test database.
-describe.skip("evidence-collector", () => {
+describe("evidence-collector", () => {
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-test-"));
-    process.env.AGENTMELD_DATA_DIR = tempDir;
-    resetBootstrapForTests();
-    resetClientForTests();
-    eventBus.clearForTests();
-    ensureDatabase();
-  });
-
-  afterEach(() => {
-    resetBootstrapForTests();
-    resetClientForTests();
-    eventBus.clearForTests();
-    delete process.env.AGENTMELD_DATA_DIR;
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ok */ }
+    mockInsertEvidence.mockClear();
   });
 
   it("captures file_write evidence for fs_write tool", async () => {
@@ -129,12 +143,12 @@ describe.skip("evidence-collector", () => {
       durationMs: 10,
     });
 
-    const records = listEvidenceForChildRun("run_test");
-    expect(records.length).toBeGreaterThanOrEqual(1);
-    const writeRec = records.find((r) => r.type === "file_written");
-    expect(writeRec).toBeDefined();
-    expect(writeRec!.subjectId).toBe("src/App.tsx");
-    expect(writeRec!.trustLevel).toBe("verified");
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
+    const record = mockInsertEvidence.mock.calls[0][0];
+    expect(record.type).toBe("file_written");
+    expect(record.subjectId).toBe("src/App.tsx");
+    expect(record.trustLevel).toBe("verified");
+    expect(record.attemptId).toBe("ta_test_1");
   });
 
   it("captures command_executed evidence for bash tool", async () => {
@@ -147,10 +161,10 @@ describe.skip("evidence-collector", () => {
       durationMs: 150,
     });
 
-    const records = listEvidenceForChildRun("run_test");
-    const cmdRec = records.find((r) => r.type === "command_executed");
-    expect(cmdRec).toBeDefined();
-    const payload = JSON.parse(cmdRec!.payloadJson);
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
+    const record = mockInsertEvidence.mock.calls[0][0];
+    expect(record.type).toBe("command_executed");
+    const payload = JSON.parse(record.payloadJson);
     expect(payload.exitCode).toBe(0);
     expect(payload.command).toBe("pnpm build");
   });
@@ -165,16 +179,16 @@ describe.skip("evidence-collector", () => {
       durationMs: 50,
     });
 
-    const records = listEvidenceForChildRun("run_test");
-    const cmdRec = records.find((r) => r.type === "command_executed");
-    expect(cmdRec).toBeDefined();
-    expect(cmdRec!.status).toBe("invalid");
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
+    const record = mockInsertEvidence.mock.calls[0][0];
+    expect(record.type).toBe("command_executed");
+    expect(record.status).toBe("invalid");
   });
 
   it("skips capture when taskExecution is null (non-task runs)", async () => {
     const ctx: ToolContext = {
       conversationId: "conv_test",
-      workspacePath: tempDir,
+      workspacePath: "/tmp/test",
       agentId: "ag_test",
       runId: "run_top_level",
       parentRunId: null,
@@ -189,8 +203,7 @@ describe.skip("evidence-collector", () => {
       durationMs: 5,
     });
 
-    const records = listEvidenceForChildRun("run_top_level");
-    expect(records).toHaveLength(0);
+    expect(mockInsertEvidence).not.toHaveBeenCalled();
   });
 
   it("does not throw on unknown tools", async () => {
@@ -204,23 +217,10 @@ describe.skip("evidence-collector", () => {
         durationMs: 1,
       })
     ).resolves.toBeUndefined();
+    expect(mockInsertEvidence).not.toHaveBeenCalled();
   });
 
-  it("evidence survives service restart (persisted to SQLite)", async () => {
-    const ctx = makeCtx();
-    await captureEvidence({
-      toolName: "fs_write",
-      args: { path: "src/App.tsx", content: "// code" },
-      result: { ok: true, value: {} },
-      context: ctx,
-      durationMs: 5,
-    });
-
-    const records = listEvidenceForChildRun("run_test");
-    expect(records.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("two attempts of same task produce separate evidence", async () => {
+  it("two attempts of same task produce separate evidence with different attemptId", async () => {
     const ctx1 = makeCtx({ taskExecution: { ...makeCtx().taskExecution!, attemptId: "ta_1", attempt: 1 } });
     const ctx2 = makeCtx({ runId: "run_test_2", taskExecution: { ...makeCtx().taskExecution!, attemptId: "ta_2", attempt: 2 } });
 
@@ -239,12 +239,9 @@ describe.skip("evidence-collector", () => {
       durationMs: 5,
     });
 
-    const att1Evidence = listEvidenceForAttempt("ta_1");
-    const att2Evidence = listEvidenceForAttempt("ta_2");
-    expect(att1Evidence.length).toBeGreaterThanOrEqual(1);
-    expect(att2Evidence.length).toBeGreaterThanOrEqual(1);
-    expect(att1Evidence[0].attemptId).toBe("ta_1");
-    expect(att2Evidence[0].attemptId).toBe("ta_2");
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(2);
+    expect(mockInsertEvidence.mock.calls[0][0].attemptId).toBe("ta_1");
+    expect(mockInsertEvidence.mock.calls[1][0].attemptId).toBe("ta_2");
   });
 
   it("marks task_reported evidence with trust level 'reported'", async () => {
@@ -257,61 +254,43 @@ describe.skip("evidence-collector", () => {
       durationMs: 2,
     });
 
-    const records = listEvidenceForChildRun("run_test");
-    const reportRec = records.find((r) => r.type === "task_reported");
-    expect(reportRec).toBeDefined();
-    expect(reportRec!.trustLevel).toBe("reported");
-  });
-});
-
-describe.skip("evidence-repository", () => {
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-repo-test-"));
-    process.env.AGENTMELD_DATA_DIR = tempDir;
-    resetBootstrapForTests();
-    resetClientForTests();
-    eventBus.clearForTests();
-    ensureDatabase();
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
+    const record = mockInsertEvidence.mock.calls[0][0];
+    expect(record.type).toBe("task_reported");
+    expect(record.trustLevel).toBe("reported");
   });
 
-  afterEach(() => {
-    resetBootstrapForTests();
-    resetClientForTests();
-    eventBus.clearForTests();
-    delete process.env.AGENTMELD_DATA_DIR;
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ok */ }
-  });
-
-  it("getEvidence returns stored record", async () => {
+  it("captures artifact_created with outputKey and artifactId", async () => {
     const ctx = makeCtx();
     await captureEvidence({
-      toolName: "fs_write",
-      args: { path: "src/Page.tsx", content: "// page" },
-      result: { ok: true, value: {} },
+      toolName: "write_artifact",
+      args: { type: "document", outputKey: "prd" },
+      result: { ok: true, value: { artifactId: "art_prd_123" } },
       context: ctx,
-      durationMs: 1,
+      durationMs: 30,
     });
 
-    const records = listEvidenceForChildRun("run_test");
-    expect(records.length).toBeGreaterThanOrEqual(1);
-    const retrieved = getEvidence(records[0].id);
-    expect(retrieved).toBeDefined();
-    expect(retrieved!.subjectId).toBe("src/Page.tsx");
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
+    const record = mockInsertEvidence.mock.calls[0][0];
+    expect(record.type).toBe("artifact_created");
+    const payload = JSON.parse(record.payloadJson);
+    expect(payload.outputKey).toBe("prd");
+    expect(payload.artifactId).toBe("art_prd_123");
   });
 
-  it("read_evidence rejects cross-conversation access", async () => {
-    const ctxA = makeCtx({ conversationId: "conv_a" });
-    await captureEvidence({
-      toolName: "fs_write",
-      args: { path: "src/f.tsx", content: "// f" },
-      result: { ok: true, value: {} },
-      context: ctxA,
-      durationMs: 1,
-    });
+  it("evidence insert failure does not throw (fire-and-forget)", async () => {
+    mockInsertEvidence.mockImplementationOnce(() => { throw new Error("DB down"); });
+    const ctx = makeCtx();
 
-    const records = listEvidenceForChildRun("run_test");
-    const evidence = getEvidence(records[0].id);
-    expect(evidence!.conversationId).toBe("conv_a");
-    expect(evidence!.conversationId).not.toBe("conv_other");
+    // Must not throw
+    await expect(
+      captureEvidence({
+        toolName: "fs_write",
+        args: { path: "src/ok.ts", content: "ok" },
+        result: { ok: true, value: {} },
+        context: ctx,
+        durationMs: 1,
+      })
+    ).resolves.toBeUndefined();
   });
 });

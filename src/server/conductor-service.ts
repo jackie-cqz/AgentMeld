@@ -685,23 +685,25 @@ async function runChildTask(
           continue;
         }
 
-        // P1: Strict provenance — verify artifact_created evidence from THIS attempt
+        // P1: Strict provenance — MUST have artifact_created evidence matching
+        // outputKey + artifactId from the current attempt. No tool-activity fallback:
+        // write_artifact(outputKey) must produce a verifiable evidence record.
         const hasArtifactEvidence = attemptArtifactEvidence.some((ev) => {
-          if (ev.subjectId !== outputKey) return false;
           try {
             const payload = JSON.parse(ev.payloadJson);
-            return payload.outputKey === outputKey || payload.artifactType;
+            // Must match outputKey, and if artifactType is present, the artifact
+            // ID must match what was reported
+            const keyMatch = ev.subjectId === outputKey || payload.outputKey === outputKey;
+            const artifactMatch = !payload.artifactId || payload.artifactId === artifactId;
+            return keyMatch && artifactMatch;
           } catch {
             return false;
           }
         });
-        // Also check in-memory evidence as fallback
-        const attemptEvidence = getRunToolEvidence(finalRunId);
-        const hasToolActivity = attemptEvidence.fileWrites.length > 0 || attemptEvidence.commands.length > 0;
 
-        if (!hasArtifactEvidence && !hasToolActivity) {
+        if (!hasArtifactEvidence) {
           console.warn(
-            `[output-binding] task ${task.id}: no artifact_created evidence from attempt ${finalAttemptId} for outputKey "${outputKey}" — rejected`
+            `[output-binding] task ${task.id}: no artifact_created evidence from attempt ${finalAttemptId} for outputKey "${outputKey}" artifactId "${artifactId}" — rejected`
           );
           continue;
         }

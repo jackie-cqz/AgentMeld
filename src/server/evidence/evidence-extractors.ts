@@ -107,14 +107,17 @@ export const extractArtifactRead: EvidenceExtractor = (ctx, args) => {
 
 // ── write_artifact ────────────────────────────────────────────────────────
 
-export const extractArtifactCreated: EvidenceExtractor = (ctx, args) => {
+export const extractArtifactCreated: EvidenceExtractor = (ctx, args, result) => {
   const artifactType = getStr(args, "type");
   const outputKey = getStr(args, "outputKey");
+  // Extract artifactId from the result if the tool returned one
+  const resultObj = result as { ok?: boolean; value?: { artifactId?: string; id?: string } } | undefined;
+  const artifactId = resultObj?.value?.artifactId ?? resultObj?.value?.id ?? "";
   return {
     type: "artifact_created",
     subjectType: "artifact",
     subjectId: outputKey || "unknown",
-    payload: { artifactType, outputKey, agentId: ctx.agentId },
+    payload: { artifactType, outputKey, artifactId, agentId: ctx.agentId },
     contentHash: null,
   };
 };
