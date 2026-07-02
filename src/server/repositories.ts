@@ -491,17 +491,19 @@ export function persistOrchestrationPlan(record: {
 }
 
 export function persistOutputBinding(record: {
-  orchestratorRunId: string;
+  orchestratorRunId?: string;
+  conductorRunId?: string;
   planId: string;
   producerTaskId: string;
   outputKey: string;
   artifactId: string;
   now: number;
 }) {
+  const runId = record.conductorRunId ?? record.orchestratorRunId ?? "";
   getDatabase().prepare(`
     INSERT OR REPLACE INTO orchestration_output_bindings (orchestrator_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(record.orchestratorRunId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
+  `).run(runId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
 }
 
 export function persistOrchestrationConflict(record: {
@@ -517,6 +519,85 @@ export function persistOrchestrationConflict(record: {
     INSERT INTO orchestration_conflicts (id, orchestrator_run_id, plan_id, path, wave, contributors_json, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'detected', ?)
   `).run(record.id, record.orchestratorRunId, record.planId, record.path, record.wave, record.contributorsJson, record.now);
+}
+
+// ── Conductor-named aliases (P0: TypeScript层统一映射为conductorRunId, ──
+// ── SQLite 列名 orchestrator_run_id 暂时保留)                          ──
+
+export function persistConductorTask(record: {
+  id: string;
+  conductorRunId: string;
+  conversationId: string;
+  taskId: string;
+  agentId: string;
+  title?: string | null;
+  status: string;
+  summary?: string | null;
+  childRunId?: string | null;
+  attempt: number;
+  errorCategory?: string | null;
+  now: number;
+}) {
+  return persistOrchestrationTask({
+    id: record.id,
+    orchestratorRunId: record.conductorRunId,
+    conversationId: record.conversationId,
+    taskId: record.taskId,
+    agentId: record.agentId,
+    title: record.title,
+    status: record.status,
+    summary: record.summary,
+    childRunId: record.childRunId,
+    attempt: record.attempt,
+    errorCategory: record.errorCategory,
+    now: record.now,
+  });
+}
+
+export function persistConductorPlan(record: {
+  id: string;
+  conductorRunId: string;
+  conversationId: string;
+  planJson: string;
+  revision?: number;
+  status?: string;
+  userFeedback?: string | null;
+  stageAtCreation?: string | null;
+  resumedFromRunId?: string | null;
+  now: number;
+}) {
+  return persistOrchestrationPlan({
+    id: record.id,
+    orchestratorRunId: record.conductorRunId,
+    conversationId: record.conversationId,
+    planJson: record.planJson,
+    revision: record.revision,
+    status: record.status,
+    userFeedback: record.userFeedback,
+    stageAtCreation: record.stageAtCreation,
+    resumedFromRunId: record.resumedFromRunId,
+    now: record.now,
+  });
+}
+
+export function persistConductorConflict(record: {
+  id: string;
+  conductorRunId: string;
+  planId: string;
+  path: string;
+  wave: number;
+  contributorsJson: string;
+  now: number;
+}) {
+  return persistOrchestrationConflict({
+    id: record.id,
+    orchestratorRunId: record.conductorRunId,
+    planId: record.planId,
+    path: record.path,
+    wave: record.wave,
+    contributorsJson: record.contributorsJson,
+    now: record.now,
+  });
 }
 
 export function listOrchestrationPlans(orchestratorRunId: string): Array<Record<string, unknown>> {

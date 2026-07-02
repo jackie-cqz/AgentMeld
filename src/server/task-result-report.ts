@@ -1,5 +1,5 @@
 import type { DispatchTaskReport } from "@/server/dispatch-task-results";
-import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { ParsedTask } from "@/server/tools/conductor-tools";
 
 export interface TaskEvidence {
   fileWrites: Array<{ path: string; action: string }>;

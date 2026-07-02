@@ -1,4 +1,4 @@
-import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { ParsedTask } from "@/server/tools/conductor-tools";
 
 export interface ResolvedInput {
   fromTaskId: string;

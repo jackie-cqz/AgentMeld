@@ -376,8 +376,9 @@ function seedBuiltinAgents() {
   `);
 
   for (const agent of BUILTIN_AGENTS) {
+    const { isConductor: _conductor, ...rest } = agent as unknown as Record<string, unknown>;
     insert.run({
-      ...agent,
+      ...rest,
       capabilities: JSON.stringify(agent.capabilities),
       toolNames: JSON.stringify(agent.toolNames),
       isBuiltin: agent.isBuiltin ? 1 : 0,

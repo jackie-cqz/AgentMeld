@@ -28,6 +28,7 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
     toolNames: [],
     isBuiltin: false,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: false,
     createdAt: 1,
     updatedAt: 1

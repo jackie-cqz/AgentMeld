@@ -17,12 +17,13 @@ import {
 } from "@/server/repositories";
 import { buildHistoryFor } from "@/server/conversation-context";
 import { getLatestSummary, calculateContextBudget } from "@/server/context-compaction-service";
-import { executeOrchestrator } from "@/server/orchestrator-service";
+import { executeConductor } from "@/server/conductor-service";
 import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
 import { getModelLimits } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { Agent, AgentRun, Conversation, Message, StreamEvent } from "@/shared/types";
+import type { TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { ChatMessage } from "@/server/conversation-context";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,8 @@ interface StartRunInput {
   triggerMessage: Message;
   runId?: string;
   parentRunId?: string | null;
+  /** P0: task execution identity — set for child runs dispatched by Conductor */
+  taskExecution?: TaskExecutionIdentity | null;
 }
 
 export interface RunHandle {
@@ -152,28 +155,28 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     runId: run.id
   });
 
-  // 6. Orchestrator branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
-  if (agent.isOrchestrator && conversation.mode === "group") {
+  // 6. Conductor branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
+  if (agent.isConductor && conversation.mode === "group") {
     try {
-      await executeOrchestrator({
+      await executeConductor({
         conversationId: input.conversationId,
-        orchestratorAgentId: agent.id,
+        conductorAgentId: agent.id,
         triggerMessage: input.triggerMessage,
         availableAgentIds: conversation.agentIds,
-        orchestratorRunId: run.id,
+        conductorRunId: run.id,
         messageId: message.id
       });
-      // If executeOrchestrator streamed events, update message parts from the DB record
+      // If executeConductor streamed events, update message parts from the DB record
       // (the adapter's streaming events were published with message.id)
       completeRun(run, message, "complete", null, {
-        modelId: agent.modelId ?? "orchestrator",
+        modelId: agent.modelId ?? "conductor",
         inputTokens: 0,
         outputTokens: 0
       });
     } catch (error) {
-      const errorText = error instanceof Error ? error.message : "Orchestrator failed.";
-      createErrorMessage(input.conversationId, message.id, `Orchestrator error: ${errorText}`);
-      completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "orchestrator", inputTokens: 0, outputTokens: 0 });
+      const errorText = error instanceof Error ? error.message : "Conductor failed.";
+      createErrorMessage(input.conversationId, message.id, `Conductor error: ${errorText}`);
+      completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "conductor", inputTokens: 0, outputTokens: 0 });
     }
     activeRuns.delete(run.id);
     return;
@@ -183,7 +186,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   const recentMessages = listMessages(input.conversationId).slice(-20);
 
   // Child tasks (dispatched by Orchestrator) MUST have report_task_result tool
-  const effectiveToolNames = input.parentRunId && !agent.toolNames.includes("report_task_result")
+  const isChildRun = Boolean(input.taskExecution || input.parentRunId);
+  const effectiveToolNames = isChildRun && !agent.toolNames.includes("report_task_result")
     ? [...agent.toolNames, "report_task_result"]
     : agent.toolNames;
 
@@ -210,7 +214,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
 
   // Build cross-run history (skip for child tasks — they get task-only context)
   let history: ChatMessage[] = [];
-  if (!input.parentRunId) {
+  if (!isChildRun) {
     try {
       const limits = getModelLimits(agent.modelProvider);
       const conversation = getConversation(input.conversationId);
@@ -282,7 +286,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     workspacePath,
     apiKey,
     apiBaseUrl,
-    history
+    history,
+    taskExecution: input.taskExecution ?? null
   };
 
   // 8. Consume adapter stream via unified consumeStream

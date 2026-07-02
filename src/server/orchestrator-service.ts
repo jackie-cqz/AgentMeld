@@ -437,7 +437,7 @@ async function runChildTask(
 
   try {
     // Build child prompt with full context
-        // Build upstream artifact references
+        // Build upstream artifact references — only from DAG-declared inputs
     const upstreamArtifacts: UpstreamArtifact[] = [];
     for (const ri of resolvedInputs) {
       if (ri.artifactId) {
@@ -447,14 +447,9 @@ async function runChildTask(
         }
       }
     }
-    for (const [, artId] of outputBindings) {
-      if (!upstreamArtifacts.some((a) => a.id === artId)) {
-        const art = getArtifact(artId);
-        if (art) {
-          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
-        }
-      }
-    }
+    // P0: Removed global outputBindings broadcast — side-branch artifacts
+    // must not leak into task context. Cross-task propagation is only via
+    // explicit dependsOn / inputs declarations in the Plan.
 
     // Build recent conversation snippet
     const recentConversation: Array<{ from: string; content: string }> = [];
@@ -527,18 +522,41 @@ async function runChildTask(
     const report = finalReport;
     const evaluation = finalEvaluation;
 
-    // P1.5: Strict output handoff — verify reported artifacts exist in DB
-    if (report?.artifacts) {
+    // P0: Strict output handoff — only verified-complete tasks may bind outputs
+    if (evaluation.status === "complete" && report?.artifacts) {
       for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
-        const art = getArtifact(artifactId);
-        if (art && art.conversationId === conversationId) {
-          outputBindings.set(`${task.id}.${outputKey}`, artifactId);
-          // P2: Persist output binding to DB
-          persistOutputBinding({
-            orchestratorRunId: parentRunId, planId: `plan_${parentRunId}_init`,
-            producerTaskId: task.id, outputKey, artifactId, now: Date.now()
-          });
+        // Validate outputKey exists in task.expectedOutputs
+        const expectedOutput = task.expectedOutputs?.find(
+          (eo) => eo.id === outputKey
+        );
+        if (!expectedOutput) {
+          console.warn(
+            `[output-binding] task ${task.id}: outputKey "${outputKey}" not declared in expectedOutputs — rejected`
+          );
+          continue;
         }
+
+        const art = getArtifact(artifactId);
+        if (!art || art.conversationId !== conversationId) {
+          console.warn(
+            `[output-binding] task ${task.id}: artifact ${artifactId} missing or wrong conversation — rejected`
+          );
+          continue;
+        }
+
+        // Validate artifact type matches expected output type
+        if (expectedOutput.type && art.type !== expectedOutput.type) {
+          console.warn(
+            `[output-binding] task ${task.id}: artifact type "${art.type}" does not match expected "${expectedOutput.type}" for outputKey "${outputKey}" — rejected`
+          );
+          continue;
+        }
+
+        outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+        persistOutputBinding({
+          orchestratorRunId: parentRunId, planId: `plan_${parentRunId}_init`,
+          producerTaskId: task.id, outputKey, artifactId, now: Date.now()
+        });
       }
     }
 

@@ -15,6 +15,7 @@ export interface BuiltinAgentSeed {
   toolNames: string[];
   isBuiltin: boolean;
   isOrchestrator: boolean;
+  isConductor: boolean;
   supportsVision: boolean;
 }
 
@@ -47,6 +48,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
     toolNames: ["plan_tasks", "report_task_result", "read_artifact", "ask_user"],
     isBuiltin: true,
     isOrchestrator: true,
+    isConductor: true,
     supportsVision: false
   },
   {
@@ -79,6 +81,7 @@ PRD 必须包含：
     toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
     isBuiltin: true,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: false
   },
   {
@@ -112,6 +115,7 @@ PRD 必须包含：
     toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
     isBuiltin: true,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: true
   },
   {
@@ -140,6 +144,7 @@ PRD 必须包含：
     toolNames: ["fs_read", "fs_write", "bash", "write_artifact", "read_artifact", "deploy_artifact", "deploy_workspace", "read_attachment"],
     isBuiltin: true,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: false
   },
   {
@@ -165,6 +170,7 @@ PRD 必须包含：
     toolNames: ["read_artifact", "read_attachment", "fs_list", "fs_read", "bash"],
     isBuiltin: true,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: false
   },
   {
@@ -190,6 +196,7 @@ PRD 必须包含：
     toolNames: ["write_artifact", "read_artifact"],
     isBuiltin: true,
     isOrchestrator: false,
+    isConductor: false,
     supportsVision: true
   }
 ];

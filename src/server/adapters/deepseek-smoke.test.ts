@@ -21,7 +21,7 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
       capabilities: [], adapterName: "custom", modelProvider: "deepseek",
       modelId: "deepseek-chat", apiKey: null, apiBaseUrl: null,
       systemPrompt: "You are helpful.", toolNames: [],
-      isBuiltin: false, isOrchestrator: false, supportsVision: false,
+      isBuiltin: false, isOrchestrator: false, isConductor: false, supportsVision: false,
       createdAt: 1, updatedAt: 1
     },
     conversation: {

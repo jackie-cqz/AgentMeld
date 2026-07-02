@@ -223,6 +223,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
         agentId: input.agent.id,
         runId: input.runId,
         parentRunId: input.parentRunId ?? null,
+        taskExecution: input.taskExecution ?? null,
         abortSignal: signal
       };
 

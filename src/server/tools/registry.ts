@@ -56,7 +56,7 @@ import { askUserTool } from "@/server/tools/ask-user";
 import { deployArtifactTool } from "@/server/tools/deploy-artifact";
 import { deployWorkspaceTool } from "@/server/tools/deploy-workspace";
 import { readAttachmentTool } from "@/server/tools/read-attachment";
-import { planTasksTool, reportTaskResultTool } from "@/server/tools/orchestrator-tools";
+import { planTasksTool, reportTaskResultTool } from "@/server/tools/conductor-tools";
 
 function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

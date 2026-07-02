@@ -1,9 +1,13 @@
+import type { TaskExecutionIdentity } from "@/shared/evidence-types";
+
 export interface ToolContext {
   conversationId: string;
   workspacePath: string;
   agentId: string;
   runId: string;
   parentRunId?: string | null;
+  /** P0: task execution identity — set for child runs dispatched by Conductor */
+  taskExecution?: TaskExecutionIdentity | null;
   abortSignal: AbortSignal;
 }
 

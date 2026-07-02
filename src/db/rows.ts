@@ -183,6 +183,7 @@ export function mapAgent(row: AgentRow): Agent {
     toolNames: parseJson<string[]>(row.tool_names, []),
     isBuiltin: row.is_builtin === 1,
     isOrchestrator: row.is_orchestrator === 1,
+    isConductor: row.is_orchestrator === 1,
     supportsVision: row.supports_vision === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at

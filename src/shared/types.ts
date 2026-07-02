@@ -145,6 +145,8 @@ export interface Agent {
   toolNames: string[];
   isBuiltin: boolean;
   isOrchestrator: boolean;
+  /** P0: canonical conductor flag — mirrors isOrchestrator, prefer this name going forward */
+  isConductor: boolean;
   supportsVision: boolean;
   createdAt: number;
   updatedAt: number;

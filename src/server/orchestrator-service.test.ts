@@ -27,6 +27,7 @@ function makeStubAgent(overrides: Partial<Agent> = {}): Agent {
     toolNames: ["plan_tasks", "ask_user"],
     isBuiltin: true,
     isOrchestrator: true,
+    isConductor: true,
     supportsVision: false,
     createdAt: 0,
     updatedAt: 0,
@@ -40,7 +41,8 @@ function makeStubWorker(id: string, name: string, caps: string[], tools: string[
     name,
     capabilities: caps,
     toolNames: tools,
-    isOrchestrator: false
+    isOrchestrator: false,
+    isConductor: false
   });
 }
 

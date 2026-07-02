@@ -41,3 +41,19 @@ export function newContextSummaryId() {
 export function newToolCallId() {
   return `call_${nanoid(ID_SIZE)}`;
 }
+
+export function newTaskAttemptId() {
+  return `ta_${nanoid(ID_SIZE)}`;
+}
+
+export function newContextSnapshotId() {
+  return `ctxsnap_${nanoid(ID_SIZE)}`;
+}
+
+export function newEvidenceId() {
+  return `ev_${nanoid(ID_SIZE)}`;
+}
+
+export function newVerdictId() {
+  return `vd_${nanoid(ID_SIZE)}`;
+}
