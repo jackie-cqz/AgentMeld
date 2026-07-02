@@ -15,10 +15,8 @@ import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites
 import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
-import { newMessageId, newTaskAttemptId, newContextSnapshotId } from "@/shared/ids";
+import { newMessageId } from "@/shared/ids";
 import type { Message, DispatchPlanItem, Agent } from "@/shared/types";
-import type { TaskExecutionIdentity } from "@/shared/evidence-types";
-import type { TaskContextEnvelope, ContextManifestItem } from "@/shared/task-context-types";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -137,14 +135,15 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     createSystemMessage(input.conversationId, "✅ 计划已批准，正在执行子任务...");
 
     // Convert validated DispatchPlanItem[] back to ParsedTask[] for execution
-    const finalPlan: ParsedTask[] = compiledPlan.map((t) => ({
+    const approvedPlan = result.plan ?? compiledPlan;
+    const finalPlan: ParsedTask[] = approvedPlan.map((t) => ({
       id: t.id,
       agentId: t.agentId,
       title: t.title ?? t.id,
       prompt: t.task,
       dependsOn: t.dependsOn,
-      inputs: (t.inputs ?? []).map((i: { fromTaskId: string; outputId: string; required?: boolean; description?: string }) => ({ fromTaskId: i.fromTaskId, outputId: i.outputId, required: i.required ?? true, description: i.description })),
-      expectedOutputs: (t.expectedOutputs ?? []).map((o: { id: string; type: string; required?: boolean; description?: string }) => ({ id: o.id, type: o.type as ParsedTask["expectedOutputs"][number]["type"], required: o.required ?? true, description: o.description })),
+      inputs: (t.inputs ?? []).map((i) => ({ ...i, required: i.required ?? true })),
+      expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: o.required ?? true })),
       acceptanceCriteria: t.acceptanceCriteria ?? [],
       maxAttempts: t.maxAttempts ?? 1,
       targetPaths: t.targetPaths,
@@ -202,9 +201,6 @@ export async function executeConductorPlan(
   const validTasks = plan.filter((t) => availableAgents.includes(t.agentId));
   const waves = topologicalWaves(validTasks);
 
-  // P0: Derive planId from conductorRunId (revision 0 for initial plan)
-  const planId = `plan_${conductorRunId}`;
-
   // ── Stage 1: DISPATCH — execute waves with per-wave conflict detection ──
   updateRunStage(conductorRunId, "dispatch", Date.now());
   publishDispatchPlan(conversationId, conductorRunId, validTasks);
@@ -244,7 +240,7 @@ export async function executeConductorPlan(
       }
 
       wavePromises.push(
-        runChildTask(conversationId, task, triggerMessage, conductorRunId, planId, outputBindings, abortSignal)
+        runChildTask(conversationId, task, triggerMessage, conductorRunId, outputBindings, abortSignal)
           .then((r) => {
             results.set(task.id, r);
             createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} ${task.title}: ${r.summary}`);
@@ -361,12 +357,11 @@ export async function executeConductorPlan(
         createSystemMessage(conversationId, `🔧 恢复计划：${recoveryResult.tasks.length} 个修复任务`);
 
         // Execute recovery tasks — they can depend on already-completed tasks
-        const recoveryPlanId = `${planId}_recovery`;
         const recoveryWaves = topologicalWaves(recoveryResult.tasks.filter((t) => availableAgents.includes(t.agentId)));
         for (const wave of recoveryWaves) {
           if (abortSignal.aborted) break;
           const recoveryPromises = wave.map((task) =>
-            runChildTask(conversationId, task, triggerMessage, conductorRunId, recoveryPlanId, outputBindings, abortSignal)
+            runChildTask(conversationId, task, triggerMessage, conductorRunId, outputBindings, abortSignal)
               .then((r) => {
                 results.set(task.id, r);
                 createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} [恢复] ${task.title}: ${r.summary}`);
@@ -417,7 +412,6 @@ async function runChildTask(
   task: ParsedTask,
   triggerMessage: Message,
   parentRunId: string,
-  planId: string,
   outputBindings: Map<string, string>,
   signal: AbortSignal
 ): Promise<TaskResult> {
@@ -444,7 +438,7 @@ async function runChildTask(
 
   try {
     // Build child prompt with full context
-        // Build upstream artifact references — only from DAG-declared inputs
+        // Build upstream artifact references
     const upstreamArtifacts: UpstreamArtifact[] = [];
     for (const ri of resolvedInputs) {
       if (ri.artifactId) {
@@ -454,9 +448,14 @@ async function runChildTask(
         }
       }
     }
-    // P0: Removed global outputBindings broadcast — side-branch artifacts
-    // must not leak into task context. Cross-task propagation is only via
-    // explicit dependsOn / inputs declarations in the Plan.
+    for (const [, artId] of outputBindings) {
+      if (!upstreamArtifacts.some((a) => a.id === artId)) {
+        const art = getArtifact(artId);
+        if (art) {
+          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
+        }
+      }
+    }
 
     // Build recent conversation snippet
     const recentConversation: Array<{ from: string; content: string }> = [];
@@ -483,35 +482,8 @@ async function runChildTask(
     let finalRunId = "";
     let finalEvaluation = evaluateChildTaskResult(task, undefined);
     let finalReport: ReturnType<typeof getTaskReport>;
-    let finalAttemptId = "";
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // P0: Generate task execution identity for this attempt
-      const attemptId = newTaskAttemptId();
-      const contextSnapshotId = newContextSnapshotId();
-
-      const taskExecution: TaskExecutionIdentity = {
-        conductorRunId: parentRunId,
-        planId,
-        planRevision: planId.endsWith("_recovery") ? 1 : 0,
-        taskId: task.id,
-        attemptId,
-        attempt,
-        contextSnapshotId
-      };
-
-      // P0: Build minimal context snapshot (full compilation in P2)
-      const lastError = finalEvaluation.error;
-      const envelope = buildMinimalContextEnvelope(
-        taskExecution,
-        task,
-        resolvedInputs,
-        upstreamArtifacts,
-        attempt > 1 && lastError
-          ? { previousAttemptId: finalAttemptId, error: lastError }
-          : undefined
-      );
-
       const attemptPrompt = attempt > 1
         ? buildContinuationPrompt(prompt, attempt, maxAttempts, finalEvaluation.error ?? "unknown")
         : prompt;
@@ -535,14 +507,7 @@ async function runChildTask(
         attempt
       });
 
-      // P0: Pass taskExecution identity into the child run
-      const { runId: attemptRunId, promise } = startAgentRun({
-        conversationId,
-        agentId: task.agentId,
-        triggerMessage: attemptMsg,
-        parentRunId,
-        taskExecution
-      });
+      const { runId: attemptRunId, promise } = startAgentRun({ conversationId, agentId: task.agentId, triggerMessage: attemptMsg, parentRunId });
       try {
         await promise;
       } catch {
@@ -554,7 +519,6 @@ async function runChildTask(
       finalEvaluation = evaluateChildTaskResult(task, report, evidence);
       finalRunId = attemptRunId;
       finalReport = report;
-      finalAttemptId = attemptId;
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
 
@@ -562,70 +526,26 @@ async function runChildTask(
     }
 
     const report = finalReport;
+    const evaluation = finalEvaluation;
 
-    // P0: Check for missing required outputs — fail before binding anything
-    const missingRequiredOutputs = (task.expectedOutputs ?? [])
-      .filter((eo) => eo.required)
-      .filter((eo) => !report?.artifacts || !(eo.id in report.artifacts));
-    if (missingRequiredOutputs.length > 0 && finalEvaluation.status === "complete") {
-      const missingKeys = missingRequiredOutputs.map((eo) => eo.id).join(", ");
-      console.warn(
-        `[output-binding] task ${task.id}: required outputs missing: ${missingKeys} — marking as failed`
-      );
-      finalEvaluation = { status: "failed", error: `Missing required outputs: ${missingKeys}` };
-    }
-
-    // P0: Strict output handoff — only verified-complete tasks may bind outputs
-    if (finalEvaluation.status === "complete" && report?.artifacts) {
+    // P1.5: Strict output handoff — verify reported artifacts exist in DB
+    if (report?.artifacts) {
       for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
-        // Validate outputKey exists in task.expectedOutputs
-        const expectedOutput = task.expectedOutputs?.find(
-          (eo) => eo.id === outputKey
-        );
-        if (!expectedOutput) {
-          console.warn(
-            `[output-binding] task ${task.id}: outputKey "${outputKey}" not declared in expectedOutputs — rejected`
-          );
-          continue;
-        }
-
         const art = getArtifact(artifactId);
-        if (!art || art.conversationId !== conversationId) {
-          console.warn(
-            `[output-binding] task ${task.id}: artifact ${artifactId} missing or wrong conversation — rejected`
-          );
-          continue;
+        if (art && art.conversationId === conversationId) {
+          outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+          // P2: Persist output binding to DB
+          persistOutputBinding({
+            conductorRunId: parentRunId, planId: `plan_${parentRunId}_init`,
+            producerTaskId: task.id, outputKey, artifactId, now: Date.now()
+          });
         }
-
-        // Validate artifact type matches expected output type
-        if (expectedOutput.type && art.type !== expectedOutput.type) {
-          console.warn(
-            `[output-binding] task ${task.id}: artifact type "${art.type}" does not match expected "${expectedOutput.type}" for outputKey "${outputKey}" — rejected`
-          );
-          continue;
-        }
-
-        // P0: Basic provenance — verify tool activity from current attempt
-        const attemptEvidence = getRunToolEvidence(finalRunId);
-        const hasToolActivity = attemptEvidence.fileWrites.length > 0 || attemptEvidence.commands.length > 0;
-        if (!hasToolActivity && !report.summary) {
-          console.warn(
-            `[output-binding] task ${task.id}: no tool evidence from current attempt ${finalAttemptId} — rejected`
-          );
-          continue;
-        }
-
-        outputBindings.set(`${task.id}.${outputKey}`, artifactId);
-        persistOutputBinding({
-          conductorRunId: parentRunId, planId,
-          producerTaskId: task.id, outputKey, artifactId, now: Date.now()
-        });
       }
     }
 
     // P1.4: Map "blocked" → "failed" for dispatch.end event
     const dispatchStatus: "complete" | "failed" | "aborted" | "skipped" =
-      finalEvaluation.status === "blocked" ? "failed" : finalEvaluation.status;
+      evaluation.status === "blocked" ? "failed" : evaluation.status;
 
     // P1.4: Publish task.end with agentId
     eventBus.publish({
@@ -637,7 +557,7 @@ async function runChildTask(
       taskId: task.id,
       agentId: task.agentId,
       status: dispatchStatus,
-      error: finalEvaluation.error
+      error: evaluation.error
     });
 
     // Legacy dispatch.end — keep for backward compatibility
@@ -645,13 +565,13 @@ async function runChildTask(
       type: "dispatch.end", conversationId, timestamp: Date.now(),
       parentRunId, childRunId: finalRunId, taskId: task.id,
       status: dispatchStatus,
-      error: finalEvaluation.error
+      error: evaluation.error
     });
 
     return {
       taskId: task.id,
-      status: finalEvaluation.status === "complete" ? "complete" : "failed",
-      summary: report?.summary ?? finalEvaluation.error ?? `Task "${task.title}" completed.`,
+      status: evaluation.status === "complete" ? "complete" : "failed",
+      summary: report?.summary ?? evaluation.error ?? `Task "${task.title}" completed.`,
       childRunId: finalRunId
     };
   } finally {
@@ -853,151 +773,6 @@ export const CONDUCTOR_PLAN_TOOLS = [
   "fs_list",
   "fs_read"
 ] as const;
-
-// ---------------------------------------------------------------------------
-// P0: Minimal Context Envelope builder
-// ---------------------------------------------------------------------------
-
-interface MinimalEnvelopeFailureHint {
-  previousAttemptId: string;
-  error: string;
-}
-
-export function buildMinimalContextEnvelope(
-  identity: TaskExecutionIdentity,
-  task: ParsedTask,
-  resolvedInputs: ReturnType<typeof resolveTaskInputs>,
-  upstreamArtifacts: UpstreamArtifact[],
-  failureHint?: MinimalEnvelopeFailureHint
-): TaskContextEnvelope {
-  const manifestItems: ContextManifestItem[] = [];
-  const now = Date.now();
-
-  // Task objective (required)
-  manifestItems.push({
-    id: `ctx_obj_${identity.attemptId}`,
-    category: "task",
-    sourceType: "plan",
-    sourceId: identity.planId,
-    reason: "task objective",
-    required: true,
-    trustLevel: "authoritative",
-    tokenEstimate: Math.ceil(task.prompt.length / 4),
-    included: true,
-    omittedReason: null
-  });
-
-  // Upstream inputs (from DAG-declared dependencies)
-  for (const ri of resolvedInputs) {
-    manifestItems.push({
-      id: `ctx_inp_${ri.fromTaskId}_${ri.outputId}`,
-      category: "upstream_input",
-      sourceType: "artifact",
-      sourceId: ri.artifactId ?? "missing",
-      reason: `required input: ${ri.fromTaskId}.${ri.outputId}`,
-      required: ri.required,
-      trustLevel: "accepted",
-      tokenEstimate: 0,
-      included: !ri.missing,
-      omittedReason: ri.missing ? "unverified" : null
-    });
-  }
-
-  // Upstream artifacts
-  for (const art of upstreamArtifacts) {
-    manifestItems.push({
-      id: `ctx_art_${art.id}`,
-      category: "upstream_input",
-      sourceType: "artifact",
-      sourceId: art.id,
-      reason: `upstream artifact: ${art.title}`,
-      required: true,
-      trustLevel: "accepted",
-      tokenEstimate: 0,
-      included: true,
-      omittedReason: null
-    });
-  }
-
-  // Failure context (retry delta)
-  if (failureHint) {
-    manifestItems.push({
-      id: `ctx_fail_${identity.attemptId}`,
-      category: "failure",
-      sourceType: "evaluation",
-      sourceId: failureHint.previousAttemptId,
-      reason: `previous attempt failed: ${failureHint.error}`,
-      required: true,
-      trustLevel: "verified",
-      tokenEstimate: 0,
-      included: true,
-      omittedReason: null
-    });
-  }
-
-  const envelope: TaskContextEnvelope = {
-    schemaVersion: 1,
-    policyVersion: "evidence-context-p0-v1",
-    identity: {
-      conductorRunId: identity.conductorRunId,
-      planId: identity.planId,
-      planRevision: identity.planRevision,
-      taskId: identity.taskId,
-      attemptId: identity.attemptId,
-      attempt: identity.attempt,
-      contextSnapshotId: identity.contextSnapshotId
-    },
-    task: {
-      title: task.title,
-      objective: task.prompt,
-      assignedAgentId: task.agentId,
-      dependsOn: task.dependsOn
-    },
-    requirements: {
-      constraints: [],
-      expectedOutputs: (task.expectedOutputs ?? []).map((eo) => ({
-        outputKey: eo.id,
-        type: eo.type,
-        required: eo.required ?? true,
-        description: eo.description
-      }))
-    },
-    upstreamInputs: resolvedInputs
-      .filter((ri) => ri.artifactId)
-      .map((ri) => ({
-        fromTaskId: ri.fromTaskId,
-        outputKey: ri.outputId,
-        artifactId: ri.artifactId!,
-        artifactVersion: 0,
-        artifactType: "unknown",
-        title: ri.outputId,
-        verificationId: "",
-        evidenceIds: []
-      })),
-    failureContext: failureHint
-      ? {
-          previousAttemptId: failureHint.previousAttemptId,
-          previousChildRunId: "",
-          failedCriteria: [],
-          failedEvidenceIds: [],
-          failedCommands: [],
-          missingOutputs: [],
-          changedFiles: [],
-          retryInstructions: [`Previous attempt failed: ${failureHint.error}`]
-        }
-      : null,
-    manifest: manifestItems,
-    budget: {
-      maxInputTokens: 0,
-      requiredTokens: 0,
-      optionalTokens: 0,
-      omittedTokens: 0
-    },
-    createdAt: now
-  };
-
-  return envelope;
-}
 
 /**
  * Build the complete system prompt for the Conductor's PLAN (assess) stage.

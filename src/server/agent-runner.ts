@@ -22,8 +22,7 @@ import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/
 import { estimateTokens } from "@/shared/token-estimate";
 import { getModelLimits } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
-import type { Agent, AgentRun, Conversation, Message, StreamEvent } from "@/shared/types";
-import type { TaskExecutionIdentity } from "@/shared/evidence-types";
+import type { Agent, AgentRun, Conversation, Message } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 
 // ---------------------------------------------------------------------------
@@ -61,8 +60,6 @@ interface StartRunInput {
   triggerMessage: Message;
   runId?: string;
   parentRunId?: string | null;
-  /** P0: task execution identity — set for child runs dispatched by Conductor */
-  taskExecution?: TaskExecutionIdentity | null;
 }
 
 export interface RunHandle {
@@ -182,12 +179,11 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     return;
   }
 
-  // 7. Normal adapter flow (non-orchestrator agents)
+  // 7. Normal adapter flow (non-conductor agents)
   const recentMessages = listMessages(input.conversationId).slice(-20);
 
-  // Child tasks (dispatched by Orchestrator) MUST have report_task_result tool
-  const isChildRun = Boolean(input.taskExecution || input.parentRunId);
-  const effectiveToolNames = isChildRun && !agent.toolNames.includes("report_task_result")
+  // Child tasks (dispatched by Conductor) MUST have report_task_result tool
+  const effectiveToolNames = input.parentRunId && !agent.toolNames.includes("report_task_result")
     ? [...agent.toolNames, "report_task_result"]
     : agent.toolNames;
 
@@ -214,7 +210,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
 
   // Build cross-run history (skip for child tasks — they get task-only context)
   let history: ChatMessage[] = [];
-  if (!isChildRun) {
+  if (!input.parentRunId) {
     try {
       const limits = getModelLimits(agent.modelProvider);
       const conversation = getConversation(input.conversationId);
@@ -286,8 +282,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     workspacePath,
     apiKey,
     apiBaseUrl,
-    history,
-    taskExecution: input.taskExecution ?? null
+    history
   };
 
   // 8. Consume adapter stream via unified consumeStream
@@ -434,7 +429,7 @@ function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePa
 }
 
 function buildToolGuidance(toolNames: string[], workspacePath: string): string {
-  const lines: string[] = ["\n## AgentHub 工具调用规范"];
+  const lines: string[] = ["\n## AgentMeld 工具调用规范"];
   lines.push("- 需要调用工具时，必须用工具调用通道提交结构化参数，不要把 JSON 示例写进普通回复里假装调用。");
   lines.push("- 字段名必须严格使用工具 schema 里的 camelCase。");
   lines.push("- 不要编造 artifactId、attachmentId、outputKey、文件路径；只能使用上下文里明确给出的 id / 路径。");
@@ -444,8 +439,12 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
     lines.push("\n### write_artifact");
     lines.push("用途：创建用户需要预览、下载、交接或长期保存的产物；不要用它记录普通聊天结论。");
     lines.push("硬性要求：调用前必须已经准备好完整参数；严禁 write_artifact({})，严禁先空调用工具再补参数。");
-    lines.push("web_app 正确参数：write_artifact({ type: \"web_app\", title: \"...\", content: { files: { \"index.html\": \"...\" }, entry: \"index.html\" } })。");
-    lines.push("document 正确参数：write_artifact({ type: \"document\", title: \"...\", content: { format: \"markdown\", content: \"# Title\\n...\" } })。");
+    lines.push("document 参数必须是合法 JSON：{\"type\":\"document\",\"title\":\"...\",\"content\":\"# Title\\n...\"}。");
+    lines.push("web_app 参数必须是合法 JSON：{\"type\":\"web_app\",\"title\":\"...\",\"content\":{\"files\":{\"index.html\":\"...\"},\"entry\":\"index.html\"}}。");
+    lines.push("document 的 content 直接放 markdown 字符串，不要写 content: format，也不要再嵌套一个 content 字段。");
+    lines.push("web_app 的 content 必须直接传 JSON 对象，绝对不要先 JSON.stringify。");
+    lines.push("Markdown / HTML / CSS / JS 内容里的换行必须作为字符串转义写成 \\n，不要在 JSON 字符串里放真实换行。");
+    lines.push("单个文档保持精炼，避免超过一次工具调用的输出容量；内容确实很长时拆成多个有明确标题的 document 产物。");
     lines.push("常见错误：把 content 作为 JSON 字符串传入、编造 id、或用 write_artifact 写应该落盘的源码。");
   }
 
@@ -462,6 +461,8 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
     lines.push("正确流程：先 write_artifact 得到 artifactId，再 deploy_artifact({ artifactId: \"art_123\" })。");
     lines.push("deploy_workspace 用于本地项目构建后的静态目录（如 dist、build）。");
     lines.push("常见错误：自己编造 http://localhost:3000/... 或公网域名——只能引用工具返回的 previewPath。");
+    lines.push("硬性禁止：没有在本轮真实调用 deploy_artifact / deploy_workspace 并收到工具结果时，不得声称“部署成功”“已重新部署成功”，不得手写 /deployments/dep_*、[部署预览: ...] 或 [产物: ...]。");
+    lines.push("部署工具成功后，系统会自动生成部署卡和产物卡；普通回复里只需要简短说明，不要重复伪造卡片格式。");
   }
 
   if (toolNames.includes("fs_write")) {
@@ -480,14 +481,15 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
 
   if (toolNames.includes("plan_tasks")) {
     lines.push("\n### plan_tasks");
-    lines.push("用途：Orchestrator 用结构化计划拆分子任务；执行顺序只认 dependsOn 字段。");
+    lines.push("用途：Conductor 用结构化计划拆分子任务；执行顺序只认 dependsOn 字段。");
     lines.push("正确案例：t2.dependsOn=[\"t1\"]，不要只在 task 文本里写\"基于 t1\"。");
   }
 
   if (toolNames.includes("report_task_result")) {
     lines.push("\n### report_task_result");
-    lines.push("用途：被 Orchestrator 分派的子任务结束前必须调用一次，报告真实语义结果。");
-    lines.push("正确：status: \"complete\" | \"failed\" | \"blocked\"，附带 summary + acceptanceResults。");
+    lines.push("用途：被 Conductor 分派的子任务结束前必须调用一次，报告真实语义结果。");
+    lines.push("只提交最小 JSON：{\"status\":\"complete\",\"summary\":\"完成了什么\"}。失败/阻塞时可加 blockers。");
+    lines.push("不要手写 artifacts；如果任务产出了产物，在 write_artifact 时传 outputKey，系统会自动记录。");
     lines.push("错误：代码部分完成、测试失败、或缺少依赖时仍上报 complete。");
   }
 

@@ -23,8 +23,8 @@ import type { StreamEvent } from "@/shared/types";
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conference-run-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-run-"));
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetDatabaseForTests();
   eventBus.clearForTests();
@@ -34,7 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetDatabaseForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });

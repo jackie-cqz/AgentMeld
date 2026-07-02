@@ -1,6 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, expect } from "vitest";
 import { consumeStream } from "@/server/consume-stream";
+import { eventBus } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
+import { setupTestDatabase } from "@/test/test-database";
+
+let cleanupDatabase: (() => void) | undefined;
+
+beforeAll(() => {
+  cleanupDatabase = setupTestDatabase("agentmeld-consume-stream-");
+});
+
+afterAll(() => {
+  cleanupDatabase?.();
+});
 
 /** Helper: creates an async generator from an array of StreamEvents */
 async function* eventsToStream(events: StreamEvent[]): AsyncGenerator<StreamEvent> {
@@ -10,6 +22,10 @@ async function* eventsToStream(events: StreamEvent[]): AsyncGenerator<StreamEven
 }
 
 describe("consumeStream", () => {
+  afterEach(() => {
+    eventBus.clearForTests();
+  });
+
   it("accumulates text parts and returns them", async () => {
     const events: StreamEvent[] = [
       {
@@ -218,6 +234,44 @@ describe("consumeStream", () => {
     expect(deployParts[0]).toMatchObject({
       type: "deploy_status",
       deployment: expect.objectContaining({ id: "dep_1", status: "ready" })
+    });
+  });
+
+  it("broadcasts deploy.status as a synthetic part.start for live UI", async () => {
+    const published: StreamEvent[] = [];
+    const unsubscribe = eventBus.subscribe(({ event }) => {
+      published.push(event);
+    });
+
+    const deployment = {
+      id: "dep_live",
+      artifactId: "art_live",
+      title: "Live Preview",
+      version: 1,
+      status: "ready" as const,
+      previewPath: "/deployments/dep_live",
+      createdAt: 1
+    };
+
+    await consumeStream({
+      stream: eventsToStream([{
+        type: "deploy.status",
+        conversationId: "c1",
+        timestamp: 1,
+        messageId: "",
+        deployment
+      }]),
+      messageId: "msg_live",
+      runId: "run_live"
+    });
+
+    unsubscribe();
+    const partStart = published.find((event) => event.type === "part.start");
+    expect(partStart).toMatchObject({
+      type: "part.start",
+      messageId: "msg_live",
+      partIndex: 0,
+      part: { type: "deploy_status", deployment }
     });
   });
 

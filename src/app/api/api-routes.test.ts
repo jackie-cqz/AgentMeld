@@ -20,8 +20,8 @@ let tempDir: string;
 let conversationId: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conference-api-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-api-"));
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetDatabaseForTests();
   eventBus.clearForTests();
@@ -30,7 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetDatabaseForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -211,7 +211,7 @@ describe("POST /api/conversations/[id]/messages", () => {
   it("passes mentionedAgentIds through", async () => {
     const createRes = await postConversations(jsonRequest("POST", {
       mode: "group",
-      agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
+      agentIds: ["ag_mock_conductor", "ag_mock_builder"]
     }));
     const { conversation } = (await createRes.json()) as { conversation: { id: string } };
 

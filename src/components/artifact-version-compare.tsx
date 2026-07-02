@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowLeftRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { FileDiffView } from "@/components/file-diff-view";
 import type { Artifact } from "@/shared/types";
@@ -33,10 +34,27 @@ export function ArtifactVersionCompare({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
         <VersionSelect label="原版本" value={oldId} versions={versions} onChange={setOldId} />
+        <button
+          type="button"
+          onClick={() => {
+            setOldId(newId);
+            setNewId(oldId);
+          }}
+          className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"
+          title="交换版本"
+        >
+          <ArrowLeftRight className="h-4 w-4" />
+        </button>
         <VersionSelect label="新版本" value={newId} versions={versions} onChange={setNewId} />
       </div>
+      {oldVersion && newVersion ? (
+        <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          <span>v{oldVersion.version} · {new Date(oldVersion.createdAt).toLocaleString("zh-CN")}</span>
+          <span>v{newVersion.version} · {new Date(newVersion.createdAt).toLocaleString("zh-CN")}</span>
+        </div>
+      ) : null}
       {oldVersion?.content.type === "document" && newVersion?.content.type === "document" ? (
         <FileDiffView oldContent={oldVersion.content.content} newContent={newVersion.content.content} />
       ) : null}

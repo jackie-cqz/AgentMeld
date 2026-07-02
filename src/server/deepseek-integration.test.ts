@@ -15,7 +15,7 @@ let mockServer: ReturnType<typeof createDeepSeekMockServer>;
 
 beforeEach(async () => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-int-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -25,7 +25,7 @@ beforeEach(async () => {
 afterEach(async () => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   if (mockServer) await mockServer.stop();
   fs.rmSync(tempDir, { recursive: true, force: true });

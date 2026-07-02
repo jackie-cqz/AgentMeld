@@ -33,6 +33,7 @@ function createPayload(): BootstrapPayload {
         agentIds: [],
         fsWriteApprovalMode: "auto",
         pinnedMessageIds: [],
+        pinnedAt: null,
         archived: false,
         createdAt: 1,
         updatedAt: 1
@@ -44,6 +45,7 @@ function createPayload(): BootstrapPayload {
         agentIds: [],
         fsWriteApprovalMode: "review",
         pinnedMessageIds: [],
+        pinnedAt: null,
         archived: false,
         createdAt: 2,
         updatedAt: 3

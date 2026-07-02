@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { eventBus } from "@/server/event-bus";
 import {
   getConversation,
   getMessage,

@@ -20,9 +20,6 @@ export const deployArtifactTool: ToolDef = {
     }
 
     const result = deployArtifact(parsed.data.artifactId, ctx.conversationId);
-    if (result.status !== "ready") {
-      return { ok: false, error: result.error ?? "Deployment failed." };
-    }
     return { ok: true, value: result };
   }
 };

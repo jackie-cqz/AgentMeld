@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DispatchTaskReport } from "@/server/dispatch-task-results";
 import { evaluateChildTaskResult, type TaskEvidence } from "@/server/task-result-report";
-import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { ParsedTask } from "@/server/tools/conductor-tools";
 
 function task(overrides: Partial<ParsedTask> = {}): ParsedTask {
   return {

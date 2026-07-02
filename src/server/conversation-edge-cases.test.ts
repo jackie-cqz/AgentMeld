@@ -14,7 +14,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-edge-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -27,7 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   clearPendingWritesForTests();
   clearPendingBashForTests();
@@ -45,7 +45,7 @@ describe("conversation edge cases", () => {
   it("group conversation requires title defaults to auto-generated", () => {
     const conv = createConversation({
       mode: "group",
-      agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
+      agentIds: ["ag_mock_conductor", "ag_mock_builder"]
     });
     expect(conv.title).toBeTruthy();
   });

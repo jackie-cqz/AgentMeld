@@ -14,6 +14,7 @@ import {
   createMessage,
   deleteConversation as removeConversation,
   getConversation,
+  getMessage,
   listAgents,
   listArtifacts,
   listConversations,
@@ -50,6 +51,9 @@ interface UpdateConversationInput {
   archived?: boolean;
   pinnedMessageIds?: string[];
   fsWriteApprovalMode?: FsWriteApprovalMode;
+  mode?: "single" | "group";
+  agentIds?: string[];
+  pinnedAt?: number | null;
 }
 
 interface SendMessageInput {
@@ -57,6 +61,7 @@ interface SendMessageInput {
   content: string;
   mentionedAgentIds?: string[];
   attachmentIds?: string[];
+  parentMessageId?: string | null;
 }
 
 export function getBootstrapPayload(): BootstrapPayload {
@@ -85,7 +90,7 @@ export function createConversation(input: CreateConversationInput) {
   const agentIds =
     input.agentIds && input.agentIds.length > 0
       ? input.agentIds
-      : agents.filter((agent) => agent.isOrchestrator || agent.name.includes("前端")).map((agent) => agent.id);
+      : agents.filter((agent) => agent.isConductor || agent.name.includes("前端")).map((agent) => agent.id);
   const mode = input.mode ?? (agentIds.length > 1 ? "group" : "single");
 
   validateConversationAgents(mode, agentIds, agents);
@@ -123,8 +128,16 @@ export function patchConversation(conversationId: string, input: UpdateConversat
     throw new Error("PIN_LIMIT_EXCEEDED");
   }
 
+  const current = getConversation(conversationId);
+  if (!current) return null;
+  const mode = input.mode ?? current.mode;
+  const agentIds = input.agentIds ?? current.agentIds;
+  validateConversationAgents(mode, agentIds, listAgents());
+
   return updateConversation(conversationId, {
     ...input,
+    mode,
+    agentIds,
     title: input.title?.trim() || undefined,
     now: Date.now()
   });
@@ -150,6 +163,12 @@ export async function sendMessage(input: SendMessageInput) {
 
   const conversation = getConversation(input.conversationId);
   if (!conversation) throw new Error("Conversation not found.");
+  if (input.parentMessageId) {
+    const parent = getMessage(input.parentMessageId);
+    if (!parent || parent.conversationId !== input.conversationId) {
+      throw new Error("Reply target does not belong to this conversation.");
+    }
+  }
 
   const now = Date.now();
   const mentionedAgentIds = input.mentionedAgentIds ?? [];
@@ -175,6 +194,7 @@ export async function sendMessage(input: SendMessageInput) {
     parts,
     status: "complete",
     mentionedAgentIds,
+    parentMessageId: input.parentMessageId ?? null,
     now
   });
 
@@ -219,10 +239,10 @@ function pickResponders(conversation: Conversation, mentionedAgentIds: string[])
     return allowedMentionIds;
   }
 
-  const orchestrator = listAgents().find(
-    (agent) => agent.isOrchestrator && conversation.agentIds.includes(agent.id)
+  const conductor = listAgents().find(
+    (agent) => agent.isConductor && conversation.agentIds.includes(agent.id)
   );
-  return orchestrator ? [orchestrator.id] : [];
+  return conductor ? [conductor.id] : [];
 }
 
 function createWorkspace(conversationId: string, now: number) {
@@ -297,6 +317,16 @@ async function handleDeployCommand(conversationId: string, intent: { artifactId?
   return { deployed: false, candidates };
 }
 
+export async function deployConversationArtifact(conversationId: string, artifactId: string) {
+  const conversation = getConversation(conversationId);
+  if (!conversation) throw new Error("Conversation not found.");
+  const artifact = listArtifacts(conversationId).find((item) => item.id === artifactId);
+  if (!artifact) throw new Error("Artifact not found in this conversation.");
+  if (artifact.type !== "web_app") throw new Error("Only web_app artifacts can be deployed.");
+  const deploy = await handleDeployCommand(conversationId, { artifactId });
+  return deploy;
+}
+
 function detectDeployCommand(content: string): { artifactId?: string } | null {
   const trimmed = content.trim();
   // Match: /deploy, 部署, 发布, 上线, /deploy art_xxx
@@ -339,10 +369,10 @@ function validateConversationAgents(mode: "single" | "group", agentIds: string[]
     throw new Error(`Unknown agent: ${missingId}`);
   }
 
-  const orchestratorCount = agentIds.filter((agentId) =>
-    agents.some((agent) => agent.id === agentId && agent.isOrchestrator)
+  const conductorCount = agentIds.filter((agentId) =>
+    agents.some((agent) => agent.id === agentId && agent.isConductor)
   ).length;
-  if (orchestratorCount > 1) {
-    throw new Error("Group conversation can include at most one orchestrator.");
+  if (conductorCount > 1) {
+    throw new Error("Group conversation can include at most one Conductor.");
   }
 }

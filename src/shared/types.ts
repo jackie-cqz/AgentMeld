@@ -124,7 +124,7 @@ export interface PptSlide {
 
 export type ArtifactContent =
   | { type: "document"; format?: "markdown"; content: string }
-  | { type: "web_app"; files: Record<string, string>; entry: string }
+  | { type: "web_app"; files: Record<string, string>; entry: string; deploymentPreviewPath?: string; sourceType?: "artifact" | "workspace" }
   | { type: "image"; url: string; alt?: string; width?: number; height?: number }
   | { type: "code_file"; workspacePath: string; language?: string; sizeBytes?: number; checksum?: string }
   | { type: "diff"; targetArtifactId: string; hunks: DiffHunk[]; applied: boolean }
@@ -144,8 +144,6 @@ export interface Agent {
   systemPrompt: string;
   toolNames: string[];
   isBuiltin: boolean;
-  isOrchestrator: boolean;
-  /** P0: canonical conductor flag — mirrors isOrchestrator, prefer this name going forward */
   isConductor: boolean;
   supportsVision: boolean;
   createdAt: number;
@@ -232,9 +230,9 @@ export interface AgentRun {
   updatedAt: number;
 }
 
-export interface OrchestrationTaskRecord {
+export interface ConductorTaskRecord {
   id: string;
-  orchestratorRunId: string;
+  conductorRunId: string;
   conversationId: string;
   taskId: string;
   agentId: string;

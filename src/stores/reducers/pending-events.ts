@@ -16,6 +16,10 @@ export function applyPendingEvent(state: StoreDraft, event: StreamEvent) {
   if (event.type === "fs_write.resolved") {
     removeIdFromBucket(state.pendingWriteIdsByConversation, event.conversationId, event.pendingId);
     delete state.pendingWrites[event.pendingId];
+    if (event.applied) {
+      state.fileRevisionByConversation[event.conversationId] =
+        (state.fileRevisionByConversation[event.conversationId] ?? 0) + 1;
+    }
     return true;
   }
 

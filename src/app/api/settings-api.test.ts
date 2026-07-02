@@ -12,7 +12,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-settings-api-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -38,7 +38,7 @@ function jsonRequest(method: string, body?: unknown): Request {
 describe("GET /api/settings", () => {
   it("returns settings with masked keys", async () => {
     // Set a key first
-    await PATCH(jsonRequest("PATCH", { openaiApiKey: "sk-proj-abc123456789" }));
+    await PATCH(jsonRequest("PATCH", { openaiApiKey: "test-openai-key-6789" }));
 
     const res = await GET();
     expect(res.status).toBe(200);
@@ -48,7 +48,7 @@ describe("GET /api/settings", () => {
       keySources: { openai: string };
     };
     // Key should be masked — only last 4 chars visible
-    expect(body.settings.openaiApiKey).not.toBe("sk-proj-abc123456789");
+    expect(body.settings.openaiApiKey).not.toBe("test-openai-key-6789");
     expect(body.settings.openaiApiKey).toContain("6789");
     expect(body.keySources.openai).toBe("app_settings");
   });
@@ -103,12 +103,12 @@ describe("PATCH /api/settings", () => {
   });
 
   it("does not overwrite a stored key when the masked value is submitted", async () => {
-    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "sk-deepseek-original" }));
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "test-deepseek-api-key" }));
     const maskedResponse = await GET();
     const maskedBody = (await maskedResponse.json()) as { settings: { deepseekApiKey: string } };
 
     await PATCH(jsonRequest("PATCH", { deepseekApiKey: maskedBody.settings.deepseekApiKey }));
 
-    expect(getSettings().deepseekApiKey).toBe("sk-deepseek-original");
+    expect(getSettings().deepseekApiKey).toBe("test-deepseek-api-key");
   });
 });

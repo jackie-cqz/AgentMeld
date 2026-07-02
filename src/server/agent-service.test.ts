@@ -18,7 +18,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-agents-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -51,7 +51,7 @@ describe("agent-service", () => {
       expect(agent.modelId).toBe("gpt-4.1-mini");
       expect(agent.toolNames).toEqual(["fs_read", "write_artifact"]);
       expect(agent.isBuiltin).toBe(false);
-      expect(agent.isOrchestrator).toBe(false);
+      expect(agent.isConductor).toBe(false);
     });
 
     it("uses default system prompt when not provided", () => {

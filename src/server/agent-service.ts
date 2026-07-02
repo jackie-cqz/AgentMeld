@@ -72,7 +72,7 @@ export function createAgent(input: CreateAgentInput): Agent {
     INSERT INTO agents (
       id, name, avatar, description, capabilities, system_prompt,
       adapter_name, model_provider, model_id, api_key, api_base_url,
-      tool_names, is_builtin, is_orchestrator, supports_vision, created_at, updated_at
+      tool_names, is_builtin, is_conductor, supports_vision, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
@@ -88,7 +88,7 @@ export function createAgent(input: CreateAgentInput): Agent {
     input.apiBaseUrl?.trim() || null,
     JSON.stringify(toolNames),
     0, // is_builtin
-    0, // is_orchestrator
+    0, // is_conductor
     adapterName === "custom" ? 1 : 0, // supports_vision (custom agents default to yes)
     now,
     now

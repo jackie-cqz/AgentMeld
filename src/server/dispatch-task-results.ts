@@ -1,5 +1,6 @@
 declare global {
-  var __agentConferenceTaskResults: Map<string, DispatchTaskReport> | undefined;
+  var __agentMeldTaskResults: Map<string, DispatchTaskReport> | undefined;
+  var __agentMeldTaskArtifacts: Map<string, Record<string, string>> | undefined;
 }
 
 export interface DispatchTaskReport {
@@ -20,18 +21,33 @@ export interface DispatchTaskReport {
 }
 
 function getStore(): Map<string, DispatchTaskReport> {
-  if (!globalThis.__agentConferenceTaskResults) {
-    globalThis.__agentConferenceTaskResults = new Map();
+  if (!globalThis.__agentMeldTaskResults) {
+    globalThis.__agentMeldTaskResults = new Map();
   }
-  return globalThis.__agentConferenceTaskResults;
+  return globalThis.__agentMeldTaskResults;
+}
+
+function getArtifactStore(): Map<string, Record<string, string>> {
+  if (!globalThis.__agentMeldTaskArtifacts) {
+    globalThis.__agentMeldTaskArtifacts = new Map();
+  }
+  return globalThis.__agentMeldTaskArtifacts;
+}
+
+export function recordTaskArtifact(runId: string, outputKey: string, artifactId: string): void {
+  const store = getArtifactStore();
+  const existing = store.get(runId) ?? {};
+  store.set(runId, { ...existing, [outputKey]: artifactId });
 }
 
 export function recordTaskReport(runId: string, report: DispatchTaskReport): void {
   // Merge artifacts if report already exists (e.g., multiple write_artifact calls)
   const existing = getStore().get(runId);
+  const recordedArtifacts = getArtifactStore().get(runId) ?? {};
   if (existing) {
     report.artifacts = { ...existing.artifacts, ...report.artifacts };
   }
+  report.artifacts = { ...recordedArtifacts, ...report.artifacts };
   getStore().set(runId, report);
 }
 
@@ -69,8 +85,10 @@ export function evaluateTaskResult(report: DispatchTaskReport | undefined): {
 
 export function clearTaskResultsForRun(runId: string): void {
   getStore().delete(runId);
+  getArtifactStore().delete(runId);
 }
 
 export function clearAllTaskResultsForTests(): void {
   getStore().clear();
+  getArtifactStore().clear();
 }

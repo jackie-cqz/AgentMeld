@@ -14,7 +14,7 @@ export type ErrorCategory =
   | "approval_interrupted"
   | "workspace_security"
   | "context_overflow"
-  | "orchestrator_contract"
+  | "conductor_contract"
   | "run_aborted"
   | "run_interrupted";
 

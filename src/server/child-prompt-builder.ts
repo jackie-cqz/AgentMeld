@@ -28,7 +28,7 @@ export interface BuildChildPromptInput {
   resolvedInputs: ResolvedInput[];
   /** Artifacts from completed upstream tasks (id, type, title, version) */
   upstreamArtifacts: UpstreamArtifact[];
-  /** Recent conversation messages for context (user request + orchestrator messages) */
+  /** Recent conversation messages for context (user request + conductor messages) */
   recentConversation: Array<{ from: string; content: string }>;
 }
 
@@ -75,8 +75,9 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
   if (recentConversation.length > 0) {
     parts.push("  <recent_conversation>");
     for (const msg of recentConversation) {
+      const from = normalizeConversationSource(msg.from);
       const escapedContent = escapeXml(msg.content).slice(0, 500);
-      parts.push(`    <message from="${escapeXml(msg.from)}">${escapedContent}</message>`);
+      parts.push(`    <message from="${escapeXml(from)}">${escapedContent}</message>`);
     }
     parts.push("  </recent_conversation>");
     parts.push("");
@@ -177,12 +178,14 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
     "You are continuing the same dispatched sub-task. The system expects you to " +
     "complete it, not to ask whether you should do it. Use read_artifact when you " +
     "need full artifact content. When you are done, call report_task_result with " +
-    'status "complete", "failed", or "blocked" — never omit it.'
+    'minimal JSON only, for example {"status":"complete","summary":"what you completed"}. ' +
+    "Never omit report_task_result."
   );
   if (task.expectedOutputs && task.expectedOutputs.length > 0) {
     parts.push(
       "If expected_outputs are declared and your completed work creates an artifact, " +
-      "use write_artifact and pass outputKey equal to that output id."
+      "use write_artifact and pass outputKey equal to that output id. Do not repeat " +
+      "artifact ids inside report_task_result; the system records them automatically."
     );
   }
 
@@ -195,4 +198,8 @@ export function hasMissingRequiredInputs(resolvedInputs: ResolvedInput[]): boole
 
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function normalizeConversationSource(source: string): string {
+  return source === "conductor" ? "conductor" : source;
 }

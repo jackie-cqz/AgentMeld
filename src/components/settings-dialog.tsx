@@ -164,13 +164,14 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 px-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-stone-200 bg-white p-6 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-stone-950">设置</h2>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+      <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-2xl">
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-stone-950">设置</h2>
+            <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
         <p className="mt-2 text-sm text-stone-500">
           配置 API Key 后，所有 Agent 共享使用。Agent 编辑页可单独覆盖 Key。
@@ -226,7 +227,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             <div>
               <div className="text-sm font-medium text-stone-800">外部静态发布</div>
               <p className="mt-1 text-xs leading-5 text-stone-500">
-                同步部署文件到指定目录；Agent-Conference 不负责启动公网服务器。
+                同步部署文件到指定目录；AgentMeld 不负责启动公网服务器。
               </p>
             </div>
             <button
@@ -257,7 +258,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
                 <input
                   type="text"
                   className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
-                  placeholder="例如 D:\sites\agent-conference"
+                  placeholder="例如 D:\sites\agentmeld"
                   value={settings.deploymentPublishDir ?? ""}
                   onChange={(event) => setSettings({
                     ...settings,
@@ -283,7 +284,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           ) : null}
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
+        </div>
+
+        <div className="flex shrink-0 justify-end gap-3 border-t border-stone-200 bg-white px-6 py-4">
           <button onClick={onClose} className="h-9 rounded-md px-4 text-sm text-stone-600 hover:bg-stone-100">
             取消
           </button>

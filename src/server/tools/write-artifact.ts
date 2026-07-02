@@ -15,12 +15,20 @@ export const writeArtifactTool: ToolDef = {
   name: "write_artifact",
   description: `Create an artifact (document, web app, image, or presentation) in the current conversation.
 
-For document type, content must be: { format: "markdown", content: "..." }
-For web_app type, content must be: { files: { "index.html": "...", "style.css": "..." }, entry: "index.html" }
-For image type, content must be: { url: "..." }
-For ppt type, content must be: { title?: "...", theme?: {...}, slides: [...] }
+For document type, use strict JSON like:
+{"type":"document","title":"...","content":"# Title\\n\\nBody"}
 
-IMPORTANT: Always provide type, title, and content. Never call this tool with empty arguments.`,
+For web_app type, use strict JSON like:
+{"type":"web_app","title":"...","content":{"files":{"index.html":"...","style.css":"..."},"entry":"index.html"}}
+
+For image type, content must be an object like: {"url":"..."}
+For ppt type, content must be an object like: {"slides":[...]}
+
+IMPORTANT: Always provide type, title, and content. For documents, content is the markdown string
+directly; do not write content: format and do not nest another content field. For web apps, content
+is a JSON object. Escape Markdown, HTML, CSS, and JS newlines as \\n inside JSON strings. Keep a
+single artifact concise enough to fit in one tool call; split unusually large deliverables into
+multiple artifacts.`,
   parameters: {
     type: "object",
     required: ["type", "title", "content"],
@@ -35,7 +43,7 @@ IMPORTANT: Always provide type, title, and content. Never call this tool with em
         description: "A short human-readable title for the artifact."
       },
       content: {
-        description: "The artifact content, whose shape depends on the type. See tool description for details."
+        description: "Artifact content. For documents pass markdown directly as a string. For web_app pass {\"files\":...,\"entry\":\"index.html\"}. Do not JSON.stringify it; escape newlines as \\n."
       }
     }
   },
@@ -78,19 +86,31 @@ IMPORTANT: Always provide type, title, and content. Never call this tool with em
 };
 
 function normalizeContent(type: ArtifactType, raw: unknown): ArtifactContent | Error {
+  const content = parseStringifiedContent(raw);
   if (type === "document") {
-    return normalizeDocument(raw);
+    return normalizeDocument(content);
   }
   if (type === "web_app") {
-    return normalizeWebApp(raw);
+    return normalizeWebApp(content);
   }
   if (type === "image") {
-    return normalizeImage(raw);
+    return normalizeImage(content);
   }
   if (type === "ppt") {
-    return normalizePpt(raw);
+    return normalizePpt(content);
   }
   return new Error(`Unsupported artifact type: ${type}`);
+}
+
+function parseStringifiedContent(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const candidate = raw.trim();
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return raw;
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    return raw;
+  }
 }
 
 function normalizeDocument(raw: unknown): ArtifactContent | Error {

@@ -20,7 +20,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-ctx-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -30,7 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -154,7 +154,7 @@ describe("conversation-context — buildHistoryFor", () => {
     // Create a group conversation with two agents
     const conv = createConversation({
       mode: "group",
-      agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
+      agentIds: ["ag_mock_conductor", "ag_mock_builder"]
     });
     const now = Date.now();
 
@@ -166,7 +166,7 @@ describe("conversation-context — buildHistoryFor", () => {
       status: "complete",
       now: now - 2000
     });
-    // Message from the builder (another agent from orchestrator's perspective)
+    // Message from the builder (another agent from conductor's perspective)
     createMessage({
       id: newMessageId(),
       conversationId: conv.id,
@@ -177,8 +177,8 @@ describe("conversation-context — buildHistoryFor", () => {
       now: now - 1000
     });
 
-    // Build history from orchestrator's perspective
-    const history = await buildHistoryFor("ag_mock_orchestrator", conv.id);
+    // Build history from conductor's perspective
+    const history = await buildHistoryFor("ag_mock_conductor", conv.id);
 
     // The builder's message should appear as user role with [agentId] prefix
     const otherMsg = history.find((h) => h.role === "user" && h.content.includes("ag_mock_builder"));
@@ -245,7 +245,7 @@ describe("conversation-context — buildHistoryFor", () => {
 describe("buildCompactionPrompt", () => {
   const sampleMessages = [
     { role: "user", content: "帮我做一个番茄时钟" },
-    { role: "assistant", agentName: "Orchestrator", content: "正在分析任务..." },
+    { role: "assistant", agentName: "Conductor", content: "正在分析任务..." },
     {
       role: "assistant",
       agentName: "PM 小灰",
@@ -268,7 +268,7 @@ describe("buildCompactionPrompt", () => {
   it("returns userPrompt with all message content", () => {
     const { userPrompt } = buildCompactionPrompt(sampleMessages);
     expect(userPrompt).toContain("帮我做一个番茄时钟");
-    expect(userPrompt).toContain("[Orchestrator]");
+    expect(userPrompt).toContain("[Conductor]");
     expect(userPrompt).toContain("[PM 小灰]");
     expect(userPrompt).toContain("art_001");
     expect(userPrompt).toContain("New messages to compress (4 messages)");

@@ -12,8 +12,8 @@ import { deployArtifact } from "@/server/deployment-service";
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-deploy-route-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-deploy-route-"));
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   ensureDatabase();
@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -36,8 +36,12 @@ describe("GET /deployments/[id]/[[...path]]", () => {
       content: {
         type: "web_app",
         files: {
-          "index.html": "<script src=\"assets/app.js\"></script>",
-          "assets/app.js": "window.deployed = true;"
+          "index.html": [
+            "<link rel=\"stylesheet\" href=\"/assets/app.css\">",
+            "<script type=\"module\" src=\"/assets/app.js\"></script>"
+          ].join(""),
+          "assets/app.css": ".hero{background:url('/assets/hero.svg')}",
+          "assets/app.js": "window.deployed = true; const chunk = \"/assets/chunk.js\";"
         },
         entry: "index.html"
       }
@@ -49,21 +53,34 @@ describe("GET /deployments/[id]/[[...path]]", () => {
       { params: Promise.resolve({ id: deployment.id, path: undefined }) }
     );
     expect(rootResponse.status).toBe(200);
-    expect(rootResponse.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts");
+    expect(rootResponse.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts allow-same-origin");
+    expect(rootResponse.headers.get("Content-Security-Policy")).toContain("connect-src 'self' https:");
+    const rootHtml = await rootResponse.text();
+    expect(rootHtml).toContain(`<base href="/deployments/${deployment.id}/">`);
+    expect(rootHtml).toContain(`href="/deployments/${deployment.id}/assets/app.css"`);
+    expect(rootHtml).toContain(`src="/deployments/${deployment.id}/assets/app.js"`);
 
     const assetResponse = await getDeploymentFile(
       new Request(`http://localhost${deployment.previewPath}/assets/app.js`),
       { params: Promise.resolve({ id: deployment.id, path: ["assets", "app.js"] }) }
     );
     expect(assetResponse.status).toBe(200);
-    expect(await assetResponse.text()).toContain("window.deployed");
+    const js = await assetResponse.text();
+    expect(js).toContain("window.deployed");
+    expect(js).toContain(`"/deployments/${deployment.id}/assets/chunk.js"`);
+
+    const cssResponse = await getDeploymentFile(
+      new Request(`http://localhost${deployment.previewPath}/assets/app.css`),
+      { params: Promise.resolve({ id: deployment.id, path: ["assets", "app.css"] }) }
+    );
+    expect(await cssResponse.text()).toContain(`url('/deployments/${deployment.id}/assets/hero.svg')`);
   });
 
   it("returns 404 for private deployment metadata", async () => {
-    const response = await getDeploymentFile(
-      new Request("http://localhost/deployments/dep_valid/.agent-conference/manifest.json"),
-      { params: Promise.resolve({ id: "dep_valid", path: [".agent-conference", "manifest.json"] }) }
+    const newPrivateResponse = await getDeploymentFile(
+      new Request("http://localhost/deployments/dep_valid/.agentmeld/manifest.json"),
+      { params: Promise.resolve({ id: "dep_valid", path: [".agentmeld", "manifest.json"] }) }
     );
-    expect(response.status).toBe(404);
+    expect(newPrivateResponse.status).toBe(404);
   });
 });

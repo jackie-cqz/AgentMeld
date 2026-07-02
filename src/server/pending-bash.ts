@@ -11,14 +11,14 @@ interface BashEntry {
 }
 
 declare global {
-  var __agentConferencePendingBash: Map<string, BashEntry> | undefined;
+  var __agentMeldPendingBash: Map<string, BashEntry> | undefined;
 }
 
 function getStore(): Map<string, BashEntry> {
-  if (!globalThis.__agentConferencePendingBash) {
-    globalThis.__agentConferencePendingBash = new Map();
+  if (!globalThis.__agentMeldPendingBash) {
+    globalThis.__agentMeldPendingBash = new Map();
   }
-  return globalThis.__agentConferencePendingBash;
+  return globalThis.__agentMeldPendingBash;
 }
 
 export function registerPendingBash(
@@ -86,6 +86,13 @@ export function cancelPendingBashForRun(runId: string): void {
       cancelApproval(id, Date.now());
       store.delete(id);
       entry.resolver(false);
+      eventBus.publish({
+        type: "bash_command.resolved",
+        conversationId: entry.command.conversationId,
+        timestamp: Date.now(),
+        pendingId: id,
+        approved: false
+      });
     }
   }
 }

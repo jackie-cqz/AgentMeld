@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
+import type { ReactElement } from "react";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
@@ -16,14 +17,16 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
 
   const total = dispatch.plan.length;
   const complete = Object.values(dispatch.taskStatus).filter((s) => s === "complete").length;
-  const failed = Object.values(dispatch.taskStatus).filter((s) => s === "failed" || s === "aborted").length;
+  const failed = Object.values(dispatch.taskStatus).filter((s) => s === "failed" || s === "aborted" || s === "blocked").length;
   const skipped = Object.values(dispatch.taskStatus).filter((s) => s === "skipped").length;
   const running = Object.values(dispatch.taskStatus).filter((s) => s === "running").length;
 
   // Determine aggregate status
-  let aggStatus: { label: string; color: string; icon: JSX.Element } = { label: "执行中", color: "text-blue-700", icon: <Loader2 className="h-4 w-4 animate-spin text-blue-600" /> };
-  if (failed > 0) aggStatus = { label: "部分失败", color: "text-red-700", icon: <AlertTriangle className="h-4 w-4 text-red-600" /> };
-  if (complete === total) aggStatus = { label: "全部完成", color: "text-emerald-700", icon: <CheckCircle2 className="h-4 w-4 text-emerald-600" /> };
+  let aggStatus: { label: string; color: string; icon: ReactElement } = { label: "执行中", color: "text-blue-700", icon: <Loader2 className="h-4 w-4 animate-spin text-blue-600" /> };
+  const terminal = complete + failed + skipped;
+  if (failed > 0) aggStatus = { label: terminal === total ? "执行结束，存在失败" : "部分失败", color: "text-red-700", icon: <AlertTriangle className="h-4 w-4 text-red-600" /> };
+  else if (terminal === total && skipped > 0) aggStatus = { label: "部分完成", color: "text-amber-700", icon: <AlertTriangle className="h-4 w-4 text-amber-600" /> };
+  else if (complete === total) aggStatus = { label: "全部完成", color: "text-emerald-700", icon: <CheckCircle2 className="h-4 w-4 text-emerald-600" /> };
 
   return (
     <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
@@ -74,7 +77,7 @@ function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId
             <StatusLabel status={status} />
             {status === "running" ? (
               <span className="flex items-center gap-0.5 text-[10px] text-blue-600">
-                <RefreshCw className="h-3 w-3" />第{dispatch.childRunIds[taskId] ? "?" : "1"}次
+                <RefreshCw className="h-3 w-3" />第{dispatch.attempts[taskId] ?? 1}次
               </span>
             ) : null}
           </div>
@@ -112,11 +115,12 @@ function StatusIcon({ status }: { status: DispatchState["taskStatus"][string] })
   if (status === "failed") return <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />;
   if (status === "aborted") return <Ban className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />;
   if (status === "skipped") return <RotateCcw className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />;
+  if (status === "blocked") return <Ban className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />;
   return <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />;
 }
 
 function StatusLabel({ status }: { status: DispatchState["taskStatus"][string] }) {
-  const labels: Record<string, string> = { pending: "等待", running: "执行中", complete: "完成", failed: "失败", aborted: "已中止", skipped: "已跳过" };
+  const labels: Record<string, string> = { pending: "等待", running: "执行中", complete: "完成", failed: "失败", aborted: "已中止", skipped: "已跳过", blocked: "依赖阻塞" };
   return (
     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
       {status === "pending" ? <Clock3 className="mr-0.5 inline h-3 w-3" /> : null}

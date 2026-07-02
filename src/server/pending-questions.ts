@@ -11,14 +11,14 @@ interface QuestionEntry {
 }
 
 declare global {
-  var __agentConferencePendingQuestions: Map<string, QuestionEntry> | undefined;
+  var __agentMeldPendingQuestions: Map<string, QuestionEntry> | undefined;
 }
 
 function getStore(): Map<string, QuestionEntry> {
-  if (!globalThis.__agentConferencePendingQuestions) {
-    globalThis.__agentConferencePendingQuestions = new Map();
+  if (!globalThis.__agentMeldPendingQuestions) {
+    globalThis.__agentMeldPendingQuestions = new Map();
   }
-  return globalThis.__agentConferencePendingQuestions;
+  return globalThis.__agentMeldPendingQuestions;
 }
 
 export function registerPendingQuestion(

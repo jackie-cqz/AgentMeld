@@ -40,8 +40,9 @@ export interface DispatchState {
   conversationId: string;
   messageId: string | null;
   plan: PendingDispatchPlan["plan"];
-  taskStatus: Record<string, "pending" | "running" | "complete" | "failed" | "aborted" | "skipped">;
+  taskStatus: Record<string, "pending" | "running" | "complete" | "failed" | "aborted" | "skipped" | "blocked">;
   childRunIds: Record<string, string>;
+  attempts: Record<string, number>;
   errors: Record<string, string>;
   reviewStatus?: "pending" | "approved" | "rejected";
   pendingPlanId?: string;
@@ -66,6 +67,12 @@ export interface SearchState {
   total: number;
   mode: "fts" | "like";
   error: string | null;
+}
+
+export interface SendMessageOptions {
+  mentionedAgentIds?: string[];
+  attachmentIds?: string[];
+  parentMessageId?: string | null;
 }
 
 export interface AppState {
@@ -95,9 +102,11 @@ export interface AppState {
   searchState: SearchState;
 
   openFilesByConversation: Record<string, string[]>;
+  openDiffsByConversation: Record<string, string[]>;
   activeTabByConversation: Record<string, string>;
   replyTargetByConversation: Record<string, string | null>;
   pendingAttachmentsByConversation: Record<string, Attachment[]>;
+  fileRevisionByConversation: Record<string, number>;
   highlightedMessageId: string | null;
 
   activeConversationId: string | null;
@@ -115,7 +124,7 @@ export interface AppState {
 
   loadBootstrap: () => Promise<void>;
   createConversation: (payload?: CreateConversationPayload) => Promise<void>;
-  sendMessage: (conversationId: string, content: string, mentionedAgentIds?: string[]) => Promise<void>;
+  sendMessage: (conversationId: string, content: string, options?: SendMessageOptions) => Promise<void>;
   setActiveConversation: (conversationId: string) => void;
   setActiveArtifact: (artifactId: string | null) => void;
   setSidebarTab: (tab: SidebarTab) => void;
@@ -124,11 +133,17 @@ export interface AppState {
   setArtifactPanelWidth: (width: number | ((prev: number) => number)) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setComposerDraft: (conversationId: string, draft: string) => void;
+  setReplyTarget: (conversationId: string, messageId: string | null) => void;
+  addPendingAttachment: (conversationId: string, attachment: Attachment) => void;
+  removePendingAttachment: (conversationId: string, attachmentId: string) => void;
+  clearComposer: (conversationId: string) => void;
   toggleDarkMode: () => void;
   toggleSidebarCollapsed: () => void;
   updateConversation: (id: string, patch: Partial<Conversation>) => void;
   openConversationFile: (conversationId: string, filePath: string) => void;
   closeConversationFile: (conversationId: string, filePath: string) => void;
+  openPendingWriteDiff: (conversationId: string, pendingId: string) => void;
+  closeConversationTab: (conversationId: string, tabId: string) => void;
   setActiveConversationTab: (conversationId: string, tabId: string) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;

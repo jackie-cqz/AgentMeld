@@ -52,6 +52,22 @@ export function applyDispatchEvent(state: StoreDraft, event: StreamEvent) {
     return true;
   }
 
+  if (event.type === "dispatch.task.start") {
+    const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
+    dispatch.taskStatus[event.taskId] = "running";
+    dispatch.childRunIds[event.taskId] = event.childRunId;
+    dispatch.attempts[event.taskId] = event.attempt;
+    return true;
+  }
+
+  if (event.type === "dispatch.task.end") {
+    const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
+    dispatch.taskStatus[event.taskId] = event.status;
+    dispatch.childRunIds[event.taskId] = event.childRunId;
+    if (event.error) dispatch.errors[event.taskId] = event.error;
+    return true;
+  }
+
   if (event.type === "dispatch.end") {
     const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
     dispatch.taskStatus[event.taskId] = event.status;

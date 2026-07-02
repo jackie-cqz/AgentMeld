@@ -133,6 +133,7 @@ export function createDispatchState(
     plan,
     taskStatus: Object.fromEntries(plan.map((item) => [item.id, "pending"])),
     childRunIds: {},
+    attempts: {},
     errors: {}
   };
 }

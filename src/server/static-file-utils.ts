@@ -45,7 +45,10 @@ export function getStaticMimeType(fileName: string): string {
   return MIME_TYPES[path.extname(fileName).toLowerCase()] ?? "application/octet-stream";
 }
 
-export function getStaticResponseHeaders(fileName: string): Record<string, string> {
+export function getStaticResponseHeaders(
+  fileName: string,
+  options: { allowSameOrigin?: boolean } = {}
+): Record<string, string> {
   const headers: Record<string, string> = {
     "Cache-Control": "no-store",
     "Content-Type": getStaticMimeType(fileName),
@@ -53,8 +56,11 @@ export function getStaticResponseHeaders(fileName: string): Record<string, strin
   };
 
   if (path.extname(fileName).toLowerCase() === ".html") {
+    const sandboxPolicy = options.allowSameOrigin
+      ? "sandbox allow-scripts allow-same-origin"
+      : "sandbox allow-scripts";
     headers["Content-Security-Policy"] =
-      "sandbox allow-scripts; default-src 'self' data: blob: https:; script-src 'unsafe-inline' 'self' blob: https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src https:;";
+      `${sandboxPolicy}; default-src 'self' data: blob: https:; script-src 'unsafe-inline' 'self' blob: https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https:;`;
   }
 
   return headers;

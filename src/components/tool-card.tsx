@@ -11,14 +11,20 @@ import {
   Loader2,
   Rocket,
   Terminal,
+  Wrench,
   XCircle
 } from "lucide-react";
 import { useState } from "react";
 import type { MessagePart } from "@/shared/types";
+import { getToolDisplayName } from "@/shared/tool-display";
+
+type ToolUsePart = MessagePart & { type: "tool_use" };
+type ToolResultPart = MessagePart & { type: "tool_result" };
+type ToolCallEntry = { use: ToolUsePart; result?: ToolResultPart };
 
 export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; messageStatus?: string }) {
-  // Group parts: find tool_use and matching tool_result
-  const toolCalls = new Map<string, { use: MessagePart & { type: "tool_use" }; result?: MessagePart & { type: "tool_result" } }>();
+  const [groupExpanded, setGroupExpanded] = useState(false);
+  const toolCalls = new Map<string, ToolCallEntry>();
 
   for (const part of parts) {
     if (part.type === "tool_use") {
@@ -37,12 +43,53 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
   if (toolCalls.size === 0) return null;
 
   const msgDone = messageStatus === "complete" || messageStatus === "error";
+  const entries = Array.from(toolCalls.values());
+
+  if (entries.length === 1) {
+    const [{ use, result }] = entries;
+    return (
+      <ToolCallItem
+        toolUse={use}
+        toolResult={result}
+        forceDone={msgDone && !result}
+      />
+    );
+  }
+
+  const summary = getToolGroupSummary(entries, msgDone);
 
   return (
-    <div className="space-y-2">
-      {Array.from(toolCalls.values()).map(({ use, result }) => (
-        <ToolCallItem key={use.callId} toolUse={use} toolResult={result} forceDone={msgDone && !result} />
-      ))}
+    <div className={`overflow-hidden rounded-lg border text-sm ${summary.containerClass}`}>
+      <button
+        type="button"
+        aria-expanded={groupExpanded}
+        onClick={() => setGroupExpanded((expanded) => !expanded)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <ToolGroupStatusIcon status={summary.status} />
+        <Wrench className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+        <span className="min-w-0 flex-1 truncate font-medium text-stone-700 dark:text-slate-200">
+          工具调用 × {entries.length}
+        </span>
+        <span className={`shrink-0 text-xs ${summary.statusClass}`}>{summary.label}</span>
+        {groupExpanded
+          ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+          : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-stone-400" />}
+      </button>
+
+      {groupExpanded ? (
+        <div className="divide-y divide-stone-200/80 border-t border-stone-200/80 bg-white/70 dark:divide-slate-700 dark:border-slate-700 dark:bg-slate-950/40">
+          {entries.map(({ use, result }) => (
+            <ToolCallItem
+              key={use.callId}
+              toolUse={use}
+              toolResult={result}
+              forceDone={msgDone && !result}
+              grouped
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -50,30 +97,33 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
 function ToolCallItem({
   toolUse,
   toolResult,
-  forceDone
+  forceDone,
+  grouped = false
 }: {
-  toolUse: MessagePart & { type: "tool_use" };
-  toolResult?: (MessagePart & { type: "tool_result" }) | undefined;
+  toolUse: ToolUsePart;
+  toolResult?: ToolResultPart | undefined;
   forceDone?: boolean;
+  grouped?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isBash = toolUse.toolName === "bash";
-  const isWrite = toolUse.toolName === "fs_write" || toolUse.toolName === "write_artifact";
+  const isFileWrite = toolUse.toolName === "fs_write";
+  const isArtifactWrite = toolUse.toolName === "write_artifact";
   const isComplete = !!toolResult || forceDone;
   const isError = !forceDone && toolResult?.isError;
   const isPending = !isComplete;
-
   const args = toolUse.args as Record<string, unknown> | undefined;
 
   return (
-    <div className={`rounded-md border text-sm ${
-      isError ? "border-red-200 bg-red-50" :
-      isComplete ? "border-stone-200 bg-stone-50" :
-      "border-amber-200 bg-amber-50"
+    <div className={grouped ? "" : `overflow-hidden rounded-lg border text-sm ${
+      isError ? "border-red-200 bg-red-50/80 dark:border-red-900/70 dark:bg-red-950/30" :
+      isComplete ? "border-emerald-100 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20" :
+      "border-amber-200 bg-amber-50/80 dark:border-amber-900/70 dark:bg-amber-950/20"
     }`}>
-      {/* Header */}
       <button
-        onClick={() => setExpanded(!expanded)}
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         {isPending ? (
@@ -84,48 +134,48 @@ function ToolCallItem({
           <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
         )}
         <ToolIcon toolName={toolUse.toolName} />
-        <span className="font-medium text-stone-700 truncate flex-1">
-          {isBash ? "Shell" : toolUse.toolName}
+        <span className="min-w-0 flex-1 truncate font-medium text-stone-700 dark:text-slate-200">
+          {getToolDisplayName(toolUse.toolName)}
         </span>
         {isPending ? (
           <span className="text-xs text-amber-600">执行中...</span>
         ) : isError ? (
           <span className="text-xs text-red-500">失败</span>
         ) : (
-          <span className="text-xs text-stone-400">完成</span>
+          <span className="text-xs text-emerald-700 dark:text-emerald-400">已完成</span>
         )}
-        {expanded ? <ChevronDown className="h-3.5 w-3.5 text-stone-400" /> : <ChevronRight className="h-3.5 w-3.5 text-stone-400" />}
+        {expanded
+          ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-stone-400" />
+          : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-stone-400" />}
       </button>
 
-      {/* Expanded detail */}
       {expanded ? (
-        <div className="border-t border-stone-200 px-3 py-2 space-y-2">
-          {/* Bash: show command */}
+        <div className="space-y-2 border-t border-stone-200/80 bg-white/70 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/40">
           {isBash && args?.command ? (
             <div>
-              <div className="text-xs text-stone-500 mb-1">命令</div>
-              <pre className="rounded bg-stone-950 p-2 text-xs text-stone-50 overflow-x-auto font-mono whitespace-pre-wrap">
+              <div className="mb-1 text-xs text-stone-500">命令</div>
+              <pre className="overflow-x-auto whitespace-pre-wrap rounded bg-stone-950 p-2 font-mono text-xs text-stone-50">
                 {String(args.command)}
               </pre>
             </div>
           ) : null}
 
-          {/* Other tools: show args */}
           {!isBash && args ? (
             <div>
-              <div className="text-xs text-stone-500 mb-1">参数</div>
-              <pre className="rounded bg-stone-100 p-2 text-xs text-stone-700 overflow-x-auto font-mono whitespace-pre-wrap max-h-32">
-                {isWrite
+              <div className="mb-1 text-xs text-stone-500">参数</div>
+              <pre className="max-h-32 overflow-x-auto whitespace-pre-wrap rounded bg-stone-100 p-2 font-mono text-xs text-stone-700 dark:bg-slate-900 dark:text-slate-200">
+                {isFileWrite
                   ? `path: ${args.path ?? "?"} (${String(args.content ?? "").length} chars)`
-                  : JSON.stringify(args, null, 2).slice(0, 300)}
+                  : isArtifactWrite
+                    ? formatArtifactArgs(args)
+                    : JSON.stringify(args, null, 2).slice(0, 300)}
               </pre>
             </div>
           ) : null}
 
-          {/* Result */}
           {toolResult ? (
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs text-stone-500">结果</span>
                 <CopyButton text={formatResult(toolResult.result)} />
               </div>
@@ -140,6 +190,64 @@ function ToolCallItem({
       ) : null}
     </div>
   );
+}
+
+function getToolGroupSummary(entries: ToolCallEntry[], messageDone: boolean) {
+  let pending = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    if (entry.result?.isError) {
+      failed += 1;
+    } else if (!entry.result && !messageDone) {
+      pending += 1;
+    }
+  }
+
+  if (pending > 0) {
+    return {
+      status: "pending" as const,
+      label: `${pending} 个执行中`,
+      statusClass: "text-amber-600",
+      containerClass: "border-amber-200 bg-amber-50/80 dark:border-amber-900/70 dark:bg-amber-950/20"
+    };
+  }
+
+  if (failed > 0) {
+    return {
+      status: "error" as const,
+      label: `${failed} 个失败`,
+      statusClass: "text-red-500",
+      containerClass: "border-red-200 bg-red-50/80 dark:border-red-900/70 dark:bg-red-950/30"
+    };
+  }
+
+  return {
+    status: "complete" as const,
+    label: "已完成",
+    statusClass: "text-emerald-700 dark:text-emerald-400",
+    containerClass: "border-emerald-100 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20"
+  };
+}
+
+function ToolGroupStatusIcon({ status }: { status: "pending" | "error" | "complete" }) {
+  if (status === "pending") {
+    return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" />;
+  }
+  if (status === "error") {
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />;
+  }
+  return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
+}
+
+function formatArtifactArgs(args: Record<string, unknown>): string {
+  if (typeof args.rawArguments === "string") {
+    return `参数 JSON 解析失败\n${args.rawArguments.slice(0, 300)}`;
+  }
+  const contentLength = typeof args.content === "string"
+    ? args.content.length
+    : JSON.stringify(args.content ?? "").length;
+  return `type: ${args.type ?? "?"}\ntitle: ${args.title ?? "?"}\ncontent: ${contentLength} chars`;
 }
 
 function ToolIcon({ toolName }: { toolName: string }) {

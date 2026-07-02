@@ -35,12 +35,36 @@ export function assertPathWithinWorkspace(workspacePath: string, targetPath: str
   return resolveSafePath(workspacePath, targetPath);
 }
 
-export const SANDBOX_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
-export const SANDBOX_MAX_FILES = 1000;
+export const SANDBOX_MAX_BYTES = 1024 * 1024 * 1024; // 1 GB
+export const SANDBOX_MAX_FILES = 50_000;
 
 export interface WorkspaceUsage {
   totalBytes: number;
   totalFiles: number;
+}
+
+export interface SandboxQuotaLimits {
+  maxBytes: number;
+  maxFiles: number;
+}
+
+export function checkSandboxQuota(
+  usage: WorkspaceUsage,
+  nextFileBytes: number,
+  replacedFileBytes = 0,
+  createsNewFile = true,
+  limits: SandboxQuotaLimits = {
+    maxBytes: SANDBOX_MAX_BYTES,
+    maxFiles: SANDBOX_MAX_FILES
+  }
+): string | null {
+  if (usage.totalBytes - replacedFileBytes + nextFileBytes > limits.maxBytes) {
+    return `Workspace quota exceeded: ${usage.totalBytes} bytes used, max ${limits.maxBytes}.`;
+  }
+  if (createsNewFile && usage.totalFiles >= limits.maxFiles) {
+    return `Workspace file limit exceeded: ${usage.totalFiles} files, max ${limits.maxFiles}.`;
+  }
+  return null;
 }
 
 export function scanWorkspaceUsage(rootPath: string): WorkspaceUsage {

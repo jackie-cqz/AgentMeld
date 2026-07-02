@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Agent-Conference",
+  title: "AgentMeld",
   description: "Local-first multi-agent collaboration workspace"
 };
 

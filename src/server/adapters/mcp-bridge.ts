@@ -2,10 +2,10 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 
 /**
- * Internal MCP bridge — exposes Agent-Conference tools to SDK adapters.
+ * Internal MCP bridge — exposes AgentMeld tools to SDK adapters.
  *
  * ClaudeCodeAdapter and CodexAdapter use SDK-native tool sets (Bash, Read, Write, etc.)
- * but need access to Agent-Conference-specific tools:
+ * but need access to AgentMeld-specific tools:
  *   - write_artifact
  *   - read_artifact
  *   - deploy_artifact

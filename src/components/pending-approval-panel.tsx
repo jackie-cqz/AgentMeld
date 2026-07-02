@@ -1,10 +1,11 @@
 "use client";
 
-import { Check, ChevronDown, ChevronUp, FileText, Pencil, Terminal, X, Network } from "lucide-react";
+import { Check, FileText, Loader2, Pencil, Terminal, X, Network } from "lucide-react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { FileDiffView } from "@/components/file-diff-view";
+import { DispatchPlanEditor, validatePlan } from "@/components/dispatch-plan-editor";
 import { PendingQuestionCard } from "@/components/pending-question-card";
+import { requestJson } from "@/lib/request-json";
 import { useAppStore } from "@/stores/app-store";
 import {
   selectConversationPendingBashCommands,
@@ -12,10 +13,12 @@ import {
   selectConversationPendingQuestions,
   selectConversationPendingWrites
 } from "@/stores/selectors";
-import type { PendingWrite, PendingBashCommand, PendingDispatchPlan } from "@/shared/types";
+import type { DispatchPlanItem, PendingWrite, PendingBashCommand, PendingDispatchPlan } from "@/shared/types";
 
 export function PendingApprovalPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
+  const rightPanelWidth = useAppStore((s) => s.artifactPanelWidth);
   const agents = useAppStore((s) => s.agents);
   const writes = useAppStore(useShallow((s) => selectConversationPendingWrites(s, s.activeConversationId)));
   const bashes = useAppStore(useShallow((s) => selectConversationPendingBashCommands(s, s.activeConversationId)));
@@ -25,10 +28,14 @@ export function PendingApprovalPanel() {
   if (!activeConversationId) return null;
 
   if (writes.length === 0 && bashes.length === 0 && plans.length === 0 && questions.length === 0) return null;
+  const useWideDecisionSurface = questions.length > 0 || plans.length > 0;
 
   return (
-    <div className="shrink-0 border-t border-amber-200 bg-amber-50 px-6 py-3">
-      <div className="mx-auto max-w-3xl space-y-2">
+    <div
+      className="max-h-[52vh] shrink-0 overflow-y-auto border-t border-slate-200 bg-white px-4 py-3 transition-[margin]"
+      style={rightPanelOpen ? { marginRight: rightPanelWidth + 32 } : undefined}
+    >
+      <div className={`mx-auto space-y-2 ${useWideDecisionSurface ? "max-w-[1100px]" : "max-w-3xl"}`}>
         {plans.map((plan) => (
           <DispatchPlanCard key={plan.id} plan={plan} />
         ))}
@@ -51,23 +58,27 @@ export function PendingApprovalPanel() {
 }
 
 function PendingWriteCard({ write }: { write: PendingWrite }) {
-  const [expanded, setExpanded] = useState(false);
+  const openDiff = useAppStore((state) => state.openPendingWriteDiff);
   const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const handleResolve = async (approved: boolean) => {
     setResolving(true);
+    setError(null);
     try {
-      await fetch(`/api/pending-writes/${write.id}/resolve`, {
+      await requestJson(`/api/pending-writes/${write.id}/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved })
       });
+    } catch (resolveError) {
+      setError(resolveError instanceof Error ? resolveError.message : "审批失败。");
     } finally {
       setResolving(false);
     }
   };
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-white p-3 shadow-sm">
+    <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-white p-3 shadow-sm">
       <FileText className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">文件写入审批</div>
@@ -78,16 +89,12 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
         <button
           type="button"
           className="mt-2 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => openDiff(write.conversationId, write.id)}
         >
-          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          {expanded ? "收起变更" : "查看完整变更"}
+          <FileText className="h-3.5 w-3.5" />
+          在中央 Diff Tab 查看
         </button>
-        {expanded ? (
-          <div className="mt-2">
-            <FileDiffView oldContent={write.oldContent} newContent={write.newContent} />
-          </div>
-        ) : null}
+        {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
       </div>
       <div className="flex shrink-0 gap-1">
         <button
@@ -112,16 +119,26 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
 }
 
 function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const handleResolve = async (approved: boolean) => {
-    await fetch(`/api/pending-bash/${bash.id}/resolve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved })
-    });
+    setResolving(true);
+    setError(null);
+    try {
+      await requestJson(`/api/pending-bash/${bash.id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved })
+      });
+    } catch (resolveError) {
+      setError(resolveError instanceof Error ? resolveError.message : "命令审批失败。");
+    } finally {
+      setResolving(false);
+    }
   };
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-white p-3 shadow-sm">
+    <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-white p-3 shadow-sm">
       <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">命令执行审批</div>
@@ -132,17 +149,20 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
         {bash.reason ? (
           <div className="mt-1 text-xs text-stone-500">原因: {bash.reason}</div>
         ) : null}
+        {error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null}
       </div>
       <div className="flex shrink-0 gap-1">
         <button
-          onClick={() => handleResolve(true)}
+          disabled={resolving}
+          onClick={() => void handleResolve(true)}
           className="grid h-8 w-8 place-items-center rounded-md bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
           title="批准执行"
         >
           <Check className="h-4 w-4" />
         </button>
         <button
-          onClick={() => handleResolve(false)}
+          disabled={resolving}
+          onClick={() => void handleResolve(false)}
           className="grid h-8 w-8 place-items-center rounded-md bg-red-100 text-red-700 hover:bg-red-200"
           title="拒绝执行"
         >
@@ -155,25 +175,47 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
 
 function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
   const agents = useAppStore((s) => s.agents);
+  const conversation = useAppStore((s) => s.conversations[plan.conversationId]);
   const [revising, setRevising] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editedPlan, setEditedPlan] = useState<DispatchPlanItem[]>(plan.plan);
   const [feedback, setFeedback] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleResolve = async (action: "approve" | "reject" | "revise") => {
     if (action === "revise" && !feedback.trim()) {
       setRevising(true);
       return;
     }
-    await fetch(`/api/dispatch-plans/${plan.id}/resolve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        action === "revise"
-          ? { action, feedback: feedback.trim() }
-          : { action }
-      )
-    });
-    setRevising(false);
-    setFeedback("");
+    if (action === "approve" && conversation) {
+      const validationErrors = validatePlan(editedPlan, agents, conversation);
+      if (validationErrors.length > 0) {
+        setError(validationErrors[0]);
+        return;
+      }
+    }
+    setResolving(true);
+    setError(null);
+    try {
+      await requestJson(`/api/dispatch-plans/${plan.id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          action === "revise"
+            ? { action, feedback: feedback.trim() }
+            : action === "approve"
+              ? { action, plan: editedPlan }
+              : { action, feedback: feedback.trim() || undefined }
+        )
+      });
+      setRevising(false);
+      setFeedback("");
+    } catch (resolveError) {
+      setError(resolveError instanceof Error ? resolveError.message : "计划审批失败。");
+    } finally {
+      setResolving(false);
+    }
   };
 
   return (
@@ -181,7 +223,11 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
       <Network className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">编排计划待审批</div>
-        <div className="mt-2 space-y-1">
+        {editing && conversation ? (
+          <div className="mt-3">
+            <DispatchPlanEditor plan={editedPlan} agents={agents} conversation={conversation} onChange={setEditedPlan} />
+          </div>
+        ) : <div className="mt-2 space-y-1">
           {plan.plan.map((item) => {
             const agent = agents[item.agentId];
             return (
@@ -211,7 +257,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
               </div>
             );
           })}
-        </div>
+        </div>}
         {revising ? (
           <div className="mt-2 flex gap-2">
             <input
@@ -224,24 +270,37 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
             <button onClick={() => setRevising(false)} className="text-xs text-stone-500">取消</button>
           </div>
         ) : null}
+        {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
       </div>
       <div className="flex shrink-0 gap-1">
         <button
-          onClick={() => handleResolve("approve")}
+          type="button"
+          disabled={resolving}
+          onClick={() => setEditing((value) => !value)}
+          className="grid h-8 w-8 place-items-center rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+          title={editing ? "收起结构化编辑" : "结构化编辑计划"}
+        >
+          <Pencil className="h-4 w-4" />
+        </button>
+        <button
+          disabled={resolving}
+          onClick={() => void handleResolve("approve")}
           className="grid h-8 w-8 place-items-center rounded-md bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
           title="批准执行"
         >
-          <Check className="h-4 w-4" />
+          {resolving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
         </button>
         <button
-          onClick={() => handleResolve("revise")}
+          disabled={resolving}
+          onClick={() => void handleResolve("revise")}
           className="grid h-8 w-8 place-items-center rounded-md bg-blue-100 text-blue-700 hover:bg-blue-200"
           title="修改计划"
         >
           <Pencil className="h-4 w-4" />
         </button>
         <button
-          onClick={() => handleResolve("reject")}
+          disabled={resolving}
+          onClick={() => void handleResolve("reject")}
           className="grid h-8 w-8 place-items-center rounded-md bg-red-100 text-red-700 hover:bg-red-200"
           title="拒绝"
         >

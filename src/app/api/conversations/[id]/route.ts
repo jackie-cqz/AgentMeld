@@ -1,13 +1,15 @@
 import { z } from "zod";
 import { ensureDatabase } from "@/db/bootstrap";
-import { deleteConversation, getConversationPayload } from "@/server/conversation-service";
-import { updateConversation } from "@/server/repositories";
+import { deleteConversation, getConversationPayload, patchConversation } from "@/server/conversation-service";
 
 export const dynamic = "force-dynamic";
 
 const patchSchema = z.object({
   archived: z.boolean().optional(),
   title: z.string().optional(),
+  mode: z.enum(["single", "group"]).optional(),
+  agentIds: z.array(z.string().min(1)).max(12).optional(),
+  fsWriteApprovalMode: z.enum(["auto", "review"]).optional(),
   pinnedAt: z.number().nullable().optional(),
   pinnedMessageIds: z.array(z.string()).optional()
 });
@@ -30,7 +32,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = updateConversation(id, { ...parsed.data, now: Date.now() });
+  let updated;
+  try {
+    updated = patchConversation(id, parsed.data);
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "Conversation update failed." },
+      { status: 400 }
+    );
+  }
   if (!updated) {
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }

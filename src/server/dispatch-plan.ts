@@ -60,13 +60,13 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
  * Returns the compiled plan on success, or an error string on failure.
  *
  * Called at:
- *   Layer 2 — immediately after plan_tasks capture (executeOrchestrator)
+ *   Layer 2 — immediately after plan_tasks capture (executeConductor)
  *   Layer 3 — approval gate, re-validated before execution
  */
 export function compileAndValidateDispatchPlan(
   rawTasks: Array<{ id: string; agentId: string; task?: string; prompt?: string; title?: string; dependsOn?: string[]; inputs?: unknown[]; expectedOutputs?: unknown[]; acceptanceCriteria?: string[]; maxAttempts?: number; targetPaths?: string[]; requiredCommands?: unknown[]; requiredEvidence?: string[] }>,
   availableAgentIds: string[],
-  orchestratorAgentId: string,
+  conductorAgentId: string,
   resolvedExternalTaskIds: string[] = []
 ): DispatchPlanItem[] | string {
   // Convert to DispatchPlanItem format
@@ -93,7 +93,7 @@ export function compileAndValidateDispatchPlan(
   const error = validateDispatchPlan(
     compiled,
     availableAgentIds,
-    orchestratorAgentId,
+    conductorAgentId,
     resolvedExternalTaskIds
   );
   if (error) return error;
@@ -144,7 +144,7 @@ export function compileDispatchPlan(plan: DispatchPlanItem[]): DispatchPlanItem[
 export function validateDispatchPlan(
   plan: DispatchPlanItem[],
   availableAgentIds: string[],
-  orchestratorAgentId: string,
+  conductorAgentId: string,
   resolvedExternalTaskIds: string[] = []
 ): string | null {
   if (plan.length === 0) return "Plan must contain at least one task.";
@@ -157,9 +157,9 @@ export function validateDispatchPlan(
   if (taskIds.size !== plan.length) return "Duplicate task IDs found.";
 
   for (const task of plan) {
-    // Can't assign to orchestrator self
-    if (task.agentId === orchestratorAgentId) {
-      return `Task "${task.id}" cannot be assigned to the Orchestrator itself (would cause recursion).`;
+    // Can't assign to conductor self
+    if (task.agentId === conductorAgentId) {
+      return `Task "${task.id}" cannot be assigned to the Conductor itself (would cause recursion).`;
     }
 
     // Agent must be available

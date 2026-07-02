@@ -6,7 +6,14 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { getAdapter, clearRegistryForTests } from "@/server/adapters/registry";
-import { buildChatCompletionTools } from "@/server/adapters/custom-agent-adapter";
+import {
+  buildChatCompletionTools,
+  findDeployableWorkspacePath,
+  isDeployStatusRecord,
+  mergeToolArgumentChunk,
+  parseToolCallArguments,
+  shouldAutoDeployWorkspaceFromText
+} from "@/server/adapters/custom-agent-adapter";
 import type { AdapterInput } from "@/server/adapters/types";
 import type { Agent, Conversation, Workspace, Message } from "@/shared/types";
 
@@ -27,7 +34,6 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
     systemPrompt: "You are a test assistant.",
     toolNames: [],
     isBuiltin: false,
-    isOrchestrator: false,
     isConductor: false,
     supportsVision: false,
     createdAt: 1,
@@ -41,6 +47,7 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
     agentIds: [agent.id],
     fsWriteApprovalMode: "auto",
     pinnedMessageIds: [],
+    pinnedAt: null,
     archived: false,
     createdAt: 1,
     updatedAt: 1
@@ -88,7 +95,7 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-custom-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -99,26 +106,222 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   clearRegistryForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("custom-agent-adapter", () => {
-  it("constrains Orchestrator plan agentId to current conversation workers", () => {
+  it("parses standard tool arguments", () => {
+    const parsed = parseToolCallArguments(
+      JSON.stringify({ type: "document", title: "PRD", content: { content: "# PRD" } })
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args.title).toBe("PRD");
+    }
+  });
+
+  it("unwraps stringified and wrapped DeepSeek tool arguments", () => {
+    const nested = JSON.stringify({
+      arguments: JSON.stringify({
+        type: "document",
+        title: "PRD",
+        content: { content: "# PRD" }
+      })
+    });
+    const parsed = parseToolCallArguments(JSON.stringify(nested));
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args).toEqual({
+        type: "document",
+        title: "PRD",
+        content: { content: "# PRD" }
+      });
+    }
+  });
+
+  it("reports malformed tool arguments instead of replacing them with empty args", () => {
+    const parsed = parseToolCallArguments(
+      "{\"type\":\"document\",\"title\":\"PRD\",\"content\":"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain("JSON could not be parsed");
+      expect(parsed.error).toContain("\\\"type\\\"");
+      expect(parsed.serialized).toBe("{}");
+    }
+  });
+
+  it("identifies tool arguments truncated by the model output limit", () => {
+    const parsed = parseToolCallArguments(
+      "{\"type\":\"document\",\"title\":\"Long guide\",\"content\":{\"format\":\"markdown\",\"content\":\"# Guide",
+      "length"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain("reached its output limit");
+      expect(parsed.error).toContain("split it into multiple artifacts");
+    }
+  });
+
+  it("repairs a write_artifact document content object missing its opening brace", () => {
+    const parsed = parseToolCallArguments(
+      "{\"type\":\"document\",\"title\":\"TodoList 应用 PRD\",\"content\": format\": \"markdown\", \"content\": \"# TodoList 应用\\n\\n## 1. 产品概述\"}"
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args).toEqual({
+        type: "document",
+        title: "TodoList 应用 PRD",
+        content: {
+          format: "markdown",
+          content: "# TodoList 应用\n\n## 1. 产品概述"
+        }
+      });
+    }
+  });
+
+  it("repairs write_artifact document content with an unquoted nested object key and raw newlines", () => {
+    const parsed = parseToolCallArguments(
+      "{\"type\":\"document\",\"title\":\"Todo Lists 产品需求文档 (PRD)\",\"content\": format\":\"markdown\",\"content\":\"# Todo Lists — 产品需求文档 (PRD)\n\n**文档版本**: v1.0  \n**状态**: 初稿\n\n## 1. 产品概述\n打开即用。\"}"
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args).toEqual({
+        type: "document",
+        title: "Todo Lists 产品需求文档 (PRD)",
+        content: {
+          format: "markdown",
+          content: "# Todo Lists — 产品需求文档 (PRD)\n\n**文档版本**: v1.0  \n**状态**: 初稿\n\n## 1. 产品概述\n打开即用。"
+        }
+      });
+    }
+  });
+
+  it("repairs plan_tasks arrays whose task objects are missing opening braces", () => {
+    const parsed = parseToolCallArguments(
+      "{\"reasoning\":\"按需求、设计、实现、审查链路分派。\",\"tasks\":[id\":\"t1\",\"agentId\":\"ag_pm\",\"title\":\"产出 PRD\",\"prompt\":\"写 Todo Lists PRD\",\"dependsOn\":[],id\":\"t2\",\"agentId\":\"ag_designer\",\"title\":\"产出风格指南\",\"prompt\":\"基于 PRD 设计 UI\",\"dependsOn\":[\"t1\"]]}"
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args).toEqual({
+        reasoning: "按需求、设计、实现、审查链路分派。",
+        tasks: [
+          {
+            id: "t1",
+            agentId: "ag_pm",
+            title: "产出 PRD",
+            prompt: "写 Todo Lists PRD",
+            dependsOn: []
+          },
+          {
+            id: "t2",
+            agentId: "ag_designer",
+            title: "产出风格指南",
+            prompt: "基于 PRD 设计 UI",
+            dependsOn: ["t1"]
+          }
+        ]
+      });
+    }
+  });
+
+  it("does not repair JSON truncated inside a string", () => {
+    const parsed = parseToolCallArguments(
+      "{\"type\":\"document\",\"title\":\"TodoList 应用 PRD\",\"content\": format\": \"markdown\", \"content\": \"# TodoList 应用"
+    );
+
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("recovers minimal report_task_result fields when optional fields are malformed", () => {
+    const parsed = parseToolCallArguments(
+      "{\"status\":\"complete\",\"summary\":\"为 Todo Lists React 应用设计并输出了完整的极简现代风格指南。\",\"artifacts\": style-guide}",
+      null,
+      "report_task_result"
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args).toEqual({
+        status: "complete",
+        summary: "为 Todo Lists React 应用设计并输出了完整的极简现代风格指南。"
+      });
+    }
+  });
+
+  it("keeps the latest cumulative tool argument snapshot", () => {
+    const partial = "{\"type\":\"document\"";
+    const complete = JSON.stringify({
+      type: "document",
+      title: "Style guide",
+      content: { format: "markdown", content: "# Guide" }
+    });
+
+    expect(mergeToolArgumentChunk(partial, complete)).toBe(complete);
+    expect(mergeToolArgumentChunk(complete, complete)).toBe(complete);
+  });
+
+  it("uses the last complete object when providers concatenate argument snapshots", () => {
+    const first = JSON.stringify({
+      type: "document",
+      title: "Draft",
+      content: { format: "markdown", content: "# Draft" }
+    });
+    const final = JSON.stringify({
+      type: "document",
+      title: "TODO Lists 风格指南",
+      content: { format: "markdown", content: "# Final guide" }
+    });
+
+    const parsed = parseToolCallArguments(`${first}\n${final}`);
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args.title).toBe("TODO Lists 风格指南");
+      expect(parsed.args.content).toEqual({
+        format: "markdown",
+        content: "# Final guide"
+      });
+    }
+  });
+
+  it("does not accept a complete object followed by a truncated snapshot", () => {
+    const complete = JSON.stringify({
+      type: "document",
+      title: "Draft",
+      content: { format: "markdown", content: "# Draft" }
+    });
+
+    const parsed = parseToolCallArguments(
+      `${complete}\n{"type":"document","title":"Final`
+    );
+
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("constrains Conductor plan agentId to current conversation workers", () => {
     const base = buildAdapterInput();
     const input = buildAdapterInput({
       agent: {
         ...base.agent,
-        id: "ag_orchestrator",
-        isOrchestrator: true,
+        id: "ag_conductor",
+        isConductor: true,
         toolNames: ["plan_tasks"]
       },
       conversation: {
         ...base.conversation,
         mode: "group",
-        agentIds: ["ag_orchestrator", "ag_pm", "ag_frontend"]
+        agentIds: ["ag_conductor", "ag_pm", "ag_frontend"]
       },
       toolNames: ["plan_tasks"]
     });
@@ -139,6 +342,63 @@ describe("custom-agent-adapter", () => {
     const agentId = itemProperties.agentId as Record<string, unknown>;
 
     expect(agentId.enum).toEqual(["ag_pm", "ag_frontend"]);
+  });
+
+  it("identifies deploy tool results for deploy.status events", () => {
+    expect(isDeployStatusRecord({
+      id: "dep_ws_123",
+      artifactId: "art_123",
+      title: "Workspace App",
+      version: 1,
+      previewPath: "/deployments/dep_ws_123",
+      status: "ready",
+      sourceType: "workspace",
+      createdAt: 1
+    })).toBe(true);
+
+    expect(isDeployStatusRecord({
+      id: "dep_failed_123",
+      artifactId: "workspace",
+      title: "Deployment Failed",
+      version: 0,
+      previewPath: "",
+      status: "failed",
+      error: "Directory does not contain index.html.",
+      createdAt: 1
+    })).toBe(true);
+
+    expect(isDeployStatusRecord({
+      artifactId: "art_123",
+      title: "Regular artifact result"
+    })).toBe(false);
+  });
+
+  it("detects hallucinated deployment claims for deterministic workspace fallback", () => {
+    expect(shouldAutoDeployWorkspaceFromText(
+      "✅ 已重新部署成功！\n\n最新预览地址：`/deployments/dep_ws_123`\n[产物: Todo App (id=art_fake)]",
+      ["deploy_workspace"],
+      false
+    )).toBe(true);
+
+    expect(shouldAutoDeployWorkspaceFromText(
+      "我先检查一下 workspace。",
+      ["deploy_workspace"],
+      false
+    )).toBe(false);
+
+    expect(shouldAutoDeployWorkspaceFromText(
+      "✅ 已重新部署成功！\n/deployments/dep_ws_123",
+      ["deploy_workspace"],
+      true
+    )).toBe(false);
+  });
+
+  it("finds a deployable workspace directory with index.html", () => {
+    const root = path.join(tempDir, "workspace-auto-deploy");
+    fs.mkdirSync(path.join(root, "todo-app"), { recursive: true });
+    fs.writeFileSync(path.join(root, "todo-app", "index.html"), "<h1>ok</h1>");
+
+    expect(findDeployableWorkspacePath(root)).toBe("todo-app");
   });
 
   it("is registered in the adapter registry", () => {

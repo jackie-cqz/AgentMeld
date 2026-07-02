@@ -6,10 +6,9 @@ import { recordFileWriteEvidence } from "@/server/dispatch-tool-evidence";
 import { registerPendingWrite } from "@/server/pending-writes";
 import {
   assertPathWithinWorkspace,
+  checkSandboxQuota,
   ensureDir,
   MAX_FILE_WRITE_BYTES,
-  SANDBOX_MAX_BYTES,
-  SANDBOX_MAX_FILES,
   scanWorkspaceUsage
 } from "@/server/workspace-utils";
 import type { ToolDef } from "@/server/tools/types";
@@ -23,7 +22,7 @@ export const fsWriteTool: ToolDef = {
   name: "fs_write",
   description:
     "Write a text file inside the workspace. Creates parent directories automatically. " +
-    "Max 100 KB per file. In sandbox mode, the total workspace cannot exceed 100 MB / 1000 files.",
+    "Max 100 KB per file. In sandbox mode, the total workspace cannot exceed 1 GB / 50,000 files.",
   parameters: {
     type: "object",
     required: ["path", "content"],
@@ -70,18 +69,8 @@ export const fsWriteTool: ToolDef = {
     // Sandbox quota check
     try {
       const usage = scanWorkspaceUsage(ctx.workspacePath);
-      if (usage.totalBytes - oldBytes + contentBytes > SANDBOX_MAX_BYTES) {
-        return {
-          ok: false,
-          error: `Workspace quota exceeded: ${usage.totalBytes} bytes used, max ${SANDBOX_MAX_BYTES}.`
-        };
-      }
-      if (oldContent === null && usage.totalFiles >= SANDBOX_MAX_FILES) {
-        return {
-          ok: false,
-          error: `Workspace file limit exceeded: ${usage.totalFiles} files, max ${SANDBOX_MAX_FILES}.`
-        };
-      }
+      const quotaError = checkSandboxQuota(usage, contentBytes, oldBytes, oldContent === null);
+      if (quotaError) return { ok: false, error: quotaError };
     } catch {
       // If scan fails, proceed (e.g. workspace dir doesn't exist yet).
     }

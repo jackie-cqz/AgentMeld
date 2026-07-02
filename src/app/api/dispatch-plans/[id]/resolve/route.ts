@@ -8,7 +8,35 @@ export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
   action: z.enum(["approve", "reject", "revise"]),
-  feedback: z.string().optional()
+  feedback: z.string().optional(),
+  plan: z.array(z.object({
+    id: z.string().min(1),
+    agentId: z.string().min(1),
+    task: z.string().min(1),
+    dependsOn: z.array(z.string()).default([]),
+    title: z.string().optional(),
+    prompt: z.string().optional(),
+    inputs: z.array(z.object({
+      fromTaskId: z.string().min(1),
+      outputId: z.string().min(1),
+      required: z.boolean().optional(),
+      description: z.string().optional()
+    })).optional(),
+    expectedOutputs: z.array(z.object({
+      id: z.string().min(1),
+      type: z.enum(["web_app", "document", "image", "ppt"]),
+      required: z.boolean().optional(),
+      description: z.string().optional()
+    })).optional(),
+    acceptanceCriteria: z.array(z.string()).optional(),
+    maxAttempts: z.number().int().min(1).max(5).optional(),
+    targetPaths: z.array(z.string()).optional(),
+    requiredCommands: z.array(z.object({
+      command: z.string().min(1),
+      timeoutMs: z.number().positive().optional()
+    })).optional(),
+    requiredEvidence: z.array(z.string()).optional()
+  })).max(20).optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -64,25 +92,30 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Conversation not found." }, { status: 404 });
   }
 
-  // Find the orchestrator agent in the conversation
+  // Find the conductor agent in the conversation
   const availableAgents = conversation.agentIds;
-  const orchestratorAgentId = availableAgents.find((aid) => {
+  const conductorAgentId = availableAgents.find((aid) => {
     const agent = getAgent(aid);
-    return agent?.isOrchestrator;
+    return agent?.isConductor;
   }) ?? availableAgents[0] ?? "";
 
+  const submittedPlan = parsed.data.plan ?? entry.plan.plan;
   const validationResult = compileAndValidateDispatchPlan(
-    entry.plan.plan.map((p) => ({
+    submittedPlan.map((p) => ({
       id: p.id,
       agentId: p.agentId,
       task: p.task,
       dependsOn: p.dependsOn ?? [],
       inputs: p.inputs ?? [],
       expectedOutputs: p.expectedOutputs ?? [],
-      acceptanceCriteria: p.acceptanceCriteria ?? []
+      acceptanceCriteria: p.acceptanceCriteria ?? [],
+      maxAttempts: p.maxAttempts,
+      targetPaths: p.targetPaths,
+      requiredCommands: p.requiredCommands,
+      requiredEvidence: p.requiredEvidence
     })),
     availableAgents,
-    orchestratorAgentId
+    conductorAgentId
   );
 
   if (typeof validationResult === "string") {
@@ -106,7 +139,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   // Plan validated — approve
-  if (!approvePlan(id)) {
+  if (!approvePlan(id, validationResult)) {
     return Response.json({ error: "Plan was already resolved." }, { status: 409 });
   }
   eventBus.publish({

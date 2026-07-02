@@ -21,6 +21,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
 
   const webAppContent = artifact.content as Extract<ArtifactContent, { type: "web_app" }>;
+  if (isDeploymentPreviewPath(webAppContent.deploymentPreviewPath)) {
+    return Response.redirect(new URL(webAppContent.deploymentPreviewPath, request.url));
+  }
 
   const previewDir = ensureWebAppPreview(artifact);
   const url = new URL(request.url);
@@ -43,6 +46,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   return new Response(wrapPreviewHtml(html, id, entry), {
     headers: getStaticResponseHeaders(entry)
   });
+}
+
+function isDeploymentPreviewPath(value: unknown): value is string {
+  return typeof value === "string" && /^\/deployments\/dep_[a-zA-Z0-9_-]+\/?$/.test(value);
 }
 
 function wrapPreviewHtml(original: string, artifactId: string, entry: string): string {

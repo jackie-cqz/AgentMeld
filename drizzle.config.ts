@@ -5,6 +5,6 @@ export default defineConfig({
   out: "./drizzle",
   dialect: "sqlite",
   dbCredentials: {
-    url: process.env.AGENT_CONFERENCE_DB_PATH ?? "./.agent-conference-data/agent-conference.db"
+    url: process.env.AGENTMELD_DB_PATH ?? "./.agentmeld-data/agentmeld.db"
   }
 });

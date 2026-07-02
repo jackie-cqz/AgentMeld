@@ -15,8 +15,8 @@ import { updateSettings } from "@/server/settings-service";
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-deploy-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = path.join(tempDir, "data");
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-deploy-"));
+  process.env.AGENTMELD_DATA_DIR = path.join(tempDir, "data");
   resetBootstrapForTests();
   resetClientForTests();
   ensureDatabase();
@@ -25,7 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -108,7 +108,7 @@ describe("deployment-service", () => {
   });
 
   it("rejects private metadata and traversal paths", () => {
-    expect(resolveDeploymentFile("dep_valid", ".agent-conference/manifest.json")).toBeNull();
+    expect(resolveDeploymentFile("dep_valid", ".agentmeld/manifest.json")).toBeNull();
     expect(resolveDeploymentFile("dep_valid", "../secret.txt")).toBeNull();
   });
 });

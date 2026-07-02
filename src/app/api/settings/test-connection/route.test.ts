@@ -12,7 +12,7 @@ let originalFetch: typeof fetch;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-connection-test-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   ensureDatabase();
@@ -23,7 +23,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

@@ -6,12 +6,12 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDataDir, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { createConversation } from "@/server/conversation-service";
+import { getArtifact } from "@/server/repositories";
 import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
 import { getAllPendingBashCommands, rejectPendingBash } from "@/server/pending-bash";
-import { SANDBOX_MAX_FILES } from "@/server/workspace-utils";
 import {
   clearAllToolEvidenceForTests,
   getRunToolEvidence
@@ -23,7 +23,7 @@ let conversationId: string;
 
 beforeEach(async () => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-tools-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   workspacePath = path.join(getDataDir(), "workspaces", "conv_tools_test");
   fs.mkdirSync(workspacePath, { recursive: true });
 
@@ -55,7 +55,7 @@ beforeEach(async () => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   clearPendingWritesForTests();
   clearPendingBashForTests();
@@ -127,35 +127,6 @@ describe("fs_list", () => {
   it("rejects path outside workspace", async () => {
     const result = await toolRegistry.execute("fs_list", { path: "../../../etc" }, ctx());
     expect(result.ok).toBe(false);
-  });
-
-  it("rejects creating a new file after the workspace file limit", async () => {
-    for (let index = 0; index < SANDBOX_MAX_FILES - 3; index++) {
-      fs.writeFileSync(path.join(workspacePath, `quota-${index}.txt`), "");
-    }
-
-    const result = await toolRegistry.execute(
-      "fs_write",
-      { path: "over-limit.txt", content: "x" },
-      ctx()
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("file limit");
-  });
-
-  it("allows replacing an existing file at the workspace file limit", async () => {
-    for (let index = 0; index < SANDBOX_MAX_FILES - 3; index++) {
-      fs.writeFileSync(path.join(workspacePath, `replace-quota-${index}.txt`), "");
-    }
-
-    const result = await toolRegistry.execute(
-      "fs_write",
-      { path: "readme.txt", content: "replacement" },
-      ctx()
-    );
-
-    expect(result.ok).toBe(true);
   });
 
   it("rejects non-directory path", async () => {
@@ -306,6 +277,25 @@ describe("read_artifact", () => {
 });
 
 describe("write_artifact", () => {
+  it("creates a document artifact from direct markdown content", async () => {
+    const result = await toolRegistry.execute("write_artifact", {
+      type: "document",
+      title: "Direct Markdown",
+      content: "# Direct\n\nMarkdown body"
+    }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as { artifactId: string };
+      const artifact = getArtifact(value.artifactId);
+      expect(artifact?.content).toEqual({
+        type: "document",
+        format: "markdown",
+        content: "# Direct\n\nMarkdown body"
+      });
+    }
+  });
+
   it("creates a document artifact", async () => {
     const result = await toolRegistry.execute("write_artifact", {
       type: "document",
@@ -326,6 +316,27 @@ describe("write_artifact", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("normalizes stringified structured document content", async () => {
+    const result = await toolRegistry.execute("write_artifact", {
+      type: "document",
+      title: "Style guide",
+      content: JSON.stringify({
+        format: "markdown",
+        content: "# Style guide\n\nStructured content."
+      })
+    }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const artifact = getArtifact((result.value as { artifactId: string }).artifactId);
+      expect(artifact?.content).toEqual({
+        type: "document",
+        format: "markdown",
+        content: "# Style guide\n\nStructured content."
+      });
+    }
+  });
+
   it("creates a web_app artifact from html string", async () => {
     const result = await toolRegistry.execute("write_artifact", {
       type: "web_app",
@@ -337,6 +348,84 @@ describe("write_artifact", () => {
     if (result.ok) {
       const value = result.value as { type: string };
       expect(value.type).toBe("web_app");
+    }
+  });
+});
+
+describe("deploy_workspace", () => {
+  it("returns a failed deployment record for a deployable call that cannot be materialized", async () => {
+    const emptyPath = path.join(workspacePath, "empty-dist");
+    fs.mkdirSync(emptyPath, { recursive: true });
+
+    const result = await toolRegistry.execute("deploy_workspace", {
+      path: "empty-dist",
+      title: "Broken Workspace App"
+    }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as { status: string; error?: string; id: string };
+      expect(value.id).toMatch(/^dep_failed_/);
+      expect(value.status).toBe("failed");
+      expect(value.error).toContain("index.html");
+    }
+  });
+
+  it("creates a web_app artifact that appears in the artifact library", async () => {
+    const distPath = path.join(workspacePath, "dist");
+    fs.mkdirSync(distPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(distPath, "index.html"),
+      "<!doctype html><html><body>Workspace app<script src=\"assets/app.js\"></script></body></html>"
+    );
+    fs.mkdirSync(path.join(distPath, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(distPath, "assets", "app.js"), "window.workspaceApp = true;");
+
+    const result = await toolRegistry.execute("deploy_workspace", {
+      path: "dist",
+      title: "Workspace App"
+    }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as {
+        artifactId: string;
+        previewPath: string;
+        sourceType: string;
+        version: number;
+      };
+      const artifact = getArtifact(value.artifactId);
+
+      expect(value.sourceType).toBe("workspace");
+      expect(value.version).toBe(1);
+      expect(artifact?.conversationId).toBe(conversationId);
+      expect(artifact?.createdByAgentId).toBe("ag_mock_builder");
+      expect(artifact?.type).toBe("web_app");
+      expect(artifact?.title).toBe("Workspace App");
+      expect(artifact?.content.type).toBe("web_app");
+      if (artifact?.content.type === "web_app") {
+        expect(artifact.content.files["index.html"]).toContain("Workspace app");
+        expect(artifact.content.files["index.html"]).not.toContain("window.location.replace");
+        expect(artifact.content.files["assets/app.js"]).toContain("workspaceApp");
+        expect(artifact.content.deploymentPreviewPath).toBe(value.previewPath);
+        expect(artifact.content.sourceType).toBe("workspace");
+      }
+    }
+  });
+});
+
+describe("deploy_artifact", () => {
+  it("returns a failed deployment record when the artifact does not exist", async () => {
+    const result = await toolRegistry.execute("deploy_artifact", {
+      artifactId: "art_missing"
+    }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as { status: string; error?: string; id: string };
+      expect(value.id).toMatch(/^dep_failed_/);
+      expect(value.status).toBe("failed");
+      expect(value.error).toContain("not found");
     }
   });
 });

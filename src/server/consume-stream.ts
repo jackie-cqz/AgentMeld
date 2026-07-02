@@ -33,8 +33,8 @@ export interface ConsumeStreamResult {
 
 /**
  * Unified stream consumer used by every adapter invocation path:
- *   - executeRun (non-orchestrator agent)
- *   - runOrchestratorAssess (PLAN stage)
+ *   - executeRun (non-conductor agent)
+ *   - runConductorAssess (PLAN stage)
  *   - runAggregateStage (AGGREGATE stage)
  *
  * For each event:
@@ -230,7 +230,18 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): PartsResult 
       } else {
         next.push(deployPart);
       }
-      return { parts: next, sideEvents: noSide };
+      const partIndex = existingIndex >= 0 ? existingIndex : next.length - 1;
+      return {
+        parts: next,
+        sideEvents: [{
+          type: "part.start",
+          conversationId: event.conversationId,
+          timestamp: event.timestamp,
+          messageId: event.messageId,
+          partIndex,
+          part: deployPart
+        }]
+      };
     }
 
     default:

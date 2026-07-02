@@ -5,7 +5,7 @@ import {
   hasMissingRequiredInputs,
   type BuildChildPromptInput
 } from "@/server/child-prompt-builder";
-import type { ParsedTask } from "@/server/tools/orchestrator-tools";
+import type { ParsedTask } from "@/server/tools/conductor-tools";
 
 function makeStubTask(overrides: Partial<ParsedTask> = {}): ParsedTask {
   return {
@@ -41,7 +41,7 @@ describe("buildChildTaskPrompt", () => {
     const prompt = buildChildTaskPrompt(emptyInput);
     expect(prompt).toContain("You are continuing the same dispatched sub-task");
     expect(prompt).toContain("call report_task_result with");
-    expect(prompt).toContain('"complete", "failed", or "blocked"');
+    expect(prompt).toContain('{"status":"complete","summary":"what you completed"}');
   });
 
   it("includes expectedOutputs paragraph when task has outputs", () => {
@@ -53,6 +53,7 @@ describe("buildChildTaskPrompt", () => {
     };
     const prompt = buildChildTaskPrompt(input);
     expect(prompt).toContain("outputKey equal to that output id");
+    expect(prompt).toContain("Do not repeat artifact ids inside report_task_result");
   });
 
   it("renders required_inputs when resolvedInputs has entries", () => {
@@ -159,14 +160,14 @@ describe("buildChildTaskPrompt", () => {
       ...emptyInput,
       recentConversation: [
         { from: "user", content: "帮我做一个番茄时钟" },
-        { from: "orchestrator", content: "正在分析任务..." }
+        { from: "conductor", content: "正在分析任务..." }
       ]
     };
     const prompt = buildChildTaskPrompt(input);
     expect(prompt).toContain("<recent_conversation>");
     expect(prompt).toContain('from="user"');
     expect(prompt).toContain("帮我做一个番茄时钟");
-    expect(prompt).toContain('from="orchestrator"');
+    expect(prompt).toContain('from="conductor"');
   });
 
   it("does NOT render evidence_contract when no evidence fields set", () => {

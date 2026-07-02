@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingWrite } from "@/shared/types";
 
@@ -10,14 +11,14 @@ interface PendingEntry {
 }
 
 declare global {
-  var __agentConferencePendingWrites: Map<string, PendingEntry> | undefined;
+  var __agentMeldPendingWrites: Map<string, PendingEntry> | undefined;
 }
 
 function getStore(): Map<string, PendingEntry> {
-  if (!globalThis.__agentConferencePendingWrites) {
-    globalThis.__agentConferencePendingWrites = new Map();
+  if (!globalThis.__agentMeldPendingWrites) {
+    globalThis.__agentMeldPendingWrites = new Map();
   }
-  return globalThis.__agentConferencePendingWrites;
+  return globalThis.__agentMeldPendingWrites;
 }
 
 export function registerPendingWrite(
@@ -53,6 +54,13 @@ export function registerPendingWrite(
       }
     };
     store.set(id, entry);
+
+    eventBus.publish({
+      type: "fs_write.pending",
+      conversationId,
+      timestamp: now,
+      pendingWrite: entry.write
+    });
   });
 }
 
@@ -83,6 +91,13 @@ export function cancelPendingWritesForRun(runId: string): void {
       cancelApproval(id, Date.now());
       store.delete(id);
       entry.resolver(false);
+      eventBus.publish({
+        type: "fs_write.resolved",
+        conversationId: entry.write.conversationId,
+        timestamp: Date.now(),
+        pendingId: id,
+        applied: false
+      });
     }
   }
 }

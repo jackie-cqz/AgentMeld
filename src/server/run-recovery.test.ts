@@ -13,7 +13,7 @@ let tempDir: string;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-recov-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -23,7 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -31,7 +31,7 @@ afterEach(() => {
 describe("run-recovery", () => {
   // Shared fixture: need a real conversation + agent for FK constraints
   let convId: string;
-  const agentId = "ag_mock_orchestrator";
+  const agentId = "ag_mock_conductor";
 
   beforeEach(() => {
     const conv = createConversation({ mode: "single", agentIds: [agentId] });

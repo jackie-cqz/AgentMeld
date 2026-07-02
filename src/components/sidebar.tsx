@@ -24,6 +24,8 @@ import { AgentsPanel } from "@/components/agents-panel";
 import { AnalyticsPanel } from "@/components/analytics-panel";
 import { ArtifactLibrary } from "@/components/artifact-library";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { requestJson } from "@/lib/request-json";
+import { getAgentAvatarStyle } from "@/shared/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList, selectConversationList } from "@/stores/selectors";
 import type { Agent, Conversation } from "@/shared/types";
@@ -50,6 +52,8 @@ export function Sidebar() {
   // Inline editing: conversation id being edited + edit value
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
   const contextRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,9 +74,17 @@ export function Sidebar() {
 
   const handleDelete = async (conv: Conversation) => {
     if (!confirm(`确定删除会话「${conv.title}」吗？此操作不可撤销。`)) return;
-    await fetch(`/api/conversations/${conv.id}`, { method: "DELETE" });
-    await loadBootstrap();
-    setContextMenu(null);
+    setBusyConversationId(conv.id);
+    setActionError(null);
+    try {
+      await requestJson(`/api/conversations/${conv.id}`, { method: "DELETE" });
+      await loadBootstrap();
+      setContextMenu(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "删除会话失败。");
+    } finally {
+      setBusyConversationId(null);
+    }
   };
 
   const startRename = (conv: Conversation) => {
@@ -85,34 +97,58 @@ export function Sidebar() {
     if (!editingId) return;
     const trimmed = editValue.trim();
     if (!trimmed || trimmed === conversations.find((c) => c.id === editingId)?.title) { setEditingId(null); return; }
-    await fetch(`/api/conversations/${editingId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: trimmed })
-    });
-    updateConversation(editingId, { title: trimmed });
-    setEditingId(null);
+    setBusyConversationId(editingId);
+    setActionError(null);
+    try {
+      const data = await requestJson<{ conversation: Conversation }>(`/api/conversations/${editingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed })
+      });
+      updateConversation(editingId, data.conversation);
+      setEditingId(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "重命名失败。");
+    } finally {
+      setBusyConversationId(null);
+    }
   };
 
   const handleArchive = async (conv: Conversation) => {
-    await fetch(`/api/conversations/${conv.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archived: !conv.archived })
-    });
-    updateConversation(conv.id, { archived: !conv.archived });
-    setContextMenu(null);
+    setBusyConversationId(conv.id);
+    setActionError(null);
+    try {
+      const data = await requestJson<{ conversation: Conversation }>(`/api/conversations/${conv.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: !conv.archived })
+      });
+      updateConversation(conv.id, data.conversation);
+      setContextMenu(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "归档操作失败。");
+    } finally {
+      setBusyConversationId(null);
+    }
   };
 
   const handlePin = async (conv: Conversation) => {
     const isPinned = conv.pinnedAt !== null;
-    await fetch(`/api/conversations/${conv.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pinnedAt: isPinned ? null : Date.now() })
-    });
-    updateConversation(conv.id, { pinnedAt: isPinned ? null : Date.now() });
-    setContextMenu(null);
+    setBusyConversationId(conv.id);
+    setActionError(null);
+    try {
+      const data = await requestJson<{ conversation: Conversation }>(`/api/conversations/${conv.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinnedAt: isPinned ? null : Date.now() })
+      });
+      updateConversation(conv.id, data.conversation);
+      setContextMenu(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "置顶操作失败。");
+    } finally {
+      setBusyConversationId(null);
+    }
   };
 
   const orderedConversations = useMemo(() => {
@@ -130,6 +166,16 @@ export function Sidebar() {
 
   return (
     <aside className={`relative flex h-screen shrink-0 flex-col border-r transition-all duration-200 ${darkMode ? "border-slate-700 bg-slate-900 text-slate-100" : "border-slate-200 bg-white"} ${sidebarCollapsed ? "w-[56px]" : "w-[344px]"}`}>
+      {actionError ? (
+        <button
+          type="button"
+          onClick={() => setActionError(null)}
+          className="absolute bottom-3 left-3 right-3 z-40 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-left text-xs text-red-700 shadow-lg"
+          title="点击关闭"
+        >
+          {actionError}
+        </button>
+      ) : null}
       {/* Collapsed narrow bar */}
       {sidebarCollapsed ? (
         <div className="flex h-full flex-col items-center gap-2 py-3">
@@ -234,7 +280,7 @@ export function Sidebar() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="whitespace-nowrap text-[20px] font-semibold leading-6 text-slate-950">
-              Agent Conference
+              AgentMeld
             </div>
             <div className="mt-1 truncate text-sm text-slate-500">多 Agent 协作平台</div>
           </div>
@@ -334,8 +380,8 @@ export function Sidebar() {
                   key={conversation.id}
                   className={`group flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${
                     conversation.id === activeConversationId
-                      ? "bg-[#fffdf5] shadow-sm ring-1 ring-amber-100"
-                      : "hover:bg-slate-50"
+                      ? "bg-[#fffdf5] shadow-sm ring-1 ring-amber-100 dark:bg-blue-500/10 dark:ring-blue-500/25"
+                      : "hover:bg-slate-50 dark:hover:bg-slate-800/70"
                   }`}
                   type="button"
                   onClick={() => {
@@ -368,10 +414,10 @@ export function Sidebar() {
                         {conversation.id === activeConversationId ? (
                           <span className="text-amber-500">◆</span>
                         ) : null}
-                        <div className="truncate text-sm font-semibold text-slate-950">{conversation.title}</div>
+                        <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{conversation.title}</div>
                       </div>
                     )}
-                    <div className="mt-1 text-xs text-slate-500">
+                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                       {conversation.mode === "group" ? "群聊" : "单聊"} · {conversation.agentIds.length} 位 Agent
                     </div>
                   </div>
@@ -396,6 +442,8 @@ export function Sidebar() {
           onCreate={(payload) =>
             void createConversation(payload).then(() => {
               setDialogOpen(false);
+            }).catch((error: unknown) => {
+              setActionError(error instanceof Error ? error.message : "创建会话失败。");
             })
           }
         />
@@ -416,29 +464,33 @@ export function Sidebar() {
             {contextMenu.conversation.title}
           </div>
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-            onClick={() => handlePin(contextMenu.conversation)}
+            disabled={busyConversationId === contextMenu.conversation.id}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => void handlePin(contextMenu.conversation)}
           >
             <Pin className="h-4 w-4" />
             {contextMenu.conversation.pinnedAt !== null ? "取消置顶" : "置顶"}
           </button>
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            disabled={busyConversationId === contextMenu.conversation.id}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             onClick={() => startRename(contextMenu.conversation)}
           >
             <Pencil className="h-4 w-4" />
             重命名
           </button>
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-            onClick={() => handleArchive(contextMenu.conversation)}
+            disabled={busyConversationId === contextMenu.conversation.id}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => void handleArchive(contextMenu.conversation)}
           >
             <Archive className="h-4 w-4" />
             {contextMenu.conversation.archived ? "取消归档" : "归档"}
           </button>
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-            onClick={() => handleDelete(contextMenu.conversation)}
+            disabled={busyConversationId === contextMenu.conversation.id}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+            onClick={() => void handleDelete(contextMenu.conversation)}
           >
             <Trash2 className="h-4 w-4" />
             删除
@@ -464,7 +516,7 @@ function CreateConversationDialog({
   }) => void;
 }) {
   const defaultAgentIds = agents
-    .filter((agent) => agent.isOrchestrator || agent.name.includes("前端"))
+    .filter((agent) => agent.isConductor || agent.name.includes("前端"))
     .map((agent) => agent.id);
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<"single" | "group">("group");
@@ -514,8 +566,11 @@ function CreateConversationDialog({
                 checked={agentIds.includes(agent.id)}
                 onChange={() => toggleAgent(agent.id)}
               />
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs ${getAgentAvatarStyle(agent).solid}`}>
+                {agent.avatar}
+              </span>
               <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-              {agent.isOrchestrator ? <span className="text-[11px] text-stone-500">Orch</span> : null}
+              {agent.isConductor ? <span className="text-[11px] text-stone-500">Cond</span> : null}
             </label>
           ))}
         </div>

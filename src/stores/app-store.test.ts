@@ -49,9 +49,11 @@ beforeEach(() => {
       error: null
     },
     openFilesByConversation: {},
+    openDiffsByConversation: {},
     activeTabByConversation: {},
     replyTargetByConversation: {},
     pendingAttachmentsByConversation: {},
+    fileRevisionByConversation: {},
     highlightedMessageId: null,
     activeConversationId: null,
     activeArtifactId: null,
@@ -61,7 +63,7 @@ beforeEach(() => {
     connectionStatus: "connecting",
     lastHeartbeatAt: null,
     isBootstrapping: false,
-    composerDraft: ""
+    composerDraftByConversation: {}
   });
 });
 
@@ -144,6 +146,51 @@ describe("app-store normalized message events", () => {
     expect(useAppStore.getState().artifacts[artifact.id]).toBeUndefined();
     expect(useAppStore.getState().messageIdsByConversation[conversationId]).toEqual([]);
     expect(useAppStore.getState().artifactIdsByConversation[conversationId]).toEqual([]);
+  });
+
+  it("keeps the optimistic user message before an agent reply when SSE wins the race", async () => {
+    const realUserMessage: Message = {
+      ...sampleMessage,
+      id: "msg_real_user",
+      parts: [{ type: "text", content: "晚安好" }],
+      createdAt: 100,
+      updatedAt: 100
+    };
+    let resolveRequest!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    })));
+
+    const sendPromise = useAppStore.getState().sendMessage(conversationId, "晚安好");
+    const optimisticId = useAppStore.getState().messageIdsByConversation[conversationId]?.[0];
+    expect(optimisticId).toMatch(/^local-/);
+
+    const { applyEvent } = useAppStore.getState();
+    applyEvent({
+      type: "message.added",
+      conversationId,
+      timestamp: 100,
+      message: realUserMessage
+    });
+    applyEvent({
+      type: "message.start",
+      conversationId,
+      timestamp: 101,
+      messageId: "msg_agent_reply",
+      agentId: "ag_conductor",
+      runId: "run_reply"
+    });
+
+    resolveRequest(new Response(JSON.stringify({ message: realUserMessage }), {
+      status: 202,
+      headers: { "Content-Type": "application/json" }
+    }));
+    await sendPromise;
+
+    expect(useAppStore.getState().messageIdsByConversation[conversationId]).toEqual([
+      realUserMessage.id,
+      "msg_agent_reply"
+    ]);
   });
 });
 
@@ -460,6 +507,7 @@ describe("app-store bootstrap and UI state", () => {
           agentIds: [],
           fsWriteApprovalMode: "auto",
           pinnedMessageIds: [],
+          pinnedAt: null,
           archived: false,
           createdAt: 1,
           updatedAt: 1
@@ -494,6 +542,25 @@ describe("app-store bootstrap and UI state", () => {
     useAppStore.getState().setActiveArtifact("art_123456789abc");
     expect(useAppStore.getState().activeArtifactId).toBe("art_123456789abc");
     expect(useAppStore.getState().rightPanelOpen).toBe(true);
+  });
+
+  it("keeps composer state and tabs isolated by conversation", () => {
+    const secondConversationId = "conv_second";
+    useAppStore.getState().setComposerDraft(conversationId, "first");
+    useAppStore.getState().setComposerDraft(secondConversationId, "second");
+    useAppStore.getState().setReplyTarget(conversationId, sampleMessage.id);
+    useAppStore.getState().openConversationFile(conversationId, "src/app.ts");
+    useAppStore.getState().openPendingWriteDiff(conversationId, "pw_1");
+
+    expect(useAppStore.getState().composerDraftByConversation).toMatchObject({
+      [conversationId]: "first",
+      [secondConversationId]: "second"
+    });
+    expect(useAppStore.getState().replyTargetByConversation[conversationId]).toBe(sampleMessage.id);
+    expect(useAppStore.getState().activeTabByConversation[conversationId]).toBe("diff:pw_1");
+
+    useAppStore.getState().closeConversationTab(conversationId, "diff:pw_1");
+    expect(useAppStore.getState().activeTabByConversation[conversationId]).toBe("file:src/app.ts");
   });
 });
 

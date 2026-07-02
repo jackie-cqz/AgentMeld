@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(8000),
   mentionedAgentIds: z.array(z.string().min(1)).max(8).optional(),
-  attachmentIds: z.array(z.string().min(1)).max(10).optional()
+  attachmentIds: z.array(z.string().min(1)).max(10).optional(),
+  parentMessageId: z.string().min(1).nullable().optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -22,7 +23,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       conversationId: id,
       content: parsed.data.content,
       mentionedAgentIds: parsed.data.mentionedAgentIds,
-      attachmentIds: parsed.data.attachmentIds
+      attachmentIds: parsed.data.attachmentIds,
+      parentMessageId: parsed.data.parentMessageId
     });
     return Response.json(result, { status: 202 });
   } catch (error) {

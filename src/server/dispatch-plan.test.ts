@@ -13,8 +13,8 @@ describe("compileAndValidateDispatchPlan", () => {
         maxAttempts: 3,
         expectedOutputs: [{ id: "app", type: "web_app", required: true }]
       }],
-      ["ag_orchestrator", "ag_worker"],
-      "ag_orchestrator"
+      ["ag_conductor", "ag_worker"],
+      "ag_conductor"
     );
 
     expect(typeof result).not.toBe("string");
@@ -35,8 +35,8 @@ describe("compileAndValidateDispatchPlan", () => {
         prompt: "Repair the implementation",
         dependsOn: ["t1"]
       }],
-      ["ag_orchestrator", "ag_worker"],
-      "ag_orchestrator",
+      ["ag_conductor", "ag_worker"],
+      "ag_conductor",
       ["t1"]
     );
 
@@ -54,8 +54,8 @@ describe("compileAndValidateDispatchPlan", () => {
         prompt: "Implement",
         dependsOn: ["missing"]
       }],
-      ["ag_orchestrator", "ag_worker"],
-      "ag_orchestrator"
+      ["ag_conductor", "ag_worker"],
+      "ag_conductor"
     );
 
     expect(result).toContain("unknown task");

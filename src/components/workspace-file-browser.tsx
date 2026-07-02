@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Loader2, X } from "lucide-react";
+import { useState, useCallback, useEffect, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Loader2, RefreshCw, X } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 
 interface FileEntry {
@@ -18,7 +18,8 @@ interface Props {
 
 export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Props) {
   const panelWidth = useAppStore((s) => s.artifactPanelWidth);
-  const MIN_W = 320;
+  const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
+  const MIN_W = 380;
   const MAX_W = 960;
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -27,8 +28,6 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [dirContents, setDirContents] = useState<Map<string, FileEntry[]>>(new Map());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
-  const [contentLoading, setContentLoading] = useState(false);
 
   const fetchDirectory = useCallback(async (dirPath: string) => {
     const res = await fetch(`/api/conversations/${conversationId}/workspace-files?path=${encodeURIComponent(dirPath || ".")}`);
@@ -74,19 +73,49 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
   const openConversationFile = useAppStore((s) => s.openConversationFile);
 
   const openFile = async (filePath: string) => {
-    // P3: Open file in central tab via store
     openConversationFile(conversationId, filePath);
     setSelectedFile(filePath);
-    setContentLoading(true);
+  };
+
+  const refresh = async () => {
+    setLoading(true);
+    setError(null);
+    setExpandedDirs(new Set());
+    setDirContents(new Map());
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/workspace-files?path=${encodeURIComponent(filePath)}&read=1`);
-      if (!res.ok) throw new Error("Failed to read file");
-      const data = await res.json() as { content: string; truncated: boolean };
-      setFileContent(data.content);
-    } catch (err) {
-      setFileContent(`读取失败：${err instanceof Error ? err.message : "未知错误"}`);
+      setEntries(await fetchDirectory("."));
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : "刷新失败");
+    } finally {
+      setLoading(false);
     }
-    setContentLoading(false);
+  };
+
+  const handleResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    const move = (moveEvent: PointerEvent) => {
+      const maxWidth = Math.min(MAX_W, Math.round(window.innerWidth * 0.72));
+      setPanelWidth(Math.min(Math.max(startWidth + startX - moveEvent.clientX, MIN_W), maxWidth));
+    };
+    const up = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? 24 : -24;
+    setPanelWidth((width) => Math.min(Math.max(width + delta, MIN_W), MAX_W));
   };
 
   const bg = darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200";
@@ -98,14 +127,33 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
       className={`relative flex h-screen shrink-0 flex-col border-l ${bg}`}
       style={{ width: panelWidth, minWidth: MIN_W, maxWidth: MAX_W }}
     >
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-label="调整工作区文件面板宽度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_W}
+        aria-valuemax={MAX_W}
+        aria-valuenow={panelWidth}
+        onPointerDown={handleResizeStart}
+        onKeyDown={handleResizeKeyDown}
+        className="group absolute left-0 top-0 z-20 h-full w-2 -translate-x-1 cursor-col-resize touch-none"
+      >
+        <div className="mx-auto h-full w-px bg-transparent group-hover:bg-blue-500" />
+      </div>
       <header className={`flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 px-4`}>
         <div className="min-w-0">
           <div className={`truncate text-base font-semibold ${textMain}`}>工作区文件</div>
           <div className={`mt-1 text-xs ${muted}`}>浏览 workspace 目录</div>
         </div>
-        <button onClick={onClose} className={`grid h-8 w-8 place-items-center rounded-md ${muted} hover:bg-slate-100`}>
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex gap-1">
+          <button onClick={() => void refresh()} className={`grid h-8 w-8 place-items-center rounded-md ${muted} hover:bg-slate-100`} title="刷新文件树">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          </button>
+          <button onClick={onClose} className={`grid h-8 w-8 place-items-center rounded-md ${muted} hover:bg-slate-100`} title="关闭">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </header>
 
       {/* File tree */}
@@ -138,18 +186,6 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
         )}
       </div>
 
-      {/* File content preview */}
-      {selectedFile ? (
-        <div className="h-1/2 border-t overflow-y-auto">
-          <div className={`sticky top-0 flex items-center justify-between border-b px-3 py-2 text-xs font-mono ${darkMode ? "bg-slate-700 text-slate-300" : "bg-slate-100 text-slate-600"}`}>
-            {selectedFile}
-            {contentLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-          </div>
-          <pre className={`p-3 text-xs font-mono whitespace-pre-wrap ${darkMode ? "bg-slate-900 text-slate-300" : "bg-slate-50 text-slate-800"}`}>
-            {fileContent ?? "加载中..."}
-          </pre>
-        </div>
-      ) : null}
     </aside>
   );
 }

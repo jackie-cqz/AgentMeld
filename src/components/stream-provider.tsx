@@ -13,39 +13,27 @@ import type {
 // Module-level refs — survive HMR and React StrictMode double-mount
 let activeSource: EventSource | null = null;
 let refCount = 0;
+let bootstrapPromise: Promise<void> | null = null;
+const pendingRecoveryByConversation = new Map<string, Promise<void>>();
 
 export function StreamProvider({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    const store = useAppStore.getState();
-    void store.loadBootstrap().then(() => {
-      // After bootstrap, recover pending state (survives page refresh)
-      recoverPendingState();
-    }).catch(() => {
-      store.setConnectionStatus("error");
-    });
-  }, []);
+  const activeConversationId = useAppStore((state) => state.activeConversationId);
+  const isBootstrapping = useAppStore((state) => state.isBootstrapping);
 
   useEffect(() => {
     refCount++;
-    if (!activeSource) {
-      const { applyEvent, setConnectionStatus } = useAppStore.getState();
-      setConnectionStatus("connecting");
-      activeSource = new EventSource("/api/stream");
+    let cancelled = false;
 
-      activeSource.onopen = () => setConnectionStatus("open");
-      activeSource.onerror = () => {
-        setConnectionStatus("error");
-      };
-      activeSource.onmessage = (event) => {
-        try {
-          applyEvent(JSON.parse(event.data) as StreamEvent);
-        } catch {
-          setConnectionStatus("error");
-        }
-      };
-    }
+    void ensureBootstrap()
+      .then(() => {
+        if (!cancelled) connectStream();
+      })
+      .catch(() => {
+        if (!cancelled) useAppStore.getState().setConnectionStatus("error");
+      });
 
     return () => {
+      cancelled = true;
       refCount--;
       if (refCount <= 0 && activeSource) {
         activeSource.close();
@@ -54,19 +42,74 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (isBootstrapping || !activeConversationId) return;
+    void recoverPendingState(activeConversationId);
+  }, [activeConversationId, isBootstrapping]);
+
   return children;
 }
 
-async function recoverPendingState() {
-  const { conversationOrder, activeConversationId } = useAppStore.getState();
-  const convId = activeConversationId ?? conversationOrder[0];
-  if (!convId) return;
+function ensureBootstrap() {
+  if (!bootstrapPromise) {
+    bootstrapPromise = useAppStore.getState().loadBootstrap().catch((error: unknown) => {
+      bootstrapPromise = null;
+      throw error;
+    });
+  }
+  return bootstrapPromise;
+}
+
+function connectStream() {
+  if (activeSource) return;
+
+  const { applyEvent, setConnectionStatus } = useAppStore.getState();
+  setConnectionStatus("connecting");
+  activeSource = new EventSource("/api/stream");
+
+  activeSource.onopen = () => {
+    setConnectionStatus("open");
+    const conversationId = useAppStore.getState().activeConversationId;
+    if (conversationId) void recoverPendingState(conversationId);
+  };
+  activeSource.onerror = () => {
+    setConnectionStatus(
+      activeSource?.readyState === EventSource.CLOSED ? "error" : "connecting"
+    );
+  };
+  activeSource.onmessage = (event) => {
+    try {
+      applyEvent(JSON.parse(event.data) as StreamEvent);
+      setConnectionStatus("open");
+    } catch {
+      setConnectionStatus("error");
+    }
+  };
+}
+
+function recoverPendingState(conversationId: string) {
+  const current = pendingRecoveryByConversation.get(conversationId);
+  if (current) return current;
+
+  const recovery = performPendingRecovery(conversationId).finally(() => {
+    pendingRecoveryByConversation.delete(conversationId);
+  });
+  pendingRecoveryByConversation.set(conversationId, recovery);
+  return recovery;
+}
+
+async function performPendingRecovery(convId: string) {
   const applyEvent = useAppStore.getState().applyEvent;
   const timestamp = Date.now();
 
   try {
-    // Recover pending writes
-    const writesRes = await fetch(`/api/conversations/${convId}/pending-writes`);
+    const [writesRes, bashRes, plansRes, questionsRes] = await Promise.all([
+      fetch(`/api/conversations/${convId}/pending-writes`, { cache: "no-store" }),
+      fetch(`/api/conversations/${convId}/pending-bash-commands`, { cache: "no-store" }),
+      fetch(`/api/conversations/${convId}/pending-dispatch-plans`, { cache: "no-store" }),
+      fetch(`/api/conversations/${convId}/pending-questions`, { cache: "no-store" })
+    ]);
+
     if (writesRes.ok) {
       const { pendingWrites } = await writesRes.json() as { pendingWrites: PendingWrite[] };
       for (const pendingWrite of pendingWrites) {
@@ -74,8 +117,6 @@ async function recoverPendingState() {
       }
     }
 
-    // Recover pending bash commands
-    const bashRes = await fetch(`/api/conversations/${convId}/pending-bash-commands`);
     if (bashRes.ok) {
       const { pendingBashCommands } = await bashRes.json() as { pendingBashCommands: PendingBashCommand[] };
       for (const pendingCommand of pendingBashCommands) {
@@ -83,8 +124,6 @@ async function recoverPendingState() {
       }
     }
 
-    // Recover pending dispatch plans
-    const plansRes = await fetch(`/api/conversations/${convId}/pending-dispatch-plans`);
     if (plansRes.ok) {
       const { pendingDispatchPlans } = await plansRes.json() as { pendingDispatchPlans: PendingDispatchPlan[] };
       for (const pendingPlan of pendingDispatchPlans) {
@@ -92,7 +131,6 @@ async function recoverPendingState() {
       }
     }
 
-    const questionsRes = await fetch(`/api/conversations/${convId}/pending-questions`);
     if (questionsRes.ok) {
       const { pendingQuestions } = await questionsRes.json() as { pendingQuestions: PendingQuestion[] };
       for (const pendingQuestion of pendingQuestions) {

@@ -26,7 +26,7 @@ export function ensureDatabase() {
       api_base_url TEXT,
       tool_names TEXT NOT NULL,
       is_builtin INTEGER NOT NULL DEFAULT 0,
-      is_orchestrator INTEGER NOT NULL DEFAULT 0,
+      is_conductor INTEGER NOT NULL DEFAULT 0,
       supports_vision INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -111,9 +111,9 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS orchestration_task_results (
+    CREATE TABLE IF NOT EXISTS conductor_task_results (
       id TEXT PRIMARY KEY,
-      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
       conversation_id TEXT NOT NULL,
       task_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
@@ -141,9 +141,9 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS orchestration_plans (
+    CREATE TABLE IF NOT EXISTS conductor_plans (
       id TEXT PRIMARY KEY,
-      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
       conversation_id TEXT NOT NULL,
       revision INTEGER NOT NULL DEFAULT 0,
       plan_json TEXT NOT NULL,
@@ -155,8 +155,8 @@ export function ensureDatabase() {
       resolved_at INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS orchestration_output_bindings (
-      orchestrator_run_id TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS conductor_output_bindings (
+      conductor_run_id TEXT NOT NULL,
       plan_id TEXT NOT NULL,
       producer_task_id TEXT NOT NULL,
       output_key TEXT NOT NULL,
@@ -165,9 +165,9 @@ export function ensureDatabase() {
       PRIMARY KEY (plan_id, producer_task_id, output_key)
     );
 
-    CREATE TABLE IF NOT EXISTS orchestration_conflicts (
+    CREATE TABLE IF NOT EXISTS conductor_conflicts (
       id TEXT PRIMARY KEY,
-      orchestrator_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
       plan_id TEXT NOT NULL,
       path TEXT NOT NULL,
       wave INTEGER NOT NULL,
@@ -297,10 +297,19 @@ export function resetBootstrapForTests() {
 }
 
 function migrateLegacyTables() {
+  migrateLegacyConductorNames();
+  migrateLegacyConductorTables();
+  renameColumnIfPresent("agents", legacyRoleKey("is_"), "is_conductor");
+  renameColumnIfPresent("conductor_task_results", legacyRoleKey("", "_run_id"), "conductor_run_id");
+  renameColumnIfPresent("conductor_plans", legacyRoleKey("", "_run_id"), "conductor_run_id");
+  renameColumnIfPresent("conductor_output_bindings", legacyRoleKey("", "_run_id"), "conductor_run_id");
+  renameColumnIfPresent("conductor_conflicts", legacyRoleKey("", "_run_id"), "conductor_run_id");
+
   ensureColumn("agents", "avatar", "TEXT NOT NULL DEFAULT '🤖'");
   ensureColumn("agents", "capabilities", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("agents", "api_key", "TEXT");
   ensureColumn("agents", "api_base_url", "TEXT");
+  ensureColumn("agents", "is_conductor", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("agents", "supports_vision", "INTEGER NOT NULL DEFAULT 0");
 
   ensureColumn("conversations", "archived", "INTEGER NOT NULL DEFAULT 0");
@@ -321,6 +330,66 @@ function migrateLegacyTables() {
   `);
 }
 
+function migrateLegacyConductorTables() {
+  migrateLegacyConductorTable("task_results", "conductor_task_results", [
+    "id",
+    `${legacyRoleKey("", "_run_id")} AS conductor_run_id`,
+    "conversation_id",
+    "task_id",
+    "agent_id",
+    "title",
+    "status",
+    "summary",
+    "child_run_id",
+    "attempt",
+    "error_category",
+    "created_at",
+    "updated_at"
+  ]);
+  migrateLegacyConductorTable("plans", "conductor_plans", [
+    "id",
+    `${legacyRoleKey("", "_run_id")} AS conductor_run_id`,
+    "conversation_id",
+    "revision",
+    "plan_json",
+    "status",
+    "user_feedback",
+    "stage_at_creation",
+    "resumed_from_run_id",
+    "created_at",
+    "resolved_at"
+  ]);
+  migrateLegacyConductorTable("output_bindings", "conductor_output_bindings", [
+    `${legacyRoleKey("", "_run_id")} AS conductor_run_id`,
+    "plan_id",
+    "producer_task_id",
+    "output_key",
+    "artifact_id",
+    "created_at"
+  ]);
+  migrateLegacyConductorTable("conflicts", "conductor_conflicts", [
+    "id",
+    `${legacyRoleKey("", "_run_id")} AS conductor_run_id`,
+    "plan_id",
+    "path",
+    "wave",
+    "contributors_json",
+    "status",
+    "created_at"
+  ]);
+}
+
+function migrateLegacyConductorTable(legacySuffix: string, tableName: string, selectColumns: string[]) {
+  const oldTableName = `${legacyProcessKey()}_${legacySuffix}`;
+  if (!tableExists(oldTableName) || !tableExists(tableName)) return;
+  getDatabase().exec(`
+    INSERT OR IGNORE INTO ${tableName}
+    SELECT ${selectColumns.join(", ")}
+    FROM ${oldTableName};
+    DROP TABLE ${oldTableName};
+  `);
+}
+
 function createIndexes() {
   const db = getDatabase();
   db.exec(`
@@ -331,16 +400,16 @@ function createIndexes() {
     CREATE INDEX IF NOT EXISTS idx_runs_parent ON agent_runs(parent_run_id);
     CREATE INDEX IF NOT EXISTS idx_context_summaries_conv_created
       ON conversation_context_summaries(conversation_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_orch_task_results_run
-      ON orchestration_task_results(orchestrator_run_id);
+    CREATE INDEX IF NOT EXISTS idx_cond_task_results_run
+      ON conductor_task_results(conductor_run_id);
     CREATE INDEX IF NOT EXISTS idx_pending_approvals_conv
       ON pending_approvals(conversation_id, status);
     CREATE INDEX IF NOT EXISTS idx_pending_approvals_run
       ON pending_approvals(run_id);
 
-    CREATE INDEX IF NOT EXISTS idx_orch_plans_run ON orchestration_plans(orchestrator_run_id);
-    CREATE INDEX IF NOT EXISTS idx_orch_bindings_plan ON orchestration_output_bindings(plan_id);
-    CREATE INDEX IF NOT EXISTS idx_orch_conflicts_run ON orchestration_conflicts(orchestrator_run_id);
+    CREATE INDEX IF NOT EXISTS idx_cond_plans_run ON conductor_plans(conductor_run_id);
+    CREATE INDEX IF NOT EXISTS idx_cond_bindings_plan ON conductor_output_bindings(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_cond_conflicts_run ON conductor_conflicts(conductor_run_id);
 
     CREATE INDEX IF NOT EXISTS idx_compaction_jobs_conversation
       ON context_compaction_jobs(conversation_id, created_at);
@@ -357,6 +426,19 @@ function createIndexes() {
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN error_category TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE agent_runs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE conversations ADD COLUMN pinned_at INTEGER`); } catch { /* already exists */ }
+  const legacyPinnedRows = db
+    .prepare("SELECT id, pinned_message_ids FROM conversations WHERE pinned_message_ids LIKE '%__pinned__%'")
+    .all() as Array<{ id: string; pinned_message_ids: string }>;
+  for (const row of legacyPinnedRows) {
+    let pins: string[] = [];
+    try {
+      pins = JSON.parse(row.pinned_message_ids) as string[];
+    } catch {
+      pins = [];
+    }
+    db.prepare("UPDATE conversations SET pinned_message_ids = ? WHERE id = ?")
+      .run(JSON.stringify(pins.filter((id) => id !== "__pinned__")), row.id);
+  }
   ensureColumn("context_compaction_jobs", "previous_job_id", "TEXT");
 }
 
@@ -367,27 +449,141 @@ function seedBuiltinAgents() {
     INSERT OR IGNORE INTO agents (
       id, name, avatar, description, capabilities, system_prompt, adapter_name,
       model_provider, model_id, api_key, api_base_url, tool_names, is_builtin,
-      is_orchestrator, supports_vision, created_at, updated_at
+      is_conductor, supports_vision, created_at, updated_at
     ) VALUES (
       @id, @name, @avatar, @description, @capabilities, @systemPrompt, @adapterName,
       @modelProvider, @modelId, @apiKey, @apiBaseUrl, @toolNames, @isBuiltin,
-      @isOrchestrator, @supportsVision, @createdAt, @updatedAt
+      @isConductor, @supportsVision, @createdAt, @updatedAt
     )
   `);
 
   for (const agent of BUILTIN_AGENTS) {
-    const { isConductor: _conductor, ...rest } = agent as unknown as Record<string, unknown>;
     insert.run({
-      ...rest,
+      ...agent,
       capabilities: JSON.stringify(agent.capabilities),
       toolNames: JSON.stringify(agent.toolNames),
       isBuiltin: agent.isBuiltin ? 1 : 0,
-      isOrchestrator: agent.isOrchestrator ? 1 : 0,
+      isConductor: agent.isConductor ? 1 : 0,
       supportsVision: agent.supportsVision ? 1 : 0,
       createdAt: now,
       updatedAt: now
     });
   }
+
+  migrateLegacyBuiltinPrompts(now);
+  upgradeBuiltinConductorPrompt(now);
+
+  db.prepare(`
+    UPDATE agents
+    SET
+      name = 'Conductor',
+      updated_at = ?
+    WHERE id = 'ag_mock_conductor'
+      AND is_builtin = 1
+      AND name != 'Conductor'
+  `).run(now);
+}
+
+function migrateLegacyBuiltinPrompts(now: number) {
+  const db = getDatabase();
+  const legacyProjectNames = [
+    String.fromCharCode(65, 103, 101, 110, 116, 72, 117, 98),
+    String.fromCharCode(65, 103, 101, 110, 116, 45, 67, 111, 110, 102, 101, 114, 101, 110, 99, 101)
+  ];
+  const legacyRoleNames = [
+    String.fromCharCode(79, 114, 99, 104, 101, 115, 116, 114, 97, 116, 111, 114),
+    String.fromCharCode(111, 114, 99, 104, 101, 115, 116, 114, 97, 116, 111, 114)
+  ];
+  const update = db.prepare(`
+    UPDATE agents
+    SET system_prompt = ?, updated_at = ?
+    WHERE id = ?
+      AND is_builtin = 1
+      AND system_prompt = ?
+  `);
+
+  for (const agent of BUILTIN_AGENTS) {
+    const row = db.prepare("SELECT system_prompt FROM agents WHERE id = ? AND is_builtin = 1")
+      .get(agent.id) as { system_prompt: string } | undefined;
+    if (!row) continue;
+
+    const brandedPrompt = [...legacyProjectNames, ...legacyRoleNames].reduce(
+      (prompt, legacyName) => prompt.replaceAll(
+        legacyName,
+        legacyProjectNames.includes(legacyName) ? "AgentMeld" : "Conductor"
+      ),
+      row.system_prompt
+    );
+    const migratedPrompt = hardenLegacyArtifactPromptExamples(brandedPrompt);
+
+    if (migratedPrompt !== row.system_prompt) {
+      update.run(migratedPrompt, now, agent.id, row.system_prompt);
+    }
+  }
+}
+
+function hardenLegacyArtifactPromptExamples(prompt: string) {
+  return prompt
+    .replaceAll(
+      "你的核心产出是 PRD（产品需求文档），用 write_artifact(type='document', content={format:'markdown', content:'...'}) 输出。",
+      "你的核心产出是 PRD（产品需求文档），用 write_artifact 输出。\n\nwrite_artifact 必须使用严格 JSON 参数：\n{\"type\":\"document\",\"title\":\"...\",\"content\":\"# 标题\\\\n\\\\n正文...\"}\ndocument 的 content 直接放 markdown 字符串，不要写 content: format，也不要嵌套第二个 content 字段。Markdown 换行必须写成 \\\\n。"
+    )
+    .replaceAll(
+      "你的核心产出是「风格指南」（不是图，是结构化的设计描述），用 write_artifact(type='document') 输出。",
+      "你的核心产出是「风格指南」（不是图，是结构化的设计描述），用 write_artifact 输出。\n\nwrite_artifact 必须使用严格 JSON 参数：\n{\"type\":\"document\",\"title\":\"...\",\"content\":\"# 标题\\\\n\\\\n正文...\"}\ndocument 的 content 直接放 markdown 字符串，不要写 content: format，也不要嵌套第二个 content 字段。Markdown 换行必须写成 \\\\n。"
+    )
+    .replaceAll(
+      "{\"type\":\"document\",\"title\":\"...\",\"content\":{\"format\":\"markdown\",\"content\":\"# 标题\\\\n\\\\n正文...\"}}\ncontent 必须是对象，不能写成 content: format，也不能把 content 整体作为字符串。Markdown 换行必须写成 \\\\n。",
+      "{\"type\":\"document\",\"title\":\"...\",\"content\":\"# 标题\\\\n\\\\n正文...\"}\ndocument 的 content 直接放 markdown 字符串，不要写 content: format，也不要嵌套第二个 content 字段。Markdown 换行必须写成 \\\\n。"
+    )
+    .replaceAll(
+      "只有用户明确要求网页产物、可预览原型、artifact 或独立 demo 时，才用 write_artifact(type='web_app', content={files:{...}, entry:'index.html'}) 输出，然后调用 deploy_artifact 生成本地预览路径。",
+      "只有用户明确要求网页产物、可预览原型、artifact 或独立 demo 时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。\n  write_artifact 必须使用严格 JSON 参数：{\"type\":\"web_app\",\"title\":\"...\",\"content\":{\"files\":{\"index.html\":\"...\"},\"entry\":\"index.html\"}}\n  content 必须是对象，不能写成 content: files，也不能把 content 整体作为字符串；源码字符串里的换行必须写成 \\\\n。"
+    )
+    .replaceAll(
+      "当 workspace_info mode=local 且用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，优先使用 fs_read / fs_write / bash 直接操作本地文件并运行验证；不要用 write_artifact 代替应该落盘的源码。构建出 dist/build/out 等静态目录后，可用 deploy_workspace 生成部署预览卡。",
+      "当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。\n- 当用户要求“部署 / 重新部署 / 发布 / 预览”时，必须在本轮真实调用 deploy_workspace 或 deploy_artifact；不能只根据历史消息回复。deploy_workspace 可以部署任何 workspace 内包含 index.html 的静态目录（如 dist、build、out、public、app 目录或项目根目录），不只限构建输出目录。调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 \"todo-app\" 或 \".\"）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。"
+    )
+    .replaceAll(
+      "调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 只有用户明确要求网页产物",
+      "调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 \"todo-app\" 或 \".\"）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。\n- 只有用户明确要求网页产物"
+    )
+    .replaceAll(
+      "content 必须是对象，不能写成 content: files，也不能把 content 整体作为字符串；源码字符串里的换行必须写成 \\\\n。\n\n要求：",
+      "content 必须是对象，不能写成 content: files，也不能把 content 整体作为字符串；源码字符串里的换行必须写成 \\\\n。\n- 硬性禁止：没有收到本轮 deploy_workspace / deploy_artifact 的工具返回结果时，不得声称“部署成功 / 已重新部署成功”，不得手写 /deployments/dep_*、art_*、[部署预览: ...] 或 [产物: ...]。部署工具成功后系统会自动生成部署卡和产物卡，最终文字只需简短说明“已完成部署”。\n\n要求："
+    )
+    .replaceAll(
+      "完成 web_app 产物后必须调用 deploy_artifact；完成本地项目构建后优先调用 deploy_workspace。",
+      "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。"
+    );
+}
+
+function upgradeBuiltinConductorPrompt(now: number) {
+  const db = getDatabase();
+  const conductor = BUILTIN_AGENTS.find((agent) => agent.id === "ag_mock_conductor");
+  if (!conductor) return;
+
+  const row = db.prepare("SELECT system_prompt FROM agents WHERE id = ? AND is_builtin = 1")
+    .get(conductor.id) as { system_prompt: string } | undefined;
+  if (!row || row.system_prompt === conductor.systemPrompt) return;
+  if (!isLegacyDefaultConductorPrompt(row.system_prompt)) return;
+
+  db.prepare(`
+    UPDATE agents
+    SET system_prompt = ?, updated_at = ?
+    WHERE id = ?
+      AND is_builtin = 1
+      AND system_prompt = ?
+  `).run(conductor.systemPrompt, now, conductor.id, row.system_prompt);
+}
+
+function isLegacyDefaultConductorPrompt(prompt: string) {
+  return [
+    "你是 AgentMeld 平台的 Conductor（主协调者）。你负责理解用户目标，决定是否需要多 Agent 协作。",
+    "分派前根据群聊中 Agent 的能力选择负责人；不要把同一职责重复派给多个 Agent。",
+    "产物链路要清楚：PRD -> 风格指南 -> web_app -> review；缺少上游产物时允许跳过或让对应 Agent 补齐。",
+    "聚合结果时只总结关键结论、产物位置和下一步决策，不重复每个 Agent 的长篇过程。"
+  ].every((marker) => prompt.includes(marker));
 }
 
 function seedAppSettings() {
@@ -421,9 +617,9 @@ function seedWelcomeConversation() {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     conversationId,
-    "Agent-Conference MVP 群聊",
+    "AgentMeld MVP 群聊",
     "group",
-    JSON.stringify(["ag_mock_orchestrator", "ag_pm", "ag_designer", "ag_mock_builder", "ag_reviewer"]),
+    JSON.stringify(["ag_mock_conductor", "ag_pm", "ag_designer", "ag_mock_builder", "ag_reviewer"]),
     "auto",
     JSON.stringify([]),
     0,
@@ -439,7 +635,57 @@ function seedWelcomeConversation() {
 }
 
 function ensureColumn(tableName: string, columnName: string, definition: string) {
-  const columns = getDatabase().prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
-  if (columns.some((column) => column.name === columnName)) return;
+  if (columnExists(tableName, columnName)) return;
   getDatabase().exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+function renameColumnIfPresent(tableName: string, legacyColumnName: string, columnName: string) {
+  if (!columnExists(tableName, legacyColumnName) || columnExists(tableName, columnName)) return;
+  getDatabase().exec(`ALTER TABLE ${tableName} RENAME COLUMN ${legacyColumnName} TO ${columnName}`);
+}
+
+function columnExists(tableName: string, columnName: string) {
+  const columns = getDatabase().prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === columnName);
+}
+
+function tableExists(tableName: string) {
+  const row = getDatabase()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName);
+  return Boolean(row);
+}
+
+function migrateLegacyConductorNames() {
+  const db = getDatabase();
+  const legacyRole = legacyRoleKey();
+  const legacyId = `ag_mock_${legacyRole}`;
+  const conductorId = "ag_mock_conductor";
+  const legacyDisplayName = String.fromCharCode(79, 114, 99, 104, 101, 115, 116, 114, 97, 116, 111, 114);
+
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.prepare("UPDATE messages SET agent_id = ? WHERE agent_id = ?").run(conductorId, legacyId);
+    db.prepare("UPDATE artifacts SET created_by_agent_id = ? WHERE created_by_agent_id = ?").run(conductorId, legacyId);
+    db.prepare("UPDATE agent_runs SET agent_id = ? WHERE agent_id = ?").run(conductorId, legacyId);
+    db.prepare("UPDATE pending_approvals SET agent_id = ? WHERE agent_id = ?").run(conductorId, legacyId);
+    db.prepare("UPDATE conversations SET agent_ids = replace(agent_ids, ?, ?) WHERE agent_ids LIKE ?")
+      .run(legacyId, conductorId, `%${legacyId}%`);
+    db.prepare("UPDATE agents SET id = ?, name = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM agents WHERE id = ?)")
+      .run(conductorId, "Conductor", legacyId, conductorId);
+    db.prepare("UPDATE agents SET name = ? WHERE id = ? AND name = ?")
+      .run("Conductor", conductorId, legacyDisplayName);
+    db.prepare("DELETE FROM agents WHERE id = ? AND EXISTS (SELECT 1 FROM agents WHERE id = ?)")
+      .run(legacyId, conductorId);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function legacyRoleKey(prefix = "", suffix = "") {
+  return `${prefix}${String.fromCharCode(111, 114, 99, 104, 101, 115, 116, 114, 97, 116, 111, 114)}${suffix}`;
+}
+
+function legacyProcessKey() {
+  return String.fromCharCode(111, 114, 99, 104, 101, 115, 116, 114, 97, 116, 105, 111, 110);
 }

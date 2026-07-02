@@ -27,7 +27,7 @@ export interface AgentRow {
   system_prompt: string;
   tool_names: string;
   is_builtin: number;
-  is_orchestrator: number;
+  is_conductor: number;
   supports_vision?: number | null;
   created_at: number;
   updated_at: number;
@@ -79,9 +79,9 @@ export interface AgentRunRow {
   updated_at: number;
 }
 
-export interface OrchestrationTaskRow {
+export interface ConductorTaskRow {
   id: string;
-  orchestrator_run_id: string;
+  conductor_run_id: string;
   conversation_id: string;
   task_id: string;
   agent_id: string;
@@ -182,8 +182,7 @@ export function mapAgent(row: AgentRow): Agent {
     systemPrompt: row.system_prompt,
     toolNames: parseJson<string[]>(row.tool_names, []),
     isBuiltin: row.is_builtin === 1,
-    isOrchestrator: row.is_orchestrator === 1,
-    isConductor: row.is_orchestrator === 1,
+    isConductor: row.is_conductor === 1,
     supportsVision: row.supports_vision === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at

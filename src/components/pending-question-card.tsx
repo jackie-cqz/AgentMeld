@@ -1,6 +1,6 @@
 "use client";
 
-import { HelpCircle, Loader2, Send } from "lucide-react";
+import { Check, HelpCircle, Loader2, Send } from "lucide-react";
 import { useState } from "react";
 import type { PendingQuestion } from "@/shared/types";
 
@@ -54,60 +54,98 @@ export function PendingQuestionCard({ question, agentName }: PendingQuestionCard
       ? (answers[String(index)] ?? []).length > 0
       : Boolean(freeText[String(index)]?.trim())
   );
+  const answeredCount = question.questions.filter((item, index) =>
+    item.options.length > 0
+      ? (answers[String(index)] ?? []).length > 0
+      : Boolean(freeText[String(index)]?.trim())
+  ).length;
 
   return (
-    <div className="rounded-lg border border-blue-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 mb-3">
-        <HelpCircle className="h-4 w-4 text-blue-600" />
-        <div>
-          <div className="text-sm font-medium text-stone-900">{agentName ?? question.agentId} 需要你确认</div>
-          <div className="text-[11px] text-stone-400">Run {question.runId}</div>
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <header className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
+            <HelpCircle className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-950">需要你的选择</div>
+            <div className="mt-0.5 truncate text-xs text-slate-500">
+              {agentName ?? question.agentId} 正在等待确认
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="space-y-4">
+        <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500">
+          {answeredCount}/{question.questions.length}
+        </span>
+      </header>
+
+      <div className="space-y-3 p-4">
         {question.questions.map((q, qi) => {
           const selected = answers[String(qi)] ?? [];
           return (
-            <div key={qi}>
-              <div className="text-xs font-medium text-stone-500 uppercase mb-1">{q.header}</div>
-              <div className="text-sm text-stone-800 mb-2">{q.question}</div>
-              <div className="flex flex-wrap gap-2">
+            <fieldset key={qi} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+              <legend className="sr-only">{q.header}</legend>
+              <div className="mb-1 text-[11px] font-medium text-slate-500">{q.header}</div>
+              <div className="mb-3 text-sm font-medium leading-5 text-slate-900">{q.question}</div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {q.options.map((opt) => (
                   <button
                     key={opt.label}
+                    type="button"
                     onClick={() => handleSelect(qi, opt.label, !!q.multiSelect)}
-                    className={`rounded-full border px-3 py-1.5 text-xs transition ${
+                    className={`flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-left text-xs transition ${
                       selected.includes(opt.label)
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-stone-200 bg-white text-stone-600 hover:border-stone-300"
+                        ? "border-blue-500 bg-blue-50 text-blue-800 shadow-sm"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                     }`}
                     title={opt.description}
                   >
-                    {opt.label}
+                    <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
+                      selected.includes(opt.label)
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-300 bg-white"
+                    }`}>
+                      {selected.includes(opt.label) ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block font-medium">{opt.label}</span>
+                      {opt.description ? (
+                        <span className="mt-0.5 block line-clamp-2 text-[11px] leading-4 text-slate-500">
+                          {opt.description}
+                        </span>
+                      ) : null}
+                    </span>
                   </button>
                 ))}
               </div>
               {q.options.length === 0 ? (
                 <textarea
-                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-stone-200 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                  className="min-h-20 w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-400"
                   placeholder="输入你的回答"
                   value={freeText[String(qi)] ?? ""}
                   onChange={(event) => setFreeText((current) => ({ ...current, [String(qi)]: event.target.value }))}
                 />
               ) : null}
-            </div>
+            </fieldset>
           );
         })}
       </div>
-      <button
-        onClick={handleSubmit}
-        disabled={!complete || submitting}
-        className="mt-4 flex h-8 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white disabled:opacity-50 hover:bg-blue-700"
-      >
-        {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-        {submitting ? "提交中..." : "提交回答"}
-      </button>
-      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
-    </div>
+
+      <footer className="flex items-center justify-between gap-4 border-t border-slate-100 bg-white px-4 py-3">
+        <div className="min-w-0 text-xs text-slate-500">
+          {complete ? "已完成所有选择" : `还需回答 ${question.questions.length - answeredCount} 项`}
+          {error ? <span className="ml-2 text-red-600">{error}</span> : null}
+        </div>
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!complete || submitting}
+          className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+        >
+          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          {submitting ? "提交中..." : "提交回答"}
+        </button>
+      </footer>
+    </section>
   );
 }

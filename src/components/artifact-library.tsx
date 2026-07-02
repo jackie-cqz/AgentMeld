@@ -1,14 +1,17 @@
 "use client";
 
-import { ExternalLink, FileText, Globe, Image, Trash2 } from "lucide-react";
+import { FileText, Globe, Image as ImageIcon, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { requestJson } from "@/lib/request-json";
 import { useAppStore } from "@/stores/app-store";
-import type { Artifact, ArtifactContent } from "@/shared/types";
 
 export function ArtifactLibrary() {
   const artifacts = useAppStore((s) => s.artifacts);
   const conversations = useAppStore((s) => s.conversations);
   const setActiveConversation = useAppStore((s) => s.setActiveConversation);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
+  const loadBootstrap = useAppStore((s) => s.loadBootstrap);
+  const [error, setError] = useState<string | null>(null);
 
   const allArtifacts = Object.values(artifacts)
     .map((artifact) => ({
@@ -23,12 +26,18 @@ export function ArtifactLibrary() {
   };
 
   const handleDelete = async (artifactId: string) => {
-    await fetch(`/api/artifacts/${artifactId}`, { method: "DELETE" });
+    setError(null);
+    try {
+      await requestJson(`/api/artifacts/${artifactId}`, { method: "DELETE" });
+      await loadBootstrap();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "删除产物失败。");
+    }
   };
 
   const typeIcon = (type: string) => {
     if (type === "web_app") return <Globe className="h-4 w-4 text-blue-500" />;
-    if (type === "image") return <Image className="h-4 w-4 text-purple-500" />;
+    if (type === "image") return <ImageIcon className="h-4 w-4 text-purple-500" />;
     return <FileText className="h-4 w-4 text-emerald-500" />;
   };
 
@@ -51,6 +60,7 @@ export function ArtifactLibrary() {
         <p className="mt-0.5 text-xs text-stone-500">{allArtifacts.length} 个产物</p>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+        {error ? <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
         {allArtifacts.map(({ artifact, conversationTitle }) => (
           <div
             key={artifact.id}

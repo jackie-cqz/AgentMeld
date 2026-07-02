@@ -12,7 +12,7 @@ coverage/
 *.tsbuildinfo
 
 # Local app data
-.agent-conference-data/
+.agent*-data/
 
 # Logs
 *.log
@@ -31,6 +31,21 @@ pnpm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Internal planning docs
+AGENTS.md
+AGENT_BACKEND.md
+BACKEND_REMAINING_PRIORITY_PLAN.md
+CLAUDE.md
+DEEP-OVERVIEW.md
+README.zh-CN.md
+api-key-management.md
+conversation-log.md
+llm-prompts.md
+llm-trace-alignment-plan.md
+message-flow-trace.md
+message-flow-with-prompts-new.md
+message-flow-with-prompts.md
 
 # Release outputs
 release/

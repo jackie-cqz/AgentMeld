@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { correctAgentIds, validatePlan, topologicalWaves, parsePlanArgs } from "@/server/tools/orchestrator-tools";
+import { correctAgentIds, validatePlan, topologicalWaves, parsePlanArgs } from "@/server/tools/conductor-tools";
 import { toolRegistry } from "@/server/tools/registry";
+import { clearTaskResultsForRun, getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 
 describe("plan_tasks tool", () => {
   it("is registered in the tool registry", () => {
@@ -106,6 +107,16 @@ describe("report_task_result tool", () => {
     expect(tool).toBeDefined();
   });
 
+  it("exposes a minimal schema without artifact maps", () => {
+    const tool = toolRegistry.get("report_task_result");
+    const properties = tool?.parameters.properties as Record<string, unknown>;
+
+    expect(properties.status).toBeDefined();
+    expect(properties.summary).toBeDefined();
+    expect(properties.artifacts).toBeUndefined();
+    expect(properties.acceptanceResults).toBeUndefined();
+  });
+
   it("accepts a valid complete report", async () => {
     const result = await toolRegistry.execute("report_task_result", {
       status: "complete",
@@ -133,6 +144,21 @@ describe("report_task_result tool", () => {
     }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId: "r", abortSignal: new AbortController().signal });
 
     expect(result.ok).toBe(false);
+  });
+
+  it("merges artifacts recorded from write_artifact outputKey into the final report", async () => {
+    const runId = "run_report_artifact_merge";
+    clearTaskResultsForRun(runId);
+    recordTaskArtifact(runId, "style-guide", "art_style_123");
+
+    const result = await toolRegistry.execute("report_task_result", {
+      status: "complete",
+      summary: "Style guide completed."
+    }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId, abortSignal: new AbortController().signal });
+
+    expect(result.ok).toBe(true);
+    expect(getTaskReport(runId)?.artifacts).toEqual({ "style-guide": "art_style_123" });
+    clearTaskResultsForRun(runId);
   });
 });
 

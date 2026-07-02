@@ -18,14 +18,14 @@ export interface RunToolEvidence {
 }
 
 declare global {
-  var __agentConferenceToolEvidence: Map<string, RunToolEvidence> | undefined;
+  var __agentMeldToolEvidence: Map<string, RunToolEvidence> | undefined;
 }
 
 function getStore(): Map<string, RunToolEvidence> {
-  if (!globalThis.__agentConferenceToolEvidence) {
-    globalThis.__agentConferenceToolEvidence = new Map();
+  if (!globalThis.__agentMeldToolEvidence) {
+    globalThis.__agentMeldToolEvidence = new Map();
   }
-  return globalThis.__agentConferenceToolEvidence;
+  return globalThis.__agentMeldToolEvidence;
 }
 
 function getOrCreate(runId: string): RunToolEvidence {

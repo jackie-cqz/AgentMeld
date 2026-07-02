@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import {
+  DATABASE_FILE,
+  DATA_DIR,
+  DATA_DIR_ENV
+} from "@/shared/constants";
 
 declare global {
-  var __agentConferenceDb: SqlDatabase | undefined;
+  var __agentMeldDb: SqlDatabase | undefined;
 }
 
 interface SqlStatement {
@@ -27,26 +32,30 @@ type NodeSqliteModule = {
 const requireFromHere = createRequire(import.meta.url);
 
 export function getDataDir() {
-  const dir = process.env.AGENT_CONFERENCE_DATA_DIR
-    ? path.resolve(process.env.AGENT_CONFERENCE_DATA_DIR)
-    : path.join(/*turbopackIgnore: true*/ process.cwd(), ".agent-conference-data");
+  const configuredDir = process.env[DATA_DIR_ENV];
+  const defaultDir = path.join(/*turbopackIgnore: true*/ process.cwd(), DATA_DIR);
+  const dir = configuredDir ? path.resolve(configuredDir) : defaultDir;
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 export function getDatabase() {
-  if (!globalThis.__agentConferenceDb) {
-    const dbPath = path.join(getDataDir(), "agent-conference.db");
-    globalThis.__agentConferenceDb = openDatabase(dbPath);
-    setPragma(globalThis.__agentConferenceDb, "journal_mode = WAL");
-    setPragma(globalThis.__agentConferenceDb, "foreign_keys = ON");
+  if (!globalThis.__agentMeldDb) {
+    const dbPath = getDatabasePath();
+    globalThis.__agentMeldDb = openDatabase(dbPath);
+    setPragma(globalThis.__agentMeldDb, "journal_mode = WAL");
+    setPragma(globalThis.__agentMeldDb, "foreign_keys = ON");
   }
-  return globalThis.__agentConferenceDb;
+  return globalThis.__agentMeldDb;
 }
 
 export function resetDatabaseForTests() {
-  globalThis.__agentConferenceDb?.close?.();
-  globalThis.__agentConferenceDb = undefined;
+  globalThis.__agentMeldDb?.close?.();
+  globalThis.__agentMeldDb = undefined;
+}
+
+function getDatabasePath() {
+  return path.join(getDataDir(), DATABASE_FILE);
 }
 
 function openDatabase(dbPath: string): SqlDatabase {

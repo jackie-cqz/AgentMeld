@@ -1,7 +1,5 @@
 import type { AdapterName, Agent, Conversation, Message, Workspace, StreamEvent } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
-import type { TaskExecutionIdentity } from "@/shared/evidence-types";
-import type { TaskContextEnvelope } from "@/shared/task-context-types";
 
 export interface AdapterInput {
   conversationId: string;
@@ -18,10 +16,6 @@ export interface AdapterInput {
   apiKey: string | null;
   apiBaseUrl?: string | null;
   history?: ChatMessage[];
-  /** P0: task execution identity — set for child runs dispatched by Conductor */
-  taskExecution?: TaskExecutionIdentity | null;
-  /** P0: immutable context snapshot — minimal envelope in P0, full compilation in P2 */
-  contextSnapshot?: TaskContextEnvelope | null;
 }
 
 export interface AgentPlatformAdapter {

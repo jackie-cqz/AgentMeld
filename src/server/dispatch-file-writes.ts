@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
-// Per-run file write tracking — used by cs_write tool and Orchestrator conflict detection
+// Per-run file write tracking — used by cs_write tool and Conductor conflict detection
 // ---------------------------------------------------------------------------
 
 declare global {
-  var __agentConferenceFileWrites: Map<string, Map<string, string>> | undefined;
+  var __agentMeldFileWrites: Map<string, Map<string, string>> | undefined;
 }
 
 function getStore(): Map<string, Map<string, string>> {
-  if (!globalThis.__agentConferenceFileWrites) {
-    globalThis.__agentConferenceFileWrites = new Map();
+  if (!globalThis.__agentMeldFileWrites) {
+    globalThis.__agentMeldFileWrites = new Map();
   }
-  return globalThis.__agentConferenceFileWrites;
+  return globalThis.__agentMeldFileWrites;
 }
 
 export function recordFileWrite(runId: string, absolutePath: string, content: string): void {

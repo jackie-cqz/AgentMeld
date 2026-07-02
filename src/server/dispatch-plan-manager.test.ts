@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   approvePlan,
   cancelPendingPlansForRun,
@@ -11,6 +11,17 @@ import {
   revisePlanWithFeedback
 } from "@/server/dispatch-plan-manager";
 import type { DispatchPlanItem } from "@/shared/types";
+import { setupTestDatabase } from "@/test/test-database";
+
+let cleanupDatabase: (() => void) | undefined;
+
+beforeAll(() => {
+  cleanupDatabase = setupTestDatabase("agentmeld-dispatch-plans-");
+});
+
+afterAll(() => {
+  cleanupDatabase?.();
+});
 
 afterEach(() => {
   clearPendingPlansForTests();

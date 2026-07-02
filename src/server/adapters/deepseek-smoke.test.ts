@@ -21,13 +21,13 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
       capabilities: [], adapterName: "custom", modelProvider: "deepseek",
       modelId: "deepseek-chat", apiKey: null, apiBaseUrl: null,
       systemPrompt: "You are helpful.", toolNames: [],
-      isBuiltin: false, isOrchestrator: false, isConductor: false, supportsVision: false,
+      isBuiltin: false, isConductor: false, supportsVision: false,
       createdAt: 1, updatedAt: 1
     },
     conversation: {
       id: "conv_test", title: "T", mode: "single",
       agentIds: ["ag_test_ds"], fsWriteApprovalMode: "auto",
-      pinnedMessageIds: [], archived: false, createdAt: 1, updatedAt: 1
+      pinnedMessageIds: [], pinnedAt: null, archived: false, createdAt: 1, updatedAt: 1
     },
     workspace: {
       id: "ws_test", conversationId: "conv_test", mode: "sandbox",
@@ -46,7 +46,7 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ds-smoke-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
   eventBus.clearForTests();
@@ -57,7 +57,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   delete process.env.DEEPSEEK_API_KEY;
   eventBus.clearForTests();
   clearRegistryForTests();

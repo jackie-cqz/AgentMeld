@@ -21,7 +21,6 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
       systemPrompt: "",
       toolNames: [],
       isBuiltin: true,
-      isOrchestrator: false,
       isConductor: false,
       supportsVision: false,
       createdAt: 1,
@@ -34,6 +33,7 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
       agentIds: ["ag_mock_builder"],
       fsWriteApprovalMode: "review",
       pinnedMessageIds: [],
+      pinnedAt: null,
       archived: false,
       createdAt: 1,
       updatedAt: 1

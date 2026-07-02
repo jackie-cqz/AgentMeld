@@ -1,28 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@/shared/types";
 
 interface Props {
   messages: Message[];
   scrollerRef: React.RefObject<HTMLDivElement | null>;
+  rightOffset?: number;
 }
 
-export function ConversationTimeline({ messages, scrollerRef }: Props) {
+export function ConversationTimeline({ messages, scrollerRef, rightOffset = 0 }: Props) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [activeIdx, setActiveIdx] = useState<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Only show user messages (their questions/prompts)
-  const userMessages = messages
-    .map((m, idx) => ({ ...m, originalIndex: idx }))
-    .filter((m) => m.role === "user");
+  const userMessages = useMemo(
+    () => messages.filter((message) => message.role === "user"),
+    [messages]
+  );
 
   // Update active marker based on scroll position
   const updateActive = useCallback(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    const scrollTop = scroller.scrollTop;
     const scrollHeight = scroller.scrollHeight;
     const clientHeight = scroller.clientHeight;
     if (scrollHeight <= clientHeight) return;
@@ -38,7 +39,7 @@ export function ConversationTimeline({ messages, scrollerRef }: Props) {
         if (dist < bestDist) { bestDist = dist; best = i; }
       }
     }
-    setActiveIdx(best);
+    setActiveIdx((current) => current === best ? current : best);
   }, [userMessages, scrollerRef]);
 
   useEffect(() => {
@@ -70,7 +71,8 @@ export function ConversationTimeline({ messages, scrollerRef }: Props) {
   return (
     <div
       ref={containerRef}
-      className="absolute right-1 top-0 bottom-0 z-10 flex w-5 flex-col items-center justify-center py-4"
+      className="absolute top-0 bottom-0 z-10 flex w-5 flex-col items-center justify-center py-4"
+      style={{ right: rightOffset + 16 }}
     >
       <div className="relative flex flex-col items-center gap-1">
         {userMessages.map((msg, i) => (

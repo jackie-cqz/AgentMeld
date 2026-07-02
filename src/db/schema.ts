@@ -30,7 +30,7 @@ export const agents = sqliteTable("agents", {
   apiBaseUrl: text("api_base_url"),
   toolNames: text("tool_names", { mode: "json" }).$type<string[]>().notNull(),
   isBuiltin: integer("is_builtin", { mode: "boolean" }).notNull().default(false),
-  isOrchestrator: integer("is_orchestrator", { mode: "boolean" }).notNull().default(false),
+  isConductor: integer("is_conductor", { mode: "boolean" }).notNull().default(false),
   supportsVision: integer("supports_vision", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()

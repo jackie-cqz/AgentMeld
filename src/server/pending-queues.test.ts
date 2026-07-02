@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { eventBus } from "@/server/event-bus";
+import { setupTestDatabase } from "@/test/test-database";
 import {
   approvePendingWrite,
   cancelPendingWritesForRun,
@@ -14,13 +16,23 @@ import {
   cancelPendingBashForRun,
   clearPendingBashForTests,
   getAllPendingBashCommands,
-  getPendingBash,
   getPendingBashCommandsForConversation,
   registerPendingBash,
   rejectPendingBash
 } from "@/server/pending-bash";
 
+let cleanupDatabase: (() => void) | undefined;
+
+beforeAll(() => {
+  cleanupDatabase = setupTestDatabase("agentmeld-pending-queues-");
+});
+
+afterAll(() => {
+  cleanupDatabase?.();
+});
+
 beforeEach(() => {
+  eventBus.clearForTests();
   clearPendingWritesForTests();
   clearPendingBashForTests();
 });
@@ -28,12 +40,32 @@ beforeEach(() => {
 afterEach(() => {
   clearPendingWritesForTests();
   clearPendingBashForTests();
+  eventBus.clearForTests();
 });
 
 describe("pending-writes", () => {
   it("registers a pending write and returns a promise", () => {
     const promise = registerPendingWrite("conv_write_1", "ag_1", "run_write_1", "test.txt", "/ws/test.txt", null, "new content");
     expect(promise).toBeInstanceOf(Promise);
+  });
+
+  it("publishes a pending event when a write requires approval", () => {
+    registerPendingWrite(
+      "conv_write_1",
+      "ag_1",
+      "run_write_1",
+      "test.txt",
+      "/ws/test.txt",
+      null,
+      "new content"
+    );
+
+    const [entry] = eventBus.replayAfter(0);
+    expect(entry.event.type).toBe("fs_write.pending");
+    if (entry.event.type === "fs_write.pending") {
+      expect(entry.event.pendingWrite.path).toBe("test.txt");
+      expect(entry.event.conversationId).toBe("conv_write_1");
+    }
   });
 
   it("lists all registered writes", () => {

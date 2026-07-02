@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Play, Save, X } from "lucide-react";
+import { ChevronDown, Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
 import {
   useMemo,
   useState,
@@ -15,7 +15,7 @@ import { useAppStore } from "@/stores/app-store";
 import { selectConversationArtifacts, selectSelectedArtifact } from "@/stores/selectors";
 import type { Artifact, ArtifactContent } from "@/shared/types";
 
-const MIN_PANEL_WIDTH = 420;
+const MIN_PANEL_WIDTH = 380;
 const MAX_PANEL_WIDTH = 960;
 
 export function ArtifactPanel() {
@@ -28,8 +28,12 @@ export function ArtifactPanel() {
   const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
   const [mode, setMode] = useState<"preview" | "source" | "edit">("preview");
 
-  const fallbackArtifact = artifacts[0] ?? null;
+  const fallbackArtifact = artifacts.at(-1) ?? null;
   const selectedArtifact = activeArtifact?.conversationId === activeConversationId ? activeArtifact : fallbackArtifact;
+  const effectiveMode =
+    mode === "edit" && selectedArtifact?.type !== "document" && selectedArtifact?.type !== "web_app"
+      ? "preview"
+      : mode;
 
   const handleResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -84,22 +88,14 @@ export function ArtifactPanel() {
       </div>
       <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 px-4">
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold text-slate-950">
-            {selectedArtifact?.title ?? "Artifact Workspace"}
-          </div>
-          <div className="mt-1 text-xs text-slate-500">
-            {selectedArtifact ? `${formatArtifactType(selectedArtifact.type)} · v${selectedArtifact.version}` : "等待 Agent 生成产物"}
-          </div>
+          <div className="truncate text-base font-semibold text-slate-950">产物库</div>
+          <div className="mt-1 text-xs text-slate-500">浏览产物</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {selectedArtifact?.type === "web_app" ? (
-            <ToolbarButton title="部署预览" onClick={() => deployArtifactAction(selectedArtifact.id)}>
-              <Play className="h-4 w-4" />
-            </ToolbarButton>
-          ) : null}
           <ToolbarButton
             title="新窗口打开"
-            onClick={() => selectedArtifact?.type === "web_app" ? window.open(`/api/artifacts/${selectedArtifact.id}/preview`, "_blank") : null}
+            disabled={selectedArtifact?.type !== "web_app"}
+            onClick={() => selectedArtifact?.type === "web_app" ? window.open(getWebAppPreviewUrl(selectedArtifact), "_blank") : null}
           >
             <ExternalLink className="h-4 w-4" />
           </ToolbarButton>
@@ -121,16 +117,9 @@ export function ArtifactPanel() {
             <select
               className="h-8 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 text-xs font-medium text-slate-700 outline-none hover:border-slate-300"
               value={selectedArtifact?.id ?? ""}
-              onChange={(e) => {
-                if (!e.target.value) {
-                  setActiveArtifact(null);
-                  setRightPanelOpen(false);
-                  return;
-                }
-                setActiveArtifact(e.target.value);
-              }}
+              onChange={(e) => setActiveArtifact(e.target.value)}
             >
-              <option value="">选择产物</option>
+              <option value="" disabled>选择产物</option>
               {artifacts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.title} · v{a.version}
@@ -142,35 +131,41 @@ export function ArtifactPanel() {
         </div>
       ) : null}
 
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-4">
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+      {selectedArtifact ? (
+        <div className="flex h-9 shrink-0 items-center border-b border-slate-200 px-4 text-xs text-slate-500">
+          {formatArtifactType(selectedArtifact.type)} · v{selectedArtifact.version}
+        </div>
+      ) : null}
+
+      <div className="flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-slate-200 px-3">
+        <div className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 p-1">
           <button
-            className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-              mode === "preview" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+            className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition ${
+              effectiveMode === "preview" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
             }`}
             type="button"
             onClick={() => setMode("preview")}
           >
-            <Eye className="h-4 w-4" />预览
+            <Eye className="h-4 w-4 shrink-0" />预览
           </button>
           <button
-            className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-              mode === "source" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+            className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition ${
+              effectiveMode === "source" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
             }`}
             type="button"
             onClick={() => setMode("source")}
           >
-            <Code2 className="h-4 w-4" />源码
+            <Code2 className="h-4 w-4 shrink-0" />源码
           </button>
           {selectedArtifact && (selectedArtifact.type === "document" || selectedArtifact.type === "web_app") ? (
             <button
-              className={`flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium transition ${
-                mode === "edit" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
+              className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition ${
+                effectiveMode === "edit" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
               }`}
               type="button"
               onClick={() => setMode("edit")}
             >
-              <Pencil className="h-4 w-4" />编辑
+              <Pencil className="h-4 w-4 shrink-0" />编辑
             </button>
           ) : null}
         </div>
@@ -179,7 +174,7 @@ export function ArtifactPanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-[#f4f6fb]">
         {selectedArtifact ? (
-          <ArtifactPreview artifact={selectedArtifact} mode={mode} />
+          <ArtifactPreview artifact={selectedArtifact} mode={effectiveMode} />
         ) : (
           <EmptyPreview />
         )}
@@ -196,7 +191,7 @@ function ArtifactPreview({ artifact, mode }: { artifact: Artifact; mode: "previe
     return <ArtifactEditor key={artifact.id} artifact={artifact} />;
   }
   if (artifact.type === "web_app") {
-    return <WebAppPreview artifactId={artifact.id} />;
+    return <WebAppPreview artifact={artifact} />;
   }
   if (artifact.type === "document") {
     return <DocumentPreview artifact={artifact} />;
@@ -229,6 +224,10 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDirty =
+    title !== artifact.title ||
+    (artifact.content.type === "document" && documentContent !== artifact.content.content) ||
+    (artifact.content.type === "web_app" && JSON.stringify(files) !== JSON.stringify(artifact.content.files));
 
   const handleSave = async () => {
     setSaving(true);
@@ -272,11 +271,11 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !isDirty}
           className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          保存为 v{artifact.version + 1}
+          {isDirty ? `保存为 v${artifact.version + 1}` : "无未保存修改"}
         </button>
       </div>
 
@@ -318,8 +317,8 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
   );
 }
 
-function WebAppPreview({ artifactId }: { artifactId: string }) {
-  const previewUrl = `/api/artifacts/${artifactId}/preview`;
+function WebAppPreview({ artifact }: { artifact: Artifact }) {
+  const previewUrl = getWebAppPreviewUrl(artifact);
   return (
     <div className="flex h-full min-h-[520px] flex-col p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -335,9 +334,33 @@ function WebAppPreview({ artifactId }: { artifactId: string }) {
           <ExternalLink className="h-3.5 w-3.5" />新窗口打开
         </a>
       </div>
-      <iframe className="min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm" src={previewUrl} sandbox="allow-scripts" title="Web App Preview" />
+      <iframe
+        className="min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm"
+        src={previewUrl}
+        sandbox={previewUrl.startsWith("/deployments/") ? "allow-scripts allow-same-origin" : "allow-scripts"}
+        title="Web App Preview"
+      />
     </div>
   );
+}
+
+function getWebAppPreviewUrl(artifact: Artifact) {
+  if (artifact.content.type === "web_app") {
+    const deploymentPreviewPath =
+      "deploymentPreviewPath" in artifact.content ? artifact.content.deploymentPreviewPath : undefined;
+    if (isDeploymentPreviewPath(deploymentPreviewPath)) {
+      return trimTrailingSlash(deploymentPreviewPath);
+    }
+  }
+  return `/api/artifacts/${artifact.id}/preview`;
+}
+
+function isDeploymentPreviewPath(value: unknown): value is string {
+  return typeof value === "string" && /^\/deployments\/dep_[a-zA-Z0-9_-]+\/?$/.test(value);
+}
+
+function trimTrailingSlash(value: string) {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
 function DocumentPreview({ artifact }: { artifact: Artifact }) {
@@ -412,13 +435,14 @@ function EmptyPreview() {
   );
 }
 
-function ToolbarButton({ children, title, onClick }: { children: ReactNode; title: string; onClick?: () => void }) {
+function ToolbarButton({ children, title, onClick, disabled }: { children: ReactNode; title: string; onClick?: () => void; disabled?: boolean }) {
   return (
     <button
       className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-950"
       type="button"
       title={title}
       onClick={onClick}
+      disabled={disabled}
     >
       {children}
     </button>
@@ -480,17 +504,6 @@ function MarkdownRenderer({ content }: { content: string }) {
   return <div>{elements}</div>;
 }
 
-function deployArtifactAction(artifactId: string) {
-  fetch("/api/artifacts/" + artifactId, { method: "GET" })
-    .then((r) => r.json())
-    .then((data) => {
-      if (data.artifact?.type === "web_app") {
-        window.open("/api/artifacts/" + artifactId + "/preview", "_blank");
-      }
-    })
-    .catch(() => {});
-}
-
 function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"versions" | "compare">("versions");
@@ -526,13 +539,13 @@ function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {
   return (
     <>
       <button
-        className="flex h-8 items-center gap-2 rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+        className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
         type="button"
         onClick={load}
         disabled={!artifact}
         title="版本历史"
       >
-        <History className="h-4 w-4" />
+        <History className="h-4 w-4 shrink-0" />
         版本
       </button>
       {open ? (

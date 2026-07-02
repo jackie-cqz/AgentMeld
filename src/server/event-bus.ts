@@ -67,8 +67,8 @@ export class EventBus {
 }
 
 declare global {
-  var __agentConferenceEventBus: EventBus | undefined;
+  var __agentMeldEventBus: EventBus | undefined;
 }
 
-export const eventBus = globalThis.__agentConferenceEventBus ?? new EventBus();
-globalThis.__agentConferenceEventBus = eventBus;
+export const eventBus = globalThis.__agentMeldEventBus ?? new EventBus();
+globalThis.__agentMeldEventBus = eventBus;

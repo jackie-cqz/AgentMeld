@@ -78,7 +78,6 @@ function createAgent(id: string, isConductor: boolean): Agent {
     systemPrompt: "",
     toolNames: [],
     isBuiltin: true,
-    isOrchestrator: isConductor,
     isConductor,
     supportsVision: false,
     createdAt: 1,

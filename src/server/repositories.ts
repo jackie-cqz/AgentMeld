@@ -41,6 +41,8 @@ interface CreateConversationInput {
 
 interface UpdateConversationInput {
   title?: string;
+  mode?: ConversationMode;
+  agentIds?: string[];
   archived?: boolean;
   pinnedAt?: number | null;
   pinnedMessageIds?: string[];
@@ -85,7 +87,7 @@ interface CreateArtifactInput {
 
 export function listAgents(): Agent[] {
   const rows = getDatabase()
-    .prepare("SELECT * FROM agents ORDER BY is_orchestrator DESC, created_at ASC")
+    .prepare("SELECT * FROM agents ORDER BY is_conductor DESC, created_at ASC")
     .all() as AgentRow[];
   return rows.map(mapAgent);
 }
@@ -150,12 +152,14 @@ export function updateConversation(conversationId: string, input: UpdateConversa
     .prepare(
       `
         UPDATE conversations
-        SET title = ?, archived = ?, pinned_at = ?, pinned_message_ids = ?, fs_write_approval_mode = ?, updated_at = ?
+        SET title = ?, mode = ?, agent_ids = ?, archived = ?, pinned_at = ?, pinned_message_ids = ?, fs_write_approval_mode = ?, updated_at = ?
         WHERE id = ?
       `
     )
     .run(
       input.title ?? current.title,
+      input.mode ?? current.mode,
+      JSON.stringify(input.agentIds ?? current.agentIds),
       typeof input.archived === "boolean" ? (input.archived ? 1 : 0) : current.archived ? 1 : 0,
       input.pinnedAt !== undefined ? input.pinnedAt : current.pinnedAt ?? null,
       JSON.stringify(input.pinnedMessageIds ?? current.pinnedMessageIds),
@@ -316,11 +320,11 @@ export function listChildRunIds(parentRunId: string): string[] {
   return rows.map((r) => r.id);
 }
 
-// ── Orchestration task persistence ──
+// ── Conductor task persistence ──
 
-export function persistOrchestrationTask(record: {
+export function persistConductorTask(record: {
   id: string;
-  orchestratorRunId: string;
+  conductorRunId: string;
   conversationId: string;
   taskId: string;
   agentId: string;
@@ -334,14 +338,14 @@ export function persistOrchestrationTask(record: {
 }) {
   getDatabase()
     .prepare(`
-      INSERT OR REPLACE INTO orchestration_task_results (
-        id, orchestrator_run_id, conversation_id, task_id, agent_id,
+      INSERT OR REPLACE INTO conductor_task_results (
+        id, conductor_run_id, conversation_id, task_id, agent_id,
         title, status, summary, child_run_id, attempt, error_category,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
-      record.id, record.orchestratorRunId, record.conversationId,
+      record.id, record.conductorRunId, record.conversationId,
       record.taskId, record.agentId, record.title ?? null,
       record.status, record.summary ?? null, record.childRunId ?? null,
       record.attempt, record.errorCategory ?? null,
@@ -465,94 +469,7 @@ export function createArtifact(input: CreateArtifactInput): Artifact {
   return artifact;
 }
 
-// ── P2: Orchestration state persistence ──
-
-export function persistOrchestrationPlan(record: {
-  id: string;
-  orchestratorRunId: string;
-  conversationId: string;
-  planJson: string;
-  revision?: number;
-  status?: string;
-  userFeedback?: string | null;
-  stageAtCreation?: string | null;
-  resumedFromRunId?: string | null;
-  now: number;
-}) {
-  getDatabase().prepare(`
-    INSERT INTO orchestration_plans (id, orchestrator_run_id, conversation_id, revision, plan_json, status, user_feedback, stage_at_creation, resumed_from_run_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    record.id, record.orchestratorRunId, record.conversationId,
-    record.revision ?? 0, record.planJson, record.status ?? "active",
-    record.userFeedback ?? null, record.stageAtCreation ?? null,
-    record.resumedFromRunId ?? null, record.now
-  );
-}
-
-export function persistOutputBinding(record: {
-  orchestratorRunId?: string;
-  conductorRunId?: string;
-  planId: string;
-  producerTaskId: string;
-  outputKey: string;
-  artifactId: string;
-  now: number;
-}) {
-  const runId = record.conductorRunId ?? record.orchestratorRunId ?? "";
-  getDatabase().prepare(`
-    INSERT OR REPLACE INTO orchestration_output_bindings (orchestrator_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(runId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
-}
-
-export function persistOrchestrationConflict(record: {
-  id: string;
-  orchestratorRunId: string;
-  planId: string;
-  path: string;
-  wave: number;
-  contributorsJson: string;
-  now: number;
-}) {
-  getDatabase().prepare(`
-    INSERT INTO orchestration_conflicts (id, orchestrator_run_id, plan_id, path, wave, contributors_json, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'detected', ?)
-  `).run(record.id, record.orchestratorRunId, record.planId, record.path, record.wave, record.contributorsJson, record.now);
-}
-
-// ── Conductor-named aliases (P0: TypeScript层统一映射为conductorRunId, ──
-// ── SQLite 列名 orchestrator_run_id 暂时保留)                          ──
-
-export function persistConductorTask(record: {
-  id: string;
-  conductorRunId: string;
-  conversationId: string;
-  taskId: string;
-  agentId: string;
-  title?: string | null;
-  status: string;
-  summary?: string | null;
-  childRunId?: string | null;
-  attempt: number;
-  errorCategory?: string | null;
-  now: number;
-}) {
-  return persistOrchestrationTask({
-    id: record.id,
-    orchestratorRunId: record.conductorRunId,
-    conversationId: record.conversationId,
-    taskId: record.taskId,
-    agentId: record.agentId,
-    title: record.title,
-    status: record.status,
-    summary: record.summary,
-    childRunId: record.childRunId,
-    attempt: record.attempt,
-    errorCategory: record.errorCategory,
-    now: record.now,
-  });
-}
+// ── P2: Conductor state persistence ──
 
 export function persistConductorPlan(record: {
   id: string;
@@ -566,18 +483,29 @@ export function persistConductorPlan(record: {
   resumedFromRunId?: string | null;
   now: number;
 }) {
-  return persistOrchestrationPlan({
-    id: record.id,
-    orchestratorRunId: record.conductorRunId,
-    conversationId: record.conversationId,
-    planJson: record.planJson,
-    revision: record.revision,
-    status: record.status,
-    userFeedback: record.userFeedback,
-    stageAtCreation: record.stageAtCreation,
-    resumedFromRunId: record.resumedFromRunId,
-    now: record.now,
-  });
+  getDatabase().prepare(`
+    INSERT INTO conductor_plans (id, conductor_run_id, conversation_id, revision, plan_json, status, user_feedback, stage_at_creation, resumed_from_run_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    record.id, record.conductorRunId, record.conversationId,
+    record.revision ?? 0, record.planJson, record.status ?? "active",
+    record.userFeedback ?? null, record.stageAtCreation ?? null,
+    record.resumedFromRunId ?? null, record.now
+  );
+}
+
+export function persistOutputBinding(record: {
+  conductorRunId: string;
+  planId: string;
+  producerTaskId: string;
+  outputKey: string;
+  artifactId: string;
+  now: number;
+}) {
+  getDatabase().prepare(`
+    INSERT OR REPLACE INTO conductor_output_bindings (conductor_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(record.conductorRunId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
 }
 
 export function persistConductorConflict(record: {
@@ -589,31 +517,26 @@ export function persistConductorConflict(record: {
   contributorsJson: string;
   now: number;
 }) {
-  return persistOrchestrationConflict({
-    id: record.id,
-    orchestratorRunId: record.conductorRunId,
-    planId: record.planId,
-    path: record.path,
-    wave: record.wave,
-    contributorsJson: record.contributorsJson,
-    now: record.now,
-  });
+  getDatabase().prepare(`
+    INSERT INTO conductor_conflicts (id, conductor_run_id, plan_id, path, wave, contributors_json, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'detected', ?)
+  `).run(record.id, record.conductorRunId, record.planId, record.path, record.wave, record.contributorsJson, record.now);
 }
 
-export function listOrchestrationPlans(orchestratorRunId: string): Array<Record<string, unknown>> {
+export function listConductorPlans(conductorRunId: string): Array<Record<string, unknown>> {
   return getDatabase().prepare(
-    "SELECT * FROM orchestration_plans WHERE orchestrator_run_id = ? ORDER BY revision ASC"
-  ).all(orchestratorRunId) as Array<Record<string, unknown>>;
+    "SELECT * FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision ASC"
+  ).all(conductorRunId) as Array<Record<string, unknown>>;
 }
 
 export function listOutputBindings(planId: string): Array<Record<string, unknown>> {
   return getDatabase().prepare(
-    "SELECT * FROM orchestration_output_bindings WHERE plan_id = ?"
+    "SELECT * FROM conductor_output_bindings WHERE plan_id = ?"
   ).all(planId) as Array<Record<string, unknown>>;
 }
 
-export function listOrchestrationConflicts(orchestratorRunId: string): Array<Record<string, unknown>> {
+export function listConductorConflicts(conductorRunId: string): Array<Record<string, unknown>> {
   return getDatabase().prepare(
-    "SELECT * FROM orchestration_conflicts WHERE orchestrator_run_id = ?"
-  ).all(orchestratorRunId) as Array<Record<string, unknown>>;
+    "SELECT * FROM conductor_conflicts WHERE conductor_run_id = ?"
+  ).all(conductorRunId) as Array<Record<string, unknown>>;
 }

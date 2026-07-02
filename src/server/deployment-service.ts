@@ -5,6 +5,7 @@ import { getArtifact } from "@/server/repositories";
 import { getSettings } from "@/server/settings-service";
 import { resolveStaticFilePath } from "@/server/static-file-utils";
 import { isPathWithin } from "@/server/workspace-utils";
+import { PRIVATE_DEPLOYMENT_DIR } from "@/shared/constants";
 import type { DeployStatusRecord } from "@/shared/types";
 
 export function deployArtifact(artifactId: string, conversationId: string): DeployStatusRecord {
@@ -165,7 +166,10 @@ export function resolveDeploymentFile(
   requestedPath?: string
 ): string | null {
   const relativePath = requestedPath || "index.html";
-  if (relativePath === ".agent-conference" || relativePath.startsWith(".agent-conference/")) {
+  if (
+    relativePath === PRIVATE_DEPLOYMENT_DIR ||
+    relativePath.startsWith(`${PRIVATE_DEPLOYMENT_DIR}/`)
+  ) {
     return null;
   }
   return resolveStaticFilePath(getDeploymentDir(deploymentId), relativePath);

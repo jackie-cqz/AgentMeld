@@ -18,8 +18,8 @@ import type { StreamEvent } from "@/shared/types";
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conference-svc-"));
-  process.env.AGENT_CONFERENCE_DATA_DIR = tempDir;
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-svc-"));
+  process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetDatabaseForTests();
   ensureDatabase();
@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(() => {
   resetBootstrapForTests();
   resetDatabaseForTests();
-  delete process.env.AGENT_CONFERENCE_DATA_DIR;
+  delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -57,7 +57,7 @@ describe("conversation-service", () => {
     it("creates a group conversation with at least 2 agents", () => {
       const conv = createConversation({
         mode: "group",
-        agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
       });
 
       expect(conv.mode).toBe("group");
@@ -68,7 +68,7 @@ describe("conversation-service", () => {
       expect(() =>
         createConversation({
           mode: "single",
-          agentIds: ["ag_mock_builder", "ag_mock_orchestrator"]
+          agentIds: ["ag_mock_builder", "ag_mock_conductor"]
         })
       ).toThrow("Single conversation requires exactly one agent.");
     });
@@ -91,11 +91,11 @@ describe("conversation-service", () => {
       ).toThrow("Unknown agent: ag_nonexistent");
     });
 
-    it("rejects more than one orchestrator in a group", () => {
-      // Only one orchestrator exists in seed. We'd need to create another,
+    it("rejects more than one conductor in a group", () => {
+      // Only one conductor exists in seed. We'd need to create another,
       // but the validation checks the count among the selected agentIds.
-      // The seed has only one orchestrator, so we can't easily test this
-      // without inserting a second orchestrator. Skip for now.
+      // The seed has only one conductor, so we can't easily test this
+      // without inserting a second conductor. Skip for now.
       expect(true).toBe(true);
     });
   });
@@ -203,8 +203,8 @@ describe("conversation-service", () => {
       ).rejects.toThrow("Conversation not found.");
     });
 
-    it("returns empty runIds when no responder matches (group with no orchestrator)", async () => {
-      // Create a group with only the builder (non-orchestrator) and no @mentions
+    it("returns empty runIds when no responder matches (group with no conductor)", async () => {
+      // Create a group with only the builder (non-conductor) and no @mentions
       const conv = createConversation({
         mode: "group",
         agentIds: ["ag_mock_builder", "ag_custom_assistant"]
@@ -216,14 +216,14 @@ describe("conversation-service", () => {
         mentionedAgentIds: []
       });
 
-      // No orchestrator in this group, so no automatic responder
+      // No conductor in this group, so no automatic responder
       expect(result.runIds).toHaveLength(0);
     });
 
-    it("mentions specific agents in a group bypass the orchestrator fallback", async () => {
+    it("mentions specific agents in a group bypass the conductor fallback", async () => {
       const conv = createConversation({
         mode: "group",
-        agentIds: ["ag_mock_orchestrator", "ag_mock_builder"]
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
       });
 
       const result = await sendMessage({
@@ -232,7 +232,7 @@ describe("conversation-service", () => {
         mentionedAgentIds: ["ag_mock_builder"]
       });
 
-      // Should only trigger the mentioned agent, not the orchestrator
+      // Should only trigger the mentioned agent, not the conductor
       expect(result.runIds).toHaveLength(1);
     });
   });

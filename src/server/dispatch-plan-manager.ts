@@ -3,7 +3,7 @@ import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
-type Resolver = (outcome: { approved: boolean; feedback?: string }) => void;
+type Resolver = (outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[] }) => void;
 
 interface PlanEntry {
   plan: PendingDispatchPlan;
@@ -11,21 +11,21 @@ interface PlanEntry {
 }
 
 declare global {
-  var __agentConferencePendingPlans: Map<string, PlanEntry> | undefined;
+  var __agentMeldPendingPlans: Map<string, PlanEntry> | undefined;
 }
 
 function getStore(): Map<string, PlanEntry> {
-  if (!globalThis.__agentConferencePendingPlans) {
-    globalThis.__agentConferencePendingPlans = new Map();
+  if (!globalThis.__agentMeldPendingPlans) {
+    globalThis.__agentMeldPendingPlans = new Map();
   }
-  return globalThis.__agentConferencePendingPlans;
+  return globalThis.__agentMeldPendingPlans;
 }
 
 export function registerPendingPlan(
   conversationId: string,
   runId: string,
   plan: DispatchPlanItem[]
-): Promise<{ approved: boolean; feedback?: string }> {
+): Promise<{ approved: boolean; feedback?: string; plan?: DispatchPlanItem[] }> {
   const store = getStore();
   const id = `dp_${nanoid(12)}`;
   const now = Date.now();
@@ -68,8 +68,8 @@ export function getPendingPlansForConversation(conversationId: string): PendingD
   return getAllPendingPlans().filter((p) => p.conversationId === conversationId);
 }
 
-export function approvePlan(id: string): boolean {
-  return resolvePlan(id, { approved: true });
+export function approvePlan(id: string, plan?: DispatchPlanItem[]): boolean {
+  return resolvePlan(id, { approved: true, plan });
 }
 
 export function rejectPlan(id: string): boolean {
@@ -87,6 +87,14 @@ export function cancelPendingPlansForRun(runId: string): void {
       cancelApproval(id, Date.now());
       store.delete(id);
       entry.resolver({ approved: false });
+      eventBus.publish({
+        type: "dispatch.plan.resolved",
+        conversationId: entry.plan.conversationId,
+        timestamp: Date.now(),
+        pendingId: id,
+        runId,
+        approved: false
+      });
     }
   }
 }
@@ -102,7 +110,7 @@ export function clearPendingPlansForTests(): void {
 
 function resolvePlan(
   id: string,
-  outcome: { approved: boolean; feedback?: string }
+  outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[] }
 ): boolean {
   const store = getStore();
   const entry = store.get(id);

@@ -57,7 +57,7 @@ export const ALL_TOOL_NAMES = [
   "read_attachment"
 ] as const;
 
-export const DEFAULT_CUSTOM_PROMPT = `You are a role-focused AI collaborator in the Agent-Conference workspace.
+export const DEFAULT_CUSTOM_PROMPT = `You are a role-focused AI collaborator in the AgentMeld workspace.
 
 ## Goal and context
 - Identify the user's concrete goal, constraints, and expected deliverable before acting.
@@ -74,5 +74,5 @@ export const DEFAULT_CUSTOM_PROMPT = `You are a role-focused AI collaborator in 
 ## Output contract
 - Report concrete results, changed files, artifacts, errors, and verification evidence.
 - Never invent file paths, command output, deployment URLs, or artifact ids.
-- When dispatched by an Orchestrator, satisfy the requested output ids and clearly state unresolved risks.
+- When dispatched by a Conductor, satisfy the requested output ids and clearly state unresolved risks.
 - End with a concise result summary and the next actionable step, if one remains.`;

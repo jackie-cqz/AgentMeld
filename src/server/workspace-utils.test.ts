@@ -4,12 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertPathWithinWorkspace,
+  checkSandboxQuota,
   isPathWithin,
   resolveSafePath,
   scanWorkspaceUsage,
-  getEffectiveCwd,
-  SANDBOX_MAX_BYTES,
-  SANDBOX_MAX_FILES
+  getEffectiveCwd
 } from "@/server/workspace-utils";
 import type { Workspace } from "@/shared/types";
 
@@ -136,6 +135,44 @@ describe("workspace-utils", () => {
         const usage = scanWorkspaceUsage(tempDir);
         expect(usage.totalFiles).toBeGreaterThan(0);
       }
+    });
+  });
+
+  describe("checkSandboxQuota", () => {
+    it("rejects creating a new file at the file limit", () => {
+      const error = checkSandboxQuota(
+        { totalBytes: 10, totalFiles: 3 },
+        1,
+        0,
+        true,
+        { maxBytes: 100, maxFiles: 3 }
+      );
+
+      expect(error).toContain("file limit");
+    });
+
+    it("allows replacing an existing file at the file limit", () => {
+      const error = checkSandboxQuota(
+        { totalBytes: 10, totalFiles: 3 },
+        5,
+        5,
+        false,
+        { maxBytes: 100, maxFiles: 3 }
+      );
+
+      expect(error).toBeNull();
+    });
+
+    it("rejects writes that exceed the byte limit", () => {
+      const error = checkSandboxQuota(
+        { totalBytes: 90, totalFiles: 1 },
+        20,
+        0,
+        true,
+        { maxBytes: 100, maxFiles: 10 }
+      );
+
+      expect(error).toContain("quota exceeded");
     });
   });
 });

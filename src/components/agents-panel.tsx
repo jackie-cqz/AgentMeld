@@ -1,20 +1,26 @@
 "use client";
 
-import { Bot, Plus, Trash2, Pencil } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList } from "@/stores/selectors";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
-import type { AdapterName, ModelProvider } from "@/shared/types";
+import { requestJson } from "@/lib/request-json";
+import { getAgentAvatarStyle } from "@/shared/agent-avatar";
+import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 
 export function AgentsPanel() {
   const agentList = useAppStore(useShallow(selectAgentList));
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleCreate = async (payload: {
     name: string;
+    description: string;
+    capabilities?: string[];
     adapterName: AdapterName;
     modelProvider?: ModelProvider | null;
     modelId?: string | null;
@@ -23,20 +29,36 @@ export function AgentsPanel() {
     systemPrompt?: string;
     toolNames?: string[];
   }) => {
-    const res = await fetch("/api/agents", {
+    setError(null);
+    await requestJson("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    if (res.ok) {
-      await loadBootstrap();
-    }
+    await loadBootstrap();
+  };
+
+  const handleUpdate = async (payload: Parameters<typeof handleCreate>[0]) => {
+    if (!editingAgent) return;
+    setError(null);
+    await requestJson(`/api/agents/${editingAgent.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    setEditingAgent(null);
   };
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`确定删除 Agent "${name}" 吗？`)) return;
-    await fetch(`/api/agents/${id}`, { method: "DELETE" });
-    await loadBootstrap();
+    setError(null);
+    try {
+      await requestJson(`/api/agents/${id}`, { method: "DELETE" });
+      await loadBootstrap();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "删除 Agent 失败。");
+    }
   };
 
   return (
@@ -58,14 +80,14 @@ export function AgentsPanel() {
             key={agent.id}
             className="flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
           >
-            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-stone-100 text-lg">
+            <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-lg ${getAgentAvatarStyle(agent).solid}`}>
               {agent.avatar}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-stone-900 truncate">{agent.name}</span>
-                {agent.isOrchestrator ? (
-                  <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">Orch</span>
+                {agent.isConductor ? (
+                  <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">Cond</span>
                 ) : null}
                 {agent.isBuiltin ? (
                   <span className="shrink-0 rounded bg-stone-200 px-1.5 py-0.5 text-[10px] text-stone-500">内置</span>
@@ -75,6 +97,14 @@ export function AgentsPanel() {
                 {agent.adapterName} · {agent.modelId || "无模型"} · {agent.toolNames.length} 工具
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setEditingAgent(agent)}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded text-stone-400 hover:bg-blue-50 hover:text-blue-600"
+              title="编辑"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
             {!agent.isBuiltin ? (
               <button
                 onClick={() => handleDelete(agent.id, agent.name)}
@@ -89,6 +119,7 @@ export function AgentsPanel() {
         {agentList.length === 0 ? (
           <div className="py-8 text-center text-sm text-stone-500">暂无 Agent</div>
         ) : null}
+        {error ? <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
       </div>
 
       <CreateAgentDialog
@@ -96,6 +127,26 @@ export function AgentsPanel() {
         onClose={() => setShowCreate(false)}
         onCreate={handleCreate}
       />
+      {editingAgent ? (
+        <CreateAgentDialog
+          key={editingAgent.id}
+          open
+          onClose={() => setEditingAgent(null)}
+          onCreate={handleUpdate}
+          initial={{
+            name: editingAgent.name,
+            description: editingAgent.description,
+            capabilities: editingAgent.capabilities,
+            adapterName: editingAgent.adapterName,
+            modelProvider: editingAgent.modelProvider,
+            modelId: editingAgent.modelId,
+            apiKey: editingAgent.apiKey,
+            apiBaseUrl: editingAgent.apiBaseUrl,
+            systemPrompt: editingAgent.systemPrompt,
+            toolNames: editingAgent.toolNames
+          }}
+        />
+      ) : null}
     </div>
   );
 }
