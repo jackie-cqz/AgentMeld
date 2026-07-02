@@ -214,11 +214,11 @@ describe("database bootstrap", () => {
     expect(tableNames.has("criterion_verdicts")).toBe(true);
   });
 
-  it("orchestration_task_results has P1 verification columns", () => {
+  it("conductor_task_results has P1 verification columns", () => {
     ensureDatabase();
 
     const cols = getDatabase()
-      .prepare("PRAGMA table_info(orchestration_task_results)")
+      .prepare("PRAGMA table_info(conductor_task_results)")
       .all() as Array<{ name: string }>;
     const colNames = cols.map((c) => c.name);
 

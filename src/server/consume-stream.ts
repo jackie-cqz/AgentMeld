@@ -15,8 +15,8 @@ export interface ConsumeStreamInput {
   messageId: string;
   runId: string;
   signal?: AbortSignal;
-  /** Called for each event after filling IDs and before publishing.
-   *  Return `{ stop: true }` to break out of the loop. */
+  /** Called for each event after filling IDs.
+   *  Return `{ stop: true }` to persist/publish the current event, then break out of the loop. */
   onEvent?: (event: StreamEvent) => { stop?: boolean } | void;
 }
 
@@ -55,10 +55,12 @@ export async function consumeStream(
     // 1. Fill missing IDs
     const filled = fillEventIds(event, input.messageId, input.runId);
 
-    // 2. Callback FIRST — allows interception (e.g. plan_tasks) before any side effects
+    // 2. Callback can inspect the event and request that no later events are consumed.
+    // The current event is still persisted/published so tool results never disappear from the UI.
+    let shouldStop = false;
     if (input.onEvent) {
       const decision = input.onEvent(filled);
-      if (decision?.stop) break; // Don't accumulate, don't publish
+      shouldStop = Boolean(decision?.stop);
     }
 
     // 3. Persistence side-effects — accumulate parts + update DB at key events
@@ -79,6 +81,8 @@ export async function consumeStream(
     if (filled.type === "run.usage") {
       usage = filled.usage;
     }
+
+    if (shouldStop) break;
   }
 
   // Final flush — ensure all accumulated parts are persisted

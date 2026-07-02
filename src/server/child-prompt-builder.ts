@@ -198,17 +198,34 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
   parts.push(
     "You are continuing the same dispatched sub-task. The system expects you to " +
     "complete it, not to ask whether you should do it. Use read_artifact when you " +
-    "need full artifact content. When you are done, call report_task_result with " +
-    'minimal JSON only, for example {"status":"complete","summary":"what you completed"}. ' +
-    "Never omit report_task_result."
+    "need full artifact content. Never omit report_task_result."
   );
   if (task.expectedOutputs && task.expectedOutputs.length > 0) {
+    const outputKeys = task.expectedOutputs.map((output) => output.id);
     parts.push(
-      "If expected_outputs are declared and your completed work creates an artifact, " +
-      "use write_artifact and pass outputKey equal to that output id. Do not repeat " +
-      "artifact ids inside report_task_result; the system records them automatically."
+      `This task declares expected output ids: ${JSON.stringify(outputKeys)}. ` +
+      "For every artifact that fulfills one of them, call write_artifact with outputKey " +
+      "set to the exact matching id. A successful artifact call without outputKey does not " +
+      "satisfy expected_outputs. Do not repeat artifact ids inside report_task_result; " +
+      "the system records them automatically."
     );
   }
+  const acceptanceResults = (task.acceptanceCriteria ?? []).map((criterion) => ({
+    criterion,
+    passed: true,
+    evidence: "concrete evidence for this criterion"
+  }));
+  parts.push(
+    "At completion, call report_task_result using this contract: " +
+    JSON.stringify({
+      status: "complete",
+      summary: "what you completed",
+      acceptanceResults
+    }) +
+    ". Copy every acceptance criterion verbatim; do not paraphrase, merge, or omit criteria. " +
+    "Set passed=false and explain the evidence when a criterion is not satisfied. " +
+    "Include files, commands, and tests when required by task_evidence_contract."
+  );
 
   return parts.join("\n");
 }

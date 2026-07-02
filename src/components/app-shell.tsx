@@ -7,10 +7,8 @@ import { GlobalSearch } from "@/components/global-search";
 import { WorkspaceFileBrowser } from "@/components/workspace-file-browser";
 import { Sidebar } from "@/components/sidebar";
 import { StreamProvider } from "@/components/stream-provider";
+import { APP_NAME, RIGHT_PANEL_WIDTH_STORAGE_KEY } from "@/shared/constants";
 import { useAppStore } from "@/stores/app-store";
-
-const APP_NAME = "AgentMeld";
-const RIGHT_PANEL_WIDTH_STORAGE_KEY = "agentmeld:right-panel-width";
 
 export function AppShell() {
   return (

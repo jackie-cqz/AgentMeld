@@ -40,8 +40,9 @@ describe("buildChildTaskPrompt", () => {
   it("includes ending paragraph about continuing sub-task", () => {
     const prompt = buildChildTaskPrompt(emptyInput);
     expect(prompt).toContain("You are continuing the same dispatched sub-task");
-    expect(prompt).toContain("call report_task_result with");
-    expect(prompt).toContain('{"status":"complete","summary":"what you completed"}');
+    expect(prompt).toContain("call report_task_result using this contract");
+    expect(prompt).toContain('"status":"complete"');
+    expect(prompt).toContain('"acceptanceResults":[]');
   });
 
   it("includes expectedOutputs paragraph when task has outputs", () => {
@@ -52,7 +53,9 @@ describe("buildChildTaskPrompt", () => {
       })
     };
     const prompt = buildChildTaskPrompt(input);
-    expect(prompt).toContain("outputKey equal to that output id");
+    expect(prompt).toContain('expected output ids: ["prd"]');
+    expect(prompt).toContain("write_artifact with outputKey");
+    expect(prompt).toContain("without outputKey does not satisfy expected_outputs");
     expect(prompt).toContain("Do not repeat artifact ids inside report_task_result");
   });
 
@@ -114,6 +117,9 @@ describe("buildChildTaskPrompt", () => {
     expect(prompt).toContain("<acceptance_criteria>");
     expect(prompt).toContain("<criterion>覆盖目标用户</criterion>");
     expect(prompt).toContain("<criterion>功能列表含优先级</criterion>");
+    expect(prompt).toContain('"criterion":"覆盖目标用户"');
+    expect(prompt).toContain('"criterion":"功能列表含优先级"');
+    expect(prompt).toContain("Copy every acceptance criterion verbatim");
   });
 
   it("renders task_evidence_contract with targetPaths", () => {

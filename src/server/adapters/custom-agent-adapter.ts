@@ -417,6 +417,8 @@ function buildToolContext(input: AdapterInput, signal: AbortSignal): ToolContext
     agentId: input.agent.id,
     runId: input.runId,
     parentRunId: input.parentRunId ?? null,
+    taskExecution: input.taskExecution ?? null,
+    taskContract: input.taskContract ?? null,
     abortSignal: signal
   };
 }

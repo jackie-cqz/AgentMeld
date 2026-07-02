@@ -345,12 +345,8 @@ function WebAppPreview({ artifact }: { artifact: Artifact }) {
 }
 
 function getWebAppPreviewUrl(artifact: Artifact) {
-  if (artifact.content.type === "web_app") {
-    const deploymentPreviewPath =
-      "deploymentPreviewPath" in artifact.content ? artifact.content.deploymentPreviewPath : undefined;
-    if (isDeploymentPreviewPath(deploymentPreviewPath)) {
-      return trimTrailingSlash(deploymentPreviewPath);
-    }
+  if (artifact.content.type === "web_app" && isDeploymentPreviewPath(artifact.content.deploymentPreviewPath)) {
+    return trimTrailingSlash(artifact.content.deploymentPreviewPath);
   }
   return `/api/artifacts/${artifact.id}/preview`;
 }

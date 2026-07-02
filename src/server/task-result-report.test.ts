@@ -46,6 +46,32 @@ function evidence(overrides: Partial<TaskEvidence> = {}): TaskEvidence {
 }
 
 describe("evaluateChildTaskResult evidence gates", () => {
+  it("accepts a complete report that covers every criterion verbatim", () => {
+    const result = evaluateChildTaskResult(
+      task({ acceptanceCriteria: ["覆盖全部功能", "包含验收标准"] }),
+      report({
+        acceptanceResults: [
+          { criterion: "覆盖全部功能", passed: true, evidence: "PRD 功能表覆盖四项需求。" },
+          { criterion: "包含验收标准", passed: true, evidence: "PRD 包含 AC-01 至 AC-17。" }
+        ]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("fails closed when a declared criterion is omitted", () => {
+    const result = evaluateChildTaskResult(
+      task({ acceptanceCriteria: ["覆盖全部功能"] }),
+      report({ acceptanceResults: [] }),
+      evidence()
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("验收标准漏报");
+  });
+
   it("fails when a declared target path has no file evidence", () => {
     const result = evaluateChildTaskResult(
       task({ targetPaths: ["src/app.ts"] }),

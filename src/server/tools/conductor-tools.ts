@@ -159,10 +159,12 @@ export const reportTaskResultTool: ToolDef = {
   name: "report_task_result",
   description:
     "Report the final result of a dispatched task. Must be called once before the child agent finishes. " +
-    "Use minimal arguments: status and summary. Do not hand-write artifact maps; write_artifact outputKey is recorded automatically.",
+    "When the task declares acceptance criteria, report every criterion verbatim in acceptanceResults with pass/fail evidence. " +
+    "Report relevant files, commands, and tests when the task evidence contract requires them. " +
+    "Do not hand-write artifact maps; write_artifact outputKey is recorded automatically.",
   parameters: {
     type: "object",
-    required: ["status", "summary"],
+    required: ["status", "summary", "acceptanceResults"],
     properties: {
       status: {
         type: "string",
@@ -173,10 +175,76 @@ export const reportTaskResultTool: ToolDef = {
         type: "string",
         description: "Concise summary of what was accomplished or why it failed."
       },
+      acceptanceResults: {
+        type: "array",
+        description:
+          "One entry for every acceptance criterion declared by the task. Copy each criterion verbatim.",
+        items: {
+          type: "object",
+          required: ["criterion", "passed", "evidence"],
+          properties: {
+            criterion: {
+              type: "string",
+              description: "The exact acceptance criterion text from the task."
+            },
+            passed: {
+              type: "boolean",
+              description: "Whether the criterion passed."
+            },
+            evidence: {
+              type: "string",
+              description: "Concrete evidence supporting the verdict."
+            }
+          }
+        }
+      },
       blockers: {
         type: "array",
         items: { type: "string" },
         description: "List of blocking issues (for failed/blocked status)."
+      },
+      files: {
+        type: "array",
+        description: "Files created, modified, deleted, or read while completing the task.",
+        items: {
+          type: "object",
+          required: ["path"],
+          properties: {
+            path: { type: "string" },
+            action: {
+              type: "string",
+              enum: ["created", "modified", "deleted", "read"]
+            },
+            summary: { type: "string" }
+          }
+        }
+      },
+      commands: {
+        type: "array",
+        description: "Commands executed as task evidence.",
+        items: {
+          type: "object",
+          required: ["command", "exitCode"],
+          properties: {
+            command: { type: "string" },
+            exitCode: { type: "number" },
+            passed: { type: "boolean" },
+            summary: { type: "string" }
+          }
+        }
+      },
+      tests: {
+        type: "array",
+        description: "Tests or checks executed as task evidence.",
+        items: {
+          type: "object",
+          required: ["command", "passed"],
+          properties: {
+            command: { type: "string" },
+            passed: { type: "boolean" },
+            summary: { type: "string" }
+          }
+        }
       }
     }
   },
@@ -184,6 +252,23 @@ export const reportTaskResultTool: ToolDef = {
     const parsed = reportSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid report: ${parsed.error.message}` };
+    }
+    if (parsed.data.status === "complete" && ctx.taskContract) {
+      const expectedCriteria = ctx.taskContract.acceptanceCriteria.map((criterion) => criterion.trim());
+      const reportedCriteria = new Set(
+        (parsed.data.acceptanceResults ?? []).map((result) => result.criterion.trim())
+      );
+      const missingCriteria = expectedCriteria.filter(
+        (criterion) => !reportedCriteria.has(criterion)
+      );
+      if (missingCriteria.length > 0) {
+        return {
+          ok: false,
+          error:
+            "Incomplete acceptanceResults. Report every criterion verbatim: " +
+            missingCriteria.join(" | ")
+        };
+      }
     }
 
     // Record task result for conductor evaluation (when runId is set)
@@ -438,7 +523,13 @@ export function parsePlanArgs(args: unknown): ParsedPlan | string {
 }
 
 export function validatePlan(
-  tasks: Array<{ id: string; agentId: string; dependsOn?: string[] }>,
+  tasks: Array<{
+    id: string;
+    agentId: string;
+    dependsOn?: string[];
+    inputs?: Array<{ fromTaskId: string; outputId: string }>;
+    expectedOutputs?: Array<{ id: string }>;
+  }>,
   availableAgentIds?: string[]
 ): string | null {
   const ids = new Set(tasks.map((t) => t.id));
@@ -467,6 +558,30 @@ export function validatePlan(
   for (const t of tasks) {
     for (const dep of t.dependsOn ?? []) {
       if (!ids.has(dep)) return `Task "${t.id}" depends on unknown task "${dep}".`;
+    }
+  }
+
+  // Duplicate output keys make downstream evidence binding ambiguous.
+  for (const t of tasks) {
+    const outputIds = (t.expectedOutputs ?? []).map((output) => output.id);
+    if (new Set(outputIds).size !== outputIds.length) {
+      return `Task "${t.id}" has duplicate expectedOutput ids.`;
+    }
+  }
+
+  // Inputs must bind to a declared output from an upstream task. This catches plans
+  // where the model invents or reuses the wrong outputKey before dispatch starts.
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  for (const t of tasks) {
+    for (const input of t.inputs ?? []) {
+      if (!ids.has(input.fromTaskId)) {
+        return `Task "${t.id}" input references unknown task "${input.fromTaskId}".`;
+      }
+      const upstream = taskMap.get(input.fromTaskId);
+      const upstreamOutputs = upstream?.expectedOutputs ?? [];
+      if (!upstreamOutputs.some((output) => output.id === input.outputId)) {
+        return `Task "${t.id}" input references unknown output "${input.outputId}" from task "${input.fromTaskId}".`;
+      }
     }
   }
 

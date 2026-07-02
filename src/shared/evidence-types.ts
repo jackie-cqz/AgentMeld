@@ -9,6 +9,15 @@ export interface TaskExecutionIdentity {
   contextSnapshotId: string;
 }
 
+export interface TaskExecutionContract {
+  acceptanceCriteria: string[];
+  expectedOutputs: Array<{
+    outputKey: string;
+    type: "web_app" | "document" | "image" | "ppt";
+    required: boolean;
+  }>;
+}
+
 export type EvidenceTrustLevel = "authoritative" | "verified" | "accepted" | "reported" | "retrieved";
 export type CriterionValidator =
   | { type: "file_exists"; path: string }

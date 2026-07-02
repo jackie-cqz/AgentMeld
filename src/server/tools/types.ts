@@ -1,9 +1,13 @@
+import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
+
 export interface ToolContext {
   conversationId: string;
   workspacePath: string;
   agentId: string;
   runId: string;
   parentRunId?: string | null;
+  taskExecution?: TaskExecutionIdentity | null;
+  taskContract?: TaskExecutionContract | null;
   abortSignal: AbortSignal;
 }
 

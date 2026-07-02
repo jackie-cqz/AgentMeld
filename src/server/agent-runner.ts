@@ -60,6 +60,8 @@ interface StartRunInput {
   triggerMessage: Message;
   runId?: string;
   parentRunId?: string | null;
+  taskExecution?: import("@/shared/evidence-types").TaskExecutionIdentity | null;
+  taskContract?: import("@/shared/evidence-types").TaskExecutionContract | null;
 }
 
 export interface RunHandle {
@@ -112,6 +114,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     conversationId: input.conversationId,
     agentId: input.agentId,
     triggerMessageId: input.triggerMessage.id,
+    parentRunId: input.parentRunId ?? null,
     status: "running",
     now
   });
@@ -272,6 +275,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     conversationId: input.conversationId,
     runId: run.id,
     parentRunId: input.parentRunId ?? null,
+    taskExecution: input.taskExecution ?? null,
+    taskContract: input.taskContract ?? null,
     agent,
     conversation,
     workspace,
@@ -488,7 +493,8 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
   if (toolNames.includes("report_task_result")) {
     lines.push("\n### report_task_result");
     lines.push("用途：被 Conductor 分派的子任务结束前必须调用一次，报告真实语义结果。");
-    lines.push("只提交最小 JSON：{\"status\":\"complete\",\"summary\":\"完成了什么\"}。失败/阻塞时可加 blockers。");
+    lines.push("必须遵循子任务上下文给出的报告契约；有 acceptance_criteria 时，要在 acceptanceResults 中逐字、逐项回报并提供证据。");
+    lines.push("有 task_evidence_contract 时，同时回报相关 files、commands、tests；失败/阻塞时设置对应 status 并填写 blockers。");
     lines.push("不要手写 artifacts；如果任务产出了产物，在 write_artifact 时传 outputKey，系统会自动记录。");
     lines.push("错误：代码部分完成、测试失败、或缺少依赖时仍上报 complete。");
   }

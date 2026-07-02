@@ -316,6 +316,43 @@ describe("write_artifact", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("requires a declared outputKey before creating a dispatched artifact", async () => {
+    const taskContext = ctx({
+      taskContract: {
+        acceptanceCriteria: [],
+        expectedOutputs: [{ outputKey: "prd", type: "document", required: true }]
+      }
+    });
+
+    const missingKey = await toolRegistry.execute("write_artifact", {
+      type: "document",
+      title: "PRD",
+      content: "# PRD"
+    }, taskContext);
+    expect(missingKey.ok).toBe(false);
+    if (!missingKey.ok) expect(missingKey.error).toContain("outputKey is required");
+
+    const wrongType = await toolRegistry.execute("write_artifact", {
+      type: "web_app",
+      title: "PRD",
+      content: "<h1>PRD</h1>",
+      outputKey: "prd"
+    }, taskContext);
+    expect(wrongType.ok).toBe(false);
+    if (!wrongType.ok) expect(wrongType.error).toContain("does not match expected type");
+
+    const valid = await toolRegistry.execute("write_artifact", {
+      type: "document",
+      title: "PRD",
+      content: "# PRD",
+      outputKey: "prd"
+    }, taskContext);
+    expect(valid.ok).toBe(true);
+    if (valid.ok) {
+      expect((valid.value as { outputKey?: string }).outputKey).toBe("prd");
+    }
+  });
+
   it("normalizes stringified structured document content", async () => {
     const result = await toolRegistry.execute("write_artifact", {
       type: "document",

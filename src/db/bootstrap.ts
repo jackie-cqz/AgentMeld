@@ -123,6 +123,8 @@ export function ensureDatabase() {
       child_run_id TEXT,
       attempt INTEGER NOT NULL DEFAULT 1,
       error_category TEXT,
+      verification_status TEXT NOT NULL DEFAULT 'not_started',
+      verified_attempt_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -459,9 +461,9 @@ function migrateLegacyTables() {
   ensureColumn("app_settings", "deployment_publish_dir", "TEXT");
   ensureColumn("app_settings", "deployment_public_base_url", "TEXT");
 
-  // P1: Orchestration task results — verification status columns
-  try { getDatabase().exec("ALTER TABLE orchestration_task_results ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'not_started'"); } catch { /* already exists */ }
-  try { getDatabase().exec("ALTER TABLE orchestration_task_results ADD COLUMN verified_attempt_id TEXT"); } catch { /* already exists */ }
+  // P1: Conductor task results - verification status columns for existing databases.
+  ensureColumn("conductor_task_results", "verification_status", "TEXT NOT NULL DEFAULT 'not_started'");
+  ensureColumn("conductor_task_results", "verified_attempt_id", "TEXT");
 
   getDatabase().exec(`
     UPDATE agent_runs SET started_at = created_at WHERE started_at = 0;
@@ -520,8 +522,12 @@ function migrateLegacyConductorTables() {
 function migrateLegacyConductorTable(legacySuffix: string, tableName: string, selectColumns: string[]) {
   const oldTableName = `${legacyProcessKey()}_${legacySuffix}`;
   if (!tableExists(oldTableName) || !tableExists(tableName)) return;
+  const targetColumns = selectColumns.map((column) => {
+    const aliasMatch = column.match(/\s+AS\s+([a-z_][a-z0-9_]*)$/i);
+    return aliasMatch?.[1] ?? column;
+  });
   getDatabase().exec(`
-    INSERT OR IGNORE INTO ${tableName}
+    INSERT OR IGNORE INTO ${tableName} (${targetColumns.join(", ")})
     SELECT ${selectColumns.join(", ")}
     FROM ${oldTableName};
     DROP TABLE ${oldTableName};

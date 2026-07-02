@@ -164,8 +164,52 @@ describe("consumeStream", () => {
     });
 
     expect(capturedTool).toBe("plan_tasks");
-    // plan_tasks event is intercepted BEFORE accumulation — stops at just the text part
-    expect(result.parts).toHaveLength(1); // only part.start text part, no tool_use
+    // The stopping event is still persisted; only later events are skipped.
+    expect(result.parts).toHaveLength(2); // text part + tool_use, no later delta
+    expect(result.parts[1]).toMatchObject({ type: "tool_use", callId: "call_stop" });
+  });
+
+  it("persists the stopping tool_result before breaking the stream", async () => {
+    const published: StreamEvent[] = [];
+    const unsubscribe = eventBus.subscribe(({ event }) => {
+      published.push(event);
+    });
+
+    const events: StreamEvent[] = [
+      {
+        type: "tool.call", conversationId: "c1", timestamp: 1,
+        messageId: "", callId: "call_plan",
+        toolName: "plan_tasks", args: { reasoning: "x", tasks: [] }
+      },
+      {
+        type: "tool.result", conversationId: "c1", timestamp: 2,
+        messageId: "", callId: "call_plan",
+        result: { ok: true, value: { tasks: [] } }, isError: false
+      },
+      {
+        type: "part.start", conversationId: "c1", timestamp: 3,
+        messageId: "", partIndex: 0,
+        part: { type: "text", content: "should not appear" }
+      }
+    ];
+
+    const result = await consumeStream({
+      stream: eventsToStream(events),
+      messageId: "msg_1",
+      runId: "run_1",
+      onEvent: (event) => {
+        if (event.type === "tool.result" && event.callId === "call_plan") {
+          return { stop: true };
+        }
+      }
+    });
+
+    unsubscribe();
+
+    expect(result.parts).toHaveLength(2);
+    expect(result.parts[0]).toMatchObject({ type: "tool_use", callId: "call_plan" });
+    expect(result.parts[1]).toMatchObject({ type: "tool_result", callId: "call_plan" });
+    expect(published.some((event) => event.type === "tool.result" && event.callId === "call_plan")).toBe(true);
   });
 
   it("respects abort signal", async () => {

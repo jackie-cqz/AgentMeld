@@ -16,10 +16,10 @@ export const writeArtifactTool: ToolDef = {
   description: `Create an artifact (document, web app, image, or presentation) in the current conversation.
 
 For document type, use strict JSON like:
-{"type":"document","title":"...","content":"# Title\\n\\nBody"}
+{"type":"document","title":"...","content":"# Title\\n\\nBody","outputKey":"declared-output-id"}
 
 For web_app type, use strict JSON like:
-{"type":"web_app","title":"...","content":{"files":{"index.html":"...","style.css":"..."},"entry":"index.html"}}
+{"type":"web_app","title":"...","content":{"files":{"index.html":"...","style.css":"..."},"entry":"index.html"},"outputKey":"declared-output-id"}
 
 For image type, content must be an object like: {"url":"..."}
 For ppt type, content must be an object like: {"slides":[...]}
@@ -28,7 +28,8 @@ IMPORTANT: Always provide type, title, and content. For documents, content is th
 directly; do not write content: format and do not nest another content field. For web apps, content
 is a JSON object. Escape Markdown, HTML, CSS, and JS newlines as \\n inside JSON strings. Keep a
 single artifact concise enough to fit in one tool call; split unusually large deliverables into
-multiple artifacts.`,
+multiple artifacts. For a dispatched task with expected_outputs, outputKey is required and must
+exactly match one declared output id. Never invent or rename an output id.`,
   parameters: {
     type: "object",
     required: ["type", "title", "content"],
@@ -44,6 +45,11 @@ multiple artifacts.`,
       },
       content: {
         description: "Artifact content. For documents pass markdown directly as a string. For web_app pass {\"files\":...,\"entry\":\"index.html\"}. Do not JSON.stringify it; escape newlines as \\n."
+      },
+      outputKey: {
+        type: "string",
+        description:
+          "For dispatched tasks, the exact id from expected_outputs that this artifact fulfills. Omit only when no expected output was declared."
       }
     }
   },
@@ -54,6 +60,33 @@ multiple artifacts.`,
     }
 
     const { type, title } = parsed.data;
+    const expectedOutputs = ctx.taskContract?.expectedOutputs ?? [];
+    if (expectedOutputs.length > 0) {
+      const validKeys = expectedOutputs.map((output) => output.outputKey);
+      if (!parsed.data.outputKey) {
+        return {
+          ok: false,
+          error: `outputKey is required for this dispatched task. Use one of: ${validKeys.join(", ")}`
+        };
+      }
+      const expectedOutput = expectedOutputs.find(
+        (output) => output.outputKey === parsed.data.outputKey
+      );
+      if (!expectedOutput) {
+        return {
+          ok: false,
+          error: `Unknown outputKey "${parsed.data.outputKey}". Use one of: ${validKeys.join(", ")}`
+        };
+      }
+      if (expectedOutput.type !== type) {
+        return {
+          ok: false,
+          error:
+            `Artifact type "${type}" does not match expected type "${expectedOutput.type}" ` +
+            `for outputKey "${expectedOutput.outputKey}".`
+        };
+      }
+    }
     const rawContent = parsed.data.content;
 
     const normalized = normalizeContent(type, rawContent);

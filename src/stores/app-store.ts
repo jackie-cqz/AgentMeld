@@ -6,6 +6,7 @@ import { requestJson } from "@/lib/request-json";
 import { applyStreamEvent } from "@/stores/apply-stream-event";
 import { normalizeBootstrap } from "@/stores/normalize-bootstrap";
 import { ensureConversationBuckets } from "@/stores/store-helpers";
+import { RIGHT_PANEL_WIDTH_STORAGE_KEY } from "@/shared/constants";
 import type {
   AppState,
   BootstrapPayload,
@@ -14,8 +15,6 @@ import type {
   SearchState,
   SidebarTab
 } from "@/stores/store-types";
-
-const RIGHT_PANEL_WIDTH_STORAGE_KEY = "agentmeld:right-panel-width";
 import type { Message, SearchHit } from "@/shared/types";
 
 export type { AppState, CompactionState, DispatchState, SearchState, SidebarTab };
