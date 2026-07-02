@@ -303,6 +303,65 @@ export function ensureDatabase() {
       checked_at INTEGER NOT NULL,
       UNIQUE(attempt_id, criterion_id)
     );
+
+    -- P2: Fact Registry tables
+
+    CREATE TABLE IF NOT EXISTS conversation_fact_definitions (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL
+        REFERENCES conversations(id) ON DELETE CASCADE,
+      canonical_key TEXT NOT NULL,
+      namespace TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      property_name TEXT NOT NULL,
+      value_type TEXT NOT NULL,
+      update_policy TEXT NOT NULL DEFAULT 'replace',
+      description TEXT NOT NULL,
+      aliases_json TEXT NOT NULL DEFAULT '[]',
+      applicable_task_tags_json TEXT NOT NULL DEFAULT '[]',
+      applicable_agent_roles_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      origin TEXT NOT NULL DEFAULT 'conversation',
+      proposed_by_agent_id TEXT,
+      source_message_id TEXT,
+      merged_into_definition_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(conversation_id, canonical_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_facts (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL
+        REFERENCES conversations(id) ON DELETE CASCADE,
+      definition_id TEXT NOT NULL,
+      canonical_key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      value_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trust_level TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      resolution_method TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      supersedes_fact_id TEXT,
+      invalidated_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_fact_sources (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL
+        REFERENCES conversations(id) ON DELETE CASCADE,
+      fact_id TEXT NOT NULL
+        REFERENCES conversation_facts(id) ON DELETE CASCADE,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_excerpt TEXT,
+      created_at INTEGER NOT NULL,
+      UNIQUE(fact_id, source_type, source_id)
+    );
   `);
 
   migrateLegacyTables();
@@ -509,6 +568,14 @@ function createIndexes() {
       ON task_attempts(conductor_run_id, task_id);
     CREATE INDEX IF NOT EXISTS idx_context_snapshots_attempt
       ON task_context_snapshots(attempt_id);
+
+    -- P2: Fact Registry indexes
+    CREATE INDEX IF NOT EXISTS idx_conversation_facts_active
+      ON conversation_facts(conversation_id, canonical_key, status);
+    CREATE INDEX IF NOT EXISTS idx_conversation_facts_source
+      ON conversation_facts(source_type, source_id);
+    CREATE INDEX IF NOT EXISTS idx_conversation_fact_definitions_lookup
+      ON conversation_fact_definitions(conversation_id, namespace, entity_type, property_name);
   `);
 
   // P1: Migration for existing DBs that may lack the new columns/table
