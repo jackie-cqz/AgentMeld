@@ -197,4 +197,108 @@ describe("database bootstrap", () => {
     expect(run.status).toBe("running");
     expect(run.startedAt).toBeGreaterThan(0);
   });
+
+  // ── P1: Evidence-aware tables ──────────────────────────────────────────
+
+  it("creates four P1 evidence tables", () => {
+    ensureDatabase();
+
+    const tableRows = getDatabase()
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    const tableNames = new Set(tableRows.map((row) => row.name));
+
+    expect(tableNames.has("task_attempts")).toBe(true);
+    expect(tableNames.has("task_context_snapshots")).toBe(true);
+    expect(tableNames.has("task_evidence")).toBe(true);
+    expect(tableNames.has("criterion_verdicts")).toBe(true);
+  });
+
+  it("orchestration_task_results has P1 verification columns", () => {
+    ensureDatabase();
+
+    const cols = getDatabase()
+      .prepare("PRAGMA table_info(orchestration_task_results)")
+      .all() as Array<{ name: string }>;
+    const colNames = cols.map((c) => c.name);
+
+    expect(colNames).toContain("verification_status");
+    expect(colNames).toContain("verified_attempt_id");
+  });
+
+  it("task_attempts enforces unique constraint on conductor_run_id + plan_id + task_id + attempt", () => {
+    ensureDatabase();
+    const conversation = getDatabase().prepare("SELECT id FROM conversations LIMIT 1").get() as { id: string };
+    const agent = getDatabase().prepare("SELECT id FROM agents LIMIT 1").get() as { id: string };
+
+    // Create an agent run first (FK requirement)
+    createRun({ id: "run_fk_test", conversationId: conversation.id, agentId: agent.id, status: "complete", now: Date.now() });
+
+    const now = Date.now();
+    const db = getDatabase();
+
+    // First insert succeeds
+    db.prepare(`
+      INSERT INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("ta_test_unique", "run_fk_test", conversation.id, "plan_test", 0, "t1", agent.id, 1, "running", "not_started", now, now);
+
+    // Second insert with same (run, plan, task, attempt) must fail
+    expect(() => {
+      db.prepare(`
+        INSERT INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("ta_test_unique_2", "run_fk_test", conversation.id, "plan_test", 0, "t1", agent.id, 1, "running", "not_started", now, now);
+    }).toThrow();
+  });
+
+  it("task_evidence cascades on attempt delete", () => {
+    ensureDatabase();
+    const conversation = getDatabase().prepare("SELECT id FROM conversations LIMIT 1").get() as { id: string };
+    const agent = getDatabase().prepare("SELECT id FROM agents LIMIT 1").get() as { id: string };
+
+    const now = Date.now();
+    const db = getDatabase();
+
+    // Create agent run + task attempt
+    createRun({ id: "run_cascade_test", conversationId: conversation.id, agentId: agent.id, status: "complete", now });
+    db.prepare(`
+      INSERT INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("ta_cascade_test", "run_cascade_test", conversation.id, "plan_cascade", 0, "t1", agent.id, 1, "complete", "not_started", now, now);
+
+    // Insert evidence linked to this attempt
+    db.prepare(`
+      INSERT INTO task_evidence (id, conversation_id, conductor_run_id, plan_id, task_id, attempt_id, child_run_id, context_snapshot_id, agent_id, type, status, trust_level, source_kind, source_id, subject_type, subject_id, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("ev_cascade_test", conversation.id, "run_cascade_test", "plan_cascade", "t1", "ta_cascade_test", "run_cascade_test", "ctx_1", agent.id, "file_written", "valid", "verified", "tool_call", "fs_write_1", "file", "src/test.ts", "{}", now);
+
+    // Verify evidence exists
+    const evBefore = db.prepare("SELECT id FROM task_evidence WHERE id = ?").get("ev_cascade_test");
+    expect(evBefore).toBeTruthy();
+
+    // Delete attempt — evidence should cascade
+    db.prepare("DELETE FROM task_attempts WHERE id = ?").run("ta_cascade_test");
+
+    const evAfter = db.prepare("SELECT id FROM task_evidence WHERE id = ?").get("ev_cascade_test");
+    expect(evAfter).toBeFalsy();
+  });
+
+  it("context snapshot requires attempt (FK constraint)", () => {
+    ensureDatabase();
+    const conversation = getDatabase().prepare("SELECT id FROM conversations LIMIT 1").get() as { id: string };
+    const agent = getDatabase().prepare("SELECT id FROM agents LIMIT 1").get() as { id: string };
+    const now = Date.now();
+    const db = getDatabase();
+
+    createRun({ id: "run_snap_fk", conversationId: conversation.id, agentId: agent.id, status: "complete", now });
+
+    // Snapshot referencing non-existent attempt must fail
+    expect(() => {
+      db.prepare(`
+        INSERT INTO task_context_snapshots (id, conversation_id, conductor_run_id, plan_id, task_id, attempt_id, policy_version, schema_version, envelope_json, manifest_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("ctxsnap_no_attempt", conversation.id, "run_snap_fk", "plan_x", "t1", "ta_nonexistent", "p1", 1, "{}", "[]", now);
+    }).toThrow();
+  });
 });

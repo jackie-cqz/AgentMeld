@@ -181,3 +181,119 @@ export const appSettings = sqliteTable("app_settings", {
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
 });
+
+// ── P1: Evidence-aware Context Engineering tables ──────────────────────────
+
+export const taskAttempts = sqliteTable(
+  "task_attempts",
+  {
+    id: text("id").primaryKey(),
+    conductorRunId: text("conductor_run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id").notNull(),
+    planId: text("plan_id").notNull(),
+    planRevision: integer("plan_revision").notNull().default(0),
+    taskId: text("task_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    childRunId: text("child_run_id"),
+    attempt: integer("attempt").notNull(),
+    contextSnapshotId: text("context_snapshot_id"),
+    executionStatus: text("execution_status").notNull().default("queued"),
+    verificationStatus: text("verification_status").notNull().default("not_started"),
+    failureContextJson: text("failure_context_json"),
+    startedAt: integer("started_at"),
+    finishedAt: integer("finished_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_task_attempts_unique").on(
+      table.conductorRunId, table.planId, table.taskId, table.attempt
+    ),
+    index("idx_task_attempts_run").on(table.conductorRunId, table.taskId),
+  ]
+);
+
+export const taskContextSnapshots = sqliteTable(
+  "task_context_snapshots",
+  {
+    id: text("id").primaryKey(),
+    conversationId: text("conversation_id").notNull(),
+    conductorRunId: text("conductor_run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    planId: text("plan_id").notNull(),
+    taskId: text("task_id").notNull(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: "cascade" }),
+    policyVersion: text("policy_version").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    envelopeJson: text("envelope_json").notNull(),
+    manifestJson: text("manifest_json").notNull(),
+    tokenEstimate: integer("token_estimate").notNull().default(0),
+    requiredTokenEstimate: integer("required_token_estimate").notNull().default(0),
+    omittedTokenEstimate: integer("omitted_token_estimate").notNull().default(0),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_context_snapshots_attempt").on(table.attemptId),
+  ]
+);
+
+export const taskEvidence = sqliteTable(
+  "task_evidence",
+  {
+    id: text("id").primaryKey(),
+    conversationId: text("conversation_id").notNull(),
+    conductorRunId: text("conductor_run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    planId: text("plan_id").notNull(),
+    taskId: text("task_id").notNull(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: "cascade" }),
+    childRunId: text("child_run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    contextSnapshotId: text("context_snapshot_id").notNull(),
+    agentId: text("agent_id").notNull(),
+    type: text("type").notNull(),
+    status: text("status").notNull().default("valid"),
+    trustLevel: text("trust_level").notNull().default("verified"),
+    sourceKind: text("source_kind").notNull(),
+    sourceId: text("source_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+    subjectId: text("subject_id").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    contentHash: text("content_hash"),
+    invalidatedAt: integer("invalidated_at"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_task_evidence_attempt").on(table.attemptId, table.createdAt),
+    index("idx_task_evidence_subject").on(table.subjectType, table.subjectId, table.status),
+    index("idx_task_evidence_task").on(table.conductorRunId, table.planId, table.taskId),
+  ]
+);
+
+export const criterionVerdicts = sqliteTable(
+  "criterion_verdicts",
+  {
+    id: text("id").primaryKey(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: "cascade" }),
+    criterionId: text("criterion_id").notNull(),
+    validatorType: text("validator_type").notNull(),
+    status: text("status").notNull(),
+    evidenceIdsJson: text("evidence_ids_json").notNull().default("[]"),
+    reason: text("reason").notNull(),
+    checkedAt: integer("checked_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_criterion_verdicts_unique").on(table.attemptId, table.criterionId),
+  ]
+);

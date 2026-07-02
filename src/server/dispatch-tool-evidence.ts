@@ -1,18 +1,15 @@
 // ---------------------------------------------------------------------------
-// P1: Tool evidence — SQLite-backed with in-memory fallback for non-task runs
+// P1: Tool evidence — SQLite-backed with in-memory fallback
 //
-// recordFileWriteEvidence / recordCommandEvidence are kept as a short-term
-// compatibility facade. They write to in-memory store for non-task runs,
-// while task runs are captured through the Evidence Collector in SQLite.
+// recordFileWriteEvidence / recordCommandEvidence are compatibility facades
+// that write to BOTH in-memory AND SQLite (via evidenceRepository).
 //
-// getRunToolEvidence now queries SQLite for task runs and falls back to the
-// in-memory store for non-task runs.
-//
-// clearRunToolEvidence clears only the in-memory cache; the SQLite Ledger is
-// immutable — evidence is never deleted.
+// getRunToolEvidence queries SQLite first, falls back to in-memory.
+// clearRunToolEvidence clears only in-memory; the SQLite Ledger is immutable.
 // ---------------------------------------------------------------------------
 
-import { listEvidenceForChildRun } from "@/server/repositories/evidence-repository";
+import { listEvidenceForChildRun, insertEvidence } from "@/server/repositories/evidence-repository";
+import { newEvidenceId } from "@/shared/ids";
 
 export interface FileWriteEvidence {
   path: string;
@@ -58,6 +55,7 @@ export function recordFileWriteEvidence(
   evidence: FileWriteEvidence
 ): void {
   if (!runId) return;
+  // In-memory store (immediate access for evaluation)
   const current = getOrCreate(runId);
   const index = current.fileWrites.findIndex((entry) => entry.path === evidence.path);
   if (index >= 0) {
@@ -65,6 +63,13 @@ export function recordFileWriteEvidence(
   } else {
     current.fileWrites.push(evidence);
   }
+
+  // P1: Also persist to SQLite Evidence Ledger with available identity
+  tryPersistToLedger(runId, "file_written", "file", evidence.path || evidence.absolutePath, {
+    path: evidence.path,
+    absolutePath: evidence.absolutePath,
+    action: evidence.action,
+  });
 }
 
 export function recordCommandEvidence(
@@ -72,7 +77,71 @@ export function recordCommandEvidence(
   evidence: CommandEvidence
 ): void {
   if (!runId) return;
+  // In-memory store (immediate access for evaluation)
   getOrCreate(runId).commands.push(evidence);
+
+  // P1: Also persist to SQLite Evidence Ledger
+  tryPersistToLedger(runId, "command_executed", "command", evidence.command.slice(0, 120), {
+    command: evidence.command.slice(0, 500),
+    exitCode: evidence.exitCode,
+    timedOut: evidence.timedOut,
+    isError: evidence.isError,
+    cwd: evidence.cwd ?? null,
+  });
+}
+
+/**
+ * P1: Attempt to persist evidence to the SQLite Ledger.
+ * Falls back silently if task identity is unavailable (non-task runs).
+ */
+function tryPersistToLedger(
+  childRunId: string,
+  type: string,
+  subjectType: string,
+  subjectId: string,
+  payload: Record<string, unknown>
+) {
+  try {
+    // Try to get task identity from existing evidence or task_attempts
+    const { getDatabase } = require("@/db/client") as { getDatabase: () => unknown };
+    const db = getDatabase() as { prepare: (sql: string) => { get: (...args: unknown[]) => { attempt_id?: string; conductor_run_id?: string; plan_id?: string; task_id?: string; context_snapshot_id?: string; agent_id?: string; conversation_id?: string } | undefined } };
+    const row = db
+      .prepare("SELECT attempt_id FROM task_attempts WHERE child_run_id = ? LIMIT 1")
+      .get(childRunId);
+
+    if (row?.attempt_id) {
+      const attempt = db
+        .prepare("SELECT * FROM task_attempts WHERE id = ?")
+        .get(row.attempt_id) as { conversation_id?: string; conductor_run_id?: string; plan_id?: string; task_id?: string; context_snapshot_id?: string; agent_id?: string } | undefined;
+
+      if (attempt) {
+        insertEvidence({
+          id: newEvidenceId(),
+          conversationId: attempt.conversation_id ?? "",
+          conductorRunId: attempt.conductor_run_id ?? "",
+          planId: attempt.plan_id ?? "",
+          taskId: attempt.task_id ?? "",
+          attemptId: row.attempt_id,
+          childRunId,
+          contextSnapshotId: attempt.context_snapshot_id ?? "",
+          agentId: attempt.agent_id ?? "",
+          type,
+          status: "valid",
+          trustLevel: "verified",
+          sourceKind: "tool_call",
+          sourceId: `${type}_${Date.now()}`,
+          subjectType,
+          subjectId,
+          payloadJson: JSON.stringify(payload),
+          contentHash: null,
+          invalidatedAt: null,
+          createdAt: Date.now(),
+        });
+      }
+    }
+  } catch {
+    // Non-task run or DB not available — evidence stays in-memory only
+  }
 }
 
 export function getRunToolEvidence(runId: string): RunToolEvidence {

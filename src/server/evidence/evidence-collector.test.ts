@@ -222,7 +222,7 @@ describe.skip("evidence-collector", () => {
 
   it("two attempts of same task produce separate evidence", async () => {
     const ctx1 = makeCtx({ taskExecution: { ...makeCtx().taskExecution!, attemptId: "ta_1", attempt: 1 } });
-    const ctx2 = makeCtx({ taskExecution: { ...makeCtx().taskExecution!, attemptId: "ta_2", attempt: 2, runId: "run_test_2" } });
+    const ctx2 = makeCtx({ runId: "run_test_2", taskExecution: { ...makeCtx().taskExecution!, attemptId: "ta_2", attempt: 2 } });
 
     await captureEvidence({
       toolName: "fs_write",

@@ -1,4 +1,12 @@
 import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
+import { captureEvidence } from "@/server/evidence/evidence-collector";
+
+function normalizeToolError(error: unknown): ToolResult {
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : "Tool handler threw an unexpected error."
+  };
+}
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDef>();
@@ -33,14 +41,10 @@ export class ToolRegistry {
     try {
       result = await tool.handler(args, ctx);
     } catch (error) {
-      result = {
-        ok: false,
-        error: error instanceof Error ? error.message : "Tool handler threw an unexpected error."
-      };
+      result = normalizeToolError(error);
     }
 
     // P1: Capture evidence for every tool execution (fire-and-forget, never blocks)
-    const { captureEvidence } = await import("@/server/evidence/evidence-collector");
     captureEvidence({
       toolName: name,
       args,
