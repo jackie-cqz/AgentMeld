@@ -54,7 +54,9 @@ export const ALL_TOOL_NAMES = [
   "ask_user",
   "deploy_artifact",
   "deploy_workspace",
-  "read_attachment"
+  "read_attachment",
+  "read_evidence",
+  "update_context_facts"
 ] as const;
 
 export const DEFAULT_CUSTOM_PROMPT = `You are a role-focused AI collaborator in the AgentMeld workspace.

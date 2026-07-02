@@ -20,6 +20,7 @@ interface SqlStatement {
 export interface SqlDatabase {
   exec(sql: string): void;
   prepare(sql: string): SqlStatement;
+  transaction?: <T>(fn: () => T) => () => T;
   pragma?: (source: string) => unknown;
   close?: () => void;
 }

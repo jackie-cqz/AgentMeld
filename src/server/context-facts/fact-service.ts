@@ -124,7 +124,26 @@ export function resolveFacts(
     WHERE id = ? AND status = 'active'
   `);
 
-  // Run sequentially (P2: transaction wrapper deferred until SQLite adapter supports it)
+  const insertSource = db.prepare(`
+    INSERT OR IGNORE INTO conversation_fact_sources (
+      id, conversation_id, fact_id, source_type, source_id, source_excerpt, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  // Use transaction for atomic supersede+insert if available
+  const runInTransaction = db.transaction
+    ? db.transaction(() => {
+        runResolutionLoop();
+      })
+    : null;
+
+  if (runInTransaction) {
+    runInTransaction();
+  } else {
+    runResolutionLoop();
+  }
+
+  function runResolutionLoop() {
     for (const candidate of candidates) {
       const { canonicalKey, definitionId, method } = canonicalizeFactKey(candidate, dynamicDefs);
 
@@ -156,7 +175,13 @@ export function resolveFacts(
       if (currentActive) {
         const currentValue = JSON.stringify(currentActive.value);
         if (currentValue === valueJson) {
-          // Same value — no change needed
+          // Same value — no change needed, but record the new source
+          const sourceExcerpt = candidate.sourceExcerpt?.slice(0, 500) ?? null;
+          insertSource.run(
+            `fsrc_${currentActive.id}_${sourceId}`.slice(0, 64),
+            conversationId, currentActive.id, sourceType, sourceId, sourceExcerpt, now
+          );
+
           resolutions.push({
             status: "no_change",
             definitionId,
@@ -204,6 +229,13 @@ export function resolveFacts(
         currentActive?.id ?? null, now, now
       );
 
+      // P2: Track fact source for audit trail
+      const sourceExcerpt = candidate.sourceExcerpt?.slice(0, 500) ?? null;
+      insertSource.run(
+        `fsrc_${factId}_${sourceId}`.slice(0, 64),
+        conversationId, factId, sourceType, sourceId, sourceExcerpt, now
+      );
+
       resolutions.push({
         status: currentActive ? "matched" : "created",
         definitionId,
@@ -233,6 +265,7 @@ export function resolveFacts(
           : `Created new fact "${canonicalKey}".`,
       });
     }
+  } // end runResolutionLoop
 
   return {
     resolutions,

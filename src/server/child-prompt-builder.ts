@@ -23,6 +23,13 @@ export interface UpstreamArtifact {
   version: number;
 }
 
+export interface ActiveFactEntry {
+  canonicalKey: string;
+  value: unknown;
+  valueType: string;
+  description: string;
+}
+
 export interface BuildChildPromptInput {
   task: ParsedTask;
   resolvedInputs: ResolvedInput[];
@@ -30,6 +37,8 @@ export interface BuildChildPromptInput {
   upstreamArtifacts: UpstreamArtifact[];
   /** Recent conversation messages for context (user request + conductor messages) */
   recentConversation: Array<{ from: string; content: string }>;
+  /** P2: Active context facts for this agent (filtered by role + task tags) */
+  activeFacts?: ActiveFactEntry[];
 }
 
 export function resolveTaskInputs(
@@ -120,6 +129,18 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
       );
     }
     parts.push("  </upstream_artifacts>");
+    parts.push("");
+  }
+
+  // P2: Active context facts — system-managed project state
+  if (input.activeFacts && input.activeFacts.length > 0) {
+    parts.push("  <project_facts>");
+    parts.push("    <!-- System-verified project facts. Use as authoritative context. -->");
+    for (const fact of input.activeFacts) {
+      const val = typeof fact.value === "object" ? JSON.stringify(fact.value) : String(fact.value);
+      parts.push(`    <fact key="${escapeXml(fact.canonicalKey)}" type="${escapeXml(fact.valueType)}">${escapeXml(val)}</fact>`);
+    }
+    parts.push("  </project_facts>");
     parts.push("");
   }
 

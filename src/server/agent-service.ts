@@ -168,7 +168,7 @@ function validateCustomAgentConfig(
     }
   }
   const allowedTools = allowInternalTools
-    ? new Set([...ALL_TOOL_NAMES, "plan_tasks", "report_task_result"])
+    ? new Set([...ALL_TOOL_NAMES, "plan_tasks", "report_task_result", "update_context_facts"])
     : new Set<string>(ALL_TOOL_NAMES);
   const unknownTools = toolNames.filter((toolName) => !allowedTools.has(toolName));
   if (unknownTools.length > 0) {

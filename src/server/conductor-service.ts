@@ -7,7 +7,8 @@ import { createMessage, getConversation, getWorkspaceForConversation, listAgents
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
-import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact } from "@/server/child-prompt-builder";
+import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
+import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
@@ -491,12 +492,33 @@ async function runChildTask(
       recentConversation.push({ from: "user", content: userText });
     }
 
+    // P2: Load active facts for this agent's context
+    let activeFacts: ActiveFactEntry[] = [];
+    try {
+      const defs = getFilteredDefinitionsForAgent({
+        conversationId,
+        agentRole: task.agentId,
+        userMessageText: extractTextFromMessage(triggerMessage),
+      });
+      activeFacts = defs
+        .filter((d) => d.currentValue !== null)
+        .map((d) => ({
+          canonicalKey: d.canonicalKey,
+          value: d.currentValue,
+          valueType: d.valueType,
+          description: d.description,
+        }));
+    } catch {
+      // Fact loading failure must not block task dispatch
+    }
+
     // Build child prompt with full context
     const prompt = buildChildTaskPrompt({
       task,
       resolvedInputs,
       upstreamArtifacts,
-      recentConversation
+      recentConversation,
+      activeFacts: activeFacts.length > 0 ? activeFacts : undefined,
     });
 
     eventBus.publish({

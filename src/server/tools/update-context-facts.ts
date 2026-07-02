@@ -153,13 +153,41 @@ export const updateContextFactsTool: ToolDef = {
       value: r.previousFact?.value ?? null,
     }));
 
-    // Handle proposals (new definition candidates)
+    // Handle proposals — persist as pending conversation_fact_definitions
+    const { getDatabase } = await import("@/db/client");
+    const db = getDatabase();
+    const insertDef = db.prepare(`
+      INSERT OR IGNORE INTO conversation_fact_definitions (
+        id, conversation_id, canonical_key, namespace, entity_type, property_name,
+        value_type, update_policy, description, aliases_json,
+        applicable_task_tags_json, applicable_agent_roles_json,
+        status, origin, proposed_by_agent_id, source_message_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const now = Date.now();
+
     for (const p of proposals) {
-      // Save proposals as pending facts for later review
-      pending.push({
-        canonicalKey: `proposed:${p.entity}.${p.property}`,
-        reason: `New definition proposal: ${p.description} (${p.valueType})`,
-      });
+      const canonicalKey = `proposed:${p.entity}.${p.property}`;
+      const defId = `def_${ctx.conversationId}_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}`.slice(0, 64);
+      try {
+        insertDef.run(
+          defId, ctx.conversationId, canonicalKey,
+          p.proposedNamespace ?? "conversation", p.entity, p.property,
+          p.valueType, "replace", p.description,
+          JSON.stringify(p.aliases ?? []),
+          "[]", "[]",
+          "pending", "conversation", ctx.agentId, null, now, now
+        );
+        pending.push({
+          canonicalKey,
+          reason: `New definition proposal saved: ${p.description} (${p.valueType}). Pending review.`,
+        });
+      } catch (err) {
+        pending.push({
+          canonicalKey,
+          reason: `Failed to save definition proposal: ${err instanceof Error ? err.message : "unknown error"}`,
+        });
+      }
     }
 
     return {

@@ -47,7 +47,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
 7. dependsOn 是执行顺序的唯一依据，在 task 文本里写"先做 A"无效。
 8. 只能使用当前群聊中真实存在的 Agent id，不得编造 agentId 或把任务派给自己。
 9. 聚合结果时只总结关键结论、产物位置和下一步决策，不重复每个 Agent 的长篇过程。`,
-    toolNames: ["plan_tasks", "report_task_result", "read_artifact", "ask_user"],
+    toolNames: ["plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts"],
     isBuiltin: true,
     isConductor: true,
     supportsVision: false
