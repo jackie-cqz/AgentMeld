@@ -181,7 +181,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
 
     await executeConductorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
-      input.conductorRunId, input.triggerMessage, input.conductorAgentId
+      input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId
     );
   }
 }
@@ -211,6 +211,7 @@ export async function executeConductorPlan(
   plan: ParsedTask[],
   availableAgents: string[],
   conductorRunId: string,
+  planId: string,
   triggerMessage: Message,
   conductorAgentId: string,
   signal?: AbortSignal
@@ -268,7 +269,7 @@ export async function executeConductorPlan(
       }
 
       wavePromises.push(
-        runChildTask(conversationId, task, triggerMessage, conductorRunId, outputBindings, abortSignal)
+        runChildTask(conversationId, task, triggerMessage, conductorRunId, planId, outputBindings, abortSignal)
           .then((r) => {
             results.set(task.id, r);
             createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} ${task.title}: ${r.summary}`);
@@ -389,7 +390,7 @@ export async function executeConductorPlan(
         for (const wave of recoveryWaves) {
           if (abortSignal.aborted) break;
           const recoveryPromises = wave.map((task) =>
-            runChildTask(conversationId, task, triggerMessage, conductorRunId, outputBindings, abortSignal)
+            runChildTask(conversationId, task, triggerMessage, conductorRunId, planId, outputBindings, abortSignal)
               .then((r) => {
                 results.set(task.id, r);
                 createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} [恢复] ${task.title}: ${r.summary}`);
@@ -440,6 +441,7 @@ async function runChildTask(
   task: ParsedTask,
   triggerMessage: Message,
   parentRunId: string,
+  planId: string,
   outputBindings: Map<string, string>,
   signal: AbortSignal
 ): Promise<TaskResult> {
@@ -464,9 +466,6 @@ async function runChildTask(
     return { taskId: task.id, status: "aborted", summary: "Aborted before start." };
   }
 
-  // P0: Derive planId from parentRunId (same conductor run shares one plan)
-  const planId = `plan_${parentRunId}`;
-
   try {
     // Build child prompt with full context
         // Build upstream artifact references
@@ -479,15 +478,6 @@ async function runChildTask(
         }
       }
     }
-    for (const [, artId] of outputBindings) {
-      if (!upstreamArtifacts.some((a) => a.id === artId)) {
-        const art = getArtifact(artId);
-        if (art) {
-          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
-        }
-      }
-    }
-
     // Build recent conversation snippet
     const recentConversation: Array<{ from: string; content: string }> = [];
     const userText = extractTextFromMessage(triggerMessage);
