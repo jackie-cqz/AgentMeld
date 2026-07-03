@@ -7,6 +7,15 @@ import { newConversationId, newWorkspaceId } from "@/shared/ids";
 
 let bootstrapped = false;
 
+const LEGACY_BUILTIN_TOOL_PRESETS: Record<string, string[]> = {
+  ag_mock_conductor: ["plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts"],
+  ag_pm: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
+  ag_designer: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
+  ag_mock_builder: ["fs_read", "fs_write", "bash", "write_artifact", "read_artifact", "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"],
+  ag_reviewer: ["read_artifact", "read_attachment", "fs_list", "fs_read", "bash"],
+  ag_custom_assistant: ["write_artifact", "read_artifact"]
+};
+
 export function ensureDatabase() {
   if (bootstrapped) return;
   const db = getDatabase();
@@ -635,6 +644,7 @@ function seedBuiltinAgents() {
   }
 
   migrateLegacyBuiltinPrompts(now);
+  migrateLegacyBuiltinToolPresets(now);
   upgradeBuiltinConductorPrompt(now);
 
   db.prepare(`
@@ -646,6 +656,47 @@ function seedBuiltinAgents() {
       AND is_builtin = 1
       AND name != 'Conductor'
   `).run(now);
+}
+
+function migrateLegacyBuiltinToolPresets(now: number) {
+  const db = getDatabase();
+  const update = db.prepare(`
+    UPDATE agents
+    SET tool_names = ?, updated_at = ?
+    WHERE id = ?
+      AND is_builtin = 1
+      AND tool_names = ?
+  `);
+
+  for (const agent of BUILTIN_AGENTS) {
+    const legacyTools = LEGACY_BUILTIN_TOOL_PRESETS[agent.id];
+    if (!legacyTools) continue;
+    if (sameStringArray(legacyTools, agent.toolNames)) continue;
+
+    const row = db.prepare("SELECT tool_names FROM agents WHERE id = ? AND is_builtin = 1")
+      .get(agent.id) as { tool_names: string } | undefined;
+    if (!row) continue;
+
+    const currentTools = parseToolNames(row.tool_names);
+    if (!sameStringArray(currentTools, legacyTools)) continue;
+
+    update.run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
+  }
+}
+
+function parseToolNames(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((value) => typeof value === "string")
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function sameStringArray(a: string[], b: string[]) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 function migrateLegacyBuiltinPrompts(now: number) {
@@ -687,7 +738,7 @@ function migrateLegacyBuiltinPrompts(now: number) {
 }
 
 function hardenLegacyArtifactPromptExamples(prompt: string) {
-  return prompt
+  const hardened = prompt
     .replaceAll(
       "你的核心产出是 PRD（产品需求文档），用 write_artifact(type='document', content={format:'markdown', content:'...'}) 输出。",
       "你的核心产出是 PRD（产品需求文档），用 write_artifact 输出。\n\nwrite_artifact 必须使用严格 JSON 参数：\n{\"type\":\"document\",\"title\":\"...\",\"content\":\"# 标题\\\\n\\\\n正文...\"}\ndocument 的 content 直接放 markdown 字符串，不要写 content: format，也不要嵌套第二个 content 字段。Markdown 换行必须写成 \\\\n。"
@@ -719,6 +770,63 @@ function hardenLegacyArtifactPromptExamples(prompt: string) {
     .replaceAll(
       "完成 web_app 产物后必须调用 deploy_artifact；完成本地项目构建后优先调用 deploy_workspace。",
       "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。"
+    );
+
+  return upgradeFrontendPatchPolicy(hardenFrontendWorkspaceUpdatePolicy(hardened));
+}
+
+function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
+  if (!prompt.includes("你是前端工程师")) {
+    return prompt;
+  }
+
+  const safeUpdatePolicy =
+    "- 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。\n" +
+    "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。";
+  const bashVerificationPolicy =
+    "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。\n" +
+    "- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。";
+
+  const anchor =
+    "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。";
+
+  const insertAfterAnchor = (current: string, text: string) => {
+    if (current.includes(anchor)) {
+      return current.replace(anchor, `${anchor}\n${text}`);
+    }
+    return current.replace("工作方式：", `工作方式：\n${text}`);
+  };
+
+  let hardened = prompt;
+  if (!hardened.includes("精确覆盖目标文件")) {
+    hardened = insertAfterAnchor(hardened, safeUpdatePolicy);
+  }
+  if (!hardened.includes("bash 只用于")) {
+    hardened = insertAfterAnchor(hardened, bashVerificationPolicy);
+  }
+
+  return hardened;
+}
+
+function upgradeFrontendPatchPolicy(prompt: string) {
+  if (!prompt.includes("你是前端工程师")) return prompt;
+
+  return prompt
+    .replaceAll(
+      "fs_list / fs_read / fs_write / bash",
+      "fs_list / fs_read / fs_write / fs_patch / bash"
+    )
+    .replaceAll(
+      "如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。",
+      "如果旧文件不再使用，默认保留；局部修改优先使用 fs_patch，新建文件或确实需要完整替换时使用 fs_write。"
+    )
+    .replaceAll(
+      "源码修改必须使用 fs_write；不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。",
+      "已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。"
+    )
+    .replaceAll(
+      "源码修改必须使用 fs_patch 或 fs_write；不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。",
+      "已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。"
     );
 }
 

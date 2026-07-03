@@ -3,7 +3,7 @@ import { z } from "zod";
 import { currentPlatform, type Platform } from "@/server/platform";
 import { registerPendingBash } from "@/server/pending-bash";
 import { recordCommandEvidence } from "@/server/dispatch-tool-evidence";
-import { findBannedPattern, getBannedPatterns } from "@/server/security";
+import { findBannedPattern } from "@/server/security";
 import {
   assertPathWithinWorkspace,
   BASH_OUTPUT_CHARS,
@@ -25,17 +25,70 @@ const APPROVAL_PATTERNS: RegExp[] = [
   /\bgit\s+reset\b/,
   /\bgit\s+clean\b/,
   /\bgit\s+(checkout|restore)\b/,
-  /\brm\s+-rf\b/,
-  /\bfind\s+.*-delete\b/,
   /\bchmod\b/,
   /\bchown\b/,
   /\bdocker\b/,
-  /\bRemove-Item\b.*-Recurse/i,
-  /\bRemove-Item\b.*-Force/i
+];
+
+const SOURCE_MUTATION_PATTERNS: RegExp[] = [
+  /\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item)\b/i,
+  /\b(del|erase|copy|move|ren|rename)\b/i,
+  /\bsed\b[^|;]*(?:-i|--in-place)\b/i,
+  /\bperl\b[^|;]*-(?:p?i|i)/i,
+  /\bpython(?:3)?\b[^|;]*\b(open|write_text|shutil|Path\()/i,
+  /(^|[^2])>{1,2}(?!&1)/
+];
+
+const VERIFICATION_PATTERNS: RegExp[] = [
+  /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|lint|typecheck|check)\b/i,
+  /\bnpx\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i
 ];
 
 function needsApproval(command: string): boolean {
   return APPROVAL_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+function findSourceMutationPattern(command: string): RegExp | null {
+  for (const pattern of SOURCE_MUTATION_PATTERNS) {
+    if (pattern.test(command)) return pattern;
+  }
+  return null;
+}
+
+function stripOutputFilter(segment: string): string {
+  return segment
+    .split("|")[0]
+    .replace(/\s+2>&1\b/g, "")
+    .replace(/\s+1>\s*\$null\b/gi, "")
+    .trim();
+}
+
+function isDirectoryChange(segment: string): boolean {
+  return /^(?:cd|Set-Location|Push-Location)\b/i.test(segment.trim());
+}
+
+function isVerificationSegment(segment: string): boolean {
+  const command = stripOutputFilter(segment);
+  return VERIFICATION_PATTERNS.some((pattern) => pattern.test(command));
+}
+
+function isVerificationOnlyCommand(command: string): boolean {
+  const segments = command
+    .split(/\s*(?:;|&&|\|\|)\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length === 0) return false;
+
+  let sawVerification = false;
+  for (const segment of segments) {
+    if (isDirectoryChange(segment)) continue;
+    if (!isVerificationSegment(segment)) return false;
+    sawVerification = true;
+  }
+  return sawVerification;
 }
 
 function getShell(platform: Platform): { cmd: string; args: string[] } {
@@ -61,15 +114,15 @@ function getShell(platform: Platform): { cmd: string; args: string[] } {
 
 const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
   posix:
-    "Run a shell command inside workspace. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
-    "Use POSIX syntax: ls, grep, cat, git, npm. " +
+    "Run a verification shell command inside workspace. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
+    "Use bash only for build/test/lint/typecheck verification. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output: stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
-    "Blocked: rm -rf /, sudo, fork bombs, curl | sh.",
+    "Blocked: source mutation, recursive deletion, sudo, fork bombs, curl | sh.",
   windows:
-    "Run a PowerShell 5.1 command inside workspace. " +
-    "Use PowerShell syntax: Get-ChildItem, Select-String, Get-Content, git, npm. " +
+    "Run a verification PowerShell 5.1 command inside workspace. " +
+    "Use PowerShell only for build/test/lint/typecheck verification. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output is UTF-8, stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
-    "Blocked: Remove-Item -Recurse -Force, format, shutdown, iex(iwr ...), reg delete."
+    "Blocked: source mutation, Remove-Item/rmdir deletion, format, shutdown, iex(iwr ...), reg delete."
 };
 
 export const bashTool: ToolDef = {
@@ -81,7 +134,7 @@ export const bashTool: ToolDef = {
     properties: {
       command: {
         type: "string",
-        description: `The shell command to execute inside the workspace. ${
+        description: `The build/test/lint/typecheck verification command to execute inside the workspace. ${
           currentPlatform() === "windows"
             ? "Uses PowerShell 5.1 syntax."
             : "Uses POSIX shell syntax."
@@ -103,6 +156,28 @@ export const bashTool: ToolDef = {
     if (banned) {
       if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return { ok: false, error: `Command blocked by security policy (pattern: ${banned.source}).` };
+    }
+
+    const mutationPattern = findSourceMutationPattern(command);
+    if (mutationPattern) {
+      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
+      return {
+        ok: false,
+        error:
+          "Command blocked by bash verification-only policy. " +
+          "Use fs_patch for existing-file edits, fs_write for new/full files, and fs_list/fs_read for inspection " +
+          `(pattern: ${mutationPattern.source}).`
+      };
+    }
+
+    if (!isVerificationOnlyCommand(command)) {
+      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
+      return {
+        ok: false,
+        error:
+          "Command blocked by bash verification-only policy. " +
+          "bash is only for build/test/lint/typecheck commands; use fs_list/fs_read for inspection, fs_patch for existing-file edits, and fs_write for new/full files."
+      };
     }
 
     // 2. Verify cwd is within workspace

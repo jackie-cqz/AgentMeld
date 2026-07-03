@@ -9,7 +9,7 @@ import { getSettings, resolveApiKey } from "@/server/settings-service";
 import { getArtifact } from "@/server/repositories";
 import { recordTaskArtifact } from "@/server/dispatch-task-results";
 
-const MAX_TOOL_ROUNDS = 8;
+export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 16;
 
 const PROVIDER_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
@@ -83,7 +83,8 @@ export const customAgentAdapter: AgentPlatformAdapter = {
     let deployToolSucceededInRun = false;
 
     let currentMessages = [...messages];
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    let exhaustedToolRounds = false;
+    for (let round = 0; round < CUSTOM_AGENT_MAX_TOOL_ROUNDS; round++) {
       if (signal.aborted) break;
 
       let stream: Awaited<ReturnType<typeof client.chat.completions.create>>;
@@ -370,6 +371,33 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
       currentMessages = [...currentMessages, assistantMsg, ...toolMsgs];
       partIndex++;
+      if (round === CUSTOM_AGENT_MAX_TOOL_ROUNDS - 1) {
+        exhaustedToolRounds = true;
+      }
+    }
+
+    if (exhaustedToolRounds && !signal.aborted) {
+      const message =
+        `⚠️ 工具调用轮次已达到上限（${CUSTOM_AGENT_MAX_TOOL_ROUNDS} 轮）。` +
+        "本次运行已停止，避免无限循环。请让 Agent 基于当前错误继续修复，或缩小任务范围后重试。";
+      yield {
+        type: "part.start",
+        conversationId,
+        timestamp: Date.now(),
+        messageId: "",
+        partIndex,
+        part: { type: "text", content: "" }
+      };
+      yield {
+        type: "part.delta",
+        conversationId,
+        timestamp: Date.now(),
+        messageId: "",
+        partIndex,
+        delta: { type: "text.append", text: message }
+      };
+      yield { type: "part.end", conversationId, timestamp: Date.now(), messageId: "", partIndex };
+      throw new Error(`Tool round limit reached (${CUSTOM_AGENT_MAX_TOOL_ROUNDS}).`);
     }
 
     // Yield final usage

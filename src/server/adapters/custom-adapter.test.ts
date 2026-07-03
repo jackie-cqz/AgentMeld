@@ -8,6 +8,7 @@ import { eventBus } from "@/server/event-bus";
 import { getAdapter, clearRegistryForTests } from "@/server/adapters/registry";
 import {
   buildChatCompletionTools,
+  CUSTOM_AGENT_MAX_TOOL_ROUNDS,
   findDeployableWorkspacePath,
   isDeployStatusRecord,
   mergeToolArgumentChunk,
@@ -113,6 +114,10 @@ afterEach(() => {
 });
 
 describe("custom-agent-adapter", () => {
+  it("allows enough tool rounds for coding workflows", () => {
+    expect(CUSTOM_AGENT_MAX_TOOL_ROUNDS).toBeGreaterThanOrEqual(16);
+  });
+
   it("parses standard tool arguments", () => {
     const parsed = parseToolCallArguments(
       JSON.stringify({ type: "document", title: "PRD", content: { content: "# PRD" } })

@@ -472,7 +472,14 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
 
   if (toolNames.includes("fs_write")) {
     lines.push("\n### workspace 文件与命令工具");
-    lines.push(`fs_write: 写文件到 workspace (${workspacePath})，上限 100KB。用于源码文件，不用于产物。`);
+    lines.push(`fs_write: 新建或完整覆盖 workspace (${workspacePath}) 内的文本文件，上限 100KB。用于源码文件，不用于产物。`);
+  }
+
+  if (toolNames.includes("fs_patch")) {
+    if (!toolNames.includes("fs_write")) {
+      lines.push("\n### workspace 文件与命令工具");
+    }
+    lines.push("fs_patch: 精确修改已有文本文件。先用 fs_read 读取最新内容，再提交唯一的 oldText 和 newText；多处匹配默认拒绝，只有明确需要批量替换时才设置 replaceAll=true。");
   }
 
   if (toolNames.includes("fs_read")) {
@@ -480,7 +487,8 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
   }
 
   if (toolNames.includes("bash")) {
-    lines.push("bash: 在 workspace 内执行命令，用于 npm/pnpm install、build、test。输出截断到 10,000 字符，30s 超时。检查 exitCode。");
+    lines.push("bash: 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令。输出截断到 10,000 字符，30s 超时。检查 exitCode。");
+    lines.push("禁止用 bash / PowerShell / sed / 重定向读取、写入、替换、移动、复制或删除源码文件；目录查看用 fs_list，文件读取用 fs_read，局部修改用 fs_patch，新建或完整覆盖用 fs_write。");
     lines.push("临时启动服务测试时，必须在同一个 bash 命令里清理后台进程。");
   }
 

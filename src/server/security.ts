@@ -3,6 +3,9 @@ import { currentPlatform } from "@/server/platform";
 
 const POSIX_BANNED: RegExp[] = [
   /\brm\s+-rf\s+\//,
+  /\brm\s+-[^\s]*r[^\s]*f\b/i,
+  /\brm\s+-[^\s]*f[^\s]*r\b/i,
+  /\bfind\b[^|;]*-delete\b/i,
   /\bsudo\b/,
   /\bchmod\s+\d{3,4}\s+\//,
   /:\(\)\{\s*:\|:&\s*\}/,
@@ -15,6 +18,9 @@ const POSIX_BANNED: RegExp[] = [
 const WINDOWS_BANNED: RegExp[] = [
   /\b(del|erase)\s+\/[fsq\s/]*[a-z]:\\?/i,
   /\brd\s+\/[sq\s/]*[a-z]:\\?/i,
+  /\bRemove-Item\b/i,
+  /\bri\b/i,
+  /\brmdir\b[^|;]*(?:\/s|-Recurse)/i,
   /\bRemove-Item\b[^|;]*-Recurse[^|;]*-Force/i,
   /\bRemove-Item\b[^|;]*-Force[^|;]*-Recurse/i,
   /\bri\b[^|;]*-Recurse[^|;]*-Force/i,

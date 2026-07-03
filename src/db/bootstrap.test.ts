@@ -71,6 +71,60 @@ describe("database bootstrap", () => {
     expect(counts.workspaces).toBe(counts.conversations);
   });
 
+  it("seeds builtin agent tool presets from the current configured defaults", () => {
+    ensureDatabase();
+
+    const rows = getDatabase()
+      .prepare("SELECT id, tool_names FROM agents WHERE is_builtin = 1")
+      .all() as Array<{ id: string; tool_names: string }>;
+    const toolsById = new Map(rows.map((row) => [row.id, JSON.parse(row.tool_names) as string[]]));
+
+    expect(toolsById.get("ag_mock_conductor")).toEqual([
+      "plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts",
+      "read_attachment", "bash", "fs_list", "fs_read"
+    ]);
+    expect(toolsById.get("ag_pm")).toEqual([
+      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
+    ]);
+    expect(toolsById.get("ag_designer")).toEqual([
+      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
+    ]);
+    expect(toolsById.get("ag_mock_builder")).toEqual([
+      "fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact",
+      "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"
+    ]);
+    expect(toolsById.get("ag_reviewer")).toEqual([
+      "read_artifact", "read_attachment", "fs_list", "fs_read", "bash"
+    ]);
+    expect(toolsById.get("ag_custom_assistant")).toEqual(["write_artifact", "read_artifact"]);
+  });
+
+  it("migrates old builtin tool defaults without overwriting customized tools", () => {
+    ensureDatabase();
+
+    getDatabase()
+      .prepare("UPDATE agents SET tool_names = ? WHERE id = ?")
+      .run(JSON.stringify(["write_artifact", "read_artifact", "read_attachment", "ask_user"]), "ag_pm");
+    getDatabase()
+      .prepare("UPDATE agents SET tool_names = ? WHERE id = ?")
+      .run(JSON.stringify(["fs_read"]), "ag_designer");
+
+    resetBootstrapForTests();
+    ensureDatabase();
+
+    const pm = getDatabase()
+      .prepare("SELECT tool_names FROM agents WHERE id = ?")
+      .get("ag_pm") as { tool_names: string };
+    const designer = getDatabase()
+      .prepare("SELECT tool_names FROM agents WHERE id = ?")
+      .get("ag_designer") as { tool_names: string };
+
+    expect(JSON.parse(pm.tool_names)).toEqual([
+      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
+    ]);
+    expect(JSON.parse(designer.tool_names)).toEqual(["fs_read"]);
+  });
+
   it("migrates legacy branding in builtin model prompts without resetting other content", () => {
     ensureDatabase();
     const legacyProjectName = String.fromCharCode(65, 103, 101, 110, 116, 72, 117, 98);
@@ -176,8 +230,41 @@ describe("database bootstrap", () => {
     expect(row.system_prompt).toContain("无论 workspace_info mode 是 sandbox 还是 local");
     expect(row.system_prompt).toContain("必须在本轮真实调用 deploy_workspace 或 deploy_artifact");
     expect(row.system_prompt).toContain("如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace");
+    expect(row.system_prompt).toContain("精确覆盖目标文件");
+    expect(row.system_prompt).toContain("不要用 Remove-Item / rm -rf / rmdir / find -delete");
+    expect(row.system_prompt).toContain("已有源码文件的局部修改必须使用 fs_patch");
+    expect(row.system_prompt).toContain("只有新建文件或用户明确要求完整覆盖时才使用 fs_write");
+    expect(row.system_prompt).toContain("局部修改优先使用 fs_patch");
+    expect(row.system_prompt).toContain("bash 只用于");
     expect(row.system_prompt).toContain("不得声称“部署成功 / 已重新部署成功”");
     expect(row.system_prompt).not.toContain("当 workspace_info mode=local");
+  });
+
+  it("adds bash verification-only policy to already hardened frontend prompts", () => {
+    ensureDatabase();
+    const partiallyHardenedPrompt = [
+      "你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。",
+      "",
+      "工作方式：",
+      "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。",
+      "- 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。",
+      "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。"
+    ].join("\n");
+
+    getDatabase()
+      .prepare("UPDATE agents SET system_prompt = ? WHERE id = ?")
+      .run(partiallyHardenedPrompt, "ag_mock_builder");
+
+    resetBootstrapForTests();
+    ensureDatabase();
+
+    const row = getDatabase()
+      .prepare("SELECT system_prompt FROM agents WHERE id = ?")
+      .get("ag_mock_builder") as { system_prompt: string };
+
+    expect(row.system_prompt).toContain("精确覆盖目标文件");
+    expect(row.system_prompt).toContain("已有源码文件的局部修改必须使用 fs_patch");
+    expect(row.system_prompt).toContain("目录查看用 fs_list，文件读取用 fs_read");
   });
 
   it("supports inserting an agent run through the repository layer", () => {

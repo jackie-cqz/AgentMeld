@@ -11,7 +11,7 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
-import { getAllPendingBashCommands, rejectPendingBash } from "@/server/pending-bash";
+import { getAllPendingBashCommands } from "@/server/pending-bash";
 import {
   clearAllToolEvidenceForTests,
   getRunToolEvidence
@@ -76,12 +76,13 @@ function ctx(overrides?: Partial<ToolContext>): ToolContext {
 }
 
 describe("tool registry", () => {
-  it("has all 6 MVP tools registered", () => {
+  it("has all workspace tools registered", () => {
     const names = toolRegistry.listNames();
     expect(names).toContain("bash");
     expect(names).toContain("fs_list");
     expect(names).toContain("fs_read");
     expect(names).toContain("fs_write");
+    expect(names).toContain("fs_patch");
     expect(names).toContain("read_artifact");
     expect(names).toContain("write_artifact");
   });
@@ -209,6 +210,99 @@ describe("fs_write", () => {
   });
 });
 
+describe("fs_patch", () => {
+  it("replaces one exact snippet without rewriting unrelated content", async () => {
+    fs.writeFileSync(
+      path.join(workspacePath, "component.ts"),
+      "const color = \"blue\";\nconst untouched = true;\n"
+    );
+
+    const result = await toolRegistry.execute(
+      "fs_patch",
+      {
+        path: "component.ts",
+        oldText: "const color = \"blue\";",
+        newText: "const color = \"green\";"
+      },
+      ctx()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(path.join(workspacePath, "component.ts"), "utf-8"))
+      .toBe("const color = \"green\";\nconst untouched = true;\n");
+    if (result.ok) {
+      expect(result.value).toEqual(expect.objectContaining({
+        path: "component.ts",
+        replacements: 1,
+        applied: "auto"
+      }));
+    }
+    expect(getRunToolEvidence("run_test").fileWrites).toContainEqual({
+      path: "component.ts",
+      absolutePath: path.join(workspacePath, "component.ts"),
+      action: "modified"
+    });
+  });
+
+  it("rejects missing or ambiguous oldText", async () => {
+    fs.writeFileSync(path.join(workspacePath, "repeated.ts"), "item\nitem\n");
+
+    const missing = await toolRegistry.execute(
+      "fs_patch",
+      { path: "repeated.ts", oldText: "absent", newText: "value" },
+      ctx()
+    );
+    const ambiguous = await toolRegistry.execute(
+      "fs_patch",
+      { path: "repeated.ts", oldText: "item", newText: "value" },
+      ctx()
+    );
+
+    expect(missing.ok).toBe(false);
+    expect(ambiguous.ok).toBe(false);
+    if (!missing.ok) expect(missing.error).toContain("not found");
+    if (!ambiguous.ok) expect(ambiguous.error).toContain("matched 2 locations");
+    expect(fs.readFileSync(path.join(workspacePath, "repeated.ts"), "utf-8")).toBe("item\nitem\n");
+  });
+
+  it("supports intentional replaceAll", async () => {
+    fs.writeFileSync(path.join(workspacePath, "tokens.css"), "red red red");
+
+    const result = await toolRegistry.execute(
+      "fs_patch",
+      {
+        path: "tokens.css",
+        oldText: "red",
+        newText: "blue",
+        replaceAll: true
+      },
+      ctx()
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(path.join(workspacePath, "tokens.css"), "utf-8")).toBe("blue blue blue");
+    if (result.ok) {
+      expect(result.value).toEqual(expect.objectContaining({ replacements: 3 }));
+    }
+  });
+
+  it("rejects missing files and paths outside the workspace", async () => {
+    const missing = await toolRegistry.execute(
+      "fs_patch",
+      { path: "missing.ts", oldText: "a", newText: "b" },
+      ctx()
+    );
+    const outside = await toolRegistry.execute(
+      "fs_patch",
+      { path: "../../../outside.ts", oldText: "a", newText: "b" },
+      ctx()
+    );
+
+    expect(missing.ok).toBe(false);
+    expect(outside.ok).toBe(false);
+  });
+});
+
 describe("bash", () => {
   it("rejects banned commands", async () => {
     const result = await toolRegistry.execute("bash", {
@@ -222,16 +316,31 @@ describe("bash", () => {
     }
   });
 
-  it("executes a simple echo command", async () => {
-    const cmd = process.platform === "win32"
-      ? "Write-Output hello"
-      : "echo hello";
+  it("rejects destructive workspace cleanup commands before approval", async () => {
+    const command = process.platform === "win32"
+      ? 'Remove-Item -Force "todo-app/src/App.css" -ErrorAction SilentlyContinue; if (Test-Path "todolist") { Remove-Item -Recurse -Force "todolist" }; if (Test-Path "todo-app/src/assets") { Remove-Item -Recurse -Force "todo-app/src/assets" }; Write-Host "Cleaned up."'
+      : "rm -rf todo-app/src/assets";
+
+    const result = await toolRegistry.execute("bash", { command }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("blocked");
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  });
+
+  it("executes verification commands", async () => {
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('build-ok')\"" } })
+    );
+
+    const cmd = "npm run build";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
     expect(result.ok).toBe(true);
     if (result.ok) {
       const value = result.value as { exitCode: number; output: string };
       expect(value.exitCode).toBe(0);
-      expect(value.output).toContain("hello");
+      expect(value.output).toContain("build-ok");
     }
     expect(getRunToolEvidence("run_test").commands).toEqual([
       expect.objectContaining({
@@ -243,29 +352,40 @@ describe("bash", () => {
     ]);
   }, 10000);
 
-  it("executes in the workspace directory", async () => {
-    const cmd = process.platform === "win32"
-      ? "Get-Location"
-      : "pwd";
+  it("rejects shell inspection commands because fs_list/fs_read must be used", async () => {
+    const cmd = process.platform === "win32" ? "Get-ChildItem" : "ls";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
-    expect(result.ok).toBe(true);
-  }, 10000);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("verification-only");
+  });
 
   it("rejects empty command", async () => {
     const result = await toolRegistry.execute("bash", { command: "" }, ctx());
     expect(result.ok).toBe(false);
   });
 
-  it("requires approval for dependency installation commands", async () => {
-    const execution = toolRegistry.execute("bash", { command: "pnpm install" }, ctx());
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    const pending = getAllPendingBashCommands();
-    expect(pending).toHaveLength(1);
-    rejectPendingBash(pending[0].id);
-
-    const result = await execution;
+  it("rejects dependency installation commands before approval", async () => {
+    const result = await toolRegistry.execute("bash", { command: "pnpm install" }, ctx());
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("rejected");
+    if (!result.ok) expect(result.error).toContain("verification-only");
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  });
+
+  it("rejects source mutation commands and redirects", async () => {
+    const writeCommand = process.platform === "win32"
+      ? "Set-Content src/App.tsx 'x'"
+      : "sed -i 's/a/b/' src/App.tsx";
+    const redirectCommand = process.platform === "win32"
+      ? "npm run build > build.log"
+      : "npm run build > build.log";
+
+    const writeResult = await toolRegistry.execute("bash", { command: writeCommand }, ctx());
+    const redirectResult = await toolRegistry.execute("bash", { command: redirectCommand }, ctx());
+
+    expect(writeResult.ok).toBe(false);
+    expect(redirectResult.ok).toBe(false);
+    if (!writeResult.ok) expect(writeResult.error).toContain("fs_write");
+    if (!redirectResult.ok) expect(redirectResult.error).toContain("fs_write");
   });
 });
 

@@ -6,6 +6,7 @@ describe("getToolDisplayName", () => {
     expect(getToolDisplayName("ask_user")).toBe("询问用户");
     expect(getToolDisplayName("plan_tasks")).toBe("拆分任务");
     expect(getToolDisplayName("deploy_workspace")).toBe("部署工作区");
+    expect(getToolDisplayName("fs_patch")).toBe("文件修改");
   });
 
   it("keeps unknown external tool names intact", () => {

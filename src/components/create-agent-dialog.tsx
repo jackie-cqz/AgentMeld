@@ -21,7 +21,7 @@ import {
 
 const TOOL_GROUPS = [
   { label: "只读", tone: "safe", tools: ["fs_list", "fs_read", "read_artifact", "read_attachment"] as const },
-  { label: "文件写入", tone: "danger", tools: ["fs_write"] as const },
+  { label: "文件写入", tone: "danger", tools: ["fs_write", "fs_patch"] as const },
   { label: "命令执行", tone: "danger", tools: ["bash"] as const },
   { label: "Artifact", tone: "safe", tools: ["write_artifact"] as const },
   { label: "部署", tone: "danger", tools: ["deploy_artifact", "deploy_workspace"] as const },
@@ -31,7 +31,8 @@ const TOOL_GROUPS = [
 const TOOL_META: Record<string, { label: string; description: string }> = {
   fs_list: { label: "列出文件", description: "查看工作区目录结构" },
   fs_read: { label: "读取文件", description: "读取工作区文本内容" },
-  fs_write: { label: "写入文件", description: "可修改工作区文件，需要谨慎授权" },
+  fs_write: { label: "写入文件", description: "创建或完整覆盖工作区文件，需要谨慎授权" },
+  fs_patch: { label: "文件修改", description: "精确替换已有文件中的局部内容，需要谨慎授权" },
   bash: { label: "执行命令", description: "可运行构建与测试命令，属于高风险权限" },
   read_artifact: { label: "读取产物", description: "读取上游 Agent 产物" },
   write_artifact: { label: "创建产物", description: "生成可检查的文档或 Web App" },
@@ -145,15 +146,15 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
     if (desc.includes("前端") || desc.includes("代码") || desc.includes("react") || desc.includes("vue")) {
       draft.name = draft.name || "前端开发";
-      draft.tools = ["fs_read", "fs_write", "bash", "write_artifact", "read_artifact"];
-      draft.prompt = `You are a frontend developer. Write clean, working code. Use fs_write for source files, bash for build/test, write_artifact for deliverable demos. ${quickDesc}`;
+      draft.tools = ["fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact"];
+      draft.prompt = `You are a frontend developer. Write clean, working code. Use fs_patch for focused source edits, fs_write for new or complete files, bash for build/test, and write_artifact for deliverable demos. ${quickDesc}`;
     } else if (desc.includes("审查") || desc.includes("review") || desc.includes("代码审查")) {
       draft.name = draft.name || "代码审查";
       draft.tools = ["fs_list", "fs_read", "read_artifact"];
       draft.prompt = `You are a code reviewer. Read code, check for issues, and provide clear feedback. Use fs_read and read_artifact to access files. ${quickDesc}`;
     } else if (desc.includes("部署") || desc.includes("deploy") || desc.includes("发布")) {
       draft.name = draft.name || "部署助手";
-      draft.tools = ["bash", "fs_read", "fs_write", "write_artifact", "deploy_artifact", "deploy_workspace"];
+      draft.tools = ["bash", "fs_read", "fs_write", "fs_patch", "write_artifact", "deploy_artifact", "deploy_workspace"];
       draft.prompt = `You are a deployment assistant. Build, test, and deploy projects. ${quickDesc}`;
     } else if (desc.includes("文档") || desc.includes("写作") || desc.includes("doc")) {
       draft.name = draft.name || "文档写作";

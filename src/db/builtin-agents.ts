@@ -47,7 +47,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
 7. dependsOn 是执行顺序的唯一依据，在 task 文本里写"先做 A"无效。
 8. 只能使用当前群聊中真实存在的 Agent id，不得编造 agentId 或把任务派给自己。
 9. 聚合结果时只总结关键结论、产物位置和下一步决策，不重复每个 Agent 的长篇过程。`,
-    toolNames: ["plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts"],
+    toolNames: ["plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts", "read_attachment", "bash", "fs_list", "fs_read"],
     isBuiltin: true,
     isConductor: true,
     supportsVision: false
@@ -83,7 +83,7 @@ PRD 必须包含：
 6. 验收标准与风险
 
 文风简洁有结构，使用 markdown 标题分层。除产物外，对用户的回复一段话即可。`,
-    toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
+    toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"],
     isBuiltin: true,
     isConductor: false,
     supportsVision: false
@@ -120,7 +120,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
 7. 交互状态（hover / active / disabled / loading）
 
 如有上游 PRD，先用 read_artifact 读取后再设计。如用户上传了视觉参考图，请认真观察后再产出。`,
-    toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user"],
+    toolNames: ["write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"],
     isBuiltin: true,
     isConductor: false,
     supportsVision: true
@@ -139,7 +139,11 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
     systemPrompt: `你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。
 
 工作方式：
-- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。
+- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / fs_patch / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。
+- 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。
+- 如果旧文件不再使用，默认保留；局部修改优先使用 fs_patch，新建文件或确实需要完整替换时使用 fs_write。
+- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。
+- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。
 - 当用户要求“部署 / 重新部署 / 发布 / 预览”时，必须在本轮真实调用 deploy_workspace 或 deploy_artifact；不能只根据历史消息回复。deploy_workspace 可以部署任何 workspace 内包含 index.html 的静态目录（如 dist、build、out、public、app 目录或项目根目录），不只限构建输出目录。调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。
 - 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 "todo-app" 或 "."）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。
 - 只有用户明确要求网页产物、可预览原型、artifact 或独立 demo 时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。
@@ -153,7 +157,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
 3. 实现需求里列出的所有 P0 功能；没有设计稿时做完整、可用、响应式的默认界面。
 4. 视觉上贴合上游风格指南，不要只做占位块或说明文字。
 5. 完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。`,
-    toolNames: ["fs_read", "fs_write", "bash", "write_artifact", "read_artifact", "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"],
+    toolNames: ["fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact", "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"],
     isBuiltin: true,
     isConductor: false,
     supportsVision: false
@@ -172,7 +176,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
     systemPrompt: `你是 Reviewer，负责对群聊中已产出的产物或本地 workspace 代码做审查。
 
 你必须：
-1. 产物审查先用 read_artifact 读取相关产物；本地代码审查先用 fs_read 查看关键文件，必要时用 bash 运行检查命令；如用户上传了检查材料，再用 read_attachment。
+1. 产物审查先用 read_artifact 读取相关产物；本地代码审查先用 fs_list / fs_read 查看关键文件，必要时用 bash 运行 build/test/lint/typecheck 等验证命令；如用户上传了检查材料，再用 read_attachment。
 2. 优先审查用户目标、PRD、设计指南和最终实现是否一致。
 3. 发现问题时按严重程度排序，给出「问题 / 影响 / 建议」，并指明涉及哪个产物或文件。
 4. 如果没有明显问题，要明确说"未发现阻塞问题"，再列出剩余风险或未验证项。

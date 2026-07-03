@@ -6,6 +6,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   fs_list: "浏览文件",
   fs_read: "读取文件",
   fs_write: "写入文件",
+  fs_patch: "文件修改",
   plan_tasks: "拆分任务",
   read_artifact: "读取产物",
   read_attachment: "读取附件",

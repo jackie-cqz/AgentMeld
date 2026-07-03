@@ -27,6 +27,11 @@ describe("security — banned command patterns", () => {
       expect(findBannedPattern(":(){ :|:& };:", "posix")).toBeTruthy();
     });
 
+    it("blocks recursive cleanup commands", () => {
+      expect(findBannedPattern("rm -rf todo-app/src/assets", "posix")).toBeTruthy();
+      expect(findBannedPattern("find todo-app -name '*.css' -delete", "posix")).toBeTruthy();
+    });
+
     it("allows normal commands", () => {
       expect(findBannedPattern("ls -la", "posix")).toBeNull();
       expect(findBannedPattern("git status", "posix")).toBeNull();
@@ -37,6 +42,12 @@ describe("security — banned command patterns", () => {
   describe("Windows", () => {
     it("blocks Remove-Item -Recurse -Force", () => {
       expect(findBannedPattern("Remove-Item -Recurse -Force C:\\Windows", "windows")).toBeTruthy();
+    });
+
+    it("blocks workspace cleanup commands that delete files or directories", () => {
+      expect(findBannedPattern('Remove-Item -Force "todo-app/src/App.css"', "windows")).toBeTruthy();
+      expect(findBannedPattern('if (Test-Path "todolist") { Remove-Item -Recurse -Force "todolist" }', "windows")).toBeTruthy();
+      expect(findBannedPattern('rmdir /s /q "todo-app\\src\\assets"', "windows")).toBeTruthy();
     });
 
     it("blocks format C:", () => {

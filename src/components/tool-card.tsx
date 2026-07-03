@@ -107,7 +107,7 @@ function ToolCallItem({
 }) {
   const [expanded, setExpanded] = useState(false);
   const isBash = toolUse.toolName === "bash";
-  const isFileWrite = toolUse.toolName === "fs_write";
+  const isFileWrite = toolUse.toolName === "fs_write" || toolUse.toolName === "fs_patch";
   const isArtifactWrite = toolUse.toolName === "write_artifact";
   const isComplete = !!toolResult || forceDone;
   const isError = !forceDone && toolResult?.isError;
@@ -165,7 +165,9 @@ function ToolCallItem({
               <div className="mb-1 text-xs text-stone-500">参数</div>
               <pre className="max-h-32 overflow-x-auto whitespace-pre-wrap rounded bg-stone-100 p-2 font-mono text-xs text-stone-700 dark:bg-slate-900 dark:text-slate-200">
                 {isFileWrite
-                  ? `path: ${args.path ?? "?"} (${String(args.content ?? "").length} chars)`
+                  ? toolUse.toolName === "fs_patch"
+                    ? `path: ${args.path ?? "?"}\noldText: ${String(args.oldText ?? "").length} chars\nnewText: ${String(args.newText ?? "").length} chars`
+                    : `path: ${args.path ?? "?"} (${String(args.content ?? "").length} chars)`
                   : isArtifactWrite
                     ? formatArtifactArgs(args)
                     : JSON.stringify(args, null, 2).slice(0, 300)}
@@ -252,7 +254,7 @@ function formatArtifactArgs(args: Record<string, unknown>): string {
 
 function ToolIcon({ toolName }: { toolName: string }) {
   if (toolName === "bash") return <Terminal className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
-  if (toolName === "fs_write" || toolName === "write_artifact") return <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />;
+  if (toolName === "fs_write" || toolName === "fs_patch" || toolName === "write_artifact") return <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />;
   if (toolName === "ask_user") return <HelpCircle className="h-3.5 w-3.5 shrink-0 text-violet-500" />;
   if (toolName.startsWith("deploy_")) return <Rocket className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
   return null;
@@ -283,11 +285,16 @@ function StructuredToolResult({
     );
   }
 
-  if (toolName === "fs_write" && isRecord(value)) {
+  if ((toolName === "fs_write" || toolName === "fs_patch") && isRecord(value)) {
     return (
       <div className="grid grid-cols-2 gap-2 rounded bg-stone-100 p-2 text-xs text-stone-700">
         <ResultField label="文件" value={String(value.path ?? "?")} />
-        <ResultField label="写入" value={`${String(value.bytes ?? 0)} bytes`} />
+        <ResultField
+          label={toolName === "fs_patch" ? "替换" : "写入"}
+          value={toolName === "fs_patch"
+            ? `${String(value.replacements ?? 0)} 处`
+            : `${String(value.bytes ?? 0)} bytes`}
+        />
         <ResultField label="模式" value={value.applied === "auto" ? "自动应用" : "审批后应用"} />
         <ResultField label="目录" value={String(value.cwd ?? "")} />
       </div>

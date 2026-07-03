@@ -30,7 +30,7 @@ function getStr(v: unknown, key: string): string {
 
 // ── fs_read ────────────────────────────────────────────────────────────────
 
-export const extractFileRead: EvidenceExtractor = (ctx, args, result) => {
+export const extractFileRead: EvidenceExtractor = (ctx, args) => {
   const path = getStr(args, "path") || getStr(args, "file_path");
   if (!path) return null;
   return {
@@ -44,7 +44,7 @@ export const extractFileRead: EvidenceExtractor = (ctx, args, result) => {
 
 // ── fs_write ───────────────────────────────────────────────────────────────
 
-export const extractFileWrite: EvidenceExtractor = (ctx, args, result) => {
+export const extractFileWrite: EvidenceExtractor = (ctx, args) => {
   const path = getStr(args, "path") || getStr(args, "file_path");
   const action = getStr(args, "action") || "modified";
   if (!path) return null;
@@ -150,7 +150,7 @@ export const extractUserAnswer: EvidenceExtractor = (ctx, args) => {
 
 // ── report_task_result ────────────────────────────────────────────────────
 
-export const extractTaskReport: EvidenceExtractor = (ctx, args, _result) => {
+export const extractTaskReport: EvidenceExtractor = (ctx, args) => {
   const status = getStr(args, "status");
   const summary = getStr(args, "summary").slice(0, 500);
   return {
@@ -167,6 +167,7 @@ export const extractTaskReport: EvidenceExtractor = (ctx, args, _result) => {
 export const EXTRACTOR_MAP: Record<string, EvidenceExtractor> = {
   fs_read: extractFileRead,
   fs_write: extractFileWrite,
+  fs_patch: extractFileWrite,
   bash: extractCommand,
   read_artifact: extractArtifactRead,
   write_artifact: extractArtifactCreated,
