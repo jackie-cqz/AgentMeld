@@ -3,7 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import { getDatabase } from "@/db/client";
-import { newMessageId } from "@/shared/ids";
+import { validateFactValue } from "@/server/context-facts/fact-value-validator";
+import { generateCanonicalKey } from "@/server/context-facts/fact-key-generator";
 import {
   BUILTIN_FACT_DEFINITIONS,
   findBuiltinDefinition,
@@ -149,15 +150,21 @@ export function resolveFacts(
 
       // No canonical key → requires new definition proposal
       if (!canonicalKey || !definitionId) {
+        // P2: Generate a deterministic canonical key for the new definition
+        const generatedKey = generateCanonicalKey(
+          candidate.entity ?? "unknown",
+          candidate.property ?? "value",
+          candidate.proposedKey?.split(".").slice(0, -1).join(".")
+        );
         resolutions.push({
           status: "pending",
           definitionId: null,
-          canonicalKey: candidate.proposedKey ?? null,
+          canonicalKey: generatedKey,
           previousFact: null,
           nextFact: null,
           confidence: candidate.confidence,
           resolutionMethod: "new_definition",
-          reason: `No matching definition found for "${candidate.proposedKey ?? candidate.entity + "." + candidate.property}". Requires new definition proposal.`,
+          reason: `No matching definition found — proposed canonical key "${generatedKey}". Requires new definition approval.`,
         });
         continue;
       }
@@ -211,19 +218,38 @@ export function resolveFacts(
         continue;
       }
 
+      // P2: Validate value against the definition's valueType
+      const validation = validateFactValue(candidate.value, valueType);
+      if (!validation.valid) {
+        resolutions.push({
+          status: "rejected",
+          definitionId,
+          canonicalKey,
+          previousFact: currentActive ?? null,
+          nextFact: null,
+          confidence: candidate.confidence,
+          resolutionMethod: method,
+          reason: `Value validation failed for "${canonicalKey}": ${validation.error}`,
+        });
+        continue;
+      }
+      // Use normalized value if available
+      const finalValue = validation.normalized ?? candidate.value;
+
       // Supersede old active fact
       if (currentActive) {
         supersedeFact.run(now, currentActive.id);
       }
 
-      // Insert new fact
+      // Insert new fact with validated/normalized value
+      const finalValueJson = JSON.stringify(finalValue);
       const factId = `fact_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}_${now}`;
       const trustLevel: EvidenceTrustLevel =
         sourceType === "evidence" ? "verified" :
         sourceType === "user_answer" ? "authoritative" : "reported";
 
       upsertFact.run(
-        factId, conversationId, definitionId, canonicalKey, valueJson, valueType,
+        factId, conversationId, definitionId, canonicalKey, finalValueJson, valueType,
         "active", trustLevel, candidate.confidence, method,
         sourceType, sourceId,
         currentActive?.id ?? null, now, now
@@ -246,7 +272,7 @@ export function resolveFacts(
           conversationId,
           definitionId,
           canonicalKey,
-          value: candidate.value,
+          value: finalValue,
           valueType,
           status: "active",
           trustLevel,
@@ -368,4 +394,138 @@ function buildResolutionSummary(resolutions: FactResolution[]): string {
   if (unchanged > 0) parts.push(`${unchanged} facts unchanged`);
   if (pending > 0) parts.push(`${pending} facts pending review`);
   return parts.join(", ") || "No facts changed";
+}
+
+// ── Definition Management ─────────────────────────────────────────────────
+
+export interface PendingDefinition {
+  id: string;
+  canonicalKey: string;
+  namespace: string;
+  entityType: string;
+  propertyName: string;
+  valueType: string;
+  description: string;
+  aliases: string[];
+  proposedValue: unknown;
+  proposedByAgentId: string | null;
+  createdAt: number;
+}
+
+/** List all pending definition proposals for a conversation */
+export function listPendingDefinitions(conversationId: string): PendingDefinition[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT * FROM conversation_fact_definitions
+       WHERE conversation_id = ? AND status = 'pending'
+       ORDER BY created_at ASC`
+    )
+    .all(conversationId) as Array<Record<string, unknown>>;
+
+  return rows.map((r) => ({
+    id: r.id as string,
+    canonicalKey: r.canonical_key as string,
+    namespace: r.namespace as string,
+    entityType: r.entity_type as string,
+    propertyName: r.property_name as string,
+    valueType: r.value_type as string,
+    description: r.description as string,
+    aliases: safeJsonParseArray(r.aliases_json as string),
+    proposedValue: safeJsonParseValue(r as unknown as { value_json?: string }),
+    proposedByAgentId: (r.proposed_by_agent_id as string) ?? null,
+    createdAt: r.created_at as number,
+  }));
+}
+
+/** Approve a pending definition: activate it and create the initial fact */
+export function approveDefinition(
+  conversationId: string,
+  definitionId: string,
+  value: unknown
+): { canonicalKey: string; factId: string } | { error: string } {
+  const db = getDatabase();
+  const now = Date.now();
+
+  // Get the pending definition
+  const def = db
+    .prepare(
+      "SELECT * FROM conversation_fact_definitions WHERE id = ? AND conversation_id = ? AND status = 'pending'"
+    )
+    .get(definitionId, conversationId) as Record<string, unknown> | undefined;
+
+  if (!def) {
+    return { error: "Definition not found or not pending." };
+  }
+
+  const canonicalKey = def.canonical_key as string;
+  const valueType = def.value_type as string;
+
+  // Validate the proposed value
+  const validation = validateFactValue(value, valueType as FactDefinition["valueType"]);
+  if (!validation.valid) {
+    return { error: `Value validation failed: ${validation.error}` };
+  }
+
+  const finalValue = validation.normalized ?? value;
+  const factId = `fact_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}_${now}`;
+
+  const run = db.transaction
+    ? db.transaction(() => applyApproval())
+    : applyApproval;
+
+  if (db.transaction) {
+    (run as () => void)();
+  } else {
+    applyApproval();
+  }
+
+  return { canonicalKey, factId };
+
+  function applyApproval() {
+    // Activate the definition
+    db.prepare(
+      "UPDATE conversation_fact_definitions SET status = 'active', updated_at = ? WHERE id = ?"
+    ).run(now, definitionId);
+
+    // Supersede any existing active fact with the same canonical key
+    db.prepare(
+      "UPDATE conversation_facts SET status = 'superseded', updated_at = ? WHERE conversation_id = ? AND canonical_key = ? AND status = 'active'"
+    ).run(now, conversationId, canonicalKey);
+
+    // Create the initial fact
+    db.prepare(`
+      INSERT INTO conversation_facts (
+        id, conversation_id, definition_id, canonical_key, value_json, value_type,
+        status, trust_level, confidence, resolution_method, source_type, source_id,
+        supersedes_fact_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      factId, conversationId, definitionId, canonicalKey,
+      JSON.stringify(finalValue), valueType,
+      "active", "authoritative", 1.0, "manual_confirmation",
+      "agent_proposal", definitionId,
+      null, now, now
+    );
+  }
+}
+
+/** Reject a pending definition */
+export function rejectDefinition(
+  conversationId: string,
+  definitionId: string
+): boolean {
+  const result = getDatabase()
+    .prepare(
+      "UPDATE conversation_fact_definitions SET status = 'rejected', updated_at = ? WHERE id = ? AND conversation_id = ? AND status = 'pending'"
+    )
+    .run(Date.now(), definitionId, conversationId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+function safeJsonParseArray(json: string): string[] {
+  try { const v = JSON.parse(json); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+function safeJsonParseValue(row: { value_json?: string }): unknown {
+  try { return row.value_json ? JSON.parse(row.value_json) : null; } catch { return null; }
 }

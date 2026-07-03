@@ -37,8 +37,9 @@ export async function extractFactsForUserTurn(input: {
   const dynamicDefs = loadDynamicDefinitions(conversationId);
   const relevantDefs = filterRelevantDefinitions(BUILTIN_FACT_DEFINITIONS, dynamicDefs, userText);
 
-  // Parse candidate facts from the user message using simple heuristics
-  // (full LLM-driven extraction requires the conductor Adapter, landed later)
+  // P2: LLM-first extraction — the Conductor has access to update_context_facts
+  // tool. Heuristic is a fast fallback for simple patterns when the LLM hasn't
+  // called the tool yet (Stage 0 runs before the Conductor's assess stage).
   const candidates = extractCandidatesHeuristic(userText, relevantDefs, activeFacts);
 
   if (candidates.length === 0) {
@@ -52,6 +53,30 @@ export async function extractFactsForUserTurn(input: {
     "message",
     triggerMessage.id
   );
+}
+
+/**
+ * P2: Build fact extraction guidance for the Conductor system prompt.
+ * Informs the Conductor that it should use update_context_facts to
+ * extract structured facts from user messages before planning.
+ */
+export function buildFactExtractionGuidance(): string {
+  return `
+## 事实提取（Context Facts）
+
+你可以在 planning 前或 planning 中调用 update_context_facts 工具来提取和更新项目上下文事实。
+
+何时使用：
+- 用户明确要求修改颜色、框架、是否认证等项目参数
+- 用户提出新的项目目标或约束
+- 用户纠正之前的要求
+
+如何使用：
+- 优先使用 definitionId（从可用定义列表中选择）
+- definitionId 未知时使用 proposedKey
+- 新的未知事实使用 entity + property + value + valueType 提案
+- confidence 低于 0.7 的会进入 pending 等待审核
+- 不要为"你好""谢谢"等简单问候调用此工具`;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
