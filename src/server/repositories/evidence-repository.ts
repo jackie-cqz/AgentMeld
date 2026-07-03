@@ -9,6 +9,89 @@
 
 import { getDatabase } from "@/db/client";
 
+// ── Row mappers: SQLite returns snake_case, interfaces use camelCase ───────
+
+type SnakeRow = Record<string, unknown>;
+
+function mapAttemptRow(r: SnakeRow): TaskAttemptRecord {
+  return {
+    id: r.id as string,
+    conductorRunId: r.conductor_run_id as string,
+    conversationId: r.conversation_id as string,
+    planId: r.plan_id as string,
+    planRevision: r.plan_revision as number,
+    taskId: r.task_id as string,
+    agentId: r.agent_id as string,
+    childRunId: (r.child_run_id as string) ?? null,
+    attempt: r.attempt as number,
+    contextSnapshotId: (r.context_snapshot_id as string) ?? null,
+    executionStatus: r.execution_status as string,
+    verificationStatus: r.verification_status as string,
+    failureContextJson: (r.failure_context_json as string) ?? null,
+    startedAt: (r.started_at as number) ?? null,
+    finishedAt: (r.finished_at as number) ?? null,
+    createdAt: r.created_at as number,
+    updatedAt: r.updated_at as number,
+  };
+}
+
+function mapEvidenceRow(r: SnakeRow): EvidenceRecord {
+  return {
+    id: r.id as string,
+    conversationId: r.conversation_id as string,
+    conductorRunId: r.conductor_run_id as string,
+    planId: r.plan_id as string,
+    taskId: r.task_id as string,
+    attemptId: r.attempt_id as string,
+    childRunId: r.child_run_id as string,
+    contextSnapshotId: r.context_snapshot_id as string,
+    agentId: r.agent_id as string,
+    type: r.type as string,
+    status: r.status as string,
+    trustLevel: r.trust_level as string,
+    sourceKind: r.source_kind as string,
+    sourceId: r.source_id as string,
+    subjectType: r.subject_type as string,
+    subjectId: r.subject_id as string,
+    payloadJson: r.payload_json as string,
+    contentHash: (r.content_hash as string) ?? null,
+    invalidatedAt: (r.invalidated_at as number) ?? null,
+    createdAt: r.created_at as number,
+  };
+}
+
+function mapSnapshotRow(r: SnakeRow): ContextSnapshotRecord {
+  return {
+    id: r.id as string,
+    conversationId: r.conversation_id as string,
+    conductorRunId: r.conductor_run_id as string,
+    planId: r.plan_id as string,
+    taskId: r.task_id as string,
+    attemptId: r.attempt_id as string,
+    policyVersion: r.policy_version as string,
+    schemaVersion: r.schema_version as number,
+    envelopeJson: r.envelope_json as string,
+    manifestJson: r.manifest_json as string,
+    tokenEstimate: r.token_estimate as number,
+    requiredTokenEstimate: r.required_token_estimate as number,
+    omittedTokenEstimate: r.omitted_token_estimate as number,
+    createdAt: r.created_at as number,
+  };
+}
+
+function mapVerdictRow(r: SnakeRow): VerdictRecord {
+  return {
+    id: r.id as string,
+    attemptId: r.attempt_id as string,
+    criterionId: r.criterion_id as string,
+    validatorType: r.validator_type as string,
+    status: r.status as string,
+    evidenceIdsJson: r.evidence_ids_json as string,
+    reason: r.reason as string,
+    checkedAt: r.checked_at as number,
+  };
+}
+
 // ── Task Attempts ──────────────────────────────────────────────────────────
 
 export interface TaskAttemptRecord {
@@ -92,20 +175,22 @@ export function updateTaskAttemptVerification(
 }
 
 export function getTaskAttempt(attemptId: string): TaskAttemptRecord | undefined {
-  return getDatabase()
+  const row = getDatabase()
     .prepare("SELECT * FROM task_attempts WHERE id = ?")
-    .get(attemptId) as TaskAttemptRecord | undefined;
+    .get(attemptId) as SnakeRow | undefined;
+  return row ? mapAttemptRow(row) : undefined;
 }
 
 export function listTaskAttempts(
   conductorRunId: string,
   taskId: string
 ): TaskAttemptRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM task_attempts WHERE conductor_run_id = ? AND task_id = ? ORDER BY attempt ASC"
     )
-    .all(conductorRunId, taskId) as TaskAttemptRecord[];
+    .all(conductorRunId, taskId) as SnakeRow[];
+  return rows.map(mapAttemptRow);
 }
 
 // ── Evidence ───────────────────────────────────────────────────────────────
@@ -157,17 +242,19 @@ export function insertEvidence(record: EvidenceRecord) {
 }
 
 export function getEvidence(evidenceId: string): EvidenceRecord | undefined {
-  return getDatabase()
+  const row = getDatabase()
     .prepare("SELECT * FROM task_evidence WHERE id = ?")
-    .get(evidenceId) as EvidenceRecord | undefined;
+    .get(evidenceId) as SnakeRow | undefined;
+  return row ? mapEvidenceRow(row) : undefined;
 }
 
 export function listEvidenceForAttempt(attemptId: string): EvidenceRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM task_evidence WHERE attempt_id = ? ORDER BY created_at ASC"
     )
-    .all(attemptId) as EvidenceRecord[];
+    .all(attemptId) as SnakeRow[];
+  return rows.map(mapEvidenceRow);
 }
 
 export function listEvidenceForTask(
@@ -175,19 +262,21 @@ export function listEvidenceForTask(
   planId: string,
   taskId: string
 ): EvidenceRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM task_evidence WHERE conductor_run_id = ? AND plan_id = ? AND task_id = ? ORDER BY created_at ASC"
     )
-    .all(conductorRunId, planId, taskId) as EvidenceRecord[];
+    .all(conductorRunId, planId, taskId) as SnakeRow[];
+  return rows.map(mapEvidenceRow);
 }
 
 export function listEvidenceForChildRun(childRunId: string): EvidenceRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM task_evidence WHERE child_run_id = ? ORDER BY created_at ASC"
     )
-    .all(childRunId) as EvidenceRecord[];
+    .all(childRunId) as SnakeRow[];
+  return rows.map(mapEvidenceRow);
 }
 
 export function invalidateEvidence(evidenceId: string, now: number) {
@@ -241,9 +330,10 @@ export function insertContextSnapshot(record: ContextSnapshotRecord) {
 export function getContextSnapshot(
   snapshotId: string
 ): ContextSnapshotRecord | undefined {
-  return getDatabase()
+  const row = getDatabase()
     .prepare("SELECT * FROM task_context_snapshots WHERE id = ?")
-    .get(snapshotId) as ContextSnapshotRecord | undefined;
+    .get(snapshotId) as SnakeRow | undefined;
+  return row ? mapSnapshotRow(row) : undefined;
 }
 
 export function listContextSnapshotsForTask(
@@ -251,11 +341,12 @@ export function listContextSnapshotsForTask(
   planId: string,
   taskId: string
 ): ContextSnapshotRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM task_context_snapshots WHERE conductor_run_id = ? AND plan_id = ? AND task_id = ? ORDER BY created_at ASC"
     )
-    .all(conductorRunId, planId, taskId) as ContextSnapshotRecord[];
+    .all(conductorRunId, planId, taskId) as SnakeRow[];
+  return rows.map(mapSnapshotRow);
 }
 
 // ── Criterion Verdicts ─────────────────────────────────────────────────────
@@ -287,9 +378,10 @@ export function upsertCriterionVerdict(record: VerdictRecord) {
 }
 
 export function listCriterionVerdicts(attemptId: string): VerdictRecord[] {
-  return getDatabase()
+  const rows = getDatabase()
     .prepare(
       "SELECT * FROM criterion_verdicts WHERE attempt_id = ? ORDER BY criterion_id ASC"
     )
-    .all(attemptId) as VerdictRecord[];
+    .all(attemptId) as SnakeRow[];
+  return rows.map(mapVerdictRow);
 }

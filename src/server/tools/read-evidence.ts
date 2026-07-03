@@ -153,7 +153,7 @@ function isDownstreamTask(
     const db = getDatabase();
     const rows = db
       .prepare(
-        "SELECT plan_json FROM orchestration_plans WHERE orchestrator_run_id = ? ORDER BY revision DESC LIMIT 1"
+        "SELECT plan_json FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision DESC LIMIT 1"
       )
       .all(conductorRunId) as Array<{ plan_json: string }>;
 

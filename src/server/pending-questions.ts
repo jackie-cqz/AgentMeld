@@ -1,6 +1,8 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
+import { insertEvidence } from "@/server/repositories/evidence-repository";
+import { newEvidenceId } from "@/shared/ids";
 import type { PendingQuestion } from "@/shared/types";
 
 type AnswerResolver = (answers: Record<string, string>) => void;
@@ -75,7 +77,37 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
-  if (!resolveApproval(id, true, Date.now())) return false;
+  const now = Date.now();
+  if (!resolveApproval(id, true, now)) return false;
+
+  // P1: Record user_answer evidence
+  try {
+    const q = entry.question;
+    const firstQ = q.questions[0]?.question ?? "";
+    insertEvidence({
+      id: newEvidenceId(),
+      conversationId: q.conversationId,
+      conductorRunId: q.runId,
+      planId: `plan_${q.runId}`,
+      taskId: "conductor",
+      attemptId: q.runId,
+      childRunId: q.runId,
+      contextSnapshotId: q.runId,
+      agentId: q.agentId,
+      type: "user_answered",
+      status: "valid",
+      trustLevel: "authoritative",
+      sourceKind: "user",
+      sourceId: id,
+      subjectType: "answer",
+      subjectId: id,
+      payloadJson: JSON.stringify({ questionExcerpt: firstQ.slice(0, 200), answerDigest: Object.values(answers).join(", ").slice(0, 500) }),
+      contentHash: null,
+      invalidatedAt: null,
+      createdAt: now,
+    });
+  } catch { /* evidence best-effort */ }
+
   store.delete(id);
   entry.resolver(answers);
   eventBus.publish({

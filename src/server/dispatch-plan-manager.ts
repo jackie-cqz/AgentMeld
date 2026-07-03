@@ -1,6 +1,8 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
+import { insertEvidence } from "@/server/repositories/evidence-repository";
+import { newEvidenceId } from "@/shared/ids";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
 type Resolver = (outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[] }) => void;
@@ -115,7 +117,36 @@ function resolvePlan(
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
-  if (!resolveApproval(id, outcome.approved, Date.now())) return false;
+  const now = Date.now();
+  if (!resolveApproval(id, outcome.approved, now)) return false;
+
+  // P1: Record approval evidence
+  const p = entry.plan;
+  try {
+    insertEvidence({
+      id: newEvidenceId(),
+      conversationId: p.conversationId,
+      conductorRunId: p.runId,
+      planId: `plan_${p.runId}`,
+      taskId: "conductor",
+      attemptId: p.runId,
+      childRunId: p.runId,
+      contextSnapshotId: p.runId,
+      agentId: "conductor",
+      type: "approval_resolved",
+      status: "valid",
+      trustLevel: "authoritative",
+      sourceKind: "system",
+      sourceId: id,
+      subjectType: "approval",
+      subjectId: id,
+      payloadJson: JSON.stringify({ approved: outcome.approved, feedback: outcome.feedback ?? null }),
+      contentHash: null,
+      invalidatedAt: null,
+      createdAt: now,
+    });
+  } catch { /* evidence best-effort */ }
+
   store.delete(id);
   entry.resolver(outcome);
   return true;
