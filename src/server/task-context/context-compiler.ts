@@ -4,16 +4,19 @@
 
 import type { Agent, Message } from "@/shared/types";
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
-import type { TaskContextEnvelope, ContextManifestItem, FailureContext } from "@/shared/task-context-types";
+import type { TaskContextEnvelope, FailureContext } from "@/shared/task-context-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { ResolvedInput, UpstreamArtifact, ActiveFactEntry } from "@/server/child-prompt-builder";
-import { loadActiveFacts } from "@/server/context-facts/fact-service";
-import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { getArtifact } from "@/server/repositories";
 import { buildFailureContext } from "@/server/task-context/failure-context";
 import { classifyCandidate, isForbidden } from "@/server/task-context/context-policy";
 import { type ContextCandidate, candidateToManifestItem } from "@/server/task-context/context-candidates";
-import { computeBudget, allocateBudget, isMandatoryOverBudget } from "@/server/task-context/context-budget";
+import { qualifyCandidate } from "@/server/task-context/qualification-filter";
+import { scoreCandidate, rankCandidates } from "@/server/task-context/relevance-ranker";
+import { compressCandidate } from "@/server/task-context/context-compressor";
+import { externalizeCandidate } from "@/server/task-context/context-externalizer";
+import { packContext } from "@/server/task-context/context-packer";
+import { computeBudget, isMandatoryOverBudget } from "@/server/task-context/context-budget";
 
 export interface CompileTaskContextInput {
   conversationId: string;
@@ -23,10 +26,13 @@ export interface CompileTaskContextInput {
   task: ParsedTask;
   attemptId: string;
   attempt: number;
+  /** P3: contextSnapshotId from conductor (already generated via newContextSnapshotId) */
+  contextSnapshotId: string;
   assignedAgent: Agent;
   triggerMessage: Message;
   resolvedInputs: ResolvedInput[];
   upstreamArtifacts: UpstreamArtifact[];
+  /** P3: activeFacts already filtered by agent role via getFilteredDefinitionsForAgent */
   activeFacts: ActiveFactEntry[];
   previousAttemptId?: string;
   previousError?: string;
@@ -37,6 +43,8 @@ export interface CompileTaskContextInput {
 
 export async function compileTaskContext(input: CompileTaskContextInput): Promise<TaskContextEnvelope> {
   const now = Date.now();
+
+  // Step 1: Build identity — use conductor-generated contextSnapshotId, NOT derived
   const identity: TaskExecutionIdentity = {
     conductorRunId: input.conductorRunId,
     planId: input.planId,
@@ -44,10 +52,9 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     taskId: input.task.id,
     attemptId: input.attemptId,
     attempt: input.attempt,
-    contextSnapshotId: input.attemptId + "_ctx",
+    contextSnapshotId: input.contextSnapshotId,
   };
 
-  // Step 1: Validate task identity
   if (!identity.taskId || !identity.attemptId) {
     throw new Error("context-compiler: invalid task identity");
   }
@@ -66,19 +73,18 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     tokenEstimate: Math.ceil((input.task.prompt?.length ?? 0) / 4), createdAt: now,
   });
 
-  // Active facts (step 5-6)
-  const conversationFacts = loadActiveFacts(input.conversationId);
-  for (const fact of conversationFacts) {
+  // Step 5-6: Active facts — use pre-filtered agent-specific facts, NOT loadAllActiveFacts
+  for (const fact of input.activeFacts) {
     candidates.push({
-      id: `${estimateId}_fact_${fact.id}`, category: "fact", sourceType: "fact_registry", sourceId: fact.id,
+      id: `${estimateId}_fact_${fact.canonicalKey}`, category: "fact", sourceType: "fact_registry", sourceId: fact.canonicalKey,
       content: { canonicalKey: fact.canonicalKey, value: fact.value },
-      trustLevel: fact.trustLevel, required: false, taskIds: [input.task.id],
+      trustLevel: "verified", required: false, taskIds: [input.task.id],
       namespaces: [fact.canonicalKey.split(".")[0] ?? ""], pathRefs: [], criterionIds: [],
-      tokenEstimate: estimateToken(fact.value ?? fact.canonicalKey), createdAt: fact.createdAt,
+      tokenEstimate: estimateToken(fact.value ?? fact.canonicalKey), createdAt: now,
     });
   }
 
-  // User request (step 4)
+  // Step 4: User request
   if (userText) {
     candidates.push({
       id: `${estimateId}_user_msg`, category: "recent_message", sourceType: "message", sourceId: input.triggerMessage.id,
@@ -88,7 +94,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
-  // Verified inputs (step 8-9)
+  // Step 8-9: Verified inputs with full artifact metadata
   for (const ri of input.resolvedInputs) {
     if (ri.artifactId) {
       const art = getArtifact(ri.artifactId);
@@ -102,7 +108,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     }
   }
 
-  // Target paths (step 12) — workspace snapshot
+  // Step 12: Workspace target paths
   for (const tp of input.task.targetPaths ?? []) {
     candidates.push({
       id: `${estimateId}_ws_${tp}`, category: "workspace", sourceType: "targetPath", sourceId: tp,
@@ -112,7 +118,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
-  // Failure context (step 11)
+  // Step 11: Failure context
   let failureCtx: FailureContext | null = null;
   if (input.attempt > 1 && input.previousAttemptId) {
     failureCtx = await buildFailureContext({
@@ -128,41 +134,125 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
-  // Step 14: Filter out superseded/pending/rejected/forbidden
+  // ── P3: Qualification Hard Filter (Step 14) ──────────────────────────
+  const dagTaskIds = [input.task.id, ...input.task.dependsOn];
   const qualified = candidates.filter(c => {
+    // First: hard filter
+    const qResult = qualifyCandidate(c, {
+      conversationId: input.conversationId,
+      candidateConversationId: input.conversationId,
+      taskId: input.task.id,
+      dagTaskIds,
+    });
+    if (!qResult.qualified) return false;
+
+    // Fact lifecycle filter
     if (c.category === "fact") {
-      const fact = conversationFacts.find(f => f.id === c.sourceId);
-      if (fact && fact.status !== "active") return false;
+      if (isForbidden(c.category, c.trustLevel)) return false;
+      // Filter: only facts matching the agent-filtered list
+      const matched = input.activeFacts.some(f => f.canonicalKey === (c.content as { canonicalKey?: string })?.canonicalKey);
+      if (!matched) return false;
     }
+
+    // Forbidden items (unverified outputs, superseded facts)
     if (isForbidden(c.category, c.trustLevel)) return false;
+
     return true;
   });
 
-  // Step 15: Classify and compute budget
-  const classified = qualified.map((c, i) => ({ candidate: c, tier: classifyCandidate(c.category, c.sourceType, c.required, c.trustLevel), rank: qualified.length - i }));
-  const availableBudget = computeBudget(input.modelProvider, input.systemPromptTokens ?? 1000, input.toolSchemaTokens ?? 2000, estimateToken(input.task.prompt ?? ""));
-  const mandatoryTokens = classified.filter(cl => cl.tier.tier === "mandatory").reduce((s, cl) => s + cl.candidate.tokenEstimate, 0);
+  // ── P3: Relevance Ranker + Compressor + Externalizer (Steps 15-16) ──
+  const dagDepTaskIds = input.task.dependsOn;
+  const targetPaths = input.task.targetPaths ?? [];
 
-  // Check mandatory overflow
+  const scored = rankCandidates(
+    qualified.map(c => {
+      const tier = classifyCandidate(c.category, c.sourceType, c.required, c.trustLevel);
+      return scoreCandidate(c, tier, { taskId: input.task.id, dagDepTaskIds, targetPaths });
+    })
+  );
+
+  // Compress non-mandatory items
+  const compressed = scored.map(s => ({
+    ...s,
+    candidate: {
+      ...s.candidate,
+      content: s.tier.tier !== "mandatory"
+        ? compressCandidate(s.candidate, s.tier.tier as "high" | "optional").compressedContent
+        : s.candidate.content,
+    },
+  }));
+
+  // Externalize large items
+  const externalized = compressed.map(s => {
+    const ext = externalizeCandidate(s.candidate);
+    if ("refType" in ext) {
+      // Replace candidate content with reference
+      return {
+        ...s,
+        candidate: {
+          ...s.candidate,
+          content: ext,
+          tokenEstimate: 20, // ref is tiny
+        },
+      };
+    }
+    return s;
+  });
+
+  // ── P3: Budget + Packer (Step 15-16) ────────────────────────────────
+  const availableBudget = computeBudget(
+    input.modelProvider,
+    input.systemPromptTokens ?? 1000,
+    input.toolSchemaTokens ?? 2000,
+    estimateToken(input.task.prompt ?? "")
+  );
+  const mandatoryTokens = scored
+    .filter(s => s.tier.tier === "mandatory")
+    .reduce((s, sc) => s + sc.candidate.tokenEstimate, 0);
+
+  // Mandatory overflow check
   if (isMandatoryOverBudget(mandatoryTokens, availableBudget)) {
-    // Return a minimal blocked envelope
     return {
       schemaVersion: 1,
       policyVersion: "evidence-context-p3-v1",
       identity,
       task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
-      requirements: { constraints: [], expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })) },
+      requirements: {
+        constraints: input.activeFacts.map(f => ({ canonicalKey: f.canonicalKey, value: f.value })),
+        expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
+      },
       upstreamInputs: [],
       failureContext: null,
-      manifest: classified.map(cl => candidateToManifestItem(cl.candidate, cl.tier.tier === "mandatory", "budget")),
+      manifest: scored.map(s => candidateToManifestItem(s.candidate, s.tier.tier === "mandatory", "budget")),
       budget: { maxInputTokens: availableBudget, requiredTokens: mandatoryTokens, optionalTokens: 0, omittedTokens: mandatoryTokens - availableBudget },
       createdAt: now,
     };
   }
 
-  // Step 15-16: Budget allocation + manifest
-  const { packed, omitted } = allocateBudget(classified, availableBudget);
-  const manifest = [...packed.map(c => candidateToManifestItem(c, true)), ...omitted.map(o => candidateToManifestItem(o.candidate, false, o.reason))];
+  // Pack using P3 packer
+  const { packed, omitted, budget } = packContext(externalized, availableBudget);
+
+  const manifest = [
+    ...packed.map(c => candidateToManifestItem(c, true)),
+    ...omitted.map(o => candidateToManifestItem(o.candidate, false, o.reason)),
+  ];
+
+  // Build upstream inputs with real metadata (Step 8-9 complete)
+  const upstreamInputs = input.resolvedInputs
+    .filter(ri => ri.artifactId)
+    .map(ri => {
+      const art = ri.artifactId ? getArtifact(ri.artifactId) : null;
+      return {
+        fromTaskId: ri.fromTaskId,
+        outputKey: ri.outputId,
+        artifactId: ri.artifactId!,
+        artifactVersion: art?.version ?? 1,
+        artifactType: art?.type ?? "unknown",
+        title: art?.title ?? ri.outputId,
+        verificationId: "",
+        evidenceIds: [] as string[],
+      };
+    });
 
   // Step 17: Build envelope
   return {
@@ -171,18 +261,13 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     identity,
     task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
     requirements: {
-      constraints: conversationFacts.filter(f => f.status === "active").map(f => ({ canonicalKey: f.canonicalKey, value: f.value })),
+      constraints: input.activeFacts.map(f => ({ canonicalKey: f.canonicalKey, value: f.value })),
       expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
     },
-    upstreamInputs: input.resolvedInputs.filter(ri => ri.artifactId).map(ri => ({ fromTaskId: ri.fromTaskId, outputKey: ri.outputId, artifactId: ri.artifactId!, artifactVersion: 0, artifactType: "unknown", title: ri.outputId, verificationId: "", evidenceIds: [] })),
+    upstreamInputs,
     failureContext: failureCtx,
     manifest,
-    budget: {
-      maxInputTokens: availableBudget,
-      requiredTokens: mandatoryTokens,
-      optionalTokens: packed.filter(p => p.category !== "task" && p.category !== "failure").reduce((s, p) => s + p.tokenEstimate, 0),
-      omittedTokens: omitted.reduce((s, o) => s + o.candidate.tokenEstimate, 0),
-    },
+    budget,
     createdAt: now,
   };
 }

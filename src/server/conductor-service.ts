@@ -522,15 +522,6 @@ async function runChildTask(
       // Fact loading failure must not block task dispatch
     }
 
-    // Build child prompt with full context
-    const prompt = buildChildTaskPrompt({
-      task,
-      resolvedInputs,
-      upstreamArtifacts,
-      recentConversation,
-      activeFacts: activeFacts.length > 0 ? activeFacts : undefined,
-    });
-
     eventBus.publish({
       type: "dispatch.start", conversationId, timestamp: Date.now(),
       parentRunId, childRunId: "", taskId: task.id, agentId: task.agentId
@@ -584,7 +575,7 @@ async function runChildTask(
       const lastError = finalEvaluation.error;
       const envelope = await compileTaskContext({
         conversationId, conductorRunId: parentRunId, planId, planRevision: taskExecution.planRevision,
-        task, attemptId, attempt, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
+        task, attemptId, attempt, contextSnapshotId, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
         triggerMessage, resolvedInputs, upstreamArtifacts, activeFacts,
         previousAttemptId: attempt > 1 ? finalAttemptId : undefined,
         previousError: lastError,
