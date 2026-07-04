@@ -78,7 +78,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     candidates.push({
       id: `${estimateId}_fact_${fact.canonicalKey}`, category: "fact", sourceType: "fact_registry", sourceId: fact.canonicalKey,
       content: { canonicalKey: fact.canonicalKey, value: fact.value },
-      trustLevel: "verified", required: false, taskIds: [input.task.id],
+      trustLevel: fact.trustLevel ?? "verified", required: false, taskIds: [input.task.id],
       namespaces: [fact.canonicalKey.split(".")[0] ?? ""], pathRefs: [], criterionIds: [],
       tokenEstimate: estimateToken(fact.value ?? fact.canonicalKey), createdAt: now,
     });
@@ -210,11 +210,12 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     .filter(s => s.tier.tier === "mandatory")
     .reduce((s, sc) => s + sc.candidate.tokenEstimate, 0);
 
-  // Mandatory overflow check
+  // Mandatory overflow check — return blocked envelope, do NOT call model
   if (isMandatoryOverBudget(mandatoryTokens, availableBudget)) {
     return {
       schemaVersion: 1,
       policyVersion: "evidence-context-p3-v1",
+      blocked: true,
       identity,
       task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
       requirements: {
@@ -222,6 +223,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
         expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
       },
       upstreamInputs: [],
+      includedContextItems: [],
       failureContext: null,
       manifest: scored.map(s => candidateToManifestItem(s.candidate, s.tier.tier === "mandatory", "budget")),
       budget: { maxInputTokens: availableBudget, requiredTokens: mandatoryTokens, optionalTokens: 0, omittedTokens: mandatoryTokens - availableBudget },
@@ -237,34 +239,53 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     ...omitted.map(o => candidateToManifestItem(o.candidate, false, o.reason)),
   ];
 
-  // Build upstream inputs with real metadata (Step 8-9 complete)
-  const upstreamInputs = input.resolvedInputs
-    .filter(ri => ri.artifactId)
-    .map(ri => {
-      const art = ri.artifactId ? getArtifact(ri.artifactId) : null;
+  // Build upstream inputs from packed items only (not from all resolvedInputs)
+  const upstreamInputs = packed
+    .filter(c => c.category === "upstream_input")
+    .map(c => {
+      const inp = c.content as { artifactId?: string; title?: string; type?: string; version?: number };
+      const ri = input.resolvedInputs.find(r => r.artifactId === inp.artifactId);
       return {
-        fromTaskId: ri.fromTaskId,
-        outputKey: ri.outputId,
-        artifactId: ri.artifactId!,
-        artifactVersion: art?.version ?? 1,
-        artifactType: art?.type ?? "unknown",
-        title: art?.title ?? ri.outputId,
+        fromTaskId: ri?.fromTaskId ?? "",
+        outputKey: ri?.outputId ?? "",
+        artifactId: inp.artifactId ?? "",
+        artifactVersion: inp.version ?? 1,
+        artifactType: inp.type ?? "unknown",
+        title: inp.title ?? "",
         verificationId: "",
         evidenceIds: [] as string[],
       };
     });
 
-  // Step 17: Build envelope
+  // Build includedContextItems from packed
+  const includedContextItems = packed.map(c => ({
+    category: c.category,
+    sourceType: c.sourceType,
+    sourceId: c.sourceId,
+    content: c.content,
+    trustLevel: c.trustLevel,
+    required: c.required,
+    tokenEstimate: c.tokenEstimate,
+  }));
+
+  // Build constraints from packed facts only (not all activeFacts)
+  const constraints = packed
+    .filter(c => c.category === "fact")
+    .map(c => c.content as { canonicalKey?: string; value?: unknown });
+
+  // Step 17: Build envelope — only packed items become context
   return {
     schemaVersion: 1,
     policyVersion: "evidence-context-p3-v1",
+    blocked: false,
     identity,
     task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
     requirements: {
-      constraints: input.activeFacts.map(f => ({ canonicalKey: f.canonicalKey, value: f.value })),
+      constraints,
       expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
     },
     upstreamInputs,
+    includedContextItems,
     failureContext: failureCtx,
     manifest,
     budget,

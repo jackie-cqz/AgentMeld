@@ -15,8 +15,21 @@ function escapeXml(str: string): string {
 }
 
 export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
-  const { identity, task, requirements, upstreamInputs, failureContext, manifest } = envelope;
+  const { identity, task, requirements, upstreamInputs, failureContext, manifest, blocked, includedContextItems } = envelope;
   const parts: string[] = [];
+
+  if (blocked) {
+    parts.push(`[TASK CONTEXT OVERFLOW]`);
+    parts.push(`Mandatory context (${envelope.budget.requiredTokens} tokens) exceeds budget (${envelope.budget.maxInputTokens} tokens).`);
+    parts.push(`This task cannot be executed. Conductor must replan with fewer/smaller dependencies.`);
+    return parts.join("\n");
+  }
+
+  // P3: Render from includedContextItems when available (packed results)
+  const factItems = includedContextItems.filter(c => c.category === "fact");
+  const inputItems = includedContextItems.filter(c => c.category === "upstream_input");
+  const wsItems = includedContextItems.filter(c => c.category === "workspace");
+  const msgItems = includedContextItems.filter(c => c.category === "recent_message");
 
   parts.push(`<task_context`);
   parts.push(`  context_id="${escapeXml(identity.contextSnapshotId)}"`);

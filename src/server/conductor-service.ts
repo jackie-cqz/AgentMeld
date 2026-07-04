@@ -628,6 +628,16 @@ async function runChildTask(
         attempt
       });
 
+      // P3: Block child run if mandatory context exceeded budget
+      if (envelope.blocked) {
+        console.error(`[conductor] task ${task.id} attempt ${attempt}: context overflow — mandatory ${envelope.budget.requiredTokens} > available ${envelope.budget.maxInputTokens}`);
+        finalEvaluation = { status: "blocked", error: `task_context_overflow: mandatory ${envelope.budget.requiredTokens} tokens exceeds ${envelope.budget.maxInputTokens} budget` };
+        finishTaskAttempt(attemptId, "blocked", Date.now());
+        updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ error: finalEvaluation.error }), Date.now());
+        // Don't call startAgentRun — skip this task entirely
+        break;
+      }
+
       // P0: Pass taskExecution identity into the child run
       const { runId: attemptRunId, promise } = startAgentRun({
         conversationId,
@@ -1046,6 +1056,8 @@ export function buildMinimalContextEnvelope(
     requirements: { constraints: [], expectedOutputs: (task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true, description: eo.description })) },
     upstreamInputs: resolvedInputs.filter(ri => ri.artifactId).map(ri => ({ fromTaskId: ri.fromTaskId, outputKey: ri.outputId, artifactId: ri.artifactId!, artifactVersion: 0, artifactType: "unknown", title: ri.outputId, verificationId: "", evidenceIds: [] })),
     failureContext: failureHint ? { previousAttemptId: failureHint.previousAttemptId, previousChildRunId: "", failedCriteria: [], failedEvidenceIds: [], failedCommands: [], missingOutputs: [], changedFiles: [], retryInstructions: [`Previous attempt failed: ${failureHint.error}`] } : null,
+    blocked: false,
+    includedContextItems: [],
     manifest: manifestItems,
     budget: { maxInputTokens: 0, requiredTokens: 0, optionalTokens: 0, omittedTokens: 0 },
     createdAt: now

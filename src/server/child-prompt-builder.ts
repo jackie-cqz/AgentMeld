@@ -28,6 +28,8 @@ export interface ActiveFactEntry {
   value: unknown;
   valueType: string;
   description: string;
+  /** P3: Fact trust level from the fact registry */
+  trustLevel?: import("@/shared/evidence-types").EvidenceTrustLevel;
 }
 
 export interface BuildChildPromptInput {

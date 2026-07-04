@@ -142,6 +142,8 @@ describe("context-renderer", () => {
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "ctx1" },
       task: { title: "Test", objective: "Build a todo app", assignedAgentId: "ag1", dependsOn: [] },
       requirements: { constraints: [], expectedOutputs: [{ outputKey: "app", type: "web_app", required: true }] },
+      blocked: false,
+      includedContextItems: [],
       upstreamInputs: [],
       failureContext: null,
       manifest: [{ id: "m1", category: "task", sourceType: "plan", sourceId: "p1", reason: "objective", required: true, trustLevel: "authoritative", tokenEstimate: 50, included: true, omittedReason: null }],
@@ -162,6 +164,7 @@ describe("context-renderer", () => {
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "c1" },
       task: { title: "T", objective: "A < B && C > D", assignedAgentId: "ag1", dependsOn: [] },
       requirements: { constraints: [], expectedOutputs: [] },
+      blocked: false, includedContextItems: [],
       upstreamInputs: [], failureContext: null,
       manifest: [], budget: { maxInputTokens: 1000, requiredTokens: 0, optionalTokens: 0, omittedTokens: 0 }, createdAt: 1,
     };
@@ -174,7 +177,9 @@ describe("context-renderer", () => {
       schemaVersion: 1, policyVersion: "v1",
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 2, contextSnapshotId: "c1" },
       task: { title: "T", objective: "Fix build", assignedAgentId: "ag1", dependsOn: [] },
-      requirements: { constraints: [], expectedOutputs: [] }, upstreamInputs: [],
+      requirements: { constraints: [], expectedOutputs: [] },
+      blocked: false, includedContextItems: [],
+      upstreamInputs: [],
       failureContext: {
         previousAttemptId: "a0", previousChildRunId: "",
         failedCriteria: [], failedEvidenceIds: [],
