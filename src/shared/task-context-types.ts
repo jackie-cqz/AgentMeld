@@ -1,5 +1,47 @@
-// P0+P3: Task context types
+// P0+P3+P6: Task context types
 import type { EvidenceTrustLevel } from "@/shared/evidence-types";
+
+// ── P6: Cross-agent context propagation ─────────────────────────────────────
+
+/** A verified input that a downstream task can consume as fact. */
+export interface VerifiedTaskInput {
+  fromTaskId: string;
+  outputKey: string;
+  artifactId: string;
+  artifactVersion: number;
+  artifactType: string;
+  title: string;
+  verificationId: string;
+  evidenceIds: string[];
+}
+
+/** Structured delta produced by a verified task for downstream consumption. */
+export interface TaskContextDelta {
+  taskId: string;
+  verifiedAttemptId: string;
+  acceptedDecisions: Array<{ canonicalKey: string; value: unknown; trustLevel: EvidenceTrustLevel }>;
+  artifactOutputs: VerifiedTaskInput[];
+  workspaceChanges: Array<{ path: string; contentHash: string; evidenceId: string }>;
+  resolvedConstraints: string[];
+  remainingRisks: string[];
+}
+
+// ── P8: Context quality metrics ─────────────────────────────────────────────
+
+export interface ContextQualityMetrics {
+  totalTokens: number;
+  requiredTokens: number;
+  optionalTokens: number;
+  omittedTokens: number;
+  includedItemCount: number;
+  staleItemRejectedCount: number;
+  unverifiedItemRejectedCount: number;
+  unrelatedItemRejectedCount: number;
+  verifiedInputCount: number;
+  retrievalHitCount: number;
+}
+
+// ── P3: Core context types ──────────────────────────────────────────────────
 
 export interface ContextManifestItem {
   id: string;

@@ -134,7 +134,14 @@ export function createDispatchState(
     taskStatus: Object.fromEntries(plan.map((item) => [item.id, "pending"])),
     childRunIds: {},
     attempts: {},
-    errors: {}
+    errors: {},
+    // P7: Evidence-aware context observability
+    attemptIdsByTask: {},
+    activeAttemptByTask: {},
+    verificationStatusByTask: {},
+    contextSummaryByAttempt: {},
+    evidenceCountByAttempt: {},
+    verdictSummaryByAttempt: {},
   };
 }
 

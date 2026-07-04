@@ -460,4 +460,33 @@ export type StreamEvent =
   | (BaseEvent & {
       type: "compaction.error";
       error: string;
+    })
+  // ── P7: Evidence-aware context observability events ──────────────────────
+  | (BaseEvent & {
+      type: "dispatch.context.compiled";
+      parentRunId: string;
+      taskId: string;
+      attemptId: string;
+      contextSnapshotId: string;
+      includedCount: number;
+      omittedCount: number;
+      tokenEstimate: number;
+      agentId: string;
+    })
+  | (BaseEvent & {
+      type: "dispatch.verification.updated";
+      parentRunId: string;
+      taskId: string;
+      attemptId: string;
+      status: "checking" | "verified" | "rejected" | "needs_review";
+      passedCount: number;
+      failedCount: number;
+    })
+  | (BaseEvent & {
+      type: "dispatch.evidence.summary";
+      parentRunId: string;
+      taskId: string;
+      attemptId: string;
+      childRunId: string;
+      evidenceCount: number;
     });

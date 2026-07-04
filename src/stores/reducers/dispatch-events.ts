@@ -76,5 +76,40 @@ export function applyDispatchEvent(state: StoreDraft, event: StreamEvent) {
     return true;
   }
 
+  // ── P7: Evidence-aware context observability events ────────────────────
+
+  if (event.type === "dispatch.context.compiled") {
+    const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
+    dispatch.attemptIdsByTask[event.taskId] ??= [];
+    if (!dispatch.attemptIdsByTask[event.taskId].includes(event.attemptId)) {
+      dispatch.attemptIdsByTask[event.taskId].push(event.attemptId);
+    }
+    dispatch.activeAttemptByTask[event.taskId] = event.attemptId;
+    dispatch.contextSummaryByAttempt[event.attemptId] = {
+      tokenEstimate: event.tokenEstimate,
+      includedCount: event.includedCount,
+      omittedCount: event.omittedCount,
+    };
+    return true;
+  }
+
+  if (event.type === "dispatch.verification.updated") {
+    const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
+    dispatch.verificationStatusByTask[event.taskId] = event.status;
+    dispatch.verdictSummaryByAttempt[event.attemptId] = {
+      passed: event.passedCount,
+      failed: event.failedCount,
+      missing: 0,
+      needsReview: event.status === "needs_review" ? 1 : 0,
+    };
+    return true;
+  }
+
+  if (event.type === "dispatch.evidence.summary") {
+    const dispatch = ensureDispatchState(state, event.conversationId, event.parentRunId);
+    dispatch.evidenceCountByAttempt[event.attemptId] = event.evidenceCount;
+    return true;
+  }
+
   return false;
 }

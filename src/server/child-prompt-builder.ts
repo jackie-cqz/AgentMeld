@@ -1,4 +1,7 @@
 import type { ParsedTask } from "@/server/tools/conductor-tools";
+import type { VerifiedTaskInput } from "@/shared/task-context-types";
+import type { EvidenceTrustLevel } from "@/shared/evidence-types";
+import { getArtifact } from "@/server/repositories";
 
 export interface ResolvedInput {
   fromTaskId: string;
@@ -59,6 +62,40 @@ export function resolveTaskInputs(
       missing: !artifactId
     };
   });
+}
+
+// ── P6: Verified input resolution ───────────────────────────────────────────
+// Unlike resolveTaskInputs (which just checks binding existence), this resolves
+// full VerifiedTaskInput records with artifact metadata and provenance.
+// Only bindings that passed P4 verification gates enter outputBindings,
+// so every resolved input is implicitly verified.
+
+export function resolveVerifiedTaskInputs(
+  task: ParsedTask,
+  outputBindings: Map<string, string>
+): VerifiedTaskInput[] {
+  return (task.inputs || [])
+    .map((input) => {
+      const bindingKey = `${input.fromTaskId}.${input.outputId}`;
+      const artifactId = outputBindings.get(bindingKey);
+      if (!artifactId) return null;
+
+      const art = getArtifact(artifactId);
+      if (!art) return null;
+
+      const vi: VerifiedTaskInput = {
+        fromTaskId: input.fromTaskId,
+        outputKey: input.outputId,
+        artifactId,
+        artifactVersion: art.version,
+        artifactType: art.type,
+        title: art.title,
+        verificationId: "", // populated by verification engine
+        evidenceIds: [],    // populated by verification engine
+      };
+      return vi;
+    })
+    .filter((v): v is VerifiedTaskInput => v !== null);
 }
 
 /**

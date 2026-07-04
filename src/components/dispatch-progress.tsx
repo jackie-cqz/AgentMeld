@@ -2,11 +2,13 @@
 
 import {
   Ban, CheckCircle2, Circle, Clock3, GitBranch,
-  Loader2, RotateCcw, XCircle, AlertTriangle, RefreshCw
+  Loader2, RotateCcw, XCircle, AlertTriangle, RefreshCw,
+  FileCheck, ShieldCheck, Eye, ChevronDown, ChevronRight
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
@@ -57,9 +59,16 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
 function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId: string }) {
   const agents = useAppStore((state) => state.agents);
   const task = dispatch.plan.find((item) => item.id === taskId);
+  const [expanded, setExpanded] = useState(false);
   if (!task) return null;
   const status = dispatch.taskStatus[taskId] ?? "pending";
   const agent = agents[task.agentId];
+  const attemptCount = dispatch.attempts[taskId] ?? 1;
+  const activeAttemptId = dispatch.activeAttemptByTask[taskId];
+  const verificationStatus = dispatch.verificationStatusByTask[taskId];
+  const evidenceCount = activeAttemptId ? (dispatch.evidenceCountByAttempt[activeAttemptId] ?? 0) : 0;
+  const contextSummary = activeAttemptId ? dispatch.contextSummaryByAttempt[activeAttemptId] : undefined;
+  const verdictSummary = activeAttemptId ? dispatch.verdictSummaryByAttempt[activeAttemptId] : undefined;
 
   return (
     <div className={`rounded-md border px-3 py-2 ${
@@ -75,10 +84,18 @@ function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId
             <span className="font-mono text-[11px] text-slate-400">{task.id}</span>
             <span className="text-xs font-medium text-slate-800">{agent?.name ?? task.agentId}</span>
             <StatusLabel status={status} />
-            {status === "running" ? (
-              <span className="flex items-center gap-0.5 text-[10px] text-blue-600">
-                <RefreshCw className="h-3 w-3" />第{dispatch.attempts[taskId] ?? 1}次
+            {attemptCount > 1 ? (
+              <span className="flex items-center gap-0.5 text-[10px] text-amber-600">
+                <RefreshCw className="h-3 w-3" />第{attemptCount}次
               </span>
+            ) : status === "running" ? (
+              <span className="flex items-center gap-0.5 text-[10px] text-blue-600">
+                <RefreshCw className="h-3 w-3" />第1次
+              </span>
+            ) : null}
+            {/* P7: Verification status badge */}
+            {verificationStatus ? (
+              <VerificationBadge status={verificationStatus} />
             ) : null}
           </div>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{task.task}</p>
@@ -100,12 +117,88 @@ function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId
               <span key={path} className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] text-amber-700">{path}</span>
             ))}
           </div>
+          {/* P7: Evidence-aware summary row */}
+          {(evidenceCount > 0 || contextSummary || verdictSummary) ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-1.5">
+              {contextSummary ? (
+                <span className="flex items-center gap-0.5 text-[10px] text-slate-500" title={`${contextSummary.includedCount} included, ${contextSummary.omittedCount} omitted`}>
+                  <Eye className="h-3 w-3" />上下文 {contextSummary.includedCount}项 · {contextSummary.tokenEstimate > 1000 ? `${(contextSummary.tokenEstimate / 1000).toFixed(1)}k` : contextSummary.tokenEstimate} tok
+                </span>
+              ) : null}
+              {evidenceCount > 0 ? (
+                <span className="flex items-center gap-0.5 text-[10px] text-slate-500">
+                  <FileCheck className="h-3 w-3" />证据 {evidenceCount}项
+                </span>
+              ) : null}
+              {verdictSummary ? (
+                <span className={`flex items-center gap-0.5 text-[10px] ${verdictSummary.failed > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                  <ShieldCheck className="h-3 w-3" />验收 {verdictSummary.passed}/{verdictSummary.passed + verdictSummary.failed + verdictSummary.missing + verdictSummary.needsReview}
+                </span>
+              ) : null}
+              {/* P7: Expand button for detail drawer */}
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="ml-auto flex items-center gap-0.5 text-[10px] text-blue-500 hover:text-blue-700"
+              >
+                {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {expanded ? "收起" : "详情"}
+              </button>
+            </div>
+          ) : null}
+          {/* P7: Expanded detail panel */}
+          {expanded ? (
+            <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+              <AttemptDetailPanel dispatch={dispatch} taskId={taskId} />
+            </div>
+          ) : null}
           {dispatch.errors[taskId] ? (
             <p className="mt-1 text-xs text-red-600">{dispatch.errors[taskId]}</p>
           ) : null}
         </div>
       </div>
     </div>
+  );
+}
+
+/** P7: Inline detail panel showing attempt-level evidence/verdict summary */
+function AttemptDetailPanel({ dispatch, taskId }: { dispatch: DispatchState; taskId: string }) {
+  const activeAttemptId = dispatch.activeAttemptByTask[taskId];
+  const verdictSummary = activeAttemptId ? dispatch.verdictSummaryByAttempt[activeAttemptId] : undefined;
+  const contextSummary = activeAttemptId ? dispatch.contextSummaryByAttempt[activeAttemptId] : undefined;
+  const evidenceCount = activeAttemptId ? (dispatch.evidenceCountByAttempt[activeAttemptId] ?? 0) : 0;
+  const verificationStatus = dispatch.verificationStatusByTask[taskId];
+
+  return (
+    <div className="rounded bg-slate-50 p-2 text-[11px] text-slate-600 space-y-1">
+      <div className="font-medium text-slate-700">任务诊断信息</div>
+      <div>状态：<span className="font-mono">{verificationStatus ?? "未开始"}</span></div>
+      {contextSummary ? (
+        <div>上下文：{contextSummary.includedCount} 项包含 · {contextSummary.omittedCount} 项省略 · {contextSummary.tokenEstimate} tok</div>
+      ) : null}
+      <div>证据：{evidenceCount} 条记录</div>
+      {verdictSummary ? (
+        <div>验收：通过 {verdictSummary.passed} · 失败 {verdictSummary.failed} · 缺失 {verdictSummary.missing} · 待审 {verdictSummary.needsReview}</div>
+      ) : null}
+      <div className="text-[10px] text-slate-400">
+        详细证据和验收结果请通过 Run API 或 task-attempt API 查询
+      </div>
+    </div>
+  );
+}
+
+/** P7: Verification status badge */
+function VerificationBadge({ status }: { status: string }) {
+  const styles: Record<string, { color: string; label: string; icon: ReactElement }> = {
+    verified: { color: "text-emerald-700 bg-emerald-50", label: "已验证", icon: <CheckCircle2 className="h-3 w-3" /> },
+    rejected: { color: "text-red-700 bg-red-50", label: "未通过", icon: <XCircle className="h-3 w-3" /> },
+    checking: { color: "text-blue-700 bg-blue-50", label: "校验中", icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+    needs_review: { color: "text-amber-700 bg-amber-50", label: "待审查", icon: <AlertTriangle className="h-3 w-3" /> },
+  };
+  const s = styles[status] ?? { color: "text-slate-600 bg-slate-100", label: status, icon: <Circle className="h-3 w-3" /> };
+  return (
+    <span className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${s.color}`}>
+      {s.icon}{s.label}
+    </span>
   );
 }
 

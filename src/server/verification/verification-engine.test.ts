@@ -69,15 +69,18 @@ describe("validator-registry", () => {
     expect(result.evidenceIds).toContain("ev_art1");
   });
 
-  it("returns reviewer_verdict pending for free-text criteria", () => {
+  it("returns reviewer_verdict skipped for optional criteria (non-blocking, no evidence)", () => {
     const result = validateCriterion(
       { id: "c7", description: "UI looks good", required: false, validator: { type: "reviewer_verdict" } },
       { type: "reviewer_verdict" },
       sampleEvidence,
       undefined
     );
+    // P4: Optional reviewer_verdict must NOT auto-pass — no evidence, no "passed" status.
     expect(result.passed).toBe(false);
-    expect(result.reason).toContain("pending review");
+    expect(result.evidenceIds).toEqual([]);
+    // Optional → skipped, non-blocking (not "pending review" which is for required criteria)
+    expect(result.reason).toContain("optional");
   });
 
   it("Agent claiming test passed without command evidence fails", () => {

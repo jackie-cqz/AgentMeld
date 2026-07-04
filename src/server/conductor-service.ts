@@ -533,12 +533,21 @@ async function runChildTask(
     // Retry loop — up to maxAttempts
     const maxAttempts = task.maxAttempts || 1;
     const now = Date.now();
+    // P5: Track previous attempt identity for retry context.
+    // On the first attempt these are empty — there is no previous run.
+    // After each failed attempt, they are updated so the next iteration can
+    // pass them into compileTaskContext → buildFailureContext.
+    let previousRunId = "";
+    let previousAttemptId = "";
+    let previousError: string | undefined;
+    // Post-loop references: finalRunId for dispatch events, finalAttemptId for
+    // verification-status updates.
     let finalRunId = "";
     let finalAttemptId = "";
-    let finalEvaluation = evaluateChildTaskResult(task, undefined);
     // P4: Verified output bindings from verification engine (replaces trust-the-agent)
     let finalVerifiedBindings: Array<{ outputKey: string; artifactId: string; evidenceIds: string[] }> = [];
     let finalReport: ReturnType<typeof getTaskReport>;
+    let finalEvaluation: ReturnType<typeof evaluateChildTaskResult> = { status: "failed", error: "not started" };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // P0: Generate task execution identity for this attempt
@@ -576,15 +585,17 @@ async function runChildTask(
         updatedAt: now,
       });
 
-      // P3: Build compiled context snapshot via full compiler pipeline
-      const lastError = finalEvaluation.error;
+      // P3+P5: Build compiled context snapshot via full compiler pipeline.
+      // On retry (attempt > 1), pass the previous attempt's identity and error
+      // so context-compiler can build a targeted FailureContext instead of
+      // repeating the full original prompt.
       const envelope = await compileTaskContext({
         conversationId, conductorRunId: parentRunId, planId, planRevision: taskExecution.planRevision,
         task, attemptId, attempt, contextSnapshotId, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
         triggerMessage, resolvedInputs, upstreamArtifacts, activeFacts,
-        previousAttemptId: attempt > 1 ? finalAttemptId : undefined,
-        previousChildRunId: attempt > 1 ? finalRunId : undefined,
-        previousError: lastError,
+        previousAttemptId: attempt > 1 ? previousAttemptId : undefined,
+        previousChildRunId: attempt > 1 ? previousRunId : undefined,
+        previousError: attempt > 1 ? previousError : undefined,
         modelProvider: taskAgent?.modelProvider ?? null,
       });
 
@@ -609,6 +620,21 @@ async function runChildTask(
       } catch (err) {
         console.error(`[conductor] failed to persist context snapshot ${contextSnapshotId}:`, err);
       }
+
+      // P7: Emit context.compiled event for frontend observability
+      eventBus.publish({
+        type: "dispatch.context.compiled",
+        conversationId,
+        timestamp: Date.now(),
+        parentRunId,
+        taskId: task.id,
+        attemptId,
+        contextSnapshotId,
+        includedCount: envelope.manifest.filter(m => m.included).length,
+        omittedCount: envelope.manifest.filter(m => !m.included).length,
+        tokenEstimate: envelope.budget.requiredTokens,
+        agentId: task.agentId,
+      });
 
       // P3: Use compiled envelope prompt for first attempt, continuation for retries
       const attemptPrompt = attempt > 1
@@ -673,9 +699,29 @@ async function runChildTask(
       const report = getTaskReport(attemptRunId);
       const evidence = getRunToolEvidence(attemptRunId);
       finalEvaluation = evaluateChildTaskResult(task, report, evidence);
+      // P5: Capture this attempt's identity for the NEXT retry iteration.
+      // These become previousAttemptId / previousChildRunId / previousError
+      // in compileTaskContext → buildFailureContext on the next loop.
+      previousRunId = attemptRunId;
+      previousAttemptId = attemptId;
+      previousError = finalEvaluation.error;
+      // Also keep finalRunId/finalAttemptId for post-loop dispatch events
+      // and verification-status updates.
       finalRunId = attemptRunId;
       finalAttemptId = attemptId;
       finalReport = report;
+
+      // P7: Emit evidence.summary for frontend observability
+      eventBus.publish({
+        type: "dispatch.evidence.summary",
+        conversationId,
+        timestamp: Date.now(),
+        parentRunId,
+        taskId: task.id,
+        attemptId,
+        childRunId: attemptRunId,
+        evidenceCount: evidence.fileWrites.length + evidence.commands.length,
+      });
 
       // P4: Run verification engine against evidence ledger — always, not just on "complete"
       // This produces criterion verdicts even for failed tasks (explaining WHY it failed)
@@ -719,6 +765,19 @@ async function runChildTask(
         finalEvaluation = { status: "failed", error: `Verification engine failure: ${err instanceof Error ? err.message : "unknown error"}` };
       }
 
+      // P7: Emit verification.updated for frontend observability
+      eventBus.publish({
+        type: "dispatch.verification.updated",
+        conversationId,
+        timestamp: Date.now(),
+        parentRunId,
+        taskId: task.id,
+        attemptId,
+        status: finalEvaluation.status === "complete" ? "verified" : "rejected",
+        passedCount: (finalVerifiedBindings?.length ?? 0),
+        failedCount: finalEvaluation.status === "complete" ? 0 : 1,
+      });
+
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
 
@@ -754,89 +813,60 @@ async function runChildTask(
       );
     }
 
-    // P4: Only verified bindings may enter output — P1 evidence check falls back
-    const verifiedBindingKeys = new Set(finalVerifiedBindings.map(b => b.outputKey));
+    // ── P4: Output binding — verifiedOutputBindings is the SOLE authority ──
+    // The verification engine already validated each binding against:
+    //   - artifact_created evidence matching outputKey + artifactId
+    //   - artifact conversation ownership
+    //   - expected output type alignment
+    // Only bindings that passed verification may propagate downstream.
+    // There is NO fallback path that trusts agent self-report (report.artifacts).
 
-    // P1+P4: Strict output handoff — verify artifact_created evidence for each binding
-    if (finalEvaluation.status === "complete" && report?.artifacts) {
-      // Query SQLite evidence ledger for this attempt's artifact_created records
-      let attemptArtifactEvidence: Array<{ subjectId: string; payloadJson: string }> = [];
-      try {
-        const allEvidence = listEvidenceForAttempt(finalAttemptId);
-        attemptArtifactEvidence = allEvidence
-          .filter((e) => e.type === "artifact_created")
-          .map((e) => ({ subjectId: e.subjectId, payloadJson: e.payloadJson }));
-      } catch {
-        // Fallback to in-memory evidence if SQLite unavailable
-      }
+    if (finalEvaluation.status === "complete" && finalVerifiedBindings.length > 0) {
+      for (const binding of finalVerifiedBindings) {
+        const { outputKey, artifactId, evidenceIds } = binding;
 
-      for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
-        // P4: Only verified bindings may propagate downstream. Fall back to
-        // evidence-based check only when verification engine produced no bindings.
-        if (finalVerifiedBindings.length > 0) {
-          const verified = finalVerifiedBindings.find(b => b.outputKey === outputKey && b.artifactId === artifactId);
-          if (!verified) {
-            console.warn(`[output-binding] task ${task.id}: outputKey "${outputKey}" not in verified bindings — rejected`);
-            continue;
-          }
-          outputBindings.set(`${task.id}.${outputKey}`, artifactId);
-          persistOutputBinding({ conductorRunId: parentRunId, planId, producerTaskId: task.id, outputKey, artifactId, now: Date.now() });
-          continue;
-        }
-
-        const expectedOutput = task.expectedOutputs?.find((output) => output.id === outputKey);
-        if (!expectedOutput) {
-          console.warn(
-            `[output-binding] task ${task.id}: undeclared outputKey "${outputKey}" - rejected`
-          );
-          continue;
-        }
-
+        // Safety check: artifact must still exist and belong to this conversation
         const art = getArtifact(artifactId);
         if (!art || art.conversationId !== conversationId) {
           console.warn(
-            `[output-binding] task ${task.id}: artifact "${artifactId}" is missing or belongs to another conversation - rejected`
+            `[output-binding] task ${task.id}: verified artifact "${artifactId}" missing or wrong conversation — rejected`
           );
           continue;
         }
 
-        // Validate artifact type matches expected output type
+        // Validate against expectedOutputs declaration
+        const expectedOutput = task.expectedOutputs?.find((o) => o.id === outputKey);
+        if (!expectedOutput) {
+          console.warn(
+            `[output-binding] task ${task.id}: verified outputKey "${outputKey}" not declared in expectedOutputs — rejected`
+          );
+          continue;
+        }
+
         if (expectedOutput.type && art.type !== expectedOutput.type) {
           console.warn(
-            `[output-binding] task ${task.id}: artifact type "${art.type}" does not match expected "${expectedOutput.type}" for outputKey "${outputKey}" — rejected`
+            `[output-binding] task ${task.id}: artifact type "${art.type}" ≠ expected "${expectedOutput.type}" for "${outputKey}" — rejected`
           );
           continue;
         }
 
-        // P1: Strict provenance — MUST have artifact_created evidence matching
-        // outputKey + artifactId from the current attempt. No tool-activity fallback:
-        // write_artifact(outputKey) must produce a verifiable evidence record.
-        const hasArtifactEvidence = attemptArtifactEvidence.some((ev) => {
-          try {
-            const payload = JSON.parse(ev.payloadJson);
-            // Must match outputKey, and if artifactType is present, the artifact
-            // ID must match what was reported
-            const keyMatch = ev.subjectId === outputKey || payload.outputKey === outputKey;
-            const artifactMatch = !payload.artifactId || payload.artifactId === artifactId;
-            return keyMatch && artifactMatch;
-          } catch {
-            return false;
-          }
-        });
-
-        if (!hasArtifactEvidence) {
-          console.warn(
-            `[output-binding] task ${task.id}: no artifact_created evidence from attempt ${finalAttemptId} for outputKey "${outputKey}" artifactId "${artifactId}" — rejected`
-          );
-          continue;
-        }
-
+        console.log(
+          `[output-binding] task ${task.id}: binding "${outputKey}" → ${artifactId} (evidence: ${evidenceIds.join(", ") || "none"})`
+        );
         outputBindings.set(`${task.id}.${outputKey}`, artifactId);
         persistOutputBinding({
           conductorRunId: parentRunId, planId,
           producerTaskId: task.id, outputKey, artifactId, now: Date.now()
         });
       }
+    } else if (finalEvaluation.status === "complete" && finalVerifiedBindings.length === 0) {
+      // P4: No verified bindings produced — verification engine may have no
+      // artifact-typed criteria, or the task had no expectedOutputs. This is
+      // NOT an error: some tasks (e.g. code review) legitimately produce no
+      // artifact outputs. Log at info level, not warn.
+      console.log(
+        `[output-binding] task ${task.id}: evaluation complete but zero verified bindings — nothing to propagate`
+      );
     }
 
     // P1.4: Map "blocked" → "failed" for dispatch.end event

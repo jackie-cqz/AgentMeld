@@ -43,7 +43,10 @@ export function validateCriterion(
     case "user_confirmation":
       return validateUserConfirmation(evidence);
     case "reviewer_verdict":
-      // P4: Required reviewer_verdict → pending review. Optional → skipped, non-blocking.
+      // P4: reviewer_verdict cannot be auto-validated by code.
+      // Required → needs_review (blocks task until reviewer resolves).
+      // Optional → informational only, non-blocking.
+      // NEVER auto-pass without evidence — that violates Evidence > declaration.
       return criterion.required
         ? { passed: false, evidenceIds: [], reason: "reviewer_verdict requires a Reviewer Agent — pending review" }
         : { passed: false, evidenceIds: [], reason: "reviewer_verdict for optional criterion — skipped (no evidence, non-blocking)" };

@@ -46,6 +46,13 @@ export interface DispatchState {
   errors: Record<string, string>;
   reviewStatus?: "pending" | "approved" | "rejected";
   pendingPlanId?: string;
+  // ── P7: Evidence-aware context observability ───────────────────────────
+  attemptIdsByTask: Record<string, string[]>;
+  activeAttemptByTask: Record<string, string>;
+  verificationStatusByTask: Record<string, "checking" | "verified" | "rejected" | "needs_review">;
+  contextSummaryByAttempt: Record<string, { tokenEstimate: number; includedCount: number; omittedCount: number }>;
+  evidenceCountByAttempt: Record<string, number>;
+  verdictSummaryByAttempt: Record<string, { passed: number; failed: number; missing: number; needsReview: number }>;
 }
 
 export interface CompactionState {
