@@ -85,10 +85,10 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
   try {
     const q = entry.question;
     const firstQ = q.questions[0]?.question ?? "";
-    // Look up any task attempt for this conductor run
+    // P1: Child questions use child_run_id; conductor questions use conductor_run_id
     const attempts = getDatabase()
-      .prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
-      .all(q.runId) as Array<{ id: string }>;
+      .prepare("SELECT id FROM task_attempts WHERE child_run_id = ? UNION ALL SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
+      .all(q.runId, q.runId) as Array<{ id: string }>;
     const attemptId = attempts[0]?.id;
     if (attemptId) {
       insertEvidence({

@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type { ToolDef, ToolContext, ToolResult } from "@/server/tools/types";
 import { resolveFacts } from "@/server/context-facts/fact-service";
+import { generateCanonicalKey } from "@/server/context-facts/fact-key-generator";
 import type { CandidateFactUpdate } from "@/shared/context-fact-types";
 
 const factValueTypeSchema = z.enum([
@@ -167,7 +168,7 @@ export const updateContextFactsTool: ToolDef = {
     const now = Date.now();
 
     for (const p of proposals) {
-      const canonicalKey = `proposed:${p.entity}.${p.property}`;
+      const canonicalKey = generateCanonicalKey(p.entity, p.property, p.proposedNamespace);
       const defId = `def_${ctx.conversationId}_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}`.slice(0, 64);
       try {
         insertDef.run(

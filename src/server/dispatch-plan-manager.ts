@@ -121,16 +121,22 @@ function resolvePlan(
   const now = Date.now();
   if (!resolveApproval(id, outcome.approved, now)) return false;
 
-  // P1: Record approval evidence — must use a real task_attempt row for FK
+  // P1: Record approval evidence — create a conductor-level attempt if none exists
   const p = entry.plan;
   try {
-    // Look up any task attempt for this conductor run
-    const attempts = getDatabase()
-      .prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
-      .all(p.runId) as Array<{ id: string }>;
-    const attemptId = attempts[0]?.id;
-    if (attemptId) {
-      insertEvidence({
+    const db = getDatabase();
+    // Look up or create a conductor meta-attempt for pre-execution approvals
+    let attemptId = (db.prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1").all(p.runId) as Array<{ id: string }>)[0]?.id;
+    if (!attemptId) {
+      attemptId = `ta_conductor_${p.runId}`;
+      try {
+        db.prepare(`
+          INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(attemptId, p.runId, p.conversationId, `plan_${p.runId}`, 0, "conductor", "conductor", 0, "running", "not_started", now, now);
+      } catch { /* may already exist */ }
+    }
+    insertEvidence({
         id: newEvidenceId(),
         conversationId: p.conversationId,
         conductorRunId: p.runId,
@@ -152,7 +158,6 @@ function resolvePlan(
         invalidatedAt: null,
         createdAt: now,
       });
-    }
   } catch { /* evidence best-effort */ }
 
   store.delete(id);

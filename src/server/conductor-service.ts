@@ -4,6 +4,7 @@ import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
 import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, persistConductorConflict } from "@/server/repositories";
+import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
@@ -110,12 +111,21 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     // Validated plan (compiled with auto-deps)
     const compiledPlan = validationResult;
 
-    // P2: Persist plan to DB
-    const planId = `plan_${input.conductorRunId}_${revisionContext ? "rev" : "init"}`;
+    // P2: Persist plan to DB — increment revision to avoid unique key conflicts
+    let planRevision = 0;
+    let planId = `plan_${input.conductorRunId}_init`;
+    if (revisionContext) {
+      // Count existing plans for this run to determine next revision number
+      const existingCount = (getDatabase()
+        .prepare("SELECT COUNT(*) as cnt FROM conductor_plans WHERE conductor_run_id = ?")
+        .get(input.conductorRunId) as { cnt: number } | undefined)?.cnt ?? 0;
+      planRevision = existingCount;
+      planId = `plan_${input.conductorRunId}_rev${existingCount}`;
+    }
     persistConductorPlan({
       id: planId, conductorRunId: input.conductorRunId, conversationId: input.conversationId,
       planJson: JSON.stringify(compiledPlan),
-      revision: revisionContext ? 1 : 0,
+      revision: planRevision,
       status: "pending",
       userFeedback: revisionContext || null,
       stageAtCreation: revisionContext ? "review" : "plan",
@@ -541,7 +551,7 @@ async function runChildTask(
       const taskExecution: TaskExecutionIdentity = {
         conductorRunId: parentRunId,
         planId,
-        planRevision: (planId.endsWith("_recovery") || planId.endsWith("_rev")) ? 1 : 0,
+        planRevision: (() => { const m = planId.match(/_rev(\d+)$|_recovery(\d+)?$/); return m ? parseInt(m[1] || m[2] || "1") : 0; })(),
         taskId: task.id,
         attemptId,
         attempt,
@@ -554,7 +564,7 @@ async function runChildTask(
         conductorRunId: parentRunId,
         conversationId,
         planId,
-        planRevision: (planId.endsWith("_recovery") || planId.endsWith("_rev")) ? 1 : 0,
+        planRevision: (() => { const m = planId.match(/_rev(\d+)$|_recovery(\d+)?$/); return m ? parseInt(m[1] || m[2] || "1") : 0; })(),
         taskId: task.id,
         agentId: task.agentId,
         childRunId: null,

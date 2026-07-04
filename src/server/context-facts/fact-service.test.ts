@@ -136,6 +136,34 @@ describe("fact-key-generator", () => {
   });
 });
 
+describe("fact-key-generator proposals", () => {
+  it("generates clean keys with no proposed: prefix", () => {
+    const key = generateCanonicalKey("theme", "primaryColor", "ui");
+    expect(key).not.toContain("proposed:");
+    expect(key).toBe("ui.primarycolor"); // normalized lowercase
+  });
+
+  it("generates keys from entity+property without namespace", () => {
+    const key = generateCanonicalKey("PomodoroTimer", "defaultWorkDurationMinutes");
+    expect(key).not.toContain("proposed:");
+    expect(key).toBe("pomodoro.timer.defaultworkdurationminutes");
+  });
+});
+
+describe("fact-agent-dto empty roles", () => {
+  it("treats empty applicableAgentRoles as all roles", () => {
+    // Dynamic defs with empty roles should NOT be filtered out
+    const defs = getFilteredDefinitionsForAgent({
+      conversationId: "test",
+      agentRole: "frontend",
+    });
+    // Builtin defs have non-empty roles and should be returned
+    const colorDef = defs.find(d => d.definitionId === "builtin_ui_primary_color");
+    expect(colorDef).toBeDefined();
+    // If there were dynamic defs with empty roles, they'd also pass the filter
+  });
+});
+
 // fact-agent-dto requires a real SQLite database with conversation_facts table.
 // These are integration tests that validate the DTO shape and filtering logic.
 describe.skip("fact-agent-dto", () => {

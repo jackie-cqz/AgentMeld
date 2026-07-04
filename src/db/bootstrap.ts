@@ -475,6 +475,9 @@ function migrateLegacyTables() {
   ensureColumn("conductor_task_results", "verification_status", "TEXT NOT NULL DEFAULT 'not_started'");
   ensureColumn("conductor_task_results", "verified_attempt_id", "TEXT");
 
+  // P2: value_json for dynamic definition proposals (added after initial P2 schema)
+  try { getDatabase().exec("ALTER TABLE conversation_fact_definitions ADD COLUMN value_json TEXT"); } catch { /* already exists */ }
+
   getDatabase().exec(`
     UPDATE agent_runs SET started_at = created_at WHERE started_at = 0;
   `);
