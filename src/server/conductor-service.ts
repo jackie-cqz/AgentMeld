@@ -674,33 +674,45 @@ async function runChildTask(
       finalAttemptId = attemptId;
       finalReport = report;
 
-      // P4: Run verification engine against evidence ledger (replaces trust-the-agent)
-      if (finalEvaluation.status === "complete") {
-        try {
-          const verification = await verifyTaskAttempt(task, attemptId, report);
-          // Persist criterion verdicts to DB
-          for (const v of verification.verdicts) {
-            try {
-              upsertCriterionVerdict({
-                id: v.id,
-                attemptId,
-                criterionId: v.criterionId,
-                validatorType: v.validatorType,
-                status: v.status,
-                evidenceIdsJson: JSON.stringify(v.evidenceIds),
-                reason: v.reason,
-                checkedAt: v.checkedAt,
-              });
-            } catch { /* verdict persistence is best-effort */ }
+      // P4: Run verification engine against evidence ledger — always, not just on "complete"
+      // This produces criterion verdicts even for failed tasks (explaining WHY it failed)
+      let verificationFailed = false;
+      try {
+        const verification = await verifyTaskAttempt(task, attemptId, report);
+        let persistedCount = 0;
+        for (const v of verification.verdicts) {
+          try {
+            upsertCriterionVerdict({
+              id: v.id,
+              attemptId,
+              criterionId: v.criterionId,
+              validatorType: v.validatorType,
+              status: v.status,
+              evidenceIdsJson: JSON.stringify(v.evidenceIds),
+              reason: v.reason,
+              checkedAt: v.checkedAt,
+            });
+            persistedCount++;
+          } catch (err) {
+            // P4: Surface persistence failures — evidence-aware gate shouldn't silently drop verdicts
+            console.error(`[conductor] failed to persist verdict ${v.criterionId} for attempt ${attemptId}:`, err);
           }
-          // Verification can downgrade a self-reported "complete" to "failed"
-          if (verification.status === "rejected") {
-            finalEvaluation = { status: "failed", error: `Verification rejected: ${verification.verdicts.filter(v => v.status === "failed").map(v => v.reason).join("; ")}` };
-          }
-        } catch {
-          // Verification engine failure must not block task evaluation
-          console.error(`[conductor] verification engine failed for task ${task.id} attempt ${attemptId}`);
         }
+        if (persistedCount === 0 && verification.verdicts.length > 0) {
+          console.error(`[conductor] ALL verdict persistence failed for attempt ${attemptId} — evidence gate compromised`);
+        }
+        // P4: Verification can override the self-reported evaluation
+        if (verification.status === "rejected") {
+          finalEvaluation = { status: "failed", error: `Verification rejected: ${verification.verdicts.filter(v => v.status === "failed").map(v => v.reason).join("; ")}` };
+          verificationFailed = true;
+        } else if (verification.status === "needs_review" && finalEvaluation.status === "complete") {
+          // needs_review on a self-reported-complete task → block it
+          finalEvaluation = { status: "failed", error: `Verification incomplete: ${verification.verdicts.filter(v => v.status === "needs_review").map(v => v.reason).join("; ")}` };
+          verificationFailed = true;
+        }
+      } catch (err) {
+        // Verification engine crash → don't block, but log prominently
+        console.error(`[conductor] verification engine CRASHED for task ${task.id} attempt ${attemptId}:`, err);
       }
 
       clearRunToolEvidence(attemptRunId);

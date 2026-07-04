@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Agent, Message } from "@/shared/types";
-import type { TaskExecutionIdentity } from "@/shared/evidence-types";
+import type { TaskExecutionIdentity, CriterionVerdict } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, FailureContext } from "@/shared/task-context-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { ResolvedInput, UpstreamArtifact, ActiveFactEntry } from "@/server/child-prompt-builder";
@@ -123,7 +123,19 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   let failureCtx: FailureContext | null = null;
   if (input.attempt > 1 && input.previousAttemptId) {
     let previousVerdicts: Parameters<typeof buildFailureContext>[0]["failedCriteria"] = [];
-    try { previousVerdicts = listCriterionVerdicts(input.previousAttemptId) as unknown as typeof previousVerdicts; } catch { /* best-effort */ }
+    try {
+      // P5: VerdictRecord.evidenceIdsJson (string) → CriterionVerdict.evidenceIds (string[])
+      const rawVerdicts = listCriterionVerdicts(input.previousAttemptId);
+      previousVerdicts = rawVerdicts.map(v => ({
+        id: v.id,
+        criterionId: v.criterionId,
+        status: v.status as "passed" | "failed" | "missing" | "needs_review",
+        validatorType: v.validatorType as CriterionVerdict["validatorType"],
+        evidenceIds: parseEvidenceIds(v.evidenceIdsJson),
+        reason: v.reason,
+        checkedAt: v.checkedAt,
+      }));
+    } catch { /* best-effort */ }
     failureCtx = await buildFailureContext({
       previousAttemptId: input.previousAttemptId,
       previousChildRunId: "", previousError: input.previousError,
@@ -303,4 +315,8 @@ function extractTextFromMessage(msg: Message): string {
 function estimateToken(content: unknown): number {
   const s = typeof content === "string" ? content : JSON.stringify(content);
   return Math.ceil(s.length / 4);
+}
+
+function parseEvidenceIds(json: string): string[] {
+  try { const v = JSON.parse(json); return Array.isArray(v) ? v : []; } catch { return []; }
 }
