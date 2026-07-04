@@ -60,7 +60,8 @@ export async function verifyTaskAttempt(
     if (verdict.status === "failed" && criterion.required) {
       hasFailure = true;
     }
-    if (verdict.status === "needs_review") {
+    // P4: Only required criteria in needs_review can block the task
+    if (verdict.status === "needs_review" && criterion.required) {
       hasReviewNeeded = true;
     }
   }

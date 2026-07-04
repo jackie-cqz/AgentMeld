@@ -583,6 +583,7 @@ async function runChildTask(
         task, attemptId, attempt, contextSnapshotId, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
         triggerMessage, resolvedInputs, upstreamArtifacts, activeFacts,
         previousAttemptId: attempt > 1 ? finalAttemptId : undefined,
+        previousChildRunId: attempt > 1 ? finalRunId : undefined,
         previousError: lastError,
         modelProvider: taskAgent?.modelProvider ?? null,
       });
@@ -770,6 +771,19 @@ async function runChildTask(
       }
 
       for (const [outputKey, artifactId] of Object.entries(report.artifacts)) {
+        // P4: Only verified bindings may propagate downstream. Fall back to
+        // evidence-based check only when verification engine produced no bindings.
+        if (finalVerifiedBindings.length > 0) {
+          const verified = finalVerifiedBindings.find(b => b.outputKey === outputKey && b.artifactId === artifactId);
+          if (!verified) {
+            console.warn(`[output-binding] task ${task.id}: outputKey "${outputKey}" not in verified bindings — rejected`);
+            continue;
+          }
+          outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+          persistOutputBinding({ conductorRunId: parentRunId, planId, producerTaskId: task.id, outputKey, artifactId, now: Date.now() });
+          continue;
+        }
+
         const expectedOutput = task.expectedOutputs?.find((output) => output.id === outputKey);
         if (!expectedOutput) {
           console.warn(
