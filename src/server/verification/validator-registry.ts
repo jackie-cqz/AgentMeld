@@ -1,0 +1,127 @@
+// ---------------------------------------------------------------------------
+// P4: Validator Registry — maps CriterionValidator types to validators
+// ---------------------------------------------------------------------------
+
+import type { CriterionValidator } from "@/shared/evidence-types";
+import type { AcceptanceCriterionSpec } from "@/shared/types";
+
+export interface ValidationResult {
+  passed: boolean;
+  evidenceIds: string[];
+  reason: string;
+}
+
+interface EvidenceRecord {
+  id: string; type: string; subjectId: string; payloadJson: string; status: string;
+}
+
+/** Resolve the appropriate validator function for a given validator spec */
+export function resolveValidator(validator: CriterionValidator): CriterionValidator {
+  return validator; // Pass-through; dispatch happens in validateCriterion
+}
+
+/** Validate a single criterion against available evidence */
+export function validateCriterion(
+  criterion: AcceptanceCriterionSpec,
+  _validator: CriterionValidator,
+  evidence: EvidenceRecord[],
+  taskReport: { artifacts?: Record<string, string>; summary?: string } | undefined
+): ValidationResult {
+  const v = criterion.validator;
+
+  switch (v.type) {
+    case "file_exists":
+      return validateFileExists(v.path, evidence);
+    case "file_changed":
+      return validateFileChanged(v.path, evidence);
+    case "command_exit":
+      return validateCommandExit(v.command, v.expectedExitCode, evidence);
+    case "artifact_exists":
+      return validateArtifactExists(v.outputKey, v.artifactType, evidence, taskReport);
+    case "deployment_created":
+      return validateDeploymentCreated(v.outputKey, evidence);
+    case "user_confirmation":
+      return validateUserConfirmation(evidence);
+    case "reviewer_verdict":
+      return { passed: false, evidenceIds: [], reason: "reviewer_verdict requires a Reviewer Agent — pending review" };
+    default:
+      return { passed: false, evidenceIds: [], reason: `Unknown validator type: ${(v as { type?: string }).type}` };
+  }
+}
+
+function validateFileExists(path: string, evidence: EvidenceRecord[]): ValidationResult {
+  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path);
+  if (matched.length > 0) {
+    return { passed: true, evidenceIds: matched.map(e => e.id), reason: `File "${path}" was written.` };
+  }
+  return { passed: false, evidenceIds: [], reason: `File "${path}" was not created/modified in this attempt.` };
+}
+
+function validateFileChanged(path: string, evidence: EvidenceRecord[]): ValidationResult {
+  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path);
+  if (matched.length > 0) {
+    return { passed: true, evidenceIds: matched.map(e => e.id), reason: `File "${path}" was modified.` };
+  }
+  return { passed: false, evidenceIds: [], reason: `File "${path}" was not modified in this attempt.` };
+}
+
+function validateCommandExit(command: string, expectedExitCode: number, evidence: EvidenceRecord[]): ValidationResult {
+  const matched = evidence.filter(e =>
+    (e.type === "command_executed" || e.type === "test_executed") &&
+    e.subjectId.includes(command.slice(0, 60))
+  );
+  if (matched.length === 0) {
+    return { passed: false, evidenceIds: [], reason: `Command "${command}" was not executed in this attempt.` };
+  }
+  // Check exit code — look for evidence with matching exit code
+  for (const ev of matched) {
+    try {
+      const p = JSON.parse(ev.payloadJson);
+      if (p.exitCode === expectedExitCode) {
+        return { passed: true, evidenceIds: [ev.id], reason: `Command "${command}" exited with ${expectedExitCode} as expected.` };
+      }
+    } catch { /* skip unparseable */ }
+  }
+  return { passed: false, evidenceIds: matched.map(e => e.id), reason: `Command "${command}" did not exit with ${expectedExitCode}.` };
+}
+
+function validateArtifactExists(
+  outputKey: string, artifactType: string | undefined,
+  evidence: EvidenceRecord[], taskReport: { artifacts?: Record<string, string> } | undefined
+): ValidationResult {
+  // Check evidence for artifact_created matching outputKey
+  const matched = evidence.filter(e => e.type === "artifact_created" && e.subjectId === outputKey);
+  if (matched.length === 0) {
+    return { passed: false, evidenceIds: [], reason: `No artifact_created evidence for outputKey "${outputKey}".` };
+  }
+  // Also check report artifacts if available
+  if (taskReport?.artifacts) {
+    const artId = taskReport.artifacts[outputKey];
+    if (!artId) {
+      return { passed: false, evidenceIds: matched.map(e => e.id), reason: `Artifact "${outputKey}" not found in task report.` };
+    }
+  }
+  if (artifactType) {
+    // Could verify type here — for V1 just note it
+  }
+  return { passed: true, evidenceIds: matched.map(e => e.id), reason: `Artifact "${outputKey}" was created.` };
+}
+
+function validateDeploymentCreated(outputKey: string | undefined, evidence: EvidenceRecord[]): ValidationResult {
+  const matched = evidence.filter(e =>
+    e.type === "deployment_created" &&
+    (!outputKey || e.subjectId === outputKey)
+  );
+  if (matched.length > 0) {
+    return { passed: true, evidenceIds: matched.map(e => e.id), reason: `Deployment was created.` };
+  }
+  return { passed: false, evidenceIds: [], reason: `No deployment_created evidence found.` };
+}
+
+function validateUserConfirmation(evidence: EvidenceRecord[]): ValidationResult {
+  const matched = evidence.filter(e => e.type === "user_answered" || e.type === "approval_resolved");
+  if (matched.length > 0) {
+    return { passed: true, evidenceIds: matched.map(e => e.id), reason: `User confirmation received.` };
+  }
+  return { passed: false, evidenceIds: [], reason: `No user confirmation evidence found.` };
+}

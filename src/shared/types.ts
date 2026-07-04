@@ -322,6 +322,14 @@ export interface PendingQuestion {
   createdAt: number;
 }
 
+/** P4: Structured acceptance criterion with machine-verifiable validator */
+export interface AcceptanceCriterionSpec {
+  id: string;
+  description: string;
+  required: boolean;
+  validator: import("@/shared/evidence-types").CriterionValidator;
+}
+
 export interface DispatchPlanItem {
   id: string;
   agentId: string;
