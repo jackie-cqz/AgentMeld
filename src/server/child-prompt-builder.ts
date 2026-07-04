@@ -241,3 +241,7 @@ function escapeXml(s: string): string {
 function normalizeConversationSource(source: string): string {
   return source === "conductor" ? "conductor" : source;
 }
+
+// ── P3: Re-export from context-renderer for conductor-service to use ────────
+
+export { renderTaskContextPrompt } from "@/server/task-context/context-renderer";

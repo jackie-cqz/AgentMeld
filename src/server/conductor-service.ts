@@ -8,7 +8,8 @@ import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
-import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
+import { buildChildTaskPrompt, resolveTaskInputs, renderTaskContextPrompt, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
+import { compileTaskContext } from "@/server/task-context/context-compiler";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
@@ -497,10 +498,10 @@ async function runChildTask(
     }
 
     // P2: Load active facts for this agent's context
+    const taskAgent = listAgents().find(a => a.id === task.agentId);
     let activeFacts: ActiveFactEntry[] = [];
     try {
       // P2: Derive agent role from capabilities, not agentId
-      const taskAgent = listAgents().find(a => a.id === task.agentId);
       const agentRole = taskAgent?.capabilities?.find(c =>
         ["pm", "ui", "frontend", "react", "design", "review"].includes(c)
       ) ?? null;
@@ -579,17 +580,16 @@ async function runChildTask(
         updatedAt: now,
       });
 
-      // P0: Build minimal context snapshot (full compilation in P2)
+      // P3: Build compiled context snapshot via full compiler pipeline
       const lastError = finalEvaluation.error;
-      const envelope = buildMinimalContextEnvelope(
-        taskExecution,
-        task,
-        resolvedInputs,
-        upstreamArtifacts,
-        attempt > 1 && lastError
-          ? { previousAttemptId: finalAttemptId, error: lastError }
-          : undefined
-      );
+      const envelope = await compileTaskContext({
+        conversationId, conductorRunId: parentRunId, planId, planRevision: taskExecution.planRevision,
+        task, attemptId, attempt, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
+        triggerMessage, resolvedInputs, upstreamArtifacts, activeFacts,
+        previousAttemptId: attempt > 1 ? finalAttemptId : undefined,
+        previousError: lastError,
+        modelProvider: taskAgent?.modelProvider ?? null,
+      });
 
       // P1: Persist context snapshot to SQLite
       try {
@@ -613,9 +613,10 @@ async function runChildTask(
         console.error(`[conductor] failed to persist context snapshot ${contextSnapshotId}:`, err);
       }
 
+      // P3: Use compiled envelope prompt for first attempt, continuation for retries
       const attemptPrompt = attempt > 1
-        ? buildContinuationPrompt(prompt, attempt, maxAttempts, finalEvaluation.error ?? "unknown")
-        : prompt;
+        ? buildContinuationPrompt(renderTaskContextPrompt(envelope), attempt, maxAttempts, finalEvaluation.error ?? "unknown")
+        : renderTaskContextPrompt(envelope);
 
       const attemptMsg: Message = {
         id: newMessageId(), conversationId, role: "user", agentId: null, runId: null,
