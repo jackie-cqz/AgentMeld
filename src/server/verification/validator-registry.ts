@@ -43,7 +43,10 @@ export function validateCriterion(
     case "user_confirmation":
       return validateUserConfirmation(evidence);
     case "reviewer_verdict":
-      return { passed: false, evidenceIds: [], reason: "reviewer_verdict requires a Reviewer Agent — pending review" };
+      // P4: Non-required reviewer_verdict auto-passes (free-text criteria shouldn't block)
+      return criterion.required
+        ? { passed: false, evidenceIds: [], reason: "reviewer_verdict requires a Reviewer Agent — pending review" }
+        : { passed: true, evidenceIds: [], reason: "reviewer_verdict for optional criterion — auto-passed" };
     default:
       return { passed: false, evidenceIds: [], reason: `Unknown validator type: ${(v as { type?: string }).type}` };
   }

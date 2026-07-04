@@ -53,10 +53,16 @@ export async function buildFailureContext(input: FailureContextInput): Promise<F
     failedEvidenceIds.push(...c.evidenceIds);
   }
 
-  // Build retry instructions
+  // Build retry instructions with passed/failed distinction
   const retryInstructions: string[] = [];
-  for (const c of input.failedCriteria) {
-    retryInstructions.push(`Failed criterion "${c.criterionId}" (${c.status}): ${c.reason}`);
+  const passed = input.failedCriteria.filter(c => c.status === "passed");
+  const failed = input.failedCriteria.filter(c => c.status !== "passed");
+
+  if (passed.length > 0) {
+    retryInstructions.push(`Already passed: ${passed.map(c => c.criterionId).join(", ")} — do NOT redo these.`);
+  }
+  for (const c of failed) {
+    retryInstructions.push(`FAILED criterion "${c.criterionId}" (${c.status}): ${c.reason} — MUST fix this.`);
   }
   for (const cmd of failedCommands) {
     retryInstructions.push(`Command "${cmd.command}" exited with ${cmd.exitCode}: ${cmd.errorExcerpt}`);

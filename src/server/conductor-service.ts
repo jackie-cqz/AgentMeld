@@ -536,6 +536,8 @@ async function runChildTask(
     let finalRunId = "";
     let finalAttemptId = "";
     let finalEvaluation = evaluateChildTaskResult(task, undefined);
+    // P4: Verified output bindings from verification engine (replaces trust-the-agent)
+    let finalVerifiedBindings: Array<{ outputKey: string; artifactId: string; evidenceIds: string[] }> = [];
     let finalReport: ReturnType<typeof getTaskReport>;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -701,6 +703,9 @@ async function runChildTask(
           console.error(`[conductor] ALL verdict persistence failed for attempt ${attemptId} — evidence gate compromised`);
         }
         // P4: Verification can override the self-reported evaluation
+        // P4: Capture verified output bindings from the verification result
+        finalVerifiedBindings = verification.verifiedOutputBindings;
+
         if (verification.status === "rejected") {
           finalEvaluation = { status: "failed", error: `Verification rejected: ${verification.verdicts.filter(v => v.status === "failed").map(v => v.reason).join("; ")}` };
         } else if (verification.status === "needs_review" && finalEvaluation.status === "complete") {
@@ -748,7 +753,10 @@ async function runChildTask(
       );
     }
 
-    // P1: Strict output handoff — verify artifact_created evidence for each binding
+    // P4: Only verified bindings may enter output — P1 evidence check falls back
+    const verifiedBindingKeys = new Set(finalVerifiedBindings.map(b => b.outputKey));
+
+    // P1+P4: Strict output handoff — verify artifact_created evidence for each binding
     if (finalEvaluation.status === "complete" && report?.artifacts) {
       // Query SQLite evidence ledger for this attempt's artifact_created records
       let attemptArtifactEvidence: Array<{ subjectId: string; payloadJson: string }> = [];

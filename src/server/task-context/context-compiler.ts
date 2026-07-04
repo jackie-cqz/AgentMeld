@@ -36,6 +36,7 @@ export interface CompileTaskContextInput {
   /** P3: activeFacts already filtered by agent role via getFilteredDefinitionsForAgent */
   activeFacts: ActiveFactEntry[];
   previousAttemptId?: string;
+  previousChildRunId?: string;
   previousError?: string;
   modelProvider?: string | null;
   systemPromptTokens?: number;
@@ -138,7 +139,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     } catch { /* best-effort */ }
     failureCtx = await buildFailureContext({
       previousAttemptId: input.previousAttemptId,
-      previousChildRunId: "", previousError: input.previousError,
+      previousChildRunId: input.previousChildRunId ?? "", previousError: input.previousError,
       failedCriteria: previousVerdicts,
     });
     candidates.push({

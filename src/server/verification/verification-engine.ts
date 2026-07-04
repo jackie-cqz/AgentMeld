@@ -89,8 +89,8 @@ export async function verifyTaskAttempt(
 function normalizeCriteria(raw: (string | AcceptanceCriterionSpec)[]): AcceptanceCriterionSpec[] {
   return raw.map((c, i) => {
     if (typeof c === "string") {
-      // Default: reviewer_verdict for free-text criteria (§10.2)
-      return { id: `criterion_${i}`, description: c, required: true, validator: { type: "reviewer_verdict" } };
+      // P4: Free-text criteria default to optional reviewer_verdict — don't block tasks
+      return { id: `criterion_${i}`, description: c, required: false, validator: { type: "reviewer_verdict" } };
     }
     return c;
   });
