@@ -8,6 +8,7 @@ import type { TaskContextEnvelope, FailureContext } from "@/shared/task-context-
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { ResolvedInput, UpstreamArtifact, ActiveFactEntry } from "@/server/child-prompt-builder";
 import { getArtifact } from "@/server/repositories";
+import { listCriterionVerdicts } from "@/server/repositories/evidence-repository";
 import { buildFailureContext } from "@/server/task-context/failure-context";
 import { classifyCandidate, isForbidden } from "@/server/task-context/context-policy";
 import { type ContextCandidate, candidateToManifestItem } from "@/server/task-context/context-candidates";
@@ -118,13 +119,15 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
-  // Step 11: Failure context
+  // Step 11: Failure context — load real verdicts from previous attempt
   let failureCtx: FailureContext | null = null;
   if (input.attempt > 1 && input.previousAttemptId) {
+    let previousVerdicts: Parameters<typeof buildFailureContext>[0]["failedCriteria"] = [];
+    try { previousVerdicts = listCriterionVerdicts(input.previousAttemptId) as unknown as typeof previousVerdicts; } catch { /* best-effort */ }
     failureCtx = await buildFailureContext({
       previousAttemptId: input.previousAttemptId,
       previousChildRunId: "", previousError: input.previousError,
-      failedCriteria: [],
+      failedCriteria: previousVerdicts,
     });
     candidates.push({
       id: `${estimateId}_fail`, category: "failure", sourceType: "evaluation", sourceId: input.previousAttemptId,

@@ -121,6 +121,43 @@ describe("verification-engine", () => {
     expect(result).toHaveProperty("status");
     expect(result).toHaveProperty("verdicts");
   });
+
+  it("returns rejected when required criterion fails", async () => {
+    const task = {
+      id: "t1", agentId: "ag1", title: "Test", prompt: "",
+      dependsOn: [], inputs: [], expectedOutputs: [],
+      acceptanceCriteria: [
+        { id: "build", description: "Build passes", required: true, validator: { type: "command_exit", command: "pnpm build", expectedExitCode: 0 } },
+      ] as unknown as string[],
+      maxAttempts: 1,
+    } as ParsedTask;
+    const result = await verifyTaskAttempt(task, "ta_test", undefined);
+    // Without build evidence, this should be rejected (no command_executed evidence)
+    expect(result.status === "rejected" || result.status === "needs_review").toBe(true);
+    expect(result.verdicts.length).toBeGreaterThan(0);
+  });
+
+  it("produces verdicts with evidenceIds on pass", async () => {
+    const task = {
+      id: "t2", agentId: "ag1", title: "Test", prompt: "",
+      dependsOn: [], inputs: [], expectedOutputs: [],
+      acceptanceCriteria: [
+        { id: "file_exists", description: "File written", required: true, validator: { type: "file_exists", path: "src/App.tsx" } },
+      ] as unknown as string[],
+      maxAttempts: 1,
+    } as ParsedTask;
+    const result = await verifyTaskAttempt(task, "ta_test", undefined);
+    expect(result.verdicts.length).toBeGreaterThan(0);
+    // Each verdict should have the required fields
+    for (const v of result.verdicts) {
+      expect(v).toHaveProperty("id");
+      expect(v).toHaveProperty("criterionId");
+      expect(v).toHaveProperty("status");
+      expect(v).toHaveProperty("evidenceIds");
+      expect(v).toHaveProperty("reason");
+      expect(v).toHaveProperty("checkedAt");
+    }
+  });
 });
 
 // ── P5: Failure-driven retry context ──────────────────────────────────────

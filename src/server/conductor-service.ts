@@ -18,6 +18,8 @@ import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
+import { verifyTaskAttempt } from "@/server/verification/verification-engine";
+import { upsertCriterionVerdict } from "@/server/repositories/evidence-repository";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { newMessageId, newTaskAttemptId, newContextSnapshotId } from "@/shared/ids";
 import type { Message, DispatchPlanItem, Agent } from "@/shared/types";
@@ -671,6 +673,36 @@ async function runChildTask(
       finalRunId = attemptRunId;
       finalAttemptId = attemptId;
       finalReport = report;
+
+      // P4: Run verification engine against evidence ledger (replaces trust-the-agent)
+      if (finalEvaluation.status === "complete") {
+        try {
+          const verification = await verifyTaskAttempt(task, attemptId, report);
+          // Persist criterion verdicts to DB
+          for (const v of verification.verdicts) {
+            try {
+              upsertCriterionVerdict({
+                id: v.id,
+                attemptId,
+                criterionId: v.criterionId,
+                validatorType: v.validatorType,
+                status: v.status,
+                evidenceIdsJson: JSON.stringify(v.evidenceIds),
+                reason: v.reason,
+                checkedAt: v.checkedAt,
+              });
+            } catch { /* verdict persistence is best-effort */ }
+          }
+          // Verification can downgrade a self-reported "complete" to "failed"
+          if (verification.status === "rejected") {
+            finalEvaluation = { status: "failed", error: `Verification rejected: ${verification.verdicts.filter(v => v.status === "failed").map(v => v.reason).join("; ")}` };
+          }
+        } catch {
+          // Verification engine failure must not block task evaluation
+          console.error(`[conductor] verification engine failed for task ${task.id} attempt ${attemptId}`);
+        }
+      }
+
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
 
