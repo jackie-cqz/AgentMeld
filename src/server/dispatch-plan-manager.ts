@@ -121,10 +121,15 @@ function resolvePlan(
   const now = Date.now();
   if (!resolveApproval(id, outcome.approved, now)) return false;
 
-  // P1: Record approval evidence — create a conductor-level attempt if none exists
+  // P1: Record approval evidence — use real planId from conductor_plans table
   const p = entry.plan;
   try {
     const db = getDatabase();
+    // Look up the real planId for this conductor run (may be _init, _rev1, etc.)
+    const planRow = db.prepare("SELECT id, revision FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision DESC LIMIT 1").get(p.runId) as { id: string; revision: number } | undefined;
+    const realPlanId = planRow?.id ?? `plan_${p.runId}_init`;
+    const planRevision = planRow?.revision ?? 0;
+
     // Look up or create a conductor meta-attempt for pre-execution approvals
     let attemptId = (db.prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1").all(p.runId) as Array<{ id: string }>)[0]?.id;
     if (!attemptId) {
@@ -133,14 +138,14 @@ function resolvePlan(
         db.prepare(`
           INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(attemptId, p.runId, p.conversationId, `plan_${p.runId}`, 0, "conductor", "conductor", 0, "running", "not_started", now, now);
+        `).run(attemptId, p.runId, p.conversationId, realPlanId, planRevision, "conductor", "conductor", 0, "running", "not_started", now, now);
       } catch { /* may already exist */ }
     }
     insertEvidence({
         id: newEvidenceId(),
         conversationId: p.conversationId,
         conductorRunId: p.runId,
-        planId: `plan_${p.runId}`,
+        planId: realPlanId,
         taskId: "conductor",
         attemptId,
         childRunId: p.runId,

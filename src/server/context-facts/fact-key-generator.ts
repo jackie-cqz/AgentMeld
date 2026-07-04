@@ -20,6 +20,8 @@ export function generateCanonicalKey(entity: string, property: string, namespace
 
 function normalizeSegment(segment: string): string {
   return segment
+    // Split camelCase: lowerUpper → lower.upper
+    .replace(/([a-z])([A-Z])/g, "$1.$2")
     .toLowerCase()
     .replace(/[\s_]+/g, ".")
     .replace(/[^a-z0-9.]/g, "")

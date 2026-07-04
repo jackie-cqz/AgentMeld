@@ -85,21 +85,20 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
   try {
     const q = entry.question;
     const firstQ = q.questions[0]?.question ?? "";
-    // P1: Child questions use child_run_id; conductor questions use conductor_run_id
-    const attempts = getDatabase()
-      .prepare("SELECT id FROM task_attempts WHERE child_run_id = ? UNION ALL SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
-      .all(q.runId, q.runId) as Array<{ id: string }>;
-    const attemptId = attempts[0]?.id;
-    if (attemptId) {
+    // P1: Look up the real task attempt for correct identity fields
+    const attempt = (getDatabase()
+      .prepare("SELECT * FROM task_attempts WHERE child_run_id = ? UNION ALL SELECT * FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
+      .all(q.runId, q.runId) as Array<Record<string, unknown>>)[0];
+    if (attempt) {
       insertEvidence({
         id: newEvidenceId(),
         conversationId: q.conversationId,
-        conductorRunId: q.runId,
-        planId: `plan_${q.runId}`,
-        taskId: "conductor",
-        attemptId,
-        childRunId: q.runId,
-        contextSnapshotId: "conductor_question",
+        conductorRunId: (attempt.conductor_run_id as string) ?? q.runId,
+        planId: (attempt.plan_id as string) ?? `plan_${q.runId}`,
+        taskId: (attempt.task_id as string) ?? "unknown",
+        attemptId: attempt.id as string,
+        childRunId: (attempt.child_run_id as string) ?? q.runId,
+        contextSnapshotId: (attempt.context_snapshot_id as string) ?? "",
         agentId: q.agentId,
       type: "user_answered",
       status: "valid",
