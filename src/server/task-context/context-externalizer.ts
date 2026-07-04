@@ -19,19 +19,9 @@ export interface ExternalContextReference {
  */
 export function externalizeCandidate(candidate: ContextCandidate): ContextCandidate | ExternalContextReference {
   switch (candidate.category) {
-    case "upstream_input": {
-      const inp = candidate.content as { artifactId?: string; title?: string; version?: number };
-      if (inp.artifactId) {
-        return {
-          refType: "artifact",
-          refId: inp.artifactId,
-          title: inp.title ?? inp.artifactId,
-          summary: `Artifact ${inp.artifactId} v${inp.version ?? 1}`,
-          readTool: "read_artifact",
-        };
-      }
+    // P3: upstream_input stays inline — metadata is small and renderer needs artifactId
+    case "upstream_input":
       return candidate;
-    }
     case "evidence": {
       const ev = candidate.content as { evidenceId?: string; type?: string };
       if (ev.evidenceId) {

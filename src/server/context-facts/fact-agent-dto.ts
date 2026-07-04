@@ -14,6 +14,8 @@ export interface AgentDefinitionDTO {
   description: string;
   valueType: string;
   currentValue: unknown | null;
+  /** P3: Fact trust level from the fact registry */
+  trustLevel: import("@/shared/evidence-types").EvidenceTrustLevel;
 }
 
 /**
@@ -68,6 +70,7 @@ export function getFilteredDefinitionsForAgent(params: {
       description: def.description,
       valueType: def.valueType,
       currentValue: activeFact?.value ?? null,
+      trustLevel: activeFact?.trustLevel ?? "verified",
     };
   });
 }

@@ -66,13 +66,33 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
     parts.push(`  </verified_inputs>`);
   }
 
-  // Workspace state
+  // P3: Workspace state from packed wsItems
+  if (wsItems.length > 0) {
+    parts.push(`  <workspace_state>`);
+    for (const ws of wsItems) {
+      const wp = ws.content as { path?: string };
+      if (wp.path) parts.push(`    <target_path>${escapeXml(wp.path)}</target_path>`);
+    }
+    parts.push(`  </workspace_state>`);
+  }
+
+  // Expected outputs
   if (requirements.expectedOutputs && requirements.expectedOutputs.length > 0) {
     parts.push(`  <expected_outputs>`);
     for (const eo of requirements.expectedOutputs) {
       parts.push(`    <output key="${escapeXml(eo.outputKey)}" type="${escapeXml(eo.type ?? "unknown")}" required="${eo.required}" />`);
     }
     parts.push(`  </expected_outputs>`);
+  }
+
+  // P3: Recent messages from packed msgItems
+  if (msgItems.length > 0) {
+    parts.push(`  <recent_messages>`);
+    for (const msg of msgItems) {
+      const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+      parts.push(`    <message source="${escapeXml(msg.sourceType)}">${escapeXml(content)}</message>`);
+    }
+    parts.push(`  </recent_messages>`);
   }
 
   // Evidence contract

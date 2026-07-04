@@ -257,13 +257,20 @@ describe("context-compressor", () => {
 });
 
 describe("context-externalizer", () => {
-  it("externalizes artifacts to references", () => {
+  it("keeps upstream_input inline (not externalized)", () => {
     const c = makeCandidate({ category: "upstream_input", content: { artifactId: "art_prd", title: "PRD", version: 1 } });
     const result = externalizeCandidate(c);
+    // Upstream_input stays as ContextCandidate (not ref) so renderer preserves artifactId
+    expect("refType" in result).toBe(false);
+    expect((result as ContextCandidate).content).toHaveProperty("artifactId", "art_prd");
+  });
+
+  it("externalizes evidence to references", () => {
+    const c = makeCandidate({ category: "evidence", content: { evidenceId: "ev1", type: "command_executed" }, tokenEstimate: 500 });
+    const result = externalizeCandidate(c);
     if ("refType" in result) {
-      expect(result.refType).toBe("artifact");
-      expect(result.refId).toBe("art_prd");
-      expect(result.readTool).toBe("read_artifact");
+      expect(result.refType).toBe("evidence");
+      expect(result.readTool).toBe("read_evidence");
     }
   });
 });

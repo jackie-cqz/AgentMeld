@@ -517,6 +517,7 @@ async function runChildTask(
           value: d.currentValue,
           valueType: d.valueType,
           description: d.description,
+          trustLevel: d.trustLevel,
         }));
     } catch {
       // Fact loading failure must not block task dispatch
