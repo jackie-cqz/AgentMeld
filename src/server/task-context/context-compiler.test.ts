@@ -8,6 +8,10 @@ import { computeBudget, allocateBudget, isMandatoryOverBudget } from "@/server/t
 import { buildContextManifest } from "@/server/task-context/context-manifest";
 import { renderTaskContextPrompt } from "@/server/task-context/context-renderer";
 import { qualifyCandidate } from "@/server/task-context/qualification-filter";
+import { scoreCandidate, rankCandidates } from "@/server/task-context/relevance-ranker";
+import { compressCandidate } from "@/server/task-context/context-compressor";
+import { externalizeCandidate } from "@/server/task-context/context-externalizer";
+import { packContext } from "@/server/task-context/context-packer";
 import type { ContextCandidate } from "@/server/task-context/context-candidates";
 import type { TaskContextEnvelope } from "@/shared/task-context-types";
 
@@ -219,5 +223,58 @@ describe("qualification-filter", () => {
   it("qualifies verified upstream inputs", () => {
     const c = makeCandidate({ category: "upstream_input", trustLevel: "verified", taskIds: ["t1"] });
     expect(qualifyCandidate(c, ctx).qualified).toBe(true);
+  });
+});
+
+describe("relevance-ranker", () => {
+  it("scores required items highest", () => {
+    const c = makeCandidate({ required: true });
+    const result = scoreCandidate(c, { tier: "mandatory", reason: "test" }, { taskId: "t1", dagDepTaskIds: [], targetPaths: [] });
+    expect(result.score).toBeGreaterThanOrEqual(1000);
+    expect(result.scoreReasons).toContain("required +1000");
+  });
+
+  it("ranks by score descending", () => {
+    const high = scoreCandidate(makeCandidate({ id: "high", required: true }), { tier: "mandatory", reason: "x" }, { taskId: "t1", dagDepTaskIds: [], targetPaths: [] });
+    const low = scoreCandidate(makeCandidate({ id: "low", category: "recent_message" }), { tier: "optional", reason: "x" }, { taskId: "t1", dagDepTaskIds: [], targetPaths: [] });
+    const ranked = rankCandidates([low, high]);
+    expect(ranked[0].candidate.id).toBe("high");
+  });
+});
+
+describe("context-compressor", () => {
+  it("compresses artifact refs", () => {
+    const c = makeCandidate({ category: "upstream_input", content: { artifactId: "art1", title: "PRD", version: 1 } });
+    const result = compressCandidate(c, "high");
+    const content = result.compressedContent as { artifactId: string };
+    expect(content.artifactId).toBe("art1");
+  });
+});
+
+describe("context-externalizer", () => {
+  it("externalizes artifacts to references", () => {
+    const c = makeCandidate({ category: "upstream_input", content: { artifactId: "art_prd", title: "PRD", version: 1 } });
+    const result = externalizeCandidate(c);
+    if ("refType" in result) {
+      expect(result.refType).toBe("artifact");
+      expect(result.refId).toBe("art_prd");
+      expect(result.readTool).toBe("read_artifact");
+    }
+  });
+});
+
+describe("context-packer", () => {
+  it("packs mandatory first, then high, then optional", () => {
+    const m = makeCandidate({ id: "m1", required: true, tokenEstimate: 100 });
+    const h = makeCandidate({ id: "h1", category: "upstream_input", tokenEstimate: 200 });
+    const o = makeCandidate({ id: "o1", category: "recent_message", tokenEstimate: 40000 });
+    const scored = [
+      scoreCandidate(m, classifyCandidate(m.category, m.sourceType, m.required, m.trustLevel), { taskId: "t1", dagDepTaskIds: [], targetPaths: [] }),
+      scoreCandidate(h, classifyCandidate(h.category, h.sourceType, h.required, h.trustLevel), { taskId: "t1", dagDepTaskIds: [], targetPaths: [] }),
+      scoreCandidate(o, classifyCandidate(o.category, o.sourceType, o.required, o.trustLevel), { taskId: "t1", dagDepTaskIds: [], targetPaths: [] }),
+    ];
+    const result = packContext(scored, 10000);
+    expect(result.packed.map(p => p.id)).toContain("m1");
+    expect(result.omitted.length).toBeGreaterThan(0);
   });
 });
