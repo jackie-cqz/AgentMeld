@@ -140,7 +140,7 @@ describe("fact-key-generator proposals", () => {
   it("generates clean keys with no proposed: prefix", () => {
     const key = generateCanonicalKey("theme", "primaryColor", "ui");
     expect(key).not.toContain("proposed:");
-    expect(key).toBe("ui.primarycolor"); // normalized lowercase
+    expect(key).toBe("ui.primary.color"); // camelCase split + normalized lowercase
   });
 
   it("generates keys from entity+property without namespace", () => {

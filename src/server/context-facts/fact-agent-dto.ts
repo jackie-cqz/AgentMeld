@@ -42,8 +42,7 @@ export function getFilteredDefinitionsForAgent(params: {
     filtered = filtered.filter(
       (d) =>
         d.applicableAgentRoles.length === 0 || // empty = all roles
-        d.applicableAgentRoles.includes(agentRole) ||
-        d.applicableAgentRoles.includes("conductor")
+        d.applicableAgentRoles.includes(agentRole)
     );
   }
 

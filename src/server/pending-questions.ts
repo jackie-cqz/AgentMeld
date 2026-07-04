@@ -85,10 +85,22 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
   try {
     const q = entry.question;
     const firstQ = q.questions[0]?.question ?? "";
+    const db = getDatabase();
     // P1: Look up the real task attempt for correct identity fields
-    const attempt = (getDatabase()
-      .prepare("SELECT * FROM task_attempts WHERE child_run_id = ? UNION ALL SELECT * FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
-      .all(q.runId, q.runId) as Array<Record<string, unknown>>)[0];
+    let attempt: Record<string, unknown> | undefined = (db
+      .prepare("SELECT * FROM task_attempts WHERE child_run_id = ? LIMIT 1")
+      .all(q.runId) as Array<Record<string, unknown>>)[0];
+    // Fallback: conductor-level question before execution — create meta-attempt
+    if (!attempt) {
+      const planRow = db.prepare("SELECT id, revision FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision DESC LIMIT 1").get(q.runId) as { id: string; revision: number } | undefined;
+      const realPlanId = planRow?.id ?? `plan_${q.runId}_init`;
+      const metaId = `ta_conductor_${realPlanId}`;
+      db.prepare(`
+        INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'conductor', ?, 0, 'running', 'not_started', ?, ?)
+      `).run(metaId, q.runId, q.conversationId, realPlanId, planRow?.revision ?? 0, q.agentId, Date.now(), Date.now());
+      attempt = db.prepare("SELECT * FROM task_attempts WHERE id = ?").get(metaId) as Record<string, unknown> | undefined;
+    }
     if (attempt) {
       insertEvidence({
         id: newEvidenceId(),

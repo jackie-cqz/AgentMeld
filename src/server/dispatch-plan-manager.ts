@@ -130,17 +130,12 @@ function resolvePlan(
     const realPlanId = planRow?.id ?? `plan_${p.runId}_init`;
     const planRevision = planRow?.revision ?? 0;
 
-    // Look up or create a conductor meta-attempt for pre-execution approvals
-    let attemptId = (db.prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1").all(p.runId) as Array<{ id: string }>)[0]?.id;
-    if (!attemptId) {
-      attemptId = `ta_conductor_${p.runId}`;
-      try {
-        db.prepare(`
-          INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(attemptId, p.runId, p.conversationId, realPlanId, planRevision, "conductor", "conductor", 0, "running", "not_started", now, now);
-      } catch { /* may already exist */ }
-    }
+    // Look up or create a conductor meta-attempt for THIS plan revision
+    const attemptId = `ta_conductor_${realPlanId}`;
+    db.prepare(`
+      INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'conductor', 'conductor', 0, 'running', 'not_started', ?, ?)
+    `).run(attemptId, p.runId, p.conversationId, realPlanId, planRevision, now, now);
     insertEvidence({
         id: newEvidenceId(),
         conversationId: p.conversationId,
