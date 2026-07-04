@@ -287,6 +287,21 @@ export function invalidateEvidence(evidenceId: string, now: number) {
     .run(now, evidenceId);
 }
 
+/** P5: Mark all evidence for a subject (file/command) as stale when superseded */
+export function markEvidenceStaleBySubject(
+  subjectType: string,
+  subjectId: string,
+  supersedingEvidenceId: string,
+  now: number
+) {
+  getDatabase()
+    .prepare(`
+      UPDATE task_evidence SET status = 'stale', invalidated_at = ?
+      WHERE subject_type = ? AND subject_id = ? AND status = 'valid'
+    `)
+    .run(now, subjectType, subjectId);
+}
+
 // ── Context Snapshots ──────────────────────────────────────────────────────
 
 export interface ContextSnapshotRecord {
