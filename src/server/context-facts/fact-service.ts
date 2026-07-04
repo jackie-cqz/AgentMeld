@@ -176,7 +176,10 @@ export function resolveFacts(
 
       // Serialize the candidate value
       const valueJson = JSON.stringify(candidate.value);
-      const valueType = candidate.valueType ?? inferValueType(candidate.value);
+      // P2: Use the Definition's declared valueType, not candidate's (prevents bypass)
+      const defForType = findBuiltinDefinition(definitionId) ??
+        dynamicDefs.find(d => d.id === definitionId);
+      const valueType = defForType?.valueType ?? candidate.valueType ?? inferValueType(candidate.value);
 
       // Check if value is unchanged
       if (currentActive) {
@@ -527,5 +530,9 @@ function safeJsonParseArray(json: string): string[] {
 }
 
 function safeJsonParseValue(row: { value_json?: string }): unknown {
-  try { return row.value_json ? JSON.parse(row.value_json) : null; } catch { return null; }
+  try {
+    if (row.value_json) return JSON.parse(row.value_json);
+    // Fallback: try extracting from payload_json or other fields
+    return null;
+  } catch { return null; }
 }

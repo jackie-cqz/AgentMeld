@@ -64,14 +64,17 @@ export const extractCommand: EvidenceExtractor = (ctx, args, _result, durationMs
   if (!command) return null;
 
   const normalizedCmd = sanitizeCommand(command);
-  const resultObj = _result as { ok?: boolean; value?: { stdout?: string; stderr?: string; exitCode?: number; timedOut?: boolean } } | undefined;
+  const resultObj = _result as { ok?: boolean; value?: { stdout?: string; stderr?: string; output?: string; exitCode?: number; timedOut?: boolean } } | undefined;
   const value = resultObj?.value;
   const exitCode = value?.exitCode ?? (resultObj?.ok ? 0 : 1);
   const timedOut = value?.timedOut ?? false;
+  // Bash tool returns merged 'output'; also try stdout/stderr
   const stdout = value?.stdout ?? "";
   const stderr = value?.stderr ?? "";
-  const { excerpt, truncated } = sanitizeOutput(stdout + (stderr ? "\n[stderr]\n" + stderr : ""));
-  const outputHash = hashCommandOutput(stdout, stderr);
+  const mergedOutput = value?.output ?? "";
+  const combined = mergedOutput || (stdout + (stderr ? "\n[stderr]\n" + stderr : ""));
+  const { excerpt, truncated } = sanitizeOutput(combined);
+  const outputHash = hashCommandOutput(stdout || mergedOutput, stderr);
   const isTest = normalizedCmd.includes("test") || normalizedCmd.includes("pnpm test") || normalizedCmd.includes("npm test");
 
   return {

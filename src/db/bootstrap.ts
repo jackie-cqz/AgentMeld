@@ -336,6 +336,7 @@ export function ensureDatabase() {
       proposed_by_agent_id TEXT,
       source_message_id TEXT,
       merged_into_definition_id TEXT,
+      value_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       UNIQUE(conversation_id, canonical_key)

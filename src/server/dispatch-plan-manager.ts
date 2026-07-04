@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
+import { getDatabase } from "@/db/client";
 import { newEvidenceId } from "@/shared/ids";
 import type { PendingDispatchPlan, DispatchPlanItem } from "@/shared/types";
 
@@ -120,31 +121,38 @@ function resolvePlan(
   const now = Date.now();
   if (!resolveApproval(id, outcome.approved, now)) return false;
 
-  // P1: Record approval evidence
+  // P1: Record approval evidence — must use a real task_attempt row for FK
   const p = entry.plan;
   try {
-    insertEvidence({
-      id: newEvidenceId(),
-      conversationId: p.conversationId,
-      conductorRunId: p.runId,
-      planId: `plan_${p.runId}`,
-      taskId: "conductor",
-      attemptId: p.runId,
-      childRunId: p.runId,
-      contextSnapshotId: p.runId,
-      agentId: "conductor",
-      type: "approval_resolved",
-      status: "valid",
-      trustLevel: "authoritative",
-      sourceKind: "system",
-      sourceId: id,
-      subjectType: "approval",
-      subjectId: id,
-      payloadJson: JSON.stringify({ approved: outcome.approved, feedback: outcome.feedback ?? null }),
-      contentHash: null,
-      invalidatedAt: null,
-      createdAt: now,
-    });
+    // Look up any task attempt for this conductor run
+    const attempts = getDatabase()
+      .prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
+      .all(p.runId) as Array<{ id: string }>;
+    const attemptId = attempts[0]?.id;
+    if (attemptId) {
+      insertEvidence({
+        id: newEvidenceId(),
+        conversationId: p.conversationId,
+        conductorRunId: p.runId,
+        planId: `plan_${p.runId}`,
+        taskId: "conductor",
+        attemptId,
+        childRunId: p.runId,
+        contextSnapshotId: "conductor_approval",
+        agentId: "conductor",
+        type: "approval_resolved",
+        status: "valid",
+        trustLevel: "authoritative",
+        sourceKind: "system",
+        sourceId: id,
+        subjectType: "approval",
+        subjectId: id,
+        payloadJson: JSON.stringify({ approved: outcome.approved, feedback: outcome.feedback ?? null }),
+        contentHash: null,
+        invalidatedAt: null,
+        createdAt: now,
+      });
+    }
   } catch { /* evidence best-effort */ }
 
   store.delete(id);

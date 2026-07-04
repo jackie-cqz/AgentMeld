@@ -161,8 +161,8 @@ export const updateContextFactsTool: ToolDef = {
         id, conversation_id, canonical_key, namespace, entity_type, property_name,
         value_type, update_policy, description, aliases_json,
         applicable_task_tags_json, applicable_agent_roles_json,
-        status, origin, proposed_by_agent_id, source_message_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, origin, proposed_by_agent_id, source_message_id, created_at, updated_at, value_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const now = Date.now();
 
@@ -176,7 +176,8 @@ export const updateContextFactsTool: ToolDef = {
           p.valueType, "replace", p.description,
           JSON.stringify(p.aliases ?? []),
           "[]", "[]",
-          "pending", "conversation", ctx.agentId, null, now, now
+          "pending", "conversation", ctx.agentId, null, now, now,
+          JSON.stringify(p.value)
         );
         pending.push({
           canonicalKey,

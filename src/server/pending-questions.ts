@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
 import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
+import { getDatabase } from "@/db/client";
 import { newEvidenceId } from "@/shared/ids";
 import type { PendingQuestion } from "@/shared/types";
 
@@ -80,20 +81,26 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
   const now = Date.now();
   if (!resolveApproval(id, true, now)) return false;
 
-  // P1: Record user_answer evidence
+  // P1: Record user_answer evidence — must use a real task_attempt row for FK
   try {
     const q = entry.question;
     const firstQ = q.questions[0]?.question ?? "";
-    insertEvidence({
-      id: newEvidenceId(),
-      conversationId: q.conversationId,
-      conductorRunId: q.runId,
-      planId: `plan_${q.runId}`,
-      taskId: "conductor",
-      attemptId: q.runId,
-      childRunId: q.runId,
-      contextSnapshotId: q.runId,
-      agentId: q.agentId,
+    // Look up any task attempt for this conductor run
+    const attempts = getDatabase()
+      .prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? LIMIT 1")
+      .all(q.runId) as Array<{ id: string }>;
+    const attemptId = attempts[0]?.id;
+    if (attemptId) {
+      insertEvidence({
+        id: newEvidenceId(),
+        conversationId: q.conversationId,
+        conductorRunId: q.runId,
+        planId: `plan_${q.runId}`,
+        taskId: "conductor",
+        attemptId,
+        childRunId: q.runId,
+        contextSnapshotId: "conductor_question",
+        agentId: q.agentId,
       type: "user_answered",
       status: "valid",
       trustLevel: "authoritative",
@@ -101,11 +108,12 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
       sourceId: id,
       subjectType: "answer",
       subjectId: id,
-      payloadJson: JSON.stringify({ questionExcerpt: firstQ.slice(0, 200), answerDigest: Object.values(answers).join(", ").slice(0, 500) }),
-      contentHash: null,
-      invalidatedAt: null,
-      createdAt: now,
-    });
+        payloadJson: JSON.stringify({ questionExcerpt: firstQ.slice(0, 200), answerDigest: Object.values(answers).join(", ").slice(0, 500) }),
+        contentHash: null,
+        invalidatedAt: null,
+        createdAt: now,
+      });
+    }
   } catch { /* evidence best-effort */ }
 
   store.delete(id);

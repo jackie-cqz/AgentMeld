@@ -9,6 +9,7 @@ import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
+import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
@@ -324,7 +325,7 @@ export async function executeConductorPlan(
       for (const c of structuredConflicts) {
         persistConductorConflict({
           id: `conflict_${conductorRunId}_${c.path.replace(/[^a-zA-Z0-9]/g, "_")}`,
-          conductorRunId, planId: `plan_${conductorRunId}_init`,
+          conductorRunId, planId,
           path: c.path, wave: c.wave,
           contributorsJson: JSON.stringify(c.contributors),
           now: Date.now()
@@ -488,9 +489,14 @@ async function runChildTask(
     // P2: Load active facts for this agent's context
     let activeFacts: ActiveFactEntry[] = [];
     try {
+      // P2: Derive agent role from capabilities, not agentId
+      const taskAgent = listAgents().find(a => a.id === task.agentId);
+      const agentRole = taskAgent?.capabilities?.find(c =>
+        ["pm", "ui", "frontend", "react", "design", "review"].includes(c)
+      ) ?? null;
       const defs = getFilteredDefinitionsForAgent({
         conversationId,
-        agentRole: task.agentId,
+        agentRole: agentRole ?? undefined,
         userMessageText: extractTextFromMessage(triggerMessage),
       });
       activeFacts = defs
@@ -535,7 +541,7 @@ async function runChildTask(
       const taskExecution: TaskExecutionIdentity = {
         conductorRunId: parentRunId,
         planId,
-        planRevision: planId.endsWith("_recovery") ? 1 : 0,
+        planRevision: (planId.endsWith("_recovery") || planId.endsWith("_rev")) ? 1 : 0,
         taskId: task.id,
         attemptId,
         attempt,
@@ -548,7 +554,7 @@ async function runChildTask(
         conductorRunId: parentRunId,
         conversationId,
         planId,
-        planRevision: planId.endsWith("_recovery") ? 1 : 0,
+        planRevision: (planId.endsWith("_recovery") || planId.endsWith("_rev")) ? 1 : 0,
         taskId: task.id,
         agentId: task.agentId,
         childRunId: null,
@@ -1140,6 +1146,9 @@ ${agentList}
 
 示例（只演示字段和依赖关系，agentId 均来自本次 <allowed_agent_ids>）：
 ${exampleTasks}`);
+
+  // P2: Fact extraction guidance
+  blocks.push(buildFactExtractionGuidance());
 
   // Block 4: Tool guidance (cut-down for PLAN stage — no fs_write, no bash)
   blocks.push(buildPlanStageToolGuidance());
