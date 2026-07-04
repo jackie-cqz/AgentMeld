@@ -35,10 +35,20 @@ export async function verifyTaskAttempt(
     const validator = resolveValidator(criterion.validator);
     const result = validateCriterion(criterion, validator, evidence, taskReport);
 
+    // P4: reviewer_verdict that can't auto-resolve → needs_review, not failed
+    let verdictStatus: CriterionVerdict["status"];
+    if (result.passed) {
+      verdictStatus = "passed";
+    } else if (result.reason.includes("pending review") || criterion.validator.type === "reviewer_verdict") {
+      verdictStatus = criterion.required ? "needs_review" : "needs_review";
+    } else {
+      verdictStatus = criterion.required ? "failed" : "missing";
+    }
+
     const verdict: CriterionVerdict = {
       id: `vd_${criterion.id}_${now}`,
       criterionId: criterion.id,
-      status: result.passed ? "passed" : (criterion.required ? "failed" : "missing"),
+      status: verdictStatus,
       validatorType: criterion.validator.type ?? "reviewer_verdict",
       evidenceIds: result.evidenceIds ?? [],
       reason: result.reason,

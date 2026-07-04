@@ -676,7 +676,6 @@ async function runChildTask(
 
       // P4: Run verification engine against evidence ledger — always, not just on "complete"
       // This produces criterion verdicts even for failed tasks (explaining WHY it failed)
-      let verificationFailed = false;
       try {
         const verification = await verifyTaskAttempt(task, attemptId, report);
         let persistedCount = 0;
@@ -704,15 +703,14 @@ async function runChildTask(
         // P4: Verification can override the self-reported evaluation
         if (verification.status === "rejected") {
           finalEvaluation = { status: "failed", error: `Verification rejected: ${verification.verdicts.filter(v => v.status === "failed").map(v => v.reason).join("; ")}` };
-          verificationFailed = true;
         } else if (verification.status === "needs_review" && finalEvaluation.status === "complete") {
           // needs_review on a self-reported-complete task → block it
           finalEvaluation = { status: "failed", error: `Verification incomplete: ${verification.verdicts.filter(v => v.status === "needs_review").map(v => v.reason).join("; ")}` };
-          verificationFailed = true;
         }
       } catch (err) {
-        // Verification engine crash → don't block, but log prominently
+        // P4: Verification engine crash → evidence gate compromised, reject the attempt
         console.error(`[conductor] verification engine CRASHED for task ${task.id} attempt ${attemptId}:`, err);
+        finalEvaluation = { status: "failed", error: `Verification engine failure: ${err instanceof Error ? err.message : "unknown error"}` };
       }
 
       clearRunToolEvidence(attemptRunId);
