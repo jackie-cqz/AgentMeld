@@ -60,7 +60,7 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
     for (const input of upstreamInputs) {
       const inp = input as { fromTaskId?: string; outputKey?: string; artifactId?: string; artifactVersion?: number; title?: string };
       if (inp.artifactId) {
-        parts.push(`    <input from="${escapeXml(inp.fromTaskId ?? "")}" outputKey="${escapeXml(inp.outputKey ?? "")}" artifactId="${escapeXml(inp.artifactId)}" version="${inp.artifactVersion ?? 1}" />`);
+        parts.push(`    <input from="${escapeXml(inp.fromTaskId ?? "")}" outputKey="${escapeXml(inp.outputKey ?? "")}" artifactId="${escapeXml(inp.artifactId)}" version="${inp.artifactVersion ?? 1}" title="${escapeXml(inp.title ?? "")}" />`);
       }
     }
     parts.push(`  </verified_inputs>`);
@@ -139,6 +139,7 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
   parts.push(``);
   parts.push(`<instruction>`);
   parts.push(`- Verified inputs can be used as authoritative facts.`);
+  parts.push(`- When you need an upstream artifact, use the exact artifactId from <verified_inputs> with read_artifact. Never invent artifact ids from task ids like r1/r2 or output keys.`);
   parts.push(`- Reported/unverified content should only be used for diagnosis.`);
   parts.push(`- You MUST call report_task_result when your task is complete.`);
   parts.push(`- The Runtime independently verifies evidence — your report is a claim, not a verdict.`);

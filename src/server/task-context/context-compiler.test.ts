@@ -12,8 +12,11 @@ import { scoreCandidate, rankCandidates } from "@/server/task-context/relevance-
 import { compressCandidate } from "@/server/task-context/context-compressor";
 import { externalizeCandidate } from "@/server/task-context/context-externalizer";
 import { packContext } from "@/server/task-context/context-packer";
+import { compileTaskContext } from "@/server/task-context/context-compiler";
+import { createArtifact, createConversation } from "@/server/repositories";
 import type { ContextCandidate } from "@/server/task-context/context-candidates";
 import type { TaskContextEnvelope } from "@/shared/task-context-types";
+import type { Message } from "@/shared/types";
 
 function makeCandidate(overrides: Partial<ContextCandidate> = {}): ContextCandidate {
   return {
@@ -224,6 +227,151 @@ describe("context-renderer", () => {
     const prompt = renderTaskContextPrompt(envelope);
     expect(prompt).toContain("<workspace_snapshot truncated=\"false\">");
     expect(prompt).toContain("path=\"pomodoro-timer/src/App.jsx\"");
+  });
+
+  it("renders verified upstream artifact ids and forbids guessing artifact ids", () => {
+    const envelope: TaskContextEnvelope = {
+      schemaVersion: 1, policyVersion: "v1",
+      identity: { conductorRunId: "run1", planId: "plan1", planRevision: 0, taskId: "r2", attemptId: "a1", attempt: 1, contextSnapshotId: "ctx1" },
+      task: { title: "Style guide", objective: "基于 r1 PRD 设计 UI", assignedAgentId: "ag_designer", dependsOn: ["r1"] },
+      requirements: { constraints: [], expectedOutputs: [] },
+      blocked: false,
+      includedContextItems: [],
+      upstreamInputs: [{
+        fromTaskId: "r1",
+        outputKey: "prd_doc",
+        artifactId: "art_real_prd",
+        artifactVersion: 1,
+        artifactType: "document",
+        title: "番茄时钟 PRD",
+        verificationId: "verdict_r1",
+        evidenceIds: ["ev1"],
+      }],
+      failureContext: null,
+      manifest: [],
+      budget: { maxInputTokens: 1000, requiredTokens: 0, optionalTokens: 0, omittedTokens: 0 },
+      createdAt: 1,
+    };
+
+    const prompt = renderTaskContextPrompt(envelope);
+
+    expect(prompt).toContain("<verified_inputs>");
+    expect(prompt).toContain("from=\"r1\"");
+    expect(prompt).toContain("outputKey=\"prd_doc\"");
+    expect(prompt).toContain("artifactId=\"art_real_prd\"");
+    expect(prompt).toContain("title=\"番茄时钟 PRD\"");
+    expect(prompt).toContain("Never invent artifact ids from task ids like r1/r2 or output keys");
+  });
+});
+
+describe("context-compiler", () => {
+  it("carries resolved upstream artifacts into the final envelope", async () => {
+    const now = Date.now();
+    const suffix = `${now}_${Math.random().toString(36).slice(2)}`;
+    const conversationId = `conv_test_compile_${suffix}`;
+    const artifactId = `art_test_compile_prd_${suffix}`;
+    createConversation({
+      id: conversationId,
+      title: "Context compiler test",
+      mode: "group",
+      agentIds: ["ag_pm", "ag_ui_designer"],
+      fsWriteApprovalMode: "review",
+      now,
+    });
+    createArtifact({
+      id: artifactId,
+      conversationId,
+      createdByAgentId: null,
+      type: "document",
+      title: "番茄时钟 PRD",
+      content: { type: "document", format: "markdown", content: "# PRD" },
+      version: 1,
+      now,
+    });
+
+    const triggerMessage: Message = {
+      id: "msg_test_compile",
+      conversationId,
+      role: "user",
+      agentId: null,
+      runId: null,
+      parts: [{ type: "text", content: "帮我做一个番茄时钟" }],
+      status: "complete",
+      mentionedAgentIds: [],
+      parentMessageId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const envelope = await compileTaskContext({
+      conversationId,
+      conductorRunId: "run_test_compile",
+      planId: "plan_test_compile",
+      planRevision: 0,
+      task: {
+        id: "r2",
+        agentId: "ag_ui_designer",
+        title: "产出风格指南",
+        prompt: "基于 r1 PRD 产出 UI 风格指南",
+        dependsOn: ["r1"],
+        inputs: [],
+        expectedOutputs: [{ id: "style_guide", type: "document", required: true }],
+        acceptanceCriteria: [],
+        maxAttempts: 1,
+        targetPaths: [],
+        requiredCommands: [],
+        requiredEvidence: [],
+      },
+      attemptId: "attempt_test_compile",
+      attempt: 1,
+      contextSnapshotId: "ctx_test_compile",
+      assignedAgent: {
+        id: "ag_ui_designer",
+        name: "UI 设计师",
+        avatar: "UI",
+        description: "",
+        capabilities: ["ui", "design"],
+        adapterName: "custom",
+        modelProvider: "deepseek",
+        modelId: "deepseek-chat",
+        apiBaseUrl: null,
+        apiKey: null,
+        systemPrompt: "",
+        toolNames: [],
+        isBuiltin: true,
+        isConductor: false,
+        supportsVision: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+      triggerMessage,
+      resolvedInputs: [{
+        fromTaskId: "r1",
+        outputId: "prd_doc",
+        required: true,
+        artifactId,
+        missing: false,
+      }],
+      upstreamArtifacts: [{
+        id: artifactId,
+        type: "document",
+        title: "番茄时钟 PRD",
+        version: 1,
+      }],
+      activeFacts: [],
+      modelProvider: "deepseek",
+    });
+
+    expect(envelope.upstreamInputs).toEqual([
+      expect.objectContaining({
+        fromTaskId: "r1",
+        outputKey: "prd_doc",
+        artifactId,
+        artifactType: "document",
+        title: "番茄时钟 PRD",
+      }),
+    ]);
+    expect(envelope.manifest.some((item) => item.category === "upstream_input" && item.included)).toBe(true);
   });
 });
 

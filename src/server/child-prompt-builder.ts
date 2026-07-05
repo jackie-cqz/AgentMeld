@@ -46,11 +46,45 @@ export interface BuildChildPromptInput {
   activeFacts?: ActiveFactEntry[];
 }
 
+function buildInputSpecs(
+  task: ParsedTask,
+  outputBindings: Map<string, string>
+): Array<{ fromTaskId: string; outputId: string; required: boolean; description?: string }> {
+  const specs = new Map<string, { fromTaskId: string; outputId: string; required: boolean; description?: string }>();
+
+  for (const input of task.inputs || []) {
+    const key = `${input.fromTaskId}.${input.outputId}`;
+    specs.set(key, {
+      fromTaskId: input.fromTaskId,
+      outputId: input.outputId,
+      required: input.required,
+      description: input.description,
+    });
+  }
+
+  for (const dependency of task.dependsOn || []) {
+    const prefix = `${dependency}.`;
+    for (const bindingKey of outputBindings.keys()) {
+      if (!bindingKey.startsWith(prefix) || specs.has(bindingKey)) continue;
+      const outputId = bindingKey.slice(prefix.length);
+      if (!outputId) continue;
+      specs.set(bindingKey, {
+        fromTaskId: dependency,
+        outputId,
+        required: true,
+        description: `Verified output "${outputId}" from upstream task "${dependency}".`,
+      });
+    }
+  }
+
+  return Array.from(specs.values());
+}
+
 export function resolveTaskInputs(
   task: ParsedTask,
   outputBindings: Map<string, string> // "taskId.outputKey" → artifactId
 ): ResolvedInput[] {
-  return (task.inputs || []).map((input) => {
+  return buildInputSpecs(task, outputBindings).map((input) => {
     const bindingKey = `${input.fromTaskId}.${input.outputId}`;
     const artifactId = outputBindings.get(bindingKey);
     return {
@@ -74,7 +108,7 @@ export function resolveVerifiedTaskInputs(
   task: ParsedTask,
   outputBindings: Map<string, string>
 ): VerifiedTaskInput[] {
-  return (task.inputs || [])
+  return buildInputSpecs(task, outputBindings)
     .map((input) => {
       const bindingKey = `${input.fromTaskId}.${input.outputId}`;
       const artifactId = outputBindings.get(bindingKey);

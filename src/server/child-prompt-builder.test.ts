@@ -227,6 +227,55 @@ describe("resolveTaskInputs", () => {
     expect(result[0].missing).toBe(false);
     expect(result[0].artifactId).toBe("art_001");
   });
+
+  it("infers verified upstream inputs from dependsOn output bindings", () => {
+    const task = makeStubTask({
+      dependsOn: ["r1", "r2"],
+      inputs: []
+    });
+    const bindings = new Map([
+      ["r1.prd_doc", "art_prd"],
+      ["r2.style_guide", "art_style"],
+      ["unrelated.output", "art_other"]
+    ]);
+
+    const result = resolveTaskInputs(task, bindings);
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        fromTaskId: "r1",
+        outputId: "prd_doc",
+        artifactId: "art_prd",
+        missing: false,
+        required: true
+      }),
+      expect.objectContaining({
+        fromTaskId: "r2",
+        outputId: "style_guide",
+        artifactId: "art_style",
+        missing: false,
+        required: true
+      })
+    ]);
+  });
+
+  it("does not duplicate explicitly declared upstream inputs", () => {
+    const task = makeStubTask({
+      dependsOn: ["r1"],
+      inputs: [{ fromTaskId: "r1", outputId: "prd_doc", required: true, description: "PRD" }]
+    });
+    const bindings = new Map([["r1.prd_doc", "art_prd"]]);
+
+    const result = resolveTaskInputs(task, bindings);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      fromTaskId: "r1",
+      outputId: "prd_doc",
+      artifactId: "art_prd",
+      description: "PRD"
+    });
+  });
 });
 
 describe("hasMissingRequiredInputs", () => {

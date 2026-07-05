@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, persistConductorConflict } from "@/server/repositories";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -460,8 +460,9 @@ async function runChildTask(
   outputBindings: Map<string, string>,
   signal: AbortSignal
 ): Promise<TaskResult> {
+  const effectiveOutputBindings = hydrateOutputBindings(outputBindings, planId);
   // Resolve inputs — check if required inputs are available
-  const resolvedInputs = resolveTaskInputs(task, outputBindings);
+  const resolvedInputs = resolveTaskInputs(task, effectiveOutputBindings);
   if (hasMissingRequiredInputs(resolvedInputs)) {
     const missing = resolvedInputs.filter((i) => i.required && i.missing).map((i) => i.outputId);
     eventBus.publish({
@@ -489,7 +490,7 @@ async function runChildTask(
     // this carries full provenance: artifact version, type, and title.
     // P4 output-binding gates ensure only verified outputs enter outputBindings,
     // so every resolved input here is implicitly verified.
-    const verifiedInputs = resolveVerifiedTaskInputs(task, outputBindings);
+    const verifiedInputs = resolveVerifiedTaskInputs(task, effectiveOutputBindings);
     const upstreamArtifacts: UpstreamArtifact[] = verifiedInputs.map((vi) => ({
       id: vi.artifactId,
       type: vi.artifactType,
@@ -948,6 +949,26 @@ async function runChildTask(
   }
 }
 
+function hydrateOutputBindings(outputBindings: Map<string, string>, planId: string): Map<string, string> {
+  const hydrated = new Map(outputBindings);
+  try {
+    for (const row of listOutputBindings(planId)) {
+      const producerTaskId = typeof row.producer_task_id === "string" ? row.producer_task_id : "";
+      const outputKey = typeof row.output_key === "string" ? row.output_key : "";
+      const artifactId = typeof row.artifact_id === "string" ? row.artifact_id : "";
+      if (!producerTaskId || !outputKey || !artifactId) continue;
+
+      const bindingKey = `${producerTaskId}.${outputKey}`;
+      if (!hydrated.has(bindingKey)) {
+        hydrated.set(bindingKey, artifactId);
+      }
+    }
+  } catch {
+    // Persistence is a fallback; in-memory bindings remain authoritative.
+  }
+  return hydrated;
+}
+
 function waitForRunEnd(runId: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => resolve(), timeoutMs);
@@ -1291,6 +1312,7 @@ ${agentList}
 - 计划阶段只能调用 ask_user、plan_tasks 和只读侦察工具
   （fs_list / fs_read / read_artifact / read_attachment）；不要写文件或执行命令。
 - NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
+- 给工程类 Agent 写任务时，不要把“必须先 npm install / npm run dev”作为硬流程；如果确实需要安装依赖，只写“需要时通过 bash 发起依赖安装审批”。验证优先写 build/test/lint/typecheck/check。
 
 ## 依赖关系（执行顺序的唯一来源，务必读完）
 - 系统【只】按每个任务的 dependsOn 决定顺序：
