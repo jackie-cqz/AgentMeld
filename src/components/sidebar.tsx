@@ -6,7 +6,9 @@ import {
   Pin,
   BarChart3,
   Bot,
+  Check,
   ChevronRight,
+  Cpu,
   Layers,
   MessageSquare,
   Moon,
@@ -14,8 +16,11 @@ import {
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sun,
-  Trash2
+  Trash2,
+  Users,
+  X
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -530,89 +535,232 @@ function CreateConversationDialog({
       return current.includes(agentId) ? current.filter((id) => id !== agentId) : [...current, agentId];
     });
   };
+  const selectedAgents = agents.filter((agent) => agentIds.includes(agent.id));
 
   return (
-    <div className="absolute inset-0 z-20 grid place-items-center bg-stone-950/20 px-4">
-      <div className="w-full max-w-[264px] rounded-md border border-stone-200 bg-white p-4 shadow-xl">
-        <div className="text-sm font-semibold text-stone-950">新建对话</div>
-        <input
-          className="mt-3 h-9 w-full rounded-md border border-stone-200 px-3 text-sm outline-none focus:border-stone-500"
-          placeholder="标题，可留空"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-        />
-
-        <div className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-stone-100 p-1">
-          {(["single", "group"] as const).map((item) => (
-            <button
-              key={item}
-              className={`h-8 rounded text-xs ${mode === item ? "bg-white font-medium text-stone-950 shadow-sm" : "text-stone-500"}`}
-              type="button"
-              onClick={() => {
-                setMode(item);
-                setAgentIds(item === "single" ? agentIds.slice(0, 1) : agentIds);
-              }}
-            >
-              {item === "single" ? "单聊" : "群聊"}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-3 max-h-40 space-y-1 overflow-y-auto">
-          {agents.map((agent) => (
-            <label key={agent.id} className="flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-stone-50">
-              <input
-                type={mode === "single" ? "radio" : "checkbox"}
-                checked={agentIds.includes(agent.id)}
-                onChange={() => toggleAgent(agent.id)}
-              />
-              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs ${getAgentAvatarStyle(agent).solid}`}>
-                {agent.avatar}
-              </span>
-              <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-              {agent.isConductor ? <span className="text-[11px] text-stone-500">Cond</span> : null}
-            </label>
-          ))}
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-1 rounded-md bg-stone-100 p-1">
-          {(["review", "auto"] as const).map((item) => (
-            <button
-              key={item}
-              className={`h-8 rounded text-xs ${approvalMode === item ? "bg-white font-medium text-stone-950 shadow-sm" : "text-stone-500"}`}
-              type="button"
-              onClick={() => setApprovalMode(item)}
-            >
-              {item === "review" ? "Review" : "Auto"}
-            </button>
-          ))}
-        </div>
-
-        {!valid ? <div className="mt-2 text-xs text-red-600">请选择正确数量的 Agent。</div> : null}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button className="h-8 rounded-md px-3 text-sm text-stone-600 hover:bg-stone-100" type="button" onClick={onClose}>
-            取消
-          </button>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 px-4 py-6 backdrop-blur-sm">
+      <div className="flex max-h-[88vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl shadow-slate-950/20 dark:border-slate-700 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5 dark:border-slate-800">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-medium text-blue-600 dark:text-blue-300">
+              <MessageSquare className="h-4 w-4" />
+              新建协作空间
+            </div>
+            <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-slate-50">选择参与这次对话的 Agent</h2>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              为不同任务组合合适的角色，创建后会进入新的群聊工作区。
+            </p>
+          </div>
           <button
-            className="h-8 rounded-md bg-stone-950 px-3 text-sm font-medium text-white disabled:bg-stone-300"
             type="button"
-            disabled={!valid}
-            onClick={() =>
-              onCreate({
-                title: title.trim() || undefined,
-                mode,
-                agentIds,
-                fsWriteApprovalMode: approvalMode
-              })
-            }
+            onClick={onClose}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+            title="关闭"
           >
-            创建
+            <X className="h-4 w-4" />
           </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_260px] gap-0 overflow-hidden max-lg:grid-cols-1">
+          <div className="min-h-0 overflow-y-auto px-6 py-5">
+            <label className="block">
+              <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">对话标题</span>
+              <input
+                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                placeholder="例如：Todo App 协作开发，可留空"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              {(["group", "single"] as const).map((item) => {
+                const active = mode === item;
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`rounded-xl border p-4 text-left transition ${
+                      active
+                        ? "border-blue-500 bg-blue-50 shadow-sm ring-4 ring-blue-500/10 dark:bg-blue-500/10"
+                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                    }`}
+                    onClick={() => {
+                      setMode(item);
+                      setAgentIds((current) => item === "single" ? current.slice(0, 1) : current);
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`grid h-9 w-9 place-items-center rounded-lg ${active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
+                        {item === "group" ? <Users className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                      </span>
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-950 dark:text-slate-100">{item === "group" ? "多 Agent 协作" : "单 Agent 对话"}</span>
+                        <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{item === "group" ? "适合产品、设计、开发、审查串联" : "适合单角色快速问答或执行"}</span>
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-6">
+              <div className="mb-3 flex items-end justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">参与 Agent</div>
+                  <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">查看职责、能力和当前接入模型后再选择。</div>
+                </div>
+                <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  已选 {agentIds.length}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                {agents.map((agent) => {
+                  const selected = agentIds.includes(agent.id);
+                  const description = buildDialogAgentDescription(agent);
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => toggleAgent(agent.id)}
+                      className={`group min-h-[154px] rounded-xl border p-4 text-left transition ${
+                        selected
+                          ? "border-blue-500 bg-blue-50/80 shadow-sm ring-4 ring-blue-500/10 dark:bg-blue-500/10"
+                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-full text-sm font-semibold ${getAgentAvatarStyle(agent).solid}`}>
+                          {agent.avatar}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{agent.name}</span>
+                            {agent.isConductor ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-200">Conductor</span> : null}
+                          </span>
+                          <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                            <Cpu className="h-3.5 w-3.5" />
+                            {formatAgentModel(agent)}
+                          </span>
+                        </span>
+                        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border transition ${
+                          selected
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : "border-slate-300 text-transparent group-hover:text-slate-300 dark:border-slate-600"
+                        }`}>
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                      </div>
+
+                      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{description}</p>
+
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {(agent.capabilities.length > 0 ? agent.capabilities.slice(0, 3) : [agent.adapterName]).map((capability) => (
+                          <span key={capability} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            {capability}
+                          </span>
+                        ))}
+                        {agent.capabilities.length > 3 ? (
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">+{agent.capabilities.length - 3}</span>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <aside className="border-l border-slate-100 bg-slate-50/80 px-5 py-5 dark:border-slate-800 dark:bg-slate-900/80 max-lg:border-l-0 max-lg:border-t">
+            <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">本次配置</div>
+            <div className="mt-4 space-y-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950">
+                <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <Users className="h-3.5 w-3.5" />
+                  协作模式
+                </div>
+                <div className="mt-2 text-sm font-semibold text-slate-950 dark:text-slate-100">{mode === "group" ? "群聊协作" : "单聊"}</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{selectedAgents.map((agent) => agent.name).join("、") || "尚未选择 Agent"}</div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950">
+                <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  文件写入审批
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+                  {(["review", "auto"] as const).map((item) => (
+                    <button
+                      key={item}
+                      className={`h-8 rounded-md text-xs transition ${approvalMode === item ? "bg-white font-semibold text-slate-950 shadow-sm dark:bg-slate-950 dark:text-slate-100" : "text-slate-500 dark:text-slate-400"}`}
+                      type="button"
+                      onClick={() => setApprovalMode(item)}
+                    >
+                      {item === "review" ? "Review" : "Auto"}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  {approvalMode === "review" ? "写入文件前需要你确认，适合不确定任务。" : "自动通过文件写入，更适合连续实现。"}
+                </p>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-6 py-4 dark:border-slate-800">
+          <div className="min-h-5 text-xs text-red-600 dark:text-red-300">
+            {!valid ? (mode === "single" ? "单聊需要选择 1 位 Agent。" : "群聊至少选择 2 位 Agent。") : ""}
+          </div>
+          <div className="flex gap-2">
+            <button className="h-10 rounded-lg px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800" type="button" onClick={onClose}>
+              取消
+            </button>
+            <button
+              className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-slate-700"
+              type="button"
+              disabled={!valid}
+              onClick={() =>
+                onCreate({
+                  title: title.trim() || undefined,
+                  mode,
+                  agentIds,
+                  fsWriteApprovalMode: approvalMode
+                })
+              }
+            >
+              创建对话
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function buildDialogAgentDescription(agent: Agent) {
+  const explicit = agent.description.trim();
+  if (explicit) return explicit;
+  const firstPromptParagraph = agent.systemPrompt
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .find(Boolean);
+  return firstPromptParagraph ?? "这个 Agent 还没有单独填写职责描述。";
+}
+
+function formatAgentModel(agent: Agent) {
+  const provider = formatProviderName(agent.modelProvider);
+  const model = agent.modelId?.trim() || "未指定模型";
+  return `${provider} / ${model}`;
+}
+
+function formatProviderName(provider: Agent["modelProvider"]) {
+  if (!provider) return "未配置";
+  if (provider === "deepseek") return "DeepSeek";
+  if (provider === "openai") return "OpenAI";
+  if (provider === "volcano-ark") return "Volcano Ark";
+  return provider;
 }
 
 function NavButton({ active, icon, label, onClick }: { active?: boolean; icon: ReactNode; label: string; onClick?: () => void }) {
