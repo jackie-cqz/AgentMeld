@@ -8,18 +8,92 @@ import {
 import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { TaskEvidenceDrawer, type DrawerTab } from "@/components/task-evidence-drawer";
+import type { EvidenceSummary } from "@/components/task-evidence-drawer";
+import type { VerdictItem } from "@/components/criterion-verdict-list";
+import type { ManifestEntry } from "@/components/task-context-manifest";
+import type { AttemptRecord } from "@/components/task-attempt-timeline";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
     Object.values(state.dispatchesByRunId).find((item) => item.messageId === messageId) ?? null
   );
 
-  // P7: Evidence drawer state
+  // P7: Evidence drawer state + API-fetched data
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTaskId, setDrawerTaskId] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("context");
+  const [drawerEvidence, setDrawerEvidence] = useState<EvidenceSummary[]>([]);
+  const [drawerVerdicts, setDrawerVerdicts] = useState<VerdictItem[]>([]);
+  const [drawerVerdictSummary, setDrawerVerdictSummary] = useState<{ passed: number; failed: number; missing: number; needsReview: number; total: number }>({ passed: 0, failed: 0, missing: 0, needsReview: 0, total: 0 });
+  const [drawerManifestIncluded, setDrawerManifestIncluded] = useState<ManifestEntry[]>([]);
+  const [drawerManifestOmitted, setDrawerManifestOmitted] = useState<ManifestEntry[]>([]);
+  const [drawerAttempts, setDrawerAttempts] = useState<AttemptRecord[]>([]);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+
+  // P7: Fetch real data from API when drawer opens
+  const fetchDrawerData = useCallback(async (taskId: string) => {
+    const activeAttemptId = dispatch?.activeAttemptByTask[taskId];
+    if (!activeAttemptId) return;
+
+    setDrawerLoading(true);
+    try {
+      // Fetch evidence
+      const evRes = await fetch(`/api/task-attempts/${activeAttemptId}/evidence`);
+      if (evRes.ok) {
+        const evData = await evRes.json();
+        setDrawerEvidence(evData.evidence ?? []);
+      }
+
+      // Fetch verdicts
+      const vRes = await fetch(`/api/task-attempts/${activeAttemptId}/verdicts`);
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        setDrawerVerdicts(vData.verdicts ?? []);
+        setDrawerVerdictSummary(vData.summary ?? { passed: 0, failed: 0, missing: 0, needsReview: 0, total: 0 });
+      }
+
+      // Fetch context manifest
+      const cRes = await fetch(`/api/task-attempts/${activeAttemptId}/context`);
+      if (cRes.ok) {
+        const cData = await cRes.json();
+        setDrawerManifestIncluded(cData.manifest?.included ?? []);
+        setDrawerManifestOmitted(cData.manifest?.omitted ?? []);
+      }
+
+      // Fetch attempt list for this task
+      const aRes = await fetch(`/api/task-attempts/${activeAttemptId}`);
+      if (aRes.ok) {
+        const aData = await aRes.json();
+        // Build simple attempt records from store + API data
+        const attemptIds = dispatch?.attemptIdsByTask[taskId] ?? [activeAttemptId];
+        const attempts: AttemptRecord[] = attemptIds.map((aid, idx) => ({
+          attemptId: aid,
+          attempt: idx + 1,
+          childRunId: dispatch?.childRunIds[taskId] ?? null,
+          executionStatus: "complete",
+          verificationStatus: dispatch?.verificationStatusByTask[taskId] ?? "not_started",
+          contextTokenEstimate: dispatch?.contextSummaryByAttempt[aid]?.tokenEstimate,
+          evidenceCount: dispatch?.evidenceCountByAttempt[aid] ?? 0,
+          startedAt: null,
+          finishedAt: null,
+        }));
+        setDrawerAttempts(attempts);
+      }
+    } catch {
+      // API not available — drawer shows empty state
+    } finally {
+      setDrawerLoading(false);
+    }
+  }, [dispatch?.activeAttemptByTask, dispatch?.attemptIdsByTask, dispatch?.childRunIds, dispatch?.verificationStatusByTask, dispatch?.contextSummaryByAttempt, dispatch?.evidenceCountByAttempt]);
+
+  // Fetch when drawer opens
+  useEffect(() => {
+    if (drawerOpen && drawerTaskId) {
+      fetchDrawerData(drawerTaskId);
+    }
+  }, [drawerOpen, drawerTaskId, fetchDrawerData]);
 
   if (!dispatch || dispatch.plan.length === 0) return null;
 
@@ -67,13 +141,19 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
         </div>
       </section>
 
-      {/* P7: Evidence drawer — slides in from the right */}
+      {/* P7: Evidence drawer — slides in from the right, with API-fetched data */}
       <TaskEvidenceDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         taskId={drawerTaskId}
         activeTab={drawerTab}
         onTabChange={setDrawerTab}
+        evidence={drawerEvidence}
+        verdicts={drawerVerdicts}
+        verdictSummary={drawerVerdictSummary}
+        manifestIncluded={drawerManifestIncluded}
+        manifestOmitted={drawerManifestOmitted}
+        attempts={drawerAttempts}
       />
     </>
   );

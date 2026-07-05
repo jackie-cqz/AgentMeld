@@ -484,34 +484,18 @@ async function runChildTask(
   try {
     // Build child prompt with full context
 
-    // P6: Resolve verified inputs with full artifact metadata (provenance,
-    // artifact version, type). Unlike resolveTaskInputs which only checks
-    // binding existence, this enriches each resolved input with artifact info.
+    // P6: Resolve verified inputs — the PRIMARY path for upstream artifact
+    // metadata. Unlike resolveTaskInputs (which only checks binding existence),
+    // this carries full provenance: artifact version, type, and title.
+    // P4 output-binding gates ensure only verified outputs enter outputBindings,
+    // so every resolved input here is implicitly verified.
     const verifiedInputs = resolveVerifiedTaskInputs(task, outputBindings);
-
-    // Build upstream artifact references — prefer verified input metadata
-    // when available (carries artifact version + type), fall back to simple
-    // resolvedInputs lookup for backwards compatibility.
-    const upstreamArtifacts: UpstreamArtifact[] = [];
-    if (verifiedInputs.length > 0) {
-      for (const vi of verifiedInputs) {
-        upstreamArtifacts.push({
-          id: vi.artifactId,
-          type: vi.artifactType,
-          title: vi.title,
-          version: vi.artifactVersion,
-        });
-      }
-    } else {
-      for (const ri of resolvedInputs) {
-        if (ri.artifactId) {
-          const art = getArtifact(ri.artifactId);
-          if (art) {
-            upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
-          }
-        }
-      }
-    }
+    const upstreamArtifacts: UpstreamArtifact[] = verifiedInputs.map((vi) => ({
+      id: vi.artifactId,
+      type: vi.artifactType,
+      title: vi.title,
+      version: vi.artifactVersion,
+    }));
     // Build recent conversation snippet
     const recentConversation: Array<{ from: string; content: string }> = [];
     const userText = extractTextFromMessage(triggerMessage);
@@ -1476,15 +1460,60 @@ export function buildReplanContext(
 ): string {
   const failedTasks = plan.filter((t) => {
     const r = results.get(t.id);
-    return r && r.status === "failed";
+    return r && (r.status === "failed" || r.status === "blocked");
   });
 
-  const summary = failedTasks.map((t) => {
+  // P5: Include verification-level detail — which criteria failed and why
+  const parts: string[] = [];
+  for (const t of failedTasks) {
     const r = results.get(t.id);
-    return `- ${t.id} (${t.title}): ${r?.summary ?? "unknown error"}`;
-  }).join("\n");
+    const summary = r?.summary ?? "unknown error";
+    parts.push(`- ${t.id} (${t.title}): ${summary}`);
 
-  return `上一轮以下任务失败：\n${summary}\n\n补救指示：为失败任务修正参数后重试。`;
+    // P5: Query verdicts for this task to give precise failure reasons
+    try {
+      const db = getDatabase();
+      const verdictRows = db
+        .prepare(`
+          SELECT cv.criterion_id, cv.status, cv.reason
+          FROM criterion_verdicts cv
+          JOIN task_attempts ta ON cv.attempt_id = ta.id
+          WHERE ta.conductor_run_id = ? AND ta.task_id = ?
+          ORDER BY ta.attempt DESC
+          LIMIT 20
+        `)
+        .all(r?.childRunId ? (getDatabase().prepare("SELECT conductor_run_id FROM task_attempts WHERE child_run_id = ?").get(r!.childRunId) as { conductor_run_id: string })?.conductor_run_id ?? "" : "", t.id) as Array<{ criterion_id: string; status: string; reason: string }>;
+      // Simpler approach: query by task_id from the latest attempt
+      const attempts = db
+        .prepare("SELECT id FROM task_attempts WHERE task_id = ? ORDER BY attempt DESC LIMIT 1")
+        .all(t.id) as Array<{ id: string }>;
+      if (attempts.length > 0) {
+        const vRows = db
+          .prepare("SELECT criterion_id, status, reason FROM criterion_verdicts WHERE attempt_id = ? ORDER BY checked_at DESC")
+          .all(attempts[0].id) as Array<{ criterion_id: string; status: string; reason: string }>;
+        for (const v of vRows) {
+          if (v.status !== "passed") {
+            parts.push(`    ❌ ${v.criterion_id} (${v.status}): ${v.reason}`);
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  const passedTasks = plan.filter((t) => {
+    const r = results.get(t.id);
+    return r && r.status === "complete";
+  });
+  const passedList = passedTasks.map((t) => `- ${t.id} (${t.title}): ✅ 已完成，无需重新执行`).join("\n");
+
+  return [
+    `上一轮执行结果：${failedTasks.length} 失败, ${passedTasks.length} 成功`,
+    "",
+    failedTasks.length > 0 ? `失败任务（含验收详情）：\n${parts.join("\n")}` : "",
+    passedTasks.length > 0 ? `已完成任务：\n${passedList}` : "",
+    "",
+    "补救指示：只修复失败任务。已完成任务可作为上游依赖直接引用。修复任务必须通过所有验收标准。",
+  ].filter(Boolean).join("\n");
 }
 
 /**

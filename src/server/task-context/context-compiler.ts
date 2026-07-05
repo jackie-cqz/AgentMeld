@@ -96,14 +96,39 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
-  // Step 8-9: Verified inputs with full artifact metadata
+  // Step 8-9: Verified inputs with full artifact metadata + producer verification
   for (const ri of input.resolvedInputs) {
     if (ri.artifactId) {
       const art = getArtifact(ri.artifactId);
+      // P6: Load producer task's verification status to enrich delta trust level
+      let producerVerification: { status: string; passedCriterionCount: number } | null = null;
+      try {
+        const db = (await import("@/db/client")).getDatabase();
+        const attempts = db
+          .prepare("SELECT id, verification_status FROM task_attempts WHERE task_id = ? AND execution_status = 'reported_complete' ORDER BY attempt DESC LIMIT 1")
+          .all(ri.fromTaskId) as Array<{ id: string; verification_status: string }>;
+        if (attempts.length > 0) {
+          const verdicts = db
+            .prepare("SELECT COUNT(*) AS cnt FROM criterion_verdicts WHERE attempt_id = ? AND status = 'passed'")
+            .get(attempts[0].id) as { cnt: number };
+          producerVerification = { status: attempts[0].verification_status, passedCriterionCount: verdicts.cnt };
+        }
+      } catch { /* best-effort */ }
+
+      const trust: import("@/shared/evidence-types").EvidenceTrustLevel =
+        producerVerification?.status === "verified" ? "verified" : "accepted";
+
       candidates.push({
         id: `${estimateId}_inp_${ri.outputId}`, category: "upstream_input", sourceType: "artifact", sourceId: ri.artifactId,
-        content: { artifactId: ri.artifactId, title: art?.title ?? ri.outputId, type: art?.type ?? "unknown", version: art?.version ?? 1 },
-        trustLevel: "verified", required: ri.required, taskIds: [input.task.id, ri.fromTaskId],
+        content: {
+          artifactId: ri.artifactId,
+          title: art?.title ?? ri.outputId,
+          type: art?.type ?? "unknown",
+          version: art?.version ?? 1,
+          producerTaskId: ri.fromTaskId,
+          producerVerification,
+        },
+        trustLevel: trust, required: ri.required, taskIds: [input.task.id, ri.fromTaskId],
         namespaces: [], pathRefs: [], criterionIds: [],
         tokenEstimate: 80, createdAt: now,
       });

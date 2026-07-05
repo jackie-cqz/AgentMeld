@@ -287,19 +287,29 @@ export function invalidateEvidence(evidenceId: string, now: number) {
     .run(now, evidenceId);
 }
 
-/** P5: Mark all evidence for a subject (file/command) as stale when superseded */
+/**
+ * P5: Mark all existing evidence for a subject as stale within a conversation.
+ * Called when a retry produces new evidence for the same file/artifact/command,
+ * so downstream consumers only see the latest evidence.
+ */
 export function markEvidenceStaleBySubject(
+  conversationId: string,
   subjectType: string,
   subjectId: string,
   supersedingEvidenceId: string,
   now: number
-) {
+): void {
   getDatabase()
     .prepare(`
-      UPDATE task_evidence SET status = 'stale', invalidated_at = ?
-      WHERE subject_type = ? AND subject_id = ? AND status = 'valid'
+      UPDATE task_evidence
+      SET status = 'stale', invalidated_at = ?
+      WHERE conversation_id = ?
+        AND subject_type = ?
+        AND subject_id = ?
+        AND status = 'valid'
+        AND id != ?
     `)
-    .run(now, subjectType, subjectId);
+    .run(now, conversationId, subjectType, subjectId, supersedingEvidenceId);
 }
 
 // ── Context Snapshots ──────────────────────────────────────────────────────

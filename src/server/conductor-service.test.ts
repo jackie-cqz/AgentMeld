@@ -184,7 +184,7 @@ describe("buildConductorAggregatePrompt", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildReplanContext", () => {
-  it("lists failed tasks with summaries", () => {
+  it("lists failed tasks with summaries and passed tasks", () => {
     const plan: ParsedTask[] = [
       { id: "t1", agentId: "ag_pm", title: "PRD", prompt: "", dependsOn: [], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 },
       { id: "t2", agentId: "ag_fe", title: "实现", prompt: "", dependsOn: ["t1"], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 },
@@ -194,11 +194,17 @@ describe("buildReplanContext", () => {
       ["t2", { taskId: "t2", status: "failed", summary: "build error" }],
     ]);
     const ctx = buildReplanContext(plan, results);
-    expect(ctx).toContain("上一轮以下任务失败");
+    // P5: New format includes execution summary with counts
+    expect(ctx).toContain("上一轮执行结果：1 失败, 1 成功");
+    expect(ctx).toContain("失败任务（含验收详情）");
+    expect(ctx).toContain("已完成任务");
     expect(ctx).toContain("t2");
     expect(ctx).toContain("实现");
     expect(ctx).toContain("build error");
-    expect(ctx).not.toContain("t1"); // t1 succeeded
+    // t1 now appears in "已完成任务" section
+    expect(ctx).toContain("t1");
+    expect(ctx).toContain("✅ 已完成");
+    expect(ctx).toContain("补救指示");
   });
 });
 
