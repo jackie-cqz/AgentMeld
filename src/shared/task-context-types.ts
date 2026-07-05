@@ -91,5 +91,7 @@ export interface TaskContextEnvelope {
   failureContext: FailureContext | null;
   manifest: ContextManifestItem[];
   budget: { maxInputTokens: number; requiredTokens: number; optionalTokens: number; omittedTokens: number };
+  /** P8: Context quality metrics for offline evaluation and observability */
+  qualityMetrics?: ContextQualityMetrics;
   createdAt: number;
 }

@@ -595,6 +595,28 @@ function createIndexes() {
       ON conversation_facts(source_type, source_id);
     CREATE INDEX IF NOT EXISTS idx_conversation_fact_definitions_lookup
       ON conversation_fact_definitions(conversation_id, namespace, entity_type, property_name);
+
+    -- P8: FTS5 virtual tables for context retrieval
+    CREATE VIRTUAL TABLE IF NOT EXISTS context_fts_messages
+      USING fts5(
+        message_id,
+        conversation_id,
+        role,
+        agent_name,
+        text_content,
+        created_at UNINDEXED,
+        tokenize='porter unicode61'
+      );
+    CREATE VIRTUAL TABLE IF NOT EXISTS context_fts_tasks
+      USING fts5(
+        source_type,
+        source_id,
+        conversation_id,
+        task_id,
+        text_content,
+        created_at UNINDEXED,
+        tokenize='porter unicode61'
+      );
   `);
 
   // P1: Migration for existing DBs that may lack the new columns/table

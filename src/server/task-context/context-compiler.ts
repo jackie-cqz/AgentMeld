@@ -4,7 +4,7 @@
 
 import type { Agent, Message } from "@/shared/types";
 import type { TaskExecutionIdentity, CriterionVerdict } from "@/shared/evidence-types";
-import type { TaskContextEnvelope, FailureContext } from "@/shared/task-context-types";
+import type { TaskContextEnvelope, FailureContext, ContextQualityMetrics } from "@/shared/task-context-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { ResolvedInput, UpstreamArtifact, ActiveFactEntry } from "@/server/child-prompt-builder";
 import { getArtifact } from "@/server/repositories";
@@ -150,6 +150,46 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
   }
 
+  // ── P8: Context Retrieval (Step 13) — FTS5 search for Optional layer ──
+  // Retrieved items are ALWAYS trust-level "retrieved" and can only enter
+  // the Optional budget. They must NEVER override active Facts or verified inputs.
+  let retrievalHitCount = 0;
+  try {
+    const userQuery = extractTextFromMessage(input.triggerMessage);
+    if (userQuery && userQuery.length > 10) {
+      // Collect source IDs already in candidates to avoid duplicates
+      const existingSourceIds = candidates.map(c => c.sourceId);
+      const { retrieveContext } = await import("@/server/task-context/context-retriever");
+      const retrieved = retrieveContext({
+        conversationId: input.conversationId,
+        query: userQuery,
+        maxResults: 10,
+        taskId: input.task.id,
+        excludeSourceIds: existingSourceIds,
+      });
+      retrievalHitCount = retrieved.length;
+      for (const ret of retrieved) {
+        candidates.push({
+          id: `${estimateId}_ret_${ret.sourceId}`,
+          category: "retrieved_history",
+          sourceType: ret.sourceType,
+          sourceId: ret.sourceId,
+          content: ret.snippet,
+          trustLevel: "retrieved",
+          required: false, // P8: retrieved = Optional tier only
+          taskIds: ret.taskId ? [ret.taskId] : [],
+          namespaces: [],
+          pathRefs: [],
+          criterionIds: [],
+          tokenEstimate: Math.ceil(ret.snippet.length / 4),
+          createdAt: ret.createdAt,
+        });
+      }
+    }
+  } catch {
+    // FTS5 may not be available — retrieval is best-effort, never blocks
+  }
+
   // ── P3: Qualification Hard Filter (Step 14) ──────────────────────────
   const dagTaskIds = [input.task.id, ...input.task.dependsOn];
   const qualified = candidates.filter(c => {
@@ -228,6 +268,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
 
   // Mandatory overflow check — return blocked envelope, do NOT call model
   if (isMandatoryOverBudget(mandatoryTokens, availableBudget)) {
+    const qm = buildQualityMetrics(scored, retrievalHitCount);
     return {
       schemaVersion: 1,
       policyVersion: "evidence-context-p3-v1",
@@ -243,6 +284,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
       failureContext: null,
       manifest: scored.map(s => candidateToManifestItem(s.candidate, s.tier.tier === "mandatory", "budget")),
       budget: { maxInputTokens: availableBudget, requiredTokens: mandatoryTokens, optionalTokens: 0, omittedTokens: mandatoryTokens - availableBudget },
+      qualityMetrics: qm,
       createdAt: now,
     };
   }
@@ -289,6 +331,14 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     .filter(c => c.category === "fact")
     .map(c => c.content as { canonicalKey?: string; value?: unknown });
 
+  // P8: Compute quality metrics from the packing result
+  const qm = buildQualityMetrics(scored, retrievalHitCount,
+    omitted.filter(o => o.reason === "stale").length,
+    omitted.filter(o => o.reason === "unverified").length,
+    omitted.filter(o => o.reason === "unrelated").length,
+    upstreamInputs.length,
+  );
+
   // Step 17: Build envelope — only packed items become context
   return {
     schemaVersion: 1,
@@ -305,6 +355,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     failureContext: failureCtx,
     manifest,
     budget,
+    qualityMetrics: qm,
     createdAt: now,
   };
 }
@@ -320,4 +371,36 @@ function estimateToken(content: unknown): number {
 
 function parseEvidenceIds(json: string): string[] {
   try { const v = JSON.parse(json); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+// ── P8: Quality metrics builder ─────────────────────────────────────────────
+
+interface ScoredCandidate {
+  candidate: { tokenEstimate: number; required: boolean; trustLevel: string; category: string };
+  tier: { tier: string };
+  scoreReasons: string[];
+}
+
+function buildQualityMetrics(
+  scored: ScoredCandidate[],
+  retrievalHits: number,
+  staleRejected: number = 0,
+  unverifiedRejected: number = 0,
+  unrelatedRejected: number = 0,
+  verifiedInputs: number = 0,
+): ContextQualityMetrics {
+  const packed = scored.filter(s => s.tier.tier !== "omitted");
+  const omitted = scored.filter(s => s.tier.tier === "omitted");
+  return {
+    totalTokens: scored.reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
+    requiredTokens: packed.filter(s => s.candidate.required).reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
+    optionalTokens: packed.filter(s => !s.candidate.required).reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
+    omittedTokens: omitted.reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
+    includedItemCount: packed.length,
+    staleItemRejectedCount: staleRejected,
+    unverifiedItemRejectedCount: unverifiedRejected,
+    unrelatedItemRejectedCount: unrelatedRejected,
+    verifiedInputCount: verifiedInputs,
+    retrievalHitCount: retrievalHits,
+  };
 }
