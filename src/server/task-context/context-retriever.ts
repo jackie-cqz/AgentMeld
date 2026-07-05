@@ -3,10 +3,14 @@
 //
 // Results are ALWAYS trust-level "retrieved" and can only enter the Optional
 // context budget. They must NEVER override authoritative/verified/active Facts.
+//
+// Lazy FTS rebuild: if the FTS index is empty for this conversation,
+// retrieveContext automatically triggers a rebuild before searching.
 // ---------------------------------------------------------------------------
 
 import { getDatabase } from "@/db/client";
 import type { EvidenceTrustLevel } from "@/shared/evidence-types";
+import { rebuildAllFts } from "@/server/search/context-fts-index";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +43,22 @@ export interface RetrievalOptions {
  * Search FTS5 indexes for context relevant to the given query.
  * Searches both message content and task/evidence/verdict metadata.
  */
+/** P8: Ensure FTS indexes are populated for this conversation before searching. */
+function ensureFtsReady(conversationId: string): void {
+  const db = getDatabase();
+  try {
+    const count = db
+      .prepare("SELECT COUNT(*) AS cnt FROM context_fts_messages WHERE conversation_id = ?")
+      .get(conversationId) as { cnt: number } | undefined;
+    if (!count || count.cnt === 0) {
+      rebuildAllFts(conversationId);
+    }
+  } catch {
+    // FTS tables may not exist yet — try to create + rebuild
+    try { rebuildAllFts(conversationId); } catch { /* best-effort */ }
+  }
+}
+
 export function retrieveContext(options: RetrievalOptions): RetrievalCandidate[] {
   const { conversationId, query, maxResults = 20, taskId, excludeSourceIds = [] } = options;
   const db = getDatabase();
@@ -52,6 +72,13 @@ export function retrieveContext(options: RetrievalOptions): RetrievalCandidate[]
   const safeQuery = normalizedQuery.replace(/["*()]/g, " ").replace(/\s+/g, " ").trim();
   if (!safeQuery) return [];
 
+  // P8: Lazy FTS rebuild — if empty, rebuild before searching
+  ensureFtsReady(conversationId);
+
+  // Over-fetch to account for taskId filtering in JS (we want maxResults
+  // AFTER task filtering, so fetch more than we need).
+  const fetchLimit = taskId ? maxResults * 4 : maxResults;
+
   try {
     // ── Search messages ──────────────────────────────────────────────────
     const msgRows = db
@@ -64,7 +91,7 @@ export function retrieveContext(options: RetrievalOptions): RetrievalCandidate[]
         ORDER BY rank
         LIMIT ?
       `)
-      .all(safeQuery, conversationId, maxResults) as Array<{
+      .all(safeQuery, conversationId, fetchLimit) as Array<{
         message_id: string; role: string; agent_name: string;
         text_content: string; created_at: number; rank: number;
       }>;
@@ -86,6 +113,14 @@ export function retrieveContext(options: RetrievalOptions): RetrievalCandidate[]
     }
 
     // ── Search tasks/evidence/verdicts ────────────────────────────────────
+    // P8: Push taskId filter into SQL WHERE to avoid truncation before filtering.
+    const taskWhere = taskId
+      ? "AND (task_id = ? OR task_id = '')"
+      : "";
+    const taskParams = taskId
+      ? [safeQuery, conversationId, taskId, fetchLimit]
+      : [safeQuery, conversationId, fetchLimit];
+
     const taskRows = db
       .prepare(`
         SELECT source_type, source_id, task_id, text_content, created_at,
@@ -93,17 +128,17 @@ export function retrieveContext(options: RetrievalOptions): RetrievalCandidate[]
         FROM context_fts_tasks
         WHERE context_fts_tasks MATCH ?
           AND conversation_id = ?
+          ${taskWhere}
         ORDER BY rank
         LIMIT ?
       `)
-      .all(safeQuery, conversationId, maxResults) as Array<{
+      .all(...taskParams) as Array<{
         source_type: string; source_id: string; task_id: string;
         text_content: string; created_at: number; rank: number;
       }>;
 
     for (const row of taskRows) {
       if (excludeSet.has(row.source_id)) continue;
-      if (taskId && row.task_id && row.task_id !== taskId) continue;
       results.push({
         id: `ret_task_${row.source_id}`,
         sourceType: row.source_type as RetrievalCandidate["sourceType"],

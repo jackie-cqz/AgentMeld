@@ -268,7 +268,16 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
 
   // Mandatory overflow check — return blocked envelope, do NOT call model
   if (isMandatoryOverBudget(mandatoryTokens, availableBudget)) {
-    const qm = buildQualityMetrics(scored, retrievalHitCount);
+    const qm = buildQualityMetrics({
+      packed: [],
+      omitted: scored.map(s => ({ candidate: s.candidate, reason: "budget" })),
+      budget: { maxInputTokens: availableBudget, requiredTokens: mandatoryTokens, optionalTokens: 0, omittedTokens: mandatoryTokens - availableBudget },
+      retrievalHits: retrievalHitCount,
+      staleRejected: 0,
+      unverifiedRejected: 0,
+      unrelatedRejected: 0,
+      verifiedInputs: 0,
+    });
     return {
       schemaVersion: 1,
       policyVersion: "evidence-context-p3-v1",
@@ -331,13 +340,17 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     .filter(c => c.category === "fact")
     .map(c => c.content as { canonicalKey?: string; value?: unknown });
 
-  // P8: Compute quality metrics from the packing result
-  const qm = buildQualityMetrics(scored, retrievalHitCount,
-    omitted.filter(o => o.reason === "stale").length,
-    omitted.filter(o => o.reason === "unverified").length,
-    omitted.filter(o => o.reason === "unrelated").length,
-    upstreamInputs.length,
-  );
+  // P8: Compute quality metrics from the ACTUAL packing result
+  const qm = buildQualityMetrics({
+    packed,
+    omitted,
+    budget,
+    retrievalHits: retrievalHitCount,
+    staleRejected: omitted.filter(o => o.reason === "stale").length,
+    unverifiedRejected: omitted.filter(o => o.reason === "unverified").length,
+    unrelatedRejected: omitted.filter(o => o.reason === "unrelated").length,
+    verifiedInputs: upstreamInputs.length,
+  });
 
   // Step 17: Build envelope — only packed items become context
   return {
@@ -374,28 +387,34 @@ function parseEvidenceIds(json: string): string[] {
 }
 
 // ── P8: Quality metrics builder ─────────────────────────────────────────────
+// Build from the ACTUAL packContext output (packed, omitted, budget), NOT from
+// the pre-pack scored array. This ensures omittedTokens reflects real budget
+// cuts and includedItemCount matches what the model actually receives.
 
-interface ScoredCandidate {
-  candidate: { tokenEstimate: number; required: boolean; trustLevel: string; category: string };
-  tier: { tier: string };
-  scoreReasons: string[];
+interface MetricCandidate {
+  tokenEstimate: number;
+  required: boolean;
+  trustLevel: string;
+  category: string;
 }
 
-function buildQualityMetrics(
-  scored: ScoredCandidate[],
-  retrievalHits: number,
-  staleRejected: number = 0,
-  unverifiedRejected: number = 0,
-  unrelatedRejected: number = 0,
-  verifiedInputs: number = 0,
-): ContextQualityMetrics {
-  const packed = scored.filter(s => s.tier.tier !== "omitted");
-  const omitted = scored.filter(s => s.tier.tier === "omitted");
+function buildQualityMetrics(params: {
+  packed: MetricCandidate[];
+  omitted: Array<{ candidate: MetricCandidate; reason: string }>;
+  budget: { maxInputTokens: number; requiredTokens: number; optionalTokens: number; omittedTokens: number };
+  retrievalHits: number;
+  staleRejected: number;
+  unverifiedRejected: number;
+  unrelatedRejected: number;
+  verifiedInputs: number;
+}): ContextQualityMetrics {
+  const { packed, omitted, budget, retrievalHits, staleRejected, unverifiedRejected, unrelatedRejected, verifiedInputs } = params;
+  const allCandidates = [...packed, ...omitted.map(o => o.candidate)];
   return {
-    totalTokens: scored.reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
-    requiredTokens: packed.filter(s => s.candidate.required).reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
-    optionalTokens: packed.filter(s => !s.candidate.required).reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
-    omittedTokens: omitted.reduce((s, sc) => s + sc.candidate.tokenEstimate, 0),
+    totalTokens: allCandidates.reduce((s, c) => s + c.tokenEstimate, 0),
+    requiredTokens: budget.requiredTokens,
+    optionalTokens: budget.optionalTokens,
+    omittedTokens: budget.omittedTokens,
     includedItemCount: packed.length,
     staleItemRejectedCount: staleRejected,
     unverifiedItemRejectedCount: unverifiedRejected,

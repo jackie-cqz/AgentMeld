@@ -17,6 +17,7 @@ import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/serve
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
+import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { verifyTaskAttempt } from "@/server/verification/verification-engine";
 import { upsertCriterionVerdict } from "@/server/repositories/evidence-repository";
@@ -830,6 +831,10 @@ async function runChildTask(
       const executionStatus = finalEvaluation.status === "complete" ? "reported_complete" : "failed";
       finishTaskAttempt(attemptId, executionStatus, Date.now());
 
+      // P8: Incremental FTS rebuild — evidence + verdicts are now persisted,
+      // so the FTS index should include this attempt's data for future searches.
+      rebuildFtsForConversation(conversationId);
+
       if (finalEvaluation.status === "complete") break;
     }
 
@@ -1125,6 +1130,18 @@ function createSystemMessage(conversationId: string, error: string): void {
     now: Date.now()
   });
   eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message });
+}
+
+// ── P8: FTS rebuild helper ──────────────────────────────────────────────────
+
+/** Fire-and-forget FTS rebuild after task attempt completion. */
+function rebuildFtsForConversation(conversationId: string): void {
+  try {
+    rebuildAllFts(conversationId);
+  } catch (err) {
+    // FTS rebuild must never block the conductor or fail a task
+    console.error(`[conductor] FTS rebuild failed for ${conversationId}:`, err);
+  }
 }
 
 // ---------------------------------------------------------------------------
