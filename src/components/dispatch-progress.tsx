@@ -30,14 +30,12 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
   const [drawerManifestIncluded, setDrawerManifestIncluded] = useState<ManifestEntry[]>([]);
   const [drawerManifestOmitted, setDrawerManifestOmitted] = useState<ManifestEntry[]>([]);
   const [drawerAttempts, setDrawerAttempts] = useState<AttemptRecord[]>([]);
-  const [drawerLoading, setDrawerLoading] = useState(false);
 
   // P7: Fetch real data from API when drawer opens
   const fetchDrawerData = useCallback(async (taskId: string) => {
     const activeAttemptId = dispatch?.activeAttemptByTask[taskId];
     if (!activeAttemptId) return;
 
-    setDrawerLoading(true);
     try {
       // Fetch evidence
       const evRes = await fetch(`/api/task-attempts/${activeAttemptId}/evidence`);
@@ -62,29 +60,33 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
         setDrawerManifestOmitted(cData.manifest?.omitted ?? []);
       }
 
-      // Fetch attempt list for this task
+      // Fetch attempt detail — use real API data for execution status + timestamps
       const aRes = await fetch(`/api/task-attempts/${activeAttemptId}`);
       if (aRes.ok) {
         const aData = await aRes.json();
-        // Build simple attempt records from store + API data
-        const attemptIds = dispatch?.attemptIdsByTask[taskId] ?? [activeAttemptId];
-        const attempts: AttemptRecord[] = attemptIds.map((aid, idx) => ({
-          attemptId: aid,
-          attempt: idx + 1,
-          childRunId: dispatch?.childRunIds[taskId] ?? null,
-          executionStatus: "complete",
-          verificationStatus: dispatch?.verificationStatusByTask[taskId] ?? "not_started",
-          contextTokenEstimate: dispatch?.contextSummaryByAttempt[aid]?.tokenEstimate,
-          evidenceCount: dispatch?.evidenceCountByAttempt[aid] ?? 0,
-          startedAt: null,
-          finishedAt: null,
-        }));
+        // Merge API data (executionStatus, startedAt, finishedAt) with store
+        // data (verification, context, evidence summaries).
+        const apiAttempt = aData.attempt;
+        const storeAttemptIds = dispatch?.attemptIdsByTask[taskId] ?? [activeAttemptId];
+        const attempts: AttemptRecord[] = storeAttemptIds.map((aid, idx) => {
+          // For the active attempt, use API data; for others, use store summary
+          const isActive = aid === activeAttemptId;
+          return {
+            attemptId: aid,
+            attempt: idx + 1,
+            childRunId: isActive ? (apiAttempt?.childRunId ?? dispatch?.childRunIds[taskId] ?? null) : (dispatch?.childRunIds[taskId] ?? null),
+            executionStatus: isActive ? (apiAttempt?.executionStatus ?? "complete") : "complete",
+            verificationStatus: dispatch?.verificationStatusByTask[taskId] ?? "not_started",
+            contextTokenEstimate: dispatch?.contextSummaryByAttempt[aid]?.tokenEstimate,
+            evidenceCount: dispatch?.evidenceCountByAttempt[aid] ?? 0,
+            startedAt: isActive ? (apiAttempt?.startedAt ?? null) : null,
+            finishedAt: isActive ? (apiAttempt?.finishedAt ?? null) : null,
+          };
+        });
         setDrawerAttempts(attempts);
       }
     } catch {
       // API not available — drawer shows empty state
-    } finally {
-      setDrawerLoading(false);
     }
   }, [dispatch?.activeAttemptByTask, dispatch?.attemptIdsByTask, dispatch?.childRunIds, dispatch?.verificationStatusByTask, dispatch?.contextSummaryByAttempt, dispatch?.evidenceCountByAttempt]);
 

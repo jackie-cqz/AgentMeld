@@ -100,13 +100,17 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   for (const ri of input.resolvedInputs) {
     if (ri.artifactId) {
       const art = getArtifact(ri.artifactId);
-      // P6: Load producer task's verification status to enrich delta trust level
+      // P6: Load producer task's verification status to enrich delta trust level.
+      // Scope by conversation + conductor run + plan to avoid cross-conversation leaks.
       let producerVerification: { status: string; passedCriterionCount: number } | null = null;
       try {
         const db = (await import("@/db/client")).getDatabase();
         const attempts = db
-          .prepare("SELECT id, verification_status FROM task_attempts WHERE task_id = ? AND execution_status = 'reported_complete' ORDER BY attempt DESC LIMIT 1")
-          .all(ri.fromTaskId) as Array<{ id: string; verification_status: string }>;
+          .prepare(`SELECT id, verification_status FROM task_attempts
+            WHERE conversation_id = ? AND conductor_run_id = ? AND plan_id = ?
+              AND task_id = ? AND execution_status = 'reported_complete'
+            ORDER BY attempt DESC LIMIT 1`)
+          .all(input.conversationId, input.conductorRunId, input.planId, ri.fromTaskId) as Array<{ id: string; verification_status: string }>;
         if (attempts.length > 0) {
           const verdicts = db
             .prepare("SELECT COUNT(*) AS cnt FROM criterion_verdicts WHERE attempt_id = ? AND status = 'passed'")

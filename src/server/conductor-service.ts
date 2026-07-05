@@ -1470,27 +1470,26 @@ export function buildReplanContext(
     const summary = r?.summary ?? "unknown error";
     parts.push(`- ${t.id} (${t.title}): ${summary}`);
 
-    // P5: Query verdicts for this task to give precise failure reasons
+    // P5: Query verdicts for this task to give precise failure reasons.
+    // Scope by conductor_run_id (derived from childRunId) + task_id.
     try {
       const db = getDatabase();
-      const verdictRows = db
-        .prepare(`
-          SELECT cv.criterion_id, cv.status, cv.reason
-          FROM criterion_verdicts cv
-          JOIN task_attempts ta ON cv.attempt_id = ta.id
-          WHERE ta.conductor_run_id = ? AND ta.task_id = ?
-          ORDER BY ta.attempt DESC
-          LIMIT 20
-        `)
-        .all(r?.childRunId ? (getDatabase().prepare("SELECT conductor_run_id FROM task_attempts WHERE child_run_id = ?").get(r!.childRunId) as { conductor_run_id: string })?.conductor_run_id ?? "" : "", t.id) as Array<{ criterion_id: string; status: string; reason: string }>;
-      // Simpler approach: query by task_id from the latest attempt
-      const attempts = db
-        .prepare("SELECT id FROM task_attempts WHERE task_id = ? ORDER BY attempt DESC LIMIT 1")
-        .all(t.id) as Array<{ id: string }>;
-      if (attempts.length > 0) {
+      // Use childRunId → task_attempts to get the authoritative conductor_run_id
+      let conductorRunId = "";
+      if (r?.childRunId) {
+        const runRow = db
+          .prepare("SELECT conductor_run_id FROM task_attempts WHERE child_run_id = ? LIMIT 1")
+          .get(r!.childRunId) as { conductor_run_id: string } | undefined;
+        conductorRunId = runRow?.conductor_run_id ?? "";
+      }
+      if (conductorRunId) {
         const vRows = db
-          .prepare("SELECT criterion_id, status, reason FROM criterion_verdicts WHERE attempt_id = ? ORDER BY checked_at DESC")
-          .all(attempts[0].id) as Array<{ criterion_id: string; status: string; reason: string }>;
+          .prepare(`SELECT cv.criterion_id, cv.status, cv.reason
+            FROM criterion_verdicts cv
+            JOIN task_attempts ta ON cv.attempt_id = ta.id
+            WHERE ta.conductor_run_id = ? AND ta.task_id = ?
+            ORDER BY ta.attempt DESC LIMIT 20`)
+          .all(conductorRunId, t.id) as Array<{ criterion_id: string; status: string; reason: string }>;
         for (const v of vRows) {
           if (v.status !== "passed") {
             parts.push(`    ❌ ${v.criterion_id} (${v.status}): ${v.reason}`);
