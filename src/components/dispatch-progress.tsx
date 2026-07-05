@@ -9,11 +9,17 @@ import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
 import type { ReactElement } from "react";
 import { useState } from "react";
+import { TaskEvidenceDrawer, type DrawerTab } from "@/components/task-evidence-drawer";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
     Object.values(state.dispatchesByRunId).find((item) => item.messageId === messageId) ?? null
   );
+
+  // P7: Evidence drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTaskId, setDrawerTaskId] = useState("");
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("context");
 
   if (!dispatch || dispatch.plan.length === 0) return null;
 
@@ -30,33 +36,50 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
   else if (terminal === total && skipped > 0) aggStatus = { label: "部分完成", color: "text-amber-700", icon: <AlertTriangle className="h-4 w-4 text-amber-600" /> };
   else if (complete === total) aggStatus = { label: "全部完成", color: "text-emerald-700", icon: <CheckCircle2 className="h-4 w-4 text-emerald-600" /> };
 
+  const handleOpenDrawer = (taskId: string, tab: DrawerTab) => {
+    setDrawerTaskId(taskId);
+    setDrawerTab(tab);
+    setDrawerOpen(true);
+  };
+
   return (
-    <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-blue-950">
-          <GitBranch className="h-4 w-4 text-blue-600" />
-          调度进度
+    <>
+      <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-950">
+            <GitBranch className="h-4 w-4 text-blue-600" />
+            调度进度
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`flex items-center gap-1 text-xs font-medium ${aggStatus.color}`}>
+              {aggStatus.icon}{aggStatus.label}
+            </span>
+            <span className="text-xs text-slate-500">
+              {complete}/{total} · ❌{failed} · ⏭{skipped}
+              {running > 0 ? ` · ⏳${running}` : ""}
+            </span>
+          </div>
+        </header>
+        <div className="mt-3 space-y-2">
+          {dispatch.plan.map((task) => (
+            <DispatchTaskRow key={task.id} dispatch={dispatch} taskId={task.id} onOpenDrawer={handleOpenDrawer} />
+          ))}
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`flex items-center gap-1 text-xs font-medium ${aggStatus.color}`}>
-            {aggStatus.icon}{aggStatus.label}
-          </span>
-          <span className="text-xs text-slate-500">
-            {complete}/{total} · ❌{failed} · ⏭{skipped}
-            {running > 0 ? ` · ⏳${running}` : ""}
-          </span>
-        </div>
-      </header>
-      <div className="mt-3 space-y-2">
-        {dispatch.plan.map((task) => (
-          <DispatchTaskRow key={task.id} dispatch={dispatch} taskId={task.id} />
-        ))}
-      </div>
-    </section>
+      </section>
+
+      {/* P7: Evidence drawer — slides in from the right */}
+      <TaskEvidenceDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        taskId={drawerTaskId}
+        activeTab={drawerTab}
+        onTabChange={setDrawerTab}
+      />
+    </>
   );
 }
 
-function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId: string }) {
+function DispatchTaskRow({ dispatch, taskId, onOpenDrawer }: { dispatch: DispatchState; taskId: string; onOpenDrawer: (taskId: string, tab: DrawerTab) => void }) {
   const agents = useAppStore((state) => state.agents);
   const task = dispatch.plan.find((item) => item.id === taskId);
   const [expanded, setExpanded] = useState(false);
@@ -117,31 +140,49 @@ function DispatchTaskRow({ dispatch, taskId }: { dispatch: DispatchState; taskId
               <span key={path} className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] text-amber-700">{path}</span>
             ))}
           </div>
-          {/* P7: Evidence-aware summary row */}
+          {/* P7: Evidence-aware summary row — clickable items open the drawer */}
           {(evidenceCount > 0 || contextSummary || verdictSummary) ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-1.5">
               {contextSummary ? (
-                <span className="flex items-center gap-0.5 text-[10px] text-slate-500" title={`${contextSummary.includedCount} included, ${contextSummary.omittedCount} omitted`}>
+                <button
+                  onClick={() => onOpenDrawer(taskId, "context")}
+                  className="flex items-center gap-0.5 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+                  title={`${contextSummary.includedCount} included, ${contextSummary.omittedCount} omitted`}
+                >
                   <Eye className="h-3 w-3" />上下文 {contextSummary.includedCount}项 · {contextSummary.tokenEstimate > 1000 ? `${(contextSummary.tokenEstimate / 1000).toFixed(1)}k` : contextSummary.tokenEstimate} tok
-                </span>
+                </button>
               ) : null}
               {evidenceCount > 0 ? (
-                <span className="flex items-center gap-0.5 text-[10px] text-slate-500">
+                <button
+                  onClick={() => onOpenDrawer(taskId, "evidence")}
+                  className="flex items-center gap-0.5 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+                >
                   <FileCheck className="h-3 w-3" />证据 {evidenceCount}项
-                </span>
+                </button>
               ) : null}
               {verdictSummary ? (
-                <span className={`flex items-center gap-0.5 text-[10px] ${verdictSummary.failed > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                <button
+                  onClick={() => onOpenDrawer(taskId, "verdicts")}
+                  className={`flex items-center gap-0.5 text-[10px] hover:underline ${verdictSummary.failed > 0 ? "text-red-600 hover:text-red-800" : "text-blue-600 hover:text-blue-800"}`}
+                >
                   <ShieldCheck className="h-3 w-3" />验收 {verdictSummary.passed}/{verdictSummary.passed + verdictSummary.failed + verdictSummary.missing + verdictSummary.needsReview}
-                </span>
+                </button>
               ) : null}
-              {/* P7: Expand button for detail drawer */}
+              {(dispatch.attempts[taskId] ?? 1) > 1 ? (
+                <button
+                  onClick={() => onOpenDrawer(taskId, "attempts")}
+                  className="flex items-center gap-0.5 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+                >
+                  第{dispatch.attempts[taskId]}次尝试
+                </button>
+              ) : null}
+              {/* Expand inline summary */}
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="ml-auto flex items-center gap-0.5 text-[10px] text-blue-500 hover:text-blue-700"
+                className="ml-auto flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-slate-600"
               >
                 {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                {expanded ? "收起" : "详情"}
+                {expanded ? "收起" : "摘要"}
               </button>
             </div>
           ) : null}

@@ -8,7 +8,7 @@ import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
-import { buildChildTaskPrompt, resolveTaskInputs, renderTaskContextPrompt, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
+import { buildChildTaskPrompt, resolveTaskInputs, resolveVerifiedTaskInputs, renderTaskContextPrompt, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
 import { compileTaskContext } from "@/server/task-context/context-compiler";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
@@ -482,13 +482,32 @@ async function runChildTask(
 
   try {
     // Build child prompt with full context
-        // Build upstream artifact references
+
+    // P6: Resolve verified inputs with full artifact metadata (provenance,
+    // artifact version, type). Unlike resolveTaskInputs which only checks
+    // binding existence, this enriches each resolved input with artifact info.
+    const verifiedInputs = resolveVerifiedTaskInputs(task, outputBindings);
+
+    // Build upstream artifact references — prefer verified input metadata
+    // when available (carries artifact version + type), fall back to simple
+    // resolvedInputs lookup for backwards compatibility.
     const upstreamArtifacts: UpstreamArtifact[] = [];
-    for (const ri of resolvedInputs) {
-      if (ri.artifactId) {
-        const art = getArtifact(ri.artifactId);
-        if (art) {
-          upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
+    if (verifiedInputs.length > 0) {
+      for (const vi of verifiedInputs) {
+        upstreamArtifacts.push({
+          id: vi.artifactId,
+          type: vi.artifactType,
+          title: vi.title,
+          version: vi.artifactVersion,
+        });
+      }
+    } else {
+      for (const ri of resolvedInputs) {
+        if (ri.artifactId) {
+          const art = getArtifact(ri.artifactId);
+          if (art) {
+            upstreamArtifacts.push({ id: art.id, type: art.type, title: art.title, version: art.version });
+          }
         }
       }
     }
@@ -712,6 +731,17 @@ async function runChildTask(
       finalReport = report;
 
       // P7: Emit evidence.summary for frontend observability
+      // P7: Emit evidence.summary — query SQLite ledger for full count,
+      // not just the in-memory fileWrites + commands snapshot.
+      let evidenceCount = evidence.fileWrites.length + evidence.commands.length;
+      try {
+        const ledgerRecords = listEvidenceForAttempt(attemptId);
+        if (ledgerRecords.length > 0) {
+          evidenceCount = ledgerRecords.length;
+        }
+      } catch {
+        // Fall back to in-memory count if SQLite unavailable
+      }
       eventBus.publish({
         type: "dispatch.evidence.summary",
         conversationId,
@@ -720,7 +750,7 @@ async function runChildTask(
         taskId: task.id,
         attemptId,
         childRunId: attemptRunId,
-        evidenceCount: evidence.fileWrites.length + evidence.commands.length,
+        evidenceCount,
       });
 
       // P4: Run verification engine against evidence ledger — always, not just on "complete"
@@ -759,24 +789,39 @@ async function runChildTask(
           // needs_review on a self-reported-complete task → block it
           finalEvaluation = { status: "failed", error: `Verification incomplete: ${verification.verdicts.filter(v => v.status === "needs_review").map(v => v.reason).join("; ")}` };
         }
+
+        // P7: Emit verification.updated with ACTUAL verdict counts, not binding count
+        eventBus.publish({
+          type: "dispatch.verification.updated",
+          conversationId,
+          timestamp: Date.now(),
+          parentRunId,
+          taskId: task.id,
+          attemptId,
+          status: verification.status === "verified" ? "verified"
+            : verification.status === "needs_review" ? "needs_review"
+            : "rejected",
+          passedCount: verification.verdicts.filter(v => v.status === "passed").length,
+          failedCount: verification.verdicts.filter(v => v.status === "failed").length,
+        });
       } catch (err) {
         // P4: Verification engine crash → evidence gate compromised, reject the attempt
         console.error(`[conductor] verification engine CRASHED for task ${task.id} attempt ${attemptId}:`, err);
         finalEvaluation = { status: "failed", error: `Verification engine failure: ${err instanceof Error ? err.message : "unknown error"}` };
-      }
 
-      // P7: Emit verification.updated for frontend observability
-      eventBus.publish({
-        type: "dispatch.verification.updated",
-        conversationId,
-        timestamp: Date.now(),
-        parentRunId,
-        taskId: task.id,
-        attemptId,
-        status: finalEvaluation.status === "complete" ? "verified" : "rejected",
-        passedCount: (finalVerifiedBindings?.length ?? 0),
-        failedCount: finalEvaluation.status === "complete" ? 0 : 1,
-      });
+        // P7: Emit verification.updated on crash — no verdicts available
+        eventBus.publish({
+          type: "dispatch.verification.updated",
+          conversationId,
+          timestamp: Date.now(),
+          parentRunId,
+          taskId: task.id,
+          attemptId,
+          status: "rejected",
+          passedCount: 0,
+          failedCount: 1,
+        });
+      }
 
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
