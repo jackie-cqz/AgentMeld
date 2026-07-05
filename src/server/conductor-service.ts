@@ -505,6 +505,10 @@ async function runChildTask(
 
     // P2: Load active facts for this agent's context
     const taskAgent = listAgents().find(a => a.id === task.agentId);
+    const workspace = getWorkspaceForConversation(conversationId);
+    const workspacePath = workspace
+      ? (workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath)
+      : undefined;
     let activeFacts: ActiveFactEntry[] = [];
     try {
       // P2: Derive agent role from capabilities, not agentId
@@ -597,6 +601,7 @@ async function runChildTask(
         conversationId, conductorRunId: parentRunId, planId, planRevision: taskExecution.planRevision,
         task, attemptId, attempt, contextSnapshotId, assignedAgent: taskAgent ?? { id: task.agentId } as Agent,
         triggerMessage, resolvedInputs, upstreamArtifacts, activeFacts,
+        workspacePath,
         previousAttemptId: attempt > 1 ? previousAttemptId : undefined,
         previousChildRunId: attempt > 1 ? previousRunId : undefined,
         previousError: attempt > 1 ? previousError : undefined,

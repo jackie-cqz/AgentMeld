@@ -194,6 +194,37 @@ describe("context-renderer", () => {
     expect(prompt).toContain("TS2322");
     expect(prompt).toContain("Fix type error");
   });
+
+  it("renders workspace snapshot entries", () => {
+    const envelope: TaskContextEnvelope = {
+      schemaVersion: 1, policyVersion: "v1",
+      identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "c1" },
+      task: { title: "T", objective: "Fix app", assignedAgentId: "ag1", dependsOn: [] },
+      requirements: { constraints: [], expectedOutputs: [] },
+      blocked: false,
+      includedContextItems: [{
+        category: "workspace",
+        sourceType: "workspace_snapshot",
+        sourceId: ".",
+        content: {
+          root: ".",
+          truncated: false,
+          entries: [
+            { type: "directory", path: "pomodoro-timer" },
+            { type: "file", path: "pomodoro-timer/src/App.jsx" },
+          ],
+        },
+        trustLevel: "verified",
+        required: false,
+        tokenEstimate: 32,
+      }],
+      upstreamInputs: [], failureContext: null, manifest: [],
+      budget: { maxInputTokens: 1000, requiredTokens: 0, optionalTokens: 32, omittedTokens: 0 }, createdAt: 1,
+    };
+    const prompt = renderTaskContextPrompt(envelope);
+    expect(prompt).toContain("<workspace_snapshot truncated=\"false\">");
+    expect(prompt).toContain("path=\"pomodoro-timer/src/App.jsx\"");
+  });
 });
 
 describe("qualification-filter", () => {
@@ -253,6 +284,20 @@ describe("context-compressor", () => {
     const result = compressCandidate(c, "high");
     const content = result.compressedContent as { artifactId: string };
     expect(content.artifactId).toBe("art1");
+  });
+
+  it("preserves workspace snapshot entries", () => {
+    const c = makeCandidate({
+      category: "workspace",
+      sourceType: "workspace_snapshot",
+      content: {
+        entries: [{ type: "file", path: "pomodoro-timer/src/App.jsx" }],
+        truncated: false,
+      },
+    });
+    const result = compressCandidate(c, "high");
+    const content = result.compressedContent as { entries?: Array<{ path: string }> };
+    expect(content.entries?.[0]?.path).toBe("pomodoro-timer/src/App.jsx");
   });
 });
 

@@ -2,6 +2,8 @@
 // P3: Task Context Compiler — 18-step pipeline from data to envelope
 // ---------------------------------------------------------------------------
 
+import fs from "fs";
+import path from "path";
 import type { Agent, Message } from "@/shared/types";
 import type { TaskExecutionIdentity, CriterionVerdict } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, FailureContext, ContextQualityMetrics } from "@/shared/task-context-types";
@@ -35,6 +37,8 @@ export interface CompileTaskContextInput {
   upstreamArtifacts: UpstreamArtifact[];
   /** P3: activeFacts already filtered by agent role via getFilteredDefinitionsForAgent */
   activeFacts: ActiveFactEntry[];
+  /** Effective workspace root for lightweight directory snapshots. */
+  workspacePath?: string;
   previousAttemptId?: string;
   previousChildRunId?: string;
   previousError?: string;
@@ -140,6 +144,16 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   }
 
   // Step 12: Workspace target paths
+  const workspaceSnapshot = input.workspacePath ? buildWorkspaceSnapshot(input.workspacePath) : null;
+  if (workspaceSnapshot) {
+    candidates.push({
+      id: `${estimateId}_ws_snapshot`, category: "workspace", sourceType: "workspace_snapshot", sourceId: ".",
+      content: workspaceSnapshot, trustLevel: "verified", required: false, taskIds: [input.task.id],
+      namespaces: [], pathRefs: workspaceSnapshot.entries.map(e => e.path), criterionIds: [],
+      tokenEstimate: estimateToken(workspaceSnapshot), createdAt: now,
+    });
+  }
+
   for (const tp of input.task.targetPaths ?? []) {
     candidates.push({
       id: `${estimateId}_ws_${tp}`, category: "workspace", sourceType: "targetPath", sourceId: tp,
@@ -451,4 +465,91 @@ function buildQualityMetrics(params: {
     verifiedInputCount: verifiedInputs,
     retrievalHitCount: retrievalHits,
   };
+}
+
+interface WorkspaceSnapshotEntry {
+  path: string;
+  type: "file" | "directory";
+}
+
+interface WorkspaceSnapshot {
+  root: ".";
+  maxDepth: number;
+  maxEntries: number;
+  truncated: boolean;
+  entries: WorkspaceSnapshotEntry[];
+  note?: string;
+}
+
+const WORKSPACE_SNAPSHOT_MAX_DEPTH = 3;
+const WORKSPACE_SNAPSHOT_MAX_ENTRIES = 80;
+const WORKSPACE_SNAPSHOT_SKIP_NAMES = new Set([
+  ".git",
+  ".next",
+  ".turbo",
+  ".vite",
+  "node_modules",
+  "coverage",
+]);
+const WORKSPACE_SNAPSHOT_SHALLOW_NAMES = new Set([
+  "build",
+  "dist",
+  "out",
+]);
+
+function buildWorkspaceSnapshot(workspacePath: string): WorkspaceSnapshot | null {
+  if (!fs.existsSync(workspacePath)) {
+    return null;
+  }
+
+  const entries: WorkspaceSnapshotEntry[] = [];
+  let truncated = false;
+
+  function walk(currentPath: string, relativeBase: string, depth: number): void {
+    if (depth > WORKSPACE_SNAPSHOT_MAX_DEPTH || truncated) return;
+
+    let dirents: fs.Dirent[];
+    try {
+      dirents = fs.readdirSync(currentPath, { withFileTypes: true })
+        .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+    } catch {
+      return;
+    }
+
+    for (const dirent of dirents) {
+      if (entries.length >= WORKSPACE_SNAPSHOT_MAX_ENTRIES) {
+        truncated = true;
+        return;
+      }
+      if (WORKSPACE_SNAPSHOT_SKIP_NAMES.has(dirent.name)) continue;
+
+      const rel = normalizeWorkspacePath(path.join(relativeBase, dirent.name));
+      const type = dirent.isDirectory() ? "directory" : "file";
+      entries.push({ path: rel, type });
+
+      if (
+        dirent.isDirectory() &&
+        !WORKSPACE_SNAPSHOT_SHALLOW_NAMES.has(dirent.name) &&
+        depth < WORKSPACE_SNAPSHOT_MAX_DEPTH
+      ) {
+        walk(path.join(currentPath, dirent.name), rel, depth + 1);
+      }
+    }
+  }
+
+  walk(workspacePath, "", 0);
+  return {
+    root: ".",
+    maxDepth: WORKSPACE_SNAPSHOT_MAX_DEPTH,
+    maxEntries: WORKSPACE_SNAPSHOT_MAX_ENTRIES,
+    truncated,
+    entries,
+    note: entries.length === 0
+      ? "Workspace is currently empty."
+      : "Lightweight workspace file list only; use fs_read for file contents before editing.",
+  };
+}
+
+function normalizeWorkspacePath(inputPath: string): string {
+  return inputPath.split(path.sep).join("/");
 }

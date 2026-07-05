@@ -33,8 +33,14 @@ export function compressCandidate(candidate: ContextCandidate, tier: "mandatory"
       };
     }
     case "workspace": {
-      const ws = candidate.content as { path?: string };
-      return { candidate, compressedContent: { path: ws.path }, compressionSummary: "path ref" };
+      const ws = candidate.content as { path?: string; entries?: unknown[]; truncated?: boolean; note?: string };
+      return {
+        candidate,
+        compressedContent: Array.isArray(ws.entries)
+          ? { entries: ws.entries, truncated: ws.truncated ?? false, note: ws.note }
+          : { path: ws.path },
+        compressionSummary: Array.isArray(ws.entries) ? "workspace snapshot" : "path ref",
+      };
     }
     case "evidence": {
       return { candidate, compressedContent: candidate.content, compressionSummary: tier === "mandatory" ? "full evidence" : "evidence ref" };

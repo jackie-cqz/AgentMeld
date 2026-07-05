@@ -70,8 +70,21 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
   if (wsItems.length > 0) {
     parts.push(`  <workspace_state>`);
     for (const ws of wsItems) {
-      const wp = ws.content as { path?: string };
+      const wp = ws.content as {
+        path?: string;
+        entries?: Array<{ path: string; type: "file" | "directory" }>;
+        truncated?: boolean;
+        note?: string;
+      };
       if (wp.path) parts.push(`    <target_path>${escapeXml(wp.path)}</target_path>`);
+      if (Array.isArray(wp.entries)) {
+        parts.push(`    <workspace_snapshot truncated="${wp.truncated ? "true" : "false"}">`);
+        if (wp.note) parts.push(`      <note>${escapeXml(wp.note)}</note>`);
+        for (const entry of wp.entries) {
+          parts.push(`      <entry type="${escapeXml(entry.type)}" path="${escapeXml(entry.path)}" />`);
+        }
+        parts.push(`    </workspace_snapshot>`);
+      }
     }
     parts.push(`  </workspace_state>`);
   }
