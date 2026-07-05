@@ -101,23 +101,16 @@ afterAll(() => {
 });
 
 describe("P8 FTS retrieval integration", () => {
-  it("retrieves messages matching query (ASCII tokenizer)", () => {
-    // FTS5 unicode61 handles Latin words as tokens. Chinese characters
+  it("retrieves results for ASCII queries (artifact + evidence indexes)", () => {
+    // FTS5 unicode61 tokenizer handles Latin words well. Chinese characters
     // are individual tokens and may not match well without a dedicated
-    // CJK tokenizer (jieba, icu). "React" and "Todo" appear in content.
+    // CJK tokenizer (jieba, icu). "pnpm" appears in evidence payloads.
     const results = retrieveContext({
-      conversationId: CONV_ID,
-      query: "Todo",
-      maxResults: 10,
-    });
-    // At minimum, the non-message indexes (artifact, task result) should
-    // return results for ASCII queries.
-    const all = retrieveContext({
       conversationId: CONV_ID,
       query: "pnpm",
       maxResults: 20,
     });
-    expect(all.length).toBeGreaterThan(0);
+    expect(results.length).toBeGreaterThan(0);
   });
 
   it("retrieves evidence matching query", () => {
@@ -196,19 +189,32 @@ describe("P8 FTS retrieval integration", () => {
     expect(results.length).toBe(0);
   });
 
-  it("lazy rebuild: retrieveContext works even without explicit rebuild", () => {
-    // ensureFtsReady triggers rebuild when FTS is empty. The evidence
-    // table has "src/App.tsx" as subjectId. Search for "App" (FTS5 may
-    // split on dots).
+  it("lazy rebuild: clear FTS → retrieveContext auto-rebuilds → finds results", () => {
+    // Manually clear both FTS tables so they are EMPTY before the test.
+    // ensureFtsReady should detect this and trigger rebuildAllFts.
+    const db = getDatabase();
+    db.prepare("DELETE FROM context_fts_messages WHERE conversation_id = ?").run(CONV_ID);
+    db.prepare("DELETE FROM context_fts_tasks WHERE conversation_id = ?").run(CONV_ID);
+
+    // Verify they're actually empty
+    const msgRow = db.prepare("SELECT COUNT(*) AS cnt FROM context_fts_messages WHERE conversation_id = ?").get(CONV_ID) as { cnt: number };
+    const taskRow = db.prepare("SELECT COUNT(*) AS cnt FROM context_fts_tasks WHERE conversation_id = ?").get(CONV_ID) as { cnt: number };
+    expect(msgRow.cnt).toBe(0);
+    expect(taskRow.cnt).toBe(0);
+
+    // Now retrieveContext — ensureFtsReady should trigger a rebuild
     const results = retrieveContext({
       conversationId: CONV_ID,
       query: "App",
       maxResults: 5,
     });
-    // Should find evidence or messages mentioning App
+    // Should find evidence mentioning App.tsx after auto-rebuild
     const found = results.some(r =>
       r.textContent.includes("App") || r.textContent.includes("src/App")
     );
     expect(found).toBe(true);
+
+    // Rebuild again so other tests aren't affected
+    rebuildAllFts(CONV_ID);
   });
 });

@@ -47,10 +47,15 @@ export interface RetrievalOptions {
 function ensureFtsReady(conversationId: string): void {
   const db = getDatabase();
   try {
-    const count = db
+    const msgCount = (db
       .prepare("SELECT COUNT(*) AS cnt FROM context_fts_messages WHERE conversation_id = ?")
-      .get(conversationId) as { cnt: number } | undefined;
-    if (!count || count.cnt === 0) {
+      .get(conversationId) as { cnt: number } | undefined)?.cnt ?? 0;
+    const taskCount = (db
+      .prepare("SELECT COUNT(*) AS cnt FROM context_fts_tasks WHERE conversation_id = ?")
+      .get(conversationId) as { cnt: number } | undefined)?.cnt ?? 0;
+    // Rebuild if EITHER index is empty — messages might be populated from
+    // an earlier rebuild but tasks/evidence/verdicts could still be stale.
+    if (msgCount === 0 || taskCount === 0) {
       rebuildAllFts(conversationId);
     }
   } catch {

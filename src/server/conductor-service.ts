@@ -833,6 +833,10 @@ async function runChildTask(
 
       // P8: Incremental FTS rebuild — evidence + verdicts are now persisted,
       // so the FTS index should include this attempt's data for future searches.
+      // NOTE: This does a full rebuild of both FTS tables per attempt.
+      // For long conversations, consider debouncing or switching to
+      // incremental upserts (INSERT into FTS directly from evidence collector).
+      // For single-user MVP this is acceptable — rebuilds are fast on local SQLite.
       rebuildFtsForConversation(conversationId);
 
       if (finalEvaluation.status === "complete") break;
