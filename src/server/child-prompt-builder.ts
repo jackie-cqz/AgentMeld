@@ -217,11 +217,14 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
     parts.push("");
   }
 
-  // Acceptance criteria
+  // Acceptance criteria — if a criterion is JSON (from role contract),
+  // extract only the human-readable description. The structured validator
+  // is for the system, not the agent.
   if (task.acceptanceCriteria && task.acceptanceCriteria.length > 0) {
     parts.push("  <acceptance_criteria>");
     for (const criterion of task.acceptanceCriteria) {
-      parts.push(`    <criterion>${escapeXml(criterion)}</criterion>`);
+      const display = extractCriterionDescription(criterion);
+      parts.push(`    <criterion>${escapeXml(display)}</criterion>`);
     }
     parts.push("  </acceptance_criteria>");
     parts.push("");
@@ -283,8 +286,11 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
       "the system records them automatically."
     );
   }
+  // P5: Build acceptanceResults with human-readable descriptions.
+  // JSON criteria from role contracts contain structured validators —
+  // the agent only needs to see and report the description text.
   const acceptanceResults = (task.acceptanceCriteria ?? []).map((criterion) => ({
-    criterion,
+    criterion: extractCriterionDescription(criterion),
     passed: true,
     evidence: "concrete evidence for this criterion"
   }));
@@ -295,7 +301,7 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
       summary: "what you completed",
       acceptanceResults
     }) +
-    ". Copy every acceptance criterion verbatim; do not paraphrase, merge, or omit criteria. " +
+    ". For each criterion, report the description text exactly as shown. " +
     "Set passed=false and explain the evidence when a criterion is not satisfied. " +
     "Include files, commands, and tests when required by task_evidence_contract."
   );
@@ -305,6 +311,15 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
 
 export function hasMissingRequiredInputs(resolvedInputs: ResolvedInput[]): boolean {
   return resolvedInputs.some((i) => i.required && i.missing);
+}
+
+/** P5: Extract human-readable description from acceptance criteria. JSON criteria (from role contracts) are parsed; plain strings pass through. */
+function extractCriterionDescription(criterion: string): string {
+  try {
+    const parsed = JSON.parse(criterion) as Record<string, unknown>;
+    if (parsed && typeof parsed.description === "string") return parsed.description;
+  } catch { /* not JSON, use as-is */ }
+  return criterion;
 }
 
 function escapeXml(s: string): string {

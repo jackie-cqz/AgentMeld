@@ -63,68 +63,69 @@ describe("detectAgentRole", () => {
 
 describe("applyRoleContracts", () => {
   const agents = [
-    { id: "t1", name: "PM", capabilities: ["pm"] },
-    { id: "t2", name: "UI Designer", capabilities: ["design"] },
+    { id: "ag_pm", name: "PM", capabilities: ["pm"] },
+    { id: "ag_designer", name: "UI Designer", capabilities: ["design"] },
     { id: "ag_builder", name: "Frontend", capabilities: ["react"] },
     { id: "ag_reviewer", name: "Reviewer", capabilities: ["review"] },
   ];
 
+  // Realistic plan where task.id ≠ agent.id — tasks reference agents by agentId.
+  // The input matching must resolve depId(t1) → task.agentId(ag_pm) → agent role(pm).
+  const fullPlan: DispatchPlanItem[] = [
+    { id: "t1", agentId: "ag_pm", task: "write PRD", dependsOn: [], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+    { id: "t2", agentId: "ag_designer", task: "design UI", dependsOn: ["t1"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+    { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+  ];
+
   it("auto-fills expectedOutputs for frontend task", () => {
-    const plan: DispatchPlanItem[] = [
-      { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
-    ];
-    const result = applyRoleContracts(plan, agents);
+    const result = applyRoleContracts(fullPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
     expect(result.enriched).toBe(true);
-    expect(result.plan[0].expectedOutputs!.length).toBeGreaterThan(0);
-    expect(result.plan[0].expectedOutputs![0].id).toBe("web_app");
+    expect(t3.expectedOutputs!.length).toBeGreaterThan(0);
+    expect(t3.expectedOutputs![0].id).toBe("web_app");
   });
 
   it("auto-fills inputs by agent role (not positional order)", () => {
-    // Frontend depends on t1(PM→prd) and t2(designer→style-guide).
-    // Role-based matching: prd→t1(PM), style-guide→t2(UI)
-    const plan: DispatchPlanItem[] = [
-      { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
-    ];
-    const result = applyRoleContracts(plan, agents);
+    const result = applyRoleContracts(fullPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
     expect(result.enriched).toBe(true);
-    expect(result.plan[0].inputs!.length).toBe(2);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
+    expect(t3.inputs!.length).toBe(2);
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
   });
 
   it("handles reversed dependency order via role matching", () => {
-    // Even if dependsOn is ["t2", "t1"], role matching still gives
-    // t1→prd (PM) and t2→style-guide (designer)
-    const plan: DispatchPlanItem[] = [
+    const reversedPlan: DispatchPlanItem[] = [
+      { id: "t1", agentId: "ag_pm", task: "write PRD", dependsOn: [], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+      { id: "t2", agentId: "ag_designer", task: "design UI", dependsOn: ["t1"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
       { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t2", "t1"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
     ];
-    const result = applyRoleContracts(plan, agents);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
+    const result = applyRoleContracts(reversedPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
   });
 
   it("does not create spurious input pairings", () => {
-    const plan: DispatchPlanItem[] = [
-      { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
-    ];
-    const result = applyRoleContracts(plan, agents);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "style-guide")).toBe(false);
-    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "prd")).toBe(false);
+    const result = applyRoleContracts(fullPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "style-guide")).toBe(false);
+    expect(t3.inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "prd")).toBe(false);
   });
 
   it("does not overwrite existing outputs", () => {
-    const plan: DispatchPlanItem[] = [
+    const customPlan: DispatchPlanItem[] = [
       { id: "t1", agentId: "ag_pm", task: "write PRD", dependsOn: [], expectedOutputs: [{ id: "custom_prd", type: "document" as const }], inputs: [], acceptanceCriteria: [] },
     ];
-    const result = applyRoleContracts(plan, agents);
+    const result = applyRoleContracts(customPlan, agents);
     expect(result.plan[0].expectedOutputs!.some((o) => o.id === "custom_prd")).toBe(true);
   });
 
   it("returns not enriched for unknown agents", () => {
-    const plan: DispatchPlanItem[] = [
+    const unknownPlan: DispatchPlanItem[] = [
       { id: "tx", agentId: "ag_unknown", task: "do stuff", dependsOn: [], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
     ];
-    const { enriched } = applyRoleContracts(plan, []);
+    const { enriched } = applyRoleContracts(unknownPlan, []);
     expect(enriched).toBe(false);
   });
 });

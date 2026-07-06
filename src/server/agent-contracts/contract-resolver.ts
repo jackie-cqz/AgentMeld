@@ -27,11 +27,14 @@ const ROLE_OUTPUT_MAP: Record<string, AgentRole> = {
 function enrichTask(
   task: DispatchPlanItem,
   contract: RoleOutputContract,
+  allPlanTasks: DispatchPlanItem[],
   agents: Array<{ id: string; name: string; capabilities: string[] }>,
   agentName?: string
 ): DispatchPlanItem {
   const enriched = { ...task };
   const agentMap = new Map(agents.map((a) => [a.id, a]));
+  // Build taskId → agentId FROM THE PLAN (not from agents list directly)
+  const taskAgentIdMap = new Map(allPlanTasks.map((t) => [t.id, t.agentId]));
 
   // expectedOutputs: only fill if task doesn't already declare this outputKey
   const existingKeys = new Set((enriched.expectedOutputs ?? []).map((o) => o.id));
@@ -47,25 +50,27 @@ function enrichTask(
     ];
   }
 
-  // inputs: match required inputs to deps by detected agent role.
-  // Build a dep→role map from agent capabilities, then pair each
-  // requiredOutputKey with the dep whose role produces that output.
+  // inputs: resolve dep taskId → task.agentId → agent → detected role → contract → outputKey.
   if (contract.requiredInputs.length > 0 && enriched.dependsOn && enriched.dependsOn.length > 0) {
     const existingInputs = new Set((enriched.inputs ?? []).map((i) => `${i.fromTaskId}.${i.outputId}`));
-    // Build a map: outputKey → depId (which dep likely produces this output)
     const depOutputs = new Map<string, string>(); // outputKey → depId
+
     for (const depId of enriched.dependsOn) {
-      const depAgent = agentMap.get(depId);
+      // Step 1: depId is a task ID (t1, t2) → get its agentId from the plan
+      const depAgentId = taskAgentIdMap.get(depId);
+      if (!depAgentId) continue;
+      // Step 2: look up the agent by agentId
+      const depAgent = agentMap.get(depAgentId);
       if (!depAgent) continue;
+      // Step 3: detect role from agent capabilities
       const depRole = detectAgentRole(depAgent.capabilities, depAgent.name);
       if (!depRole) continue;
+      // Step 4: get the contract for that role → outputKey
       const depContract = getRoleContract(depRole);
       if (depContract && !depOutputs.has(depContract.outputKey)) {
         depOutputs.set(depContract.outputKey, depId);
       }
     }
-    // Fallback: if a required outputKey isn't produced by any dep's role,
-    // use positional fallback (first unmatched dep → unmatched required input)
     const unmatchedDeps = enriched.dependsOn.filter((d) => !Array.from(depOutputs.values()).includes(d));
     let fallbackIdx = 0;
 
@@ -134,7 +139,7 @@ export function applyRoleContracts(
     const contract = getRoleContract(role);
     if (!contract) return task;
 
-    const enriched = enrichTask(task, contract, agents, agent.name);
+    const enriched = enrichTask(task, contract, plan, agents, agent.name);
     if (enriched !== task) anyEnriched = true;
     return enriched;
   });

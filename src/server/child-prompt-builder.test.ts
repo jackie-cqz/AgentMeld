@@ -119,7 +119,7 @@ describe("buildChildTaskPrompt", () => {
     expect(prompt).toContain("<criterion>功能列表含优先级</criterion>");
     expect(prompt).toContain('"criterion":"覆盖目标用户"');
     expect(prompt).toContain('"criterion":"功能列表含优先级"');
-    expect(prompt).toContain("Copy every acceptance criterion verbatim");
+    expect(prompt).toContain("report the description text exactly as shown");
   });
 
   it("renders task_evidence_contract with targetPaths", () => {
