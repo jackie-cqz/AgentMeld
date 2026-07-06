@@ -18,6 +18,37 @@ export type ErrorCategory =
   | "run_aborted"
   | "run_interrupted";
 
+// ── P4: Fine-grained tool failure classification ───────────────────────────
+// Sub-categories of "tool_execution" for diagnostics and metrics.
+
+export type ToolFailureCategory =
+  | "json_parse_error"
+  | "schema_validation_error"
+  | "permission_denied"
+  | "approval_required"
+  | "workspace_path_error"
+  | "command_failed"
+  | "timeout"
+  | "missing_evidence"
+  | "model_stopped_early"
+  | "unknown";
+
+/** Classify a tool error into a granular failure category. */
+export function classifyToolError(error: Error | string, toolName?: string): ToolFailureCategory {
+  const msg = typeof error === "string" ? error : error.message;
+
+  if (/JSON|parse|unexpected token|Unexpected end of JSON/i.test(msg)) return "json_parse_error";
+  if (/schema|validation|invalid|ZodError/i.test(msg)) return "schema_validation_error";
+  if (/permission|denied|EPERM|EACCES/i.test(msg)) return "permission_denied";
+  if (/approval|approved|rejected|pending_approval/i.test(msg)) return "approval_required";
+  if (/workspace|path|ENOENT|outside workspace/i.test(msg)) return "workspace_path_error";
+  if (/command.*failed|exit code|non-zero/i.test(msg)) return "command_failed";
+  if (/timeout|timed out|ETIMEDOUT/i.test(msg)) return "timeout";
+  if (/missing evidence|evidence.*not found/i.test(msg)) return "missing_evidence";
+  if (/stopped early|model stopped|aborted|interrupted/i.test(msg)) return "model_stopped_early";
+  return "unknown";
+}
+
 export interface LogContext {
   conversationId?: string;
   runId?: string;

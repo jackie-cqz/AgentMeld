@@ -12,6 +12,7 @@ import { buildChildTaskPrompt, resolveTaskInputs, resolveVerifiedTaskInputs, ren
 import { compileTaskContext } from "@/server/task-context/context-compiler";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
+import { buildContractGuidance } from "@/server/agent-contracts/contract-resolver";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
@@ -1335,6 +1336,10 @@ ${exampleTasks}`);
 
   // P2: Fact extraction guidance
   blocks.push(buildFactExtractionGuidance());
+
+  // P5: Standard role output contracts
+  const contractGuidance = buildContractGuidance(otherAgents);
+  if (contractGuidance) blocks.push(contractGuidance);
 
   // Block 4: Tool guidance (cut-down for PLAN stage — no fs_write, no bash)
   blocks.push(buildPlanStageToolGuidance());

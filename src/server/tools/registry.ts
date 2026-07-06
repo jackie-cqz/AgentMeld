@@ -1,10 +1,13 @@
 import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
 import { captureEvidence } from "@/server/evidence/evidence-collector";
+import { classifyToolError, type ToolFailureCategory } from "@/server/logger";
 
-function normalizeToolError(error: unknown): ToolResult {
+function normalizeToolError(error: unknown, toolName?: string): ToolResult {
+  const message = error instanceof Error ? error.message : "Tool handler threw an unexpected error.";
+  const category = classifyToolError(error instanceof Error ? error : message, toolName);
   return {
     ok: false,
-    error: error instanceof Error ? error.message : "Tool handler threw an unexpected error."
+    error: `[${category}] ${message}`,
   };
 }
 
@@ -41,7 +44,7 @@ export class ToolRegistry {
     try {
       result = await tool.handler(args, ctx);
     } catch (error) {
-      result = normalizeToolError(error);
+      result = normalizeToolError(error, name);
     }
 
     // P1: Capture evidence for every tool execution (fire-and-forget, never blocks)

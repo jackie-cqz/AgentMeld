@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyProviderError, buildErrorDetail, logger } from "@/server/logger";
+import { classifyProviderError, buildErrorDetail, logger, classifyToolError } from "@/server/logger";
 
 describe("classifyProviderError", () => {
   it("classifies 401/403 as provider_auth", () => {
@@ -53,5 +53,36 @@ describe("logger", () => {
     expect(() => logger.info("test.event", { runId: "r1" }, { key: "val" })).not.toThrow();
     expect(() => logger.warn("test.warn", { agentId: "a1" })).not.toThrow();
     expect(() => logger.error("test.err", { runId: "r2" }, { apiKey: "secret" })).not.toThrow();
+  });
+});
+
+describe("classifyToolError", () => {
+  it("classifies JSON parse errors", () => {
+    expect(classifyToolError("Unexpected token at position 42")).toBe("json_parse_error");
+    expect(classifyToolError(new Error("JSON parse error: unexpected end"))).toBe("json_parse_error");
+  });
+
+  it("classifies schema validation errors", () => {
+    expect(classifyToolError("ZodError: invalid type")).toBe("schema_validation_error");
+    expect(classifyToolError("schema validation failed")).toBe("schema_validation_error");
+  });
+
+  it("classifies permission denied", () => {
+    expect(classifyToolError("EACCES: permission denied")).toBe("permission_denied");
+    expect(classifyToolError("EPERM: operation not permitted")).toBe("permission_denied");
+  });
+
+  it("classifies command failures", () => {
+    expect(classifyToolError("command failed with exit code 1")).toBe("command_failed");
+    expect(classifyToolError("non-zero exit code: 2")).toBe("command_failed");
+  });
+
+  it("classifies timeout", () => {
+    expect(classifyToolError("ETIMEDOUT: connection timed out")).toBe("timeout");
+    expect(classifyToolError("command timed out after 30s")).toBe("timeout");
+  });
+
+  it("returns unknown for unrecognized errors", () => {
+    expect(classifyToolError("something weird happened")).toBe("unknown");
   });
 });

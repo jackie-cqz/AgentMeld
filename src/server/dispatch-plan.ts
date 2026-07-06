@@ -1,4 +1,6 @@
 import type { DispatchPlanItem } from "@/shared/types";
+import { applyRoleContracts } from "@/server/agent-contracts/contract-resolver";
+import { listAgents } from "@/server/repositories";
 
 // ---------------------------------------------------------------------------
 // 8.1 parseDispatchPlanToolArgs — strict LLM output validation
@@ -86,8 +88,15 @@ export function compileAndValidateDispatchPlan(
     requiredEvidence: t.requiredEvidence
   }));
 
+  // P5: Auto-fill from role contracts before compilation
+  const agents = listAgents();
+  const { plan: contractEnriched, enriched } = applyRoleContracts(items, agents);
+  if (enriched) {
+    console.log(`[dispatch-plan] role contracts enriched plan fields`);
+  }
+
   // Compile: auto-add dependencies, resolve inputs
-  const compiled = compileDispatchPlan(items);
+  const compiled = compileDispatchPlan(contractEnriched);
 
   // Validate: agentId existence, no self-dispatch, no cycles, etc.
   const error = validateDispatchPlan(
