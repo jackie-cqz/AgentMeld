@@ -1,0 +1,28 @@
+{
+  "id": "personal-blog-basic",
+  "title": "Personal Blog",
+  "description": "Multi-page static blog with content structure. PM defines requirements, UI designs visual style, Frontend implements and deploys.",
+  "userPrompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。",
+  "expectedTasks": ["pm", "ui", "frontend"],
+  "expectedOutputs": [
+    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
+    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
+    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  ],
+  "requiredToolEvidence": [
+    "write_artifact",
+    "read_artifact",
+    "fs_write",
+    "bash",
+    "deploy_workspace"
+  ],
+  "successCriteria": [
+    "PM creates PRD artifact",
+    "UI reads PRD and creates style guide",
+    "Frontend reads PRD and style guide",
+    "Frontend creates multi-page web_app artifact",
+    "Blog has article list and detail pages",
+    "Web app deploys with preview"
+  ],
+  "minPassCriteria": 4
+}

@@ -1,0 +1,28 @@
+{
+  "id": "expense-tracker-basic",
+  "title": "Expense Tracker",
+  "description": "Form-based expense tracker with list and simple statistics. PM defines requirements, UI designs, Frontend implements with data persistence.",
+  "userPrompt": "帮我做一个记账本 Web App。React，可以添加收入/支出记录（金额、分类、日期、备注），展示记录列表，简单的月度统计。数据存 localStorage。蓝色主题。",
+  "expectedTasks": ["pm", "ui", "frontend"],
+  "expectedOutputs": [
+    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
+    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
+    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  ],
+  "requiredToolEvidence": [
+    "write_artifact",
+    "read_artifact",
+    "fs_write",
+    "deploy_workspace"
+  ],
+  "successCriteria": [
+    "PM creates PRD artifact",
+    "UI reads PRD and creates style guide",
+    "Frontend reads PRD and style guide",
+    "Frontend creates web_app artifact with form + list",
+    "Income/expense records persist to localStorage",
+    "Monthly statistics display correctly",
+    "Web app deploys with preview"
+  ],
+  "minPassCriteria": 5
+}

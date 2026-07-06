@@ -1,0 +1,30 @@
+{
+  "id": "todo-list-basic",
+  "title": "Todo List",
+  "description": "Classic CRUD Todo List with local state and filtering. PM produces PRD, UI produces style guide, Frontend implements, Reviewer validates.",
+  "userPrompt": "帮我做一个 Todo List Web App。React，绿色主题，不需要登录。支持添加、完成、删除任务，支持按状态筛选（全部/进行中/已完成）。",
+  "expectedTasks": ["pm", "ui", "frontend", "reviewer"],
+  "expectedOutputs": [
+    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
+    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
+    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" },
+    { "taskRole": "reviewer", "outputKey": "review_report", "type": "document" }
+  ],
+  "requiredToolEvidence": [
+    "write_artifact",
+    "read_artifact",
+    "fs_write",
+    "bash",
+    "deploy_workspace"
+  ],
+  "successCriteria": [
+    "PM creates PRD artifact",
+    "UI reads PRD and creates style guide",
+    "Frontend reads PRD and style guide",
+    "Frontend creates web_app artifact",
+    "Frontend runs build successfully",
+    "Web app deploys with preview",
+    "Reviewer receives web_app artifact"
+  ],
+  "minPassCriteria": 5
+}

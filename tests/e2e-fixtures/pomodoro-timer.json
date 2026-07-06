@@ -1,0 +1,31 @@
+{
+  "id": "pomodoro-timer-basic",
+  "title": "Pomodoro Timer",
+  "description": "25-minute focus + 5-minute break pomodoro timer. PM produces PRD, UI produces style guide, Frontend implements with timer logic, Reviewer checks.",
+  "userPrompt": "帮我做一个番茄时钟 Web App。React + TypeScript，经典 Pomodoro 模式：25分钟专注 + 5分钟短休息，每4个番茄后15分钟长休息。番茄红色调，环形进度条，开始/暂停/重置按钮。",
+  "expectedTasks": ["pm", "ui", "frontend", "reviewer"],
+  "expectedOutputs": [
+    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
+    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
+    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" },
+    { "taskRole": "reviewer", "outputKey": "review_report", "type": "document" }
+  ],
+  "requiredToolEvidence": [
+    "write_artifact",
+    "read_artifact",
+    "fs_write",
+    "bash",
+    "deploy_workspace"
+  ],
+  "successCriteria": [
+    "PM creates PRD artifact",
+    "UI reads PRD and creates style guide",
+    "Frontend reads PRD and style guide",
+    "Frontend creates web_app artifact with timer logic",
+    "Frontend runs build successfully",
+    "Web app deploys with preview",
+    "Timer has start/pause/reset controls",
+    "Reviewer receives web_app artifact"
+  ],
+  "minPassCriteria": 6
+}
