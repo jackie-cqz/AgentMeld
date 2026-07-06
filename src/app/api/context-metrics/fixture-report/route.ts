@@ -1,5 +1,6 @@
 import { computeRunMetrics } from "@/server/context-metrics/context-metrics-service";
 import type { FixtureReportEntry, FixtureReportSummary } from "@/server/context-metrics/context-metrics-types";
+import { saveFixtureReport } from "@/server/context-metrics/fixture-report-store";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,11 @@ export async function POST(request: Request) {
       fixtureId: f.id, runId: f.runId, status,
       report: result, warnings, evaluatedAt: Date.now(),
     });
+  }
+
+  // P6: Persist each report
+  for (const entry of entries) {
+    try { saveFixtureReport(entry); } catch { /* best-effort */ }
   }
 
   const summary: FixtureReportSummary = {
