@@ -57,9 +57,12 @@ export function evaluateChildTaskResult(
   }
 
   // ⑤ Any acceptance criteria MISSING from the report?
+  // P5: Normalize JSON criteria (from role contracts) to description text
+  // before comparison — must sync with what the prompt tells the agent.
   const criteria = task.acceptanceCriteria ?? [];
+  const normalizedCriteria = criteria.map((c) => extractCriterionDescription(c).trim());
   const reportedCriteria = new Set((report.acceptanceResults ?? []).map((a) => a.criterion.trim()));
-  const missing = criteria.filter((c) => !reportedCriteria.has(c.trim()));
+  const missing = normalizedCriteria.filter((c) => !reportedCriteria.has(c));
   if (missing.length > 0) {
     return {
       status: "failed",
@@ -151,4 +154,13 @@ function evidencePathMatches(targetPath: string, candidatePath: string): boolean
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** P5: Extract description from JSON criteria, pass through plain strings. */
+function extractCriterionDescription(criterion: string): string {
+  try {
+    const parsed = JSON.parse(criterion) as Record<string, unknown>;
+    if (parsed && typeof parsed.description === "string") return parsed.description;
+  } catch { /* not JSON */ }
+  return criterion;
 }
