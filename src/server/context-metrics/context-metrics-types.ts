@@ -29,6 +29,7 @@ export interface ContextQualityRunMetrics {
   rejectedOutputClaimCount: number;
 
   artifactCreatedCount: number;
+  webAppOutputCount: number;
   deploymentReadyCount: number;
 }
 

@@ -49,6 +49,7 @@ function collectRawMetrics(conductorRunId: string): ContextQualityRunMetrics | n
   // Evidence metrics
   let evidenceCount = 0;
   let artifactCreatedCount = 0;
+  let webAppOutputCount = 0;
   let deploymentReadyCount = 0;
 
   for (const att of attempts) {
@@ -56,8 +57,20 @@ function collectRawMetrics(conductorRunId: string): ContextQualityRunMetrics | n
       .prepare("SELECT type, status, payload_json FROM task_evidence WHERE attempt_id = ?")
       .all(att.id) as Array<{ type: string; status: string; payload_json: string }>;
     evidenceCount += evRows.length;
-    artifactCreatedCount += evRows.filter((e) => e.type === "artifact_created").length;
-    deploymentReadyCount += evRows.filter((e) => e.type === "deployment_created" && e.status === "valid").length;
+    for (const ev of evRows) {
+      if (ev.type === "artifact_created") {
+        artifactCreatedCount++;
+        try {
+          const p = JSON.parse(ev.payload_json) as Record<string, unknown>;
+          if (p.artifactType === "web_app" || p.outputKey?.toString().includes("web_app")) {
+            webAppOutputCount++;
+          }
+        } catch { /* ok */ }
+      }
+      if (ev.type === "deployment_created" && ev.status === "valid") {
+        deploymentReadyCount++;
+      }
+    }
 
     // Check upstream reads
     for (const ev of evRows) {
@@ -183,6 +196,7 @@ function collectRawMetrics(conductorRunId: string): ContextQualityRunMetrics | n
     verifiedOutputBindingCount,
     rejectedOutputClaimCount,
     artifactCreatedCount,
+    webAppOutputCount,
     deploymentReadyCount,
   };
 }
@@ -200,7 +214,7 @@ export function computeDerivedRates(raw: ContextQualityRunMetrics): ContextQuali
     unverifiedOutputRejectionRate: safeRatio(raw.rejectedOutputClaimCount, totalOutputClaims),
     toolFailureRate: safeRatio(raw.failedToolCallCount, raw.toolCallCount),
     taskRetryRate: safeRatio(raw.attemptCount - raw.taskCount, raw.taskCount),
-    deploymentSuccessRate: safeRatio(raw.deploymentReadyCount, raw.artifactCreatedCount),
+    deploymentSuccessRate: safeRatio(raw.deploymentReadyCount, raw.webAppOutputCount),
     taskCompletionRate: safeRatio(raw.completedTaskCount, raw.taskCount),
   };
 }

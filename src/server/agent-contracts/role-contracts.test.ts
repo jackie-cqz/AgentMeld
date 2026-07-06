@@ -79,15 +79,26 @@ describe("applyRoleContracts", () => {
     expect(result.plan[0].expectedOutputs![0].id).toBe("web_app");
   });
 
-  it("auto-fills inputs from dependsOn", () => {
+  it("auto-fills inputs positionally from dependsOn", () => {
     const plan: DispatchPlanItem[] = [
       { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
     ];
     const result = applyRoleContracts(plan, agents);
     expect(result.enriched).toBe(true);
-    expect(result.plan[0].inputs!.length).toBeGreaterThan(0);
-    expect(result.plan[0].inputs!.some((i) => i.outputId === "prd")).toBe(true);
-    expect(result.plan[0].inputs!.some((i) => i.outputId === "style-guide")).toBe(true);
+    // Frontend requires [prd, style-guide]; t1→prd, t2→style-guide
+    expect(result.plan[0].inputs!.length).toBe(2);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
+  });
+
+  it("does not create spurious input pairings", () => {
+    // t2 should NOT get t2.prd or t1.style-guide
+    const plan: DispatchPlanItem[] = [
+      { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+    ];
+    const result = applyRoleContracts(plan, agents);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "style-guide")).toBe(false);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "prd")).toBe(false);
   });
 
   it("does not overwrite existing outputs", () => {

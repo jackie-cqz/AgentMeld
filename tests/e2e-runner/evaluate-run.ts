@@ -213,7 +213,7 @@ function emptyMetrics(): E2ERunMetrics {
     upstreamInputReadCount: 0, upstreamInputUnreadCount: 0,
     toolCallCount: 0, failedToolCallCount: 0,
     verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0,
-    artifactCreatedCount: 0, deploymentReadyCount: 0,
+    artifactCreatedCount: 0, webAppOutputCount: 0, deploymentReadyCount: 0,
   };
 }
 

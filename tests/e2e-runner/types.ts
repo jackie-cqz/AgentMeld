@@ -46,5 +46,6 @@ export interface E2ERunMetrics {
   verifiedOutputBindingCount: number;
   rejectedOutputClaimCount: number;
   artifactCreatedCount: number;
+  webAppOutputCount: number;
   deploymentReadyCount: number;
 }

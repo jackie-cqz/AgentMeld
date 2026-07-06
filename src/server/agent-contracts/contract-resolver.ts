@@ -37,31 +37,30 @@ function enrichTask(
     ];
   }
 
-  // inputs: auto-fill required inputs from contract if task has dependsOn
-  // that match the producer roles
-  if (contract.requiredInputs.length > 0 && enriched.dependsOn) {
+  // inputs: auto-fill required inputs by positionally pairing each
+  // requiredOutputKey with one dependency (first dep → first required input,
+  // second dep → second required input, etc.). This avoids creating spurious
+  // pairings like t2.prd when t2 is the UI designer.
+  if (contract.requiredInputs.length > 0 && enriched.dependsOn && enriched.dependsOn.length > 0) {
     const existingInputs = new Set((enriched.inputs ?? []).map((i) => `${i.fromTaskId}.${i.outputId}`));
-    for (const requiredOutputKey of contract.requiredInputs) {
-      // Find a dependency task that likely produces this output
-      for (const depId of enriched.dependsOn) {
-        const inputKey = `${depId}.${requiredOutputKey}`;
-        if (!existingInputs.has(inputKey)) {
-          enriched.inputs = [
-            ...(enriched.inputs ?? []),
-            {
-              fromTaskId: depId,
-              outputId: requiredOutputKey,
-              required: true,
-              description: `Standard input from ${depId} — ${requiredOutputKey}`,
-            },
-          ];
-          existingInputs.add(inputKey);
-        }
+    const deps = enriched.dependsOn;
+    for (let k = 0; k < contract.requiredInputs.length && k < deps.length; k++) {
+      const depId = deps[k];
+      const outputKey = contract.requiredInputs[k];
+      const inputKey = `${depId}.${outputKey}`;
+      if (!existingInputs.has(inputKey)) {
+        enriched.inputs = [
+          ...(enriched.inputs ?? []),
+          { fromTaskId: depId, outputId: outputKey, required: true, description: `Standard input from ${depId} — ${outputKey}` },
+        ];
+        existingInputs.add(inputKey);
       }
     }
   }
 
-  // acceptanceCriteria: append contract criteria if task doesn't declare them
+  // acceptanceCriteria: append contract criteria as serialized description strings.
+  // DispatchPlanItem.acceptanceCriteria is string[], so we store only the description
+  // text (the validator is enforced at verification time by the verification engine).
   const existingCriteria = new Set((enriched.acceptanceCriteria ?? []).map((c) =>
     typeof c === "string" ? c : (c as { description: string }).description
   ));
@@ -69,7 +68,7 @@ function enrichTask(
     if (!existingCriteria.has(crit.description)) {
       enriched.acceptanceCriteria = [
         ...(enriched.acceptanceCriteria ?? []),
-        crit as unknown as string,
+        crit.description,
       ];
     }
   }

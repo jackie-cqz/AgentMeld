@@ -103,14 +103,14 @@ describe("computeRunMetrics", () => {
       unverifiedRejectedCount: 0, unrelatedRejectedCount: 0,
       evidenceCount: 5, toolCallCount: 5, failedToolCallCount: 0,
       verifiedOutputBindingCount: 2, rejectedOutputClaimCount: 0,
-      artifactCreatedCount: 2, deploymentReadyCount: 1,
+      artifactCreatedCount: 2, webAppOutputCount: 1, deploymentReadyCount: 1,
     };
     const rates = computeDerivedRates(raw);
     expect(rates.upstreamInputHitRate).toBe(1); // 2/2
     expect(rates.upstreamArtifactReadRate).toBe(0.5); // 1/2
     expect(rates.contextOmissionRate).toBeGreaterThan(0); // 1/3
     expect(rates.toolFailureRate).toBe(0); // 0/5
-    expect(rates.deploymentSuccessRate).toBe(0.5); // 1/2
+    expect(rates.deploymentSuccessRate).toBe(1); // 1/1 web apps
     expect(rates.taskCompletionRate).toBe(1); // 2/2
   });
 
@@ -124,7 +124,7 @@ describe("computeRunMetrics", () => {
       unverifiedRejectedCount: 0, unrelatedRejectedCount: 0,
       evidenceCount: 0, toolCallCount: 0, failedToolCallCount: 0,
       verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0,
-      artifactCreatedCount: 0, deploymentReadyCount: 0,
+      artifactCreatedCount: 0, webAppOutputCount: 0, deploymentReadyCount: 0,
     };
     const rates = computeDerivedRates(empty);
     expect(rates.upstreamInputHitRate).toBe(0);

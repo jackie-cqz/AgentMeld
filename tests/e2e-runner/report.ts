@@ -102,6 +102,6 @@ async function evaluateRunDirect(runId: string, fixture: E2EFixture): Promise<E2
   }
 }
 
-function emptyMetrics() { return { taskCount: 0, attemptCount: 0, completedTaskCount: 0, failedTaskCount: 0, verifiedInputCount: 0, missingRequiredInputCount: 0, upstreamInputReadCount: 0, upstreamInputUnreadCount: 0, toolCallCount: 0, failedToolCallCount: 0, verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0, artifactCreatedCount: 0, deploymentReadyCount: 0 }; }
+function emptyMetrics() { return { taskCount: 0, attemptCount: 0, completedTaskCount: 0, failedTaskCount: 0, verifiedInputCount: 0, missingRequiredInputCount: 0, upstreamInputReadCount: 0, upstreamInputUnreadCount: 0, toolCallCount: 0, failedToolCallCount: 0, verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0, artifactCreatedCount: 0, webAppOutputCount: 0, deploymentReadyCount: 0 }; }
 
 main();
