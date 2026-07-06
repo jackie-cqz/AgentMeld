@@ -116,49 +116,62 @@ async function evaluateFixtureRun(runId: string, fixture: E2EFixture, strategy: 
 }
 
 function buildBenchmarkReport(results: E2ERunResult[], strategy: string): AgentBenchmarkReport {
-  const cases: AgentBenchmarkMetrics[] = results.map((r) => ({
-    success: r.status === "passed",
-    caseId: r.fixtureId, runId: r.runId,
-    startedAt: r.startedAt, finishedAt: r.finishedAt,
-    durationMs: r.finishedAt - r.startedAt,
-    strategy,
-    taskCount: r.metrics.taskCount,
-    attemptCount: r.metrics.attemptCount,
-    completedTaskCount: r.metrics.completedTaskCount,
-    failedTaskCount: r.metrics.failedTaskCount,
-    verifiedInputCount: r.metrics.verifiedInputCount,
-    upstreamInputReadCount: r.metrics.upstreamInputReadCount,
-    upstreamInputUnreadCount: r.metrics.upstreamInputUnreadCount ?? 0,
-    toolCallCount: r.metrics.toolCallCount,
-    failedToolCallCount: r.metrics.failedToolCallCount,
-    artifactCreatedCount: r.metrics.artifactCreatedCount,
-    webAppOutputCount: r.metrics.webAppOutputCount ?? 0,
-    deploymentReadyCount: r.metrics.deploymentReadyCount,
-    contextIncludedItemCount: 0,
-    contextOmittedItemCount: 0,
-    derivedRates: {
-      upstreamInputHitRate: r.metrics.verifiedInputCount > 0 ? r.metrics.upstreamInputReadCount / r.metrics.verifiedInputCount : 0,
-      upstreamArtifactReadRate: r.metrics.verifiedInputCount > 0 ? r.metrics.upstreamInputReadCount / r.metrics.verifiedInputCount : 0,
-      contextOmissionRate: 0, unverifiedOutputRejectionRate: 0,
-      toolFailureRate: r.metrics.toolCallCount > 0 ? r.metrics.failedToolCallCount / r.metrics.toolCallCount : 0,
-      taskRetryRate: r.metrics.taskCount > 0 ? (r.metrics.attemptCount - r.metrics.taskCount) / r.metrics.taskCount : 0,
-      deploymentSuccessRate: r.metrics.webAppOutputCount > 0 ? r.metrics.deploymentReadyCount / r.metrics.webAppOutputCount : 0,
-      taskCompletionRate: r.metrics.taskCount > 0 ? r.metrics.completedTaskCount / r.metrics.taskCount : 0,
-    },
-    edgesSatisfied: r.metrics.upstreamInputUnreadCount === 0,
-    missingEdges: r.metrics.upstreamInputUnreadCount > 0 ? [`${r.metrics.upstreamInputUnreadCount} unread inputs`] : [],
-    warnings: r.warnings,
-  }));
+  const cases: AgentBenchmarkMetrics[] = results.map((r) => {
+    const durationMs = r.finishedAt - r.startedAt;
+    const retryCount = Math.max(0, r.metrics.attemptCount - r.metrics.taskCount);
+    const verifiedInputs = r.metrics.verifiedInputCount;
+    const reads = r.metrics.upstreamInputReadCount;
+    const webApps = r.metrics.webAppOutputCount ?? 0;
+    const completed = r.metrics.completedTaskCount;
+    const total = r.metrics.taskCount;
 
-  const passed = cases.filter((c) => c.success).length;
+    let finalStatus: AgentBenchmarkMetrics["finalStatus"] = "failed";
+    if (r.status === "passed") {
+      finalStatus = r.warnings.length > 0 ? "partial" : "passed";
+    } else if (r.status === "error") {
+      finalStatus = "blocked";
+    }
+
+    return {
+      success: r.status === "passed",
+      finalStatus,
+      caseId: r.fixtureId, runId: r.runId,
+      startedAt: r.startedAt, finishedAt: r.finishedAt, durationMs, strategy,
+      taskCount: total, completedTaskCount: completed, failedTaskCount: r.metrics.failedTaskCount,
+      retryCount,
+      planValid: total > 0,
+      expectedRoleCoverage: total > 0 ? completed / total : 0,
+      expectedOutputCoverage: webApps > 0 ? 1 : (r.metrics.artifactCreatedCount > 0 ? 0.5 : 0),
+      verifiedInputCount: verifiedInputs,
+      verifiedInputCoverage: verifiedInputs > 0 ? reads / verifiedInputs : 0,
+      upstreamArtifactReadRate: verifiedInputs > 0 ? reads / verifiedInputs : 0,
+      contextOmissionRate: 0,
+      staleFactRejectedCount: 0,
+      unverifiedOutputBlockedCount: r.metrics.rejectedOutputClaimCount ?? 0,
+      toolCallCount: r.metrics.toolCallCount,
+      toolFailureRate: r.metrics.toolCallCount > 0 ? r.metrics.failedToolCallCount / r.metrics.toolCallCount : 0,
+      approvalRequestCount: 0,
+      jsonRepairCount: 0,
+      artifactCreatedCount: r.metrics.artifactCreatedCount,
+      deploymentReady: r.metrics.deploymentReadyCount > 0,
+      reviewerPassed: r.status === "passed",
+      estimatedInputTokens: 0,
+      edgesSatisfied: r.metrics.upstreamInputUnreadCount === 0,
+      missingEdges: r.metrics.upstreamInputUnreadCount > 0 ? [`${r.metrics.upstreamInputUnreadCount} unread inputs`] : [],
+      warnings: r.warnings,
+    };
+  });
+
+  const passed = cases.filter((c) => c.finalStatus === "passed").length;
+  const partial = cases.filter((c) => c.finalStatus === "partial").length;
   return {
     generatedAt: Date.now(),
     strategy,
     totalCases: cases.length,
-    passed,
-    failed: cases.length - passed - cases.filter((c) => c.durationMs === 0).length,
-    errors: cases.filter((c) => c.durationMs === 0 && !c.success).length,
-    overallSuccessRate: cases.length > 0 ? passed / cases.length : 0,
+    passed: passed + partial,
+    failed: cases.filter((c) => c.finalStatus === "failed").length,
+    errors: cases.filter((c) => c.finalStatus === "blocked").length,
+    overallSuccessRate: cases.length > 0 ? (passed + partial) / cases.length : 0,
     cases,
   };
 }

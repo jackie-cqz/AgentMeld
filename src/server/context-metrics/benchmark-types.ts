@@ -31,27 +31,45 @@ export interface AgentBenchmarkCase {
 
 export interface AgentBenchmarkMetrics {
   success: boolean;
+  /** P8: Granular final status — passed / partial / failed / blocked */
+  finalStatus: "passed" | "failed" | "partial" | "blocked";
   caseId: string;
   runId: string;
   startedAt: number;
   finishedAt: number;
   durationMs: number;
   strategy: string;
+
   taskCount: number;
-  attemptCount: number;
   completedTaskCount: number;
   failedTaskCount: number;
+  retryCount: number;
+
+  /** Whether the conductor generated a valid DAG */
+  planValid: boolean;
+  /** Ratio of expected roles that were assigned tasks */
+  expectedRoleCoverage: number;
+  /** Ratio of expected outputs that were actually produced */
+  expectedOutputCoverage: number;
+
   verifiedInputCount: number;
-  upstreamInputReadCount: number;
-  upstreamInputUnreadCount: number;
+  verifiedInputCoverage: number;
+  upstreamArtifactReadRate: number;
+  contextOmissionRate: number;
+  staleFactRejectedCount: number;
+  unverifiedOutputBlockedCount: number;
+
   toolCallCount: number;
-  failedToolCallCount: number;
+  toolFailureRate: number;
+  approvalRequestCount: number;
+  jsonRepairCount: number;
+
   artifactCreatedCount: number;
-  webAppOutputCount: number;
-  deploymentReadyCount: number;
-  contextIncludedItemCount: number;
-  contextOmittedItemCount: number;
-  derivedRates: ContextQualityDerivedRates;
+  deploymentReady: boolean;
+  reviewerPassed: boolean;
+
+  estimatedInputTokens: number;
+
   /** Whether all requiredContextEdges were satisfied */
   edgesSatisfied: boolean;
   missingEdges: string[];
