@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import type { E2EFixture, E2ERunResult, E2ERunMetrics } from "./types";
+import type { ContextStrategyName } from "@/server/context-policy/strategy-registry";
 
 interface TraceRunResponse {
   conductorRunId: string;

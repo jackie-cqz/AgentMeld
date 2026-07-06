@@ -1,0 +1,31 @@
+{
+  "id": "fix-broken-app",
+  "title": "Fix Broken App — Debugging Scenario",
+  "description": "Given a broken React app that fails to build, the system must diagnose the error, fix the source, and produce a working deployment. Tests FailureContext, retry, and evidence-driven repair — the most important P5 scenario.",
+  "userPrompt": "我这里有一个 React Todo App，但是 pnpm build 失败了。请帮我找出问题并修复，让应用能正常构建和部署。项目文件在 src/ 目录下。",
+  "expectedTasks": ["pm", "frontend"],
+  "expectedOutputs": [
+    { "taskRole": "pm", "outputKey": "diagnosis", "type": "document" },
+    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  ],
+  "requiredToolEvidence": [
+    "read_artifact",
+    "fs_read",
+    "fs_write",
+    "bash",
+    "deploy_workspace"
+  ],
+  "requiredContextEdges": [
+    { "fromRole": "pm", "toRole": "frontend", "outputKey": "diagnosis", "mustBeRead": true }
+  ],
+  "successCriteria": [
+    "PM diagnoses the build failure and creates diagnosis document",
+    "Frontend reads diagnosis and applies fixes",
+    "Frontend modifies source files to fix build errors",
+    "pnpm build succeeds (exitCode 0)",
+    "Web app deploys successfully",
+    "At least one retry if first build attempt fails"
+  ],
+  "minPassCriteria": 4,
+  "maxAttempts": 3
+}

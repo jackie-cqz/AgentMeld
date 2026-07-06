@@ -25,11 +25,35 @@ export interface E2ERunResult {
   startedAt: number;
   finishedAt: number;
   status: "passed" | "failed" | "error";
+  /** P7: Context strategy used for this run */
+  strategy?: string;
   metrics: E2ERunMetrics;
   criteriaResults: Array<{ criterion: string; passed: boolean; detail: string }>;
   artifacts: Array<{ outputKey: string; artifactId: string; type: string; title: string }>;
   warnings: string[];
   error?: string;
+}
+
+/** P7: Compare two E2E runs with different strategies */
+export interface StrategyComparisonEntry {
+  fixtureId: string;
+  baseline: { strategy: string; status: string; metrics: Pick<E2ERunMetrics, "taskCount" | "attemptCount" | "completedTaskCount" | "upstreamInputReadCount" | "verifiedInputCount" | "failedToolCallCount" | "deploymentReadyCount"> };
+  candidate: { strategy: string; status: string; metrics: Pick<E2ERunMetrics, "taskCount" | "attemptCount" | "completedTaskCount" | "upstreamInputReadCount" | "verifiedInputCount" | "failedToolCallCount" | "deploymentReadyCount"> };
+}
+
+export interface StrategyComparisonReport {
+  baselineStrategy: string;
+  candidateStrategy: string;
+  comparedAt: number;
+  fixtures: StrategyComparisonEntry[];
+  summary: {
+    baselinePassRate: number;
+    candidatePassRate: number;
+    baselineAvgReadRate: number;
+    candidateAvgReadRate: number;
+    baselineAvgDeployRate: number;
+    candidateAvgDeployRate: number;
+  };
 }
 
 export interface E2ERunMetrics {
