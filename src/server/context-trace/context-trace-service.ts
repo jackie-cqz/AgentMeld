@@ -174,7 +174,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
   const upstreamInputs = buildUpstreamInputs(att.taskId, att.conductorRunId, att.planId, att.childRunId ?? null, att.id);
 
   // ── Warnings ────────────────────────────────────────────────────────────
-  const warnings = buildWarnings(att, snapshot, evidence, outputBindings, upstreamInputs, includedManifest);
+  const warnings = buildWarnings(att, snapshot, evidence, evidenceRecords, outputBindings, upstreamInputs, includedManifest);
 
   return {
     attempt: traceAttempt,
@@ -354,6 +354,7 @@ function buildWarnings(
   att: TaskAttemptRecord,
   snapshot: ContextTraceSnapshot | null,
   evidence: ContextTraceEvidenceSummary[],
+  evidenceRecords: ReturnType<typeof listEvidenceForAttempt>,
   outputBindings: ContextTraceOutputBinding[],
   upstreamInputs: ContextTraceUpstreamInput[],
   includedManifest: ContextManifestItem[],
@@ -453,26 +454,41 @@ function buildWarnings(
   }
 
   // P1: guessed_artifact_id — check if agent messages mention artifact IDs
-  // that don't appear in evidence (possible hallucination).
+  // that don't appear in evidence or output bindings (possible hallucination).
   if (att.childRunId) {
     try {
       const db = getDatabase();
       const msgRows = db
         .prepare("SELECT parts, role FROM messages WHERE run_id = ? AND role = 'agent'")
         .all(att.childRunId) as Array<{ parts: string; role: string }>;
-      const knownArtifactIds = new Set(evidence.map((e) => e.subjectId));
+
+      // Build known artifact IDs from evidence payloads AND output bindings.
+      // evidence.subjectId for artifact_created is often the outputKey ("prd"),
+      // not the real artifactId — the real ID lives in payloadJson.artifactId.
+      const knownIds = new Set<string>();
+      for (const ev of evidenceRecords) {
+        knownIds.add(ev.subjectId);
+        try {
+          const p = JSON.parse(ev.payloadJson) as Record<string, unknown>;
+          if (p?.artifactId) knownIds.add(p.artifactId as string);
+        } catch { /* ok */ }
+      }
+      for (const b of outputBindings) {
+        knownIds.add(b.artifactId);
+      }
+
       for (const row of msgRows) {
         try {
           const parts = JSON.parse(row.parts) as Array<{ type: string; content?: string; artifactId?: string }>;
           for (const p of parts) {
             const refs = extractArtifactRefs(JSON.stringify(p));
             for (const refId of refs) {
-              if (!knownArtifactIds.has(refId) && outputBindings.some((b) => b.artifactId !== refId)) {
+              if (!knownIds.has(refId) && !outputBindings.some((b) => b.artifactId === refId)) {
                 if (!warnings.some((w) => w.code === "guessed_artifact_id" && w.artifactId === refId)) {
                   warnings.push({
                     code: "guessed_artifact_id",
                     severity: "warning",
-                    message: `Task ${att.taskId} referenced artifact "${refId}" in message but no evidence confirms it was created in this attempt.`,
+                    message: `Task ${att.taskId} referenced artifact "${refId}" in message but no evidence or binding confirms it exists.`,
                     taskId: att.taskId,
                     attemptId: att.id,
                     artifactId: refId,

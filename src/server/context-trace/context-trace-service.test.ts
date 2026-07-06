@@ -112,11 +112,7 @@ describe("getContextTraceByAttempt", () => {
     }
   });
 
-  it("resolves upstream inputs from dependsOn when task has no explicit inputs", () => {
-    // P1: Task t2 depends on t1 but has no explicit inputs.
-    // The runtime (buildInputSpecs) derives inputs from dependsOn + outputBindings.
-    // The trace API should pick this up via envelope.upstreamInputs or
-    // the dependsOn-derived fallback path.
+  it("resolves upstream inputs from envelope.upstreamInputs (snapshot present)", () => {
     const db = getDatabase();
     const now = Date.now();
     const attId2 = newTaskAttemptId();
@@ -134,6 +130,27 @@ describe("getContextTraceByAttempt", () => {
 
     const result = getContextTraceByAttempt(attId2);
     if (!("error" in result)) {
+      expect(result.upstreamInputs.length).toBeGreaterThan(0);
+      const prdInput = result.upstreamInputs.find((ui) => ui.fromTaskId === "t1" && ui.outputKey === "prd");
+      expect(prdInput).toBeDefined();
+      expect(prdInput!.bindingVerified).toBe(true);
+      expect(prdInput!.artifactId).toBe("art_prd");
+    }
+  });
+
+  it("falls back to dependsOn+outputBindings when no snapshot exists (pure fallback)", () => {
+    // P1: Task has dependsOn=["t1"] but NO explicit inputs and NO snapshot.
+    // The trace API should derive t1.prd from the output binding alone.
+    const db = getDatabase();
+    const now = Date.now();
+    const attId3 = newTaskAttemptId();
+
+    // No snapshot for this attempt — tests the pure fallback path
+    db.prepare(`INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, child_run_id, attempt, context_snapshot_id, execution_status, verification_status, started_at, finished_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 't2', 'ag_frontend', 'run_child_t3', 1, NULL, 'reported_complete', 'verified', ?, ?, ?, ?)`).run(attId3, RUN_ID, CONV_ID, PLAN_ID, now, now, now, now);
+
+    const result = getContextTraceByAttempt(attId3);
+    if (!("error" in result)) {
+      // Should still resolve t1.prd via dependsOn + outputBindings fallback
       expect(result.upstreamInputs.length).toBeGreaterThan(0);
       const prdInput = result.upstreamInputs.find((ui) => ui.fromTaskId === "t1" && ui.outputKey === "prd");
       expect(prdInput).toBeDefined();
