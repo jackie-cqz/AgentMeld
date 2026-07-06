@@ -38,8 +38,32 @@ async function main() {
   const runArgIdx = args.indexOf("--run");
   const strategyArgIdx = args.indexOf("--strategy");
   const compareIdx = args.indexOf("--compare");
+  const allIdx = args.indexOf("--all");
 
   const fixtures = loadFixtures();
+
+  // --all: list all fixtures and their status (informational, no run IDs needed)
+  if (allIdx >= 0 && runArgIdx < 0) {
+    console.log(JSON.stringify({
+      generatedAt: Date.now(),
+      totalFixtures: fixtures.length,
+      fixtures: fixtures.map((f) => ({
+        id: f.id,
+        title: f.title,
+        category: f.id.includes("fix") ? "debugging" : "web_app",
+        expectedRoles: f.expectedTasks,
+        expectedOutputs: f.expectedOutputs.map((eo) => `${eo.taskRole}.${eo.outputKey} (${eo.type})`),
+        successCriteria: f.successCriteria,
+        minPassCriteria: f.minPassCriteria,
+      })),
+      usage: {
+        single: "pnpm agent:bench --run <runId> --fixture <fixtureId>",
+        evaluateAll: "pass comma-separated run IDs matching fixture order: pnpm agent:bench --run <id1,id2,...> --all",
+        compare: "pnpm agent:bench --compare <baselineRun> <candidateRun>",
+      },
+    }, null, 2));
+    return;
+  }
 
   if (compareIdx >= 0) {
     const baselineRun = args[compareIdx + 1];
