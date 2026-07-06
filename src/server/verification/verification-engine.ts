@@ -92,6 +92,18 @@ export async function verifyTaskAttempt(
 function normalizeCriteria(raw: (string | AcceptanceCriterionSpec)[]): AcceptanceCriterionSpec[] {
   return raw.map((c, i) => {
     if (typeof c === "string") {
+      // P5: Try to parse JSON-serialized structured criteria from role contracts
+      try {
+        const parsed = JSON.parse(c) as Record<string, unknown>;
+        if (parsed && typeof parsed.id === "string" && typeof parsed.description === "string" && parsed.validator && typeof parsed.validator === "object") {
+          return {
+            id: parsed.id as string,
+            description: parsed.description as string,
+            required: parsed.required === true,
+            validator: parsed.validator as AcceptanceCriterionSpec["validator"],
+          };
+        }
+      } catch { /* not JSON, treat as free-text */ }
       // P4: Free-text criteria default to optional reviewer_verdict — don't block tasks
       return { id: `criterion_${i}`, description: c, required: false, validator: { type: "reviewer_verdict" } };
     }

@@ -83,6 +83,34 @@ describe("validator-registry", () => {
     expect(result.reason).toContain("optional");
   });
 
+  it("parses JSON-serialized criteria from role contracts", () => {
+    // P5: Role contracts serialize structured criteria as JSON strings.
+    // verifyTaskAttempt → normalizeCriteria should parse them back.
+    const jsonCriteria = JSON.stringify({
+      id: "contract-prd-created",
+      description: "PRD artifact created",
+      required: true,
+      validator: { type: "artifact_exists", outputKey: "app", artifactType: "document" },
+    });
+    const task = {
+      id: "t_json", agentId: "ag_pm", title: "JSON test", prompt: "",
+      dependsOn: [], inputs: [], expectedOutputs: [],
+      acceptanceCriteria: [jsonCriteria] as unknown as string[],
+      maxAttempts: 1,
+    } as ParsedTask;
+    // verifyTaskAttempt calls normalizeCriteria which should parse JSON
+    // and treat it as a required artifact_exists with outputKey "app".
+    // ev_art1 in sampleEvidence has type=artifact_created, subjectId="app" → should match.
+    const result = validateCriterion(
+      { id: "contract-prd-created", description: "PRD artifact created", required: true, validator: { type: "artifact_exists", outputKey: "app" } },
+      { type: "artifact_exists", outputKey: "app" },
+      sampleEvidence,
+      { artifacts: { app: "art_1" } }
+    );
+    expect(result.passed).toBe(true);
+    expect(result.evidenceIds).toContain("ev_art1");
+  });
+
   it("Agent claiming test passed without command evidence fails", () => {
     const noTestEvidence = sampleEvidence.filter(e => e.id !== "ev_cmd2");
     const result = validateCriterion(

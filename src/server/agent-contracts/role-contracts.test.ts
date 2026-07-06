@@ -63,8 +63,8 @@ describe("detectAgentRole", () => {
 
 describe("applyRoleContracts", () => {
   const agents = [
-    { id: "ag_pm", name: "PM", capabilities: ["pm"] },
-    { id: "ag_designer", name: "UI Designer", capabilities: ["design"] },
+    { id: "t1", name: "PM", capabilities: ["pm"] },
+    { id: "t2", name: "UI Designer", capabilities: ["design"] },
     { id: "ag_builder", name: "Frontend", capabilities: ["react"] },
     { id: "ag_reviewer", name: "Reviewer", capabilities: ["review"] },
   ];
@@ -79,20 +79,31 @@ describe("applyRoleContracts", () => {
     expect(result.plan[0].expectedOutputs![0].id).toBe("web_app");
   });
 
-  it("auto-fills inputs positionally from dependsOn", () => {
+  it("auto-fills inputs by agent role (not positional order)", () => {
+    // Frontend depends on t1(PM→prd) and t2(designer→style-guide).
+    // Role-based matching: prd→t1(PM), style-guide→t2(UI)
     const plan: DispatchPlanItem[] = [
       { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
     ];
     const result = applyRoleContracts(plan, agents);
     expect(result.enriched).toBe(true);
-    // Frontend requires [prd, style-guide]; t1→prd, t2→style-guide
     expect(result.plan[0].inputs!.length).toBe(2);
     expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
     expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
   });
 
+  it("handles reversed dependency order via role matching", () => {
+    // Even if dependsOn is ["t2", "t1"], role matching still gives
+    // t1→prd (PM) and t2→style-guide (designer)
+    const plan: DispatchPlanItem[] = [
+      { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t2", "t1"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
+    ];
+    const result = applyRoleContracts(plan, agents);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t1" && i.outputId === "prd")).toBe(true);
+    expect(result.plan[0].inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "style-guide")).toBe(true);
+  });
+
   it("does not create spurious input pairings", () => {
-    // t2 should NOT get t2.prd or t1.style-guide
     const plan: DispatchPlanItem[] = [
       { id: "t3", agentId: "ag_builder", task: "build app", dependsOn: ["t1", "t2"], expectedOutputs: [], inputs: [], acceptanceCriteria: [] },
     ];

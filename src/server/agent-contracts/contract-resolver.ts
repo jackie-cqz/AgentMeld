@@ -12,6 +12,14 @@ export interface ContractResolveResult {
   enriched: boolean;
 }
 
+/** Which role produces which standard output key */
+const ROLE_OUTPUT_MAP: Record<string, AgentRole> = {
+  prd: "pm",
+  "style-guide": "ui",
+  web_app: "frontend",
+  review_report: "reviewer",
+};
+
 /**
  * Auto-fill a plan task with its role contract.
  * If the task already has the fields set, the contract augments but doesn't overwrite.
@@ -19,9 +27,11 @@ export interface ContractResolveResult {
 function enrichTask(
   task: DispatchPlanItem,
   contract: RoleOutputContract,
+  agents: Array<{ id: string; name: string; capabilities: string[] }>,
   agentName?: string
 ): DispatchPlanItem {
   const enriched = { ...task };
+  const agentMap = new Map(agents.map((a) => [a.id, a]));
 
   // expectedOutputs: only fill if task doesn't already declare this outputKey
   const existingKeys = new Set((enriched.expectedOutputs ?? []).map((o) => o.id));
@@ -37,41 +47,65 @@ function enrichTask(
     ];
   }
 
-  // inputs: auto-fill required inputs by positionally pairing each
-  // requiredOutputKey with one dependency (first dep → first required input,
-  // second dep → second required input, etc.). This avoids creating spurious
-  // pairings like t2.prd when t2 is the UI designer.
+  // inputs: match required inputs to deps by detected agent role.
+  // Build a dep→role map from agent capabilities, then pair each
+  // requiredOutputKey with the dep whose role produces that output.
   if (contract.requiredInputs.length > 0 && enriched.dependsOn && enriched.dependsOn.length > 0) {
     const existingInputs = new Set((enriched.inputs ?? []).map((i) => `${i.fromTaskId}.${i.outputId}`));
-    const deps = enriched.dependsOn;
-    for (let k = 0; k < contract.requiredInputs.length && k < deps.length; k++) {
-      const depId = deps[k];
-      const outputKey = contract.requiredInputs[k];
-      const inputKey = `${depId}.${outputKey}`;
+    // Build a map: outputKey → depId (which dep likely produces this output)
+    const depOutputs = new Map<string, string>(); // outputKey → depId
+    for (const depId of enriched.dependsOn) {
+      const depAgent = agentMap.get(depId);
+      if (!depAgent) continue;
+      const depRole = detectAgentRole(depAgent.capabilities, depAgent.name);
+      if (!depRole) continue;
+      const depContract = getRoleContract(depRole);
+      if (depContract && !depOutputs.has(depContract.outputKey)) {
+        depOutputs.set(depContract.outputKey, depId);
+      }
+    }
+    // Fallback: if a required outputKey isn't produced by any dep's role,
+    // use positional fallback (first unmatched dep → unmatched required input)
+    const unmatchedDeps = enriched.dependsOn.filter((d) => !Array.from(depOutputs.values()).includes(d));
+    let fallbackIdx = 0;
+
+    for (const requiredOutputKey of contract.requiredInputs) {
+      let matchedDepId = depOutputs.get(requiredOutputKey);
+      if (!matchedDepId && fallbackIdx < unmatchedDeps.length) {
+        matchedDepId = unmatchedDeps[fallbackIdx++];
+      }
+      if (!matchedDepId) continue;
+
+      const inputKey = `${matchedDepId}.${requiredOutputKey}`;
       if (!existingInputs.has(inputKey)) {
         enriched.inputs = [
           ...(enriched.inputs ?? []),
-          { fromTaskId: depId, outputId: outputKey, required: true, description: `Standard input from ${depId} — ${outputKey}` },
+          { fromTaskId: matchedDepId, outputId: requiredOutputKey, required: true, description: `Standard input from ${matchedDepId} — ${requiredOutputKey}` },
         ];
         existingInputs.add(inputKey);
       }
     }
   }
 
-  // acceptanceCriteria: append contract criteria as serialized description strings.
-  // DispatchPlanItem.acceptanceCriteria is string[], so we store only the description
-  // text (the validator is enforced at verification time by the verification engine).
+  // acceptanceCriteria: serialize structured contract criteria as JSON strings
+  // so the verification engine can deserialize them back to AcceptanceCriterionSpec
+  // with real validators (artifact_exists, command_exit, deployment_created, etc.).
+  // Fallback description-only strings become optional reviewer_verdict.
   const existingCriteria = new Set((enriched.acceptanceCriteria ?? []).map((c) =>
-    typeof c === "string" ? c : (c as { description: string }).description
+    typeof c === "string" ? tryExtractCriterionId(c) : (c as { id: string }).id
   ));
   for (const crit of contract.acceptanceCriteria) {
-    if (!existingCriteria.has(crit.description)) {
+    if (!existingCriteria.has(crit.description.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase())) {
       enriched.acceptanceCriteria = [
         ...(enriched.acceptanceCriteria ?? []),
-        crit.description,
+        JSON.stringify({ id: `contract-${crit.description.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase().slice(0, 30)}`, description: crit.description, required: crit.required, validator: crit.validator }),
       ];
     }
   }
+
+function tryExtractCriterionId(c: string): string {
+  try { const p = JSON.parse(c); return p.id ?? c; } catch { return c; }
+}
 
   return enriched;
 }
@@ -100,7 +134,7 @@ export function applyRoleContracts(
     const contract = getRoleContract(role);
     if (!contract) return task;
 
-    const enriched = enrichTask(task, contract, agent.name);
+    const enriched = enrichTask(task, contract, agents, agent.name);
     if (enriched !== task) anyEnriched = true;
     return enriched;
   });
