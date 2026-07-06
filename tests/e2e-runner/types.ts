@@ -53,6 +53,8 @@ export interface StrategyComparisonReport {
     candidateAvgReadRate: number;
     baselineAvgDeployRate: number;
     candidateAvgDeployRate: number;
+    baselineContextOmissionRate: number;
+    candidateContextOmissionRate: number;
   };
 }
 

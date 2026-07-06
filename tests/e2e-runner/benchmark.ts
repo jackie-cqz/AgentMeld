@@ -39,11 +39,13 @@ async function main() {
   const strategyArgIdx = args.indexOf("--strategy");
   const compareIdx = args.indexOf("--compare");
 
+  const fixtures = loadFixtures();
+
   if (compareIdx >= 0) {
     const baselineRun = args[compareIdx + 1];
     const candidateRun = args[compareIdx + 2];
     if (!baselineRun || !candidateRun) { console.error("Usage: --compare <baselineRunId> <candidateRunId>"); process.exit(1); }
-    const report = await generateComparison(baselineRun, candidateRun);
+    const report = await generateComparison(baselineRun, candidateRun, fixtures);
     console.log(JSON.stringify(report, null, 2));
     return;
   }
@@ -53,7 +55,6 @@ async function main() {
     if (runIds.length === 0) { console.error("Usage: --run <runId1,runId2,...> [--strategy <name>]"); process.exit(1); }
     const strategy = (args[strategyArgIdx + 1] ?? "evidence_aware_context") as ContextStrategyName;
 
-    const fixtures = loadFixtures();
     const results: E2ERunResult[] = [];
     for (let i = 0; i < fixtures.length && i < runIds.length; i++) {
       const runId = runIds[i];
@@ -162,29 +163,31 @@ function buildBenchmarkReport(results: E2ERunResult[], strategy: string): AgentB
   };
 }
 
-async function generateComparison(baselineRunId: string, candidateRunId: string): Promise<StrategyComparisonReport> {
-  const fixtures = loadFixtures();
+async function generateComparison(baselineRunId: string, candidateRunId: string, fixtures: E2EFixture[]): Promise<StrategyComparisonReport> {
   const entries: StrategyComparisonEntry[] = [];
   let bPass = 0, cPass = 0, bReads = 0, cReads = 0, bInputs = 0, cInputs = 0, bDeploy = 0, cDeploy = 0;
+  let bOmitted = 0, cOmitted = 0, bIncluded = 0, cIncluded = 0;
 
   for (let i = 0; i < fixtures.length; i++) {
-    const fixture = fixtures[i];
-    // For comparison, both runs use the same fixture set — run IDs are comma-separated
     const bRunId = baselineRunId.split(",")[i] ?? baselineRunId;
     const cRunId = candidateRunId.split(",")[i] ?? candidateRunId;
 
     try {
-      const bRes = await fetch(`${API_BASE}/api/context-trace/run/${bRunId}`);
-      const bTrace = bRes.ok ? await bRes.json() as TraceRunResponse : null;
-      const cRes = await fetch(`${API_BASE}/api/context-trace/run/${cRunId}`);
-      const cTrace = cRes.ok ? await cRes.json() as TraceRunResponse : null;
+      const [bTraceRes, bMetricsRes, cTraceRes, cMetricsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/context-trace/run/${bRunId}`),
+        fetch(`${API_BASE}/api/context-metrics/run/${bRunId}`),
+        fetch(`${API_BASE}/api/context-trace/run/${cRunId}`),
+        fetch(`${API_BASE}/api/context-metrics/run/${cRunId}`),
+      ]);
+
+      const bTrace = (bTraceRes.ok ? await bTraceRes.json() : null) as TraceRunResponse | null;
+      const bMetrics = (bMetricsRes.ok ? await bMetricsRes.json() : null) as { raw: { contextIncludedItemCount: number; contextOmittedItemCount: number; rejectedOutputClaimCount: number; verifiedOutputBindingCount: number } } | null;
+      const cTrace = (cTraceRes.ok ? await cTraceRes.json() : null) as TraceRunResponse | null;
+      const cMetrics = (cMetricsRes.ok ? await cMetricsRes.json() : null) as { raw: { contextIncludedItemCount: number; contextOmittedItemCount: number; rejectedOutputClaimCount: number; verifiedOutputBindingCount: number } } | null;
 
       if (bTrace && cTrace && !(bTrace as unknown as { error: string }).error && !(cTrace as unknown as { error: string }).error) {
-        const bReadRate = bTrace.metrics.verifiedInputCount > 0 ? bTrace.metrics.upstreamInputReadCount / bTrace.metrics.verifiedInputCount : 0;
-        const cReadRate = cTrace.metrics.verifiedInputCount > 0 ? cTrace.metrics.upstreamInputReadCount / cTrace.metrics.verifiedInputCount : 0;
-
         entries.push({
-          fixtureId: fixture.id,
+          fixtureId: fixtures[i].id,
           baseline: { strategy: "baseline", status: bTrace.metrics.failedTaskCount === 0 ? "passed" : "failed", metrics: { taskCount: bTrace.metrics.taskCount, attemptCount: bTrace.metrics.attemptCount, completedTaskCount: bTrace.metrics.completedTaskCount, upstreamInputReadCount: bTrace.metrics.upstreamInputReadCount, verifiedInputCount: bTrace.metrics.verifiedInputCount, failedToolCallCount: bTrace.metrics.failedToolCallCount, deploymentReadyCount: bTrace.metrics.deploymentReadyCount } },
           candidate: { strategy: "candidate", status: cTrace.metrics.failedTaskCount === 0 ? "passed" : "failed", metrics: { taskCount: cTrace.metrics.taskCount, attemptCount: cTrace.metrics.attemptCount, completedTaskCount: cTrace.metrics.completedTaskCount, upstreamInputReadCount: cTrace.metrics.upstreamInputReadCount, verifiedInputCount: cTrace.metrics.verifiedInputCount, failedToolCallCount: cTrace.metrics.failedToolCallCount, deploymentReadyCount: cTrace.metrics.deploymentReadyCount } },
         });
@@ -194,9 +197,14 @@ async function generateComparison(baselineRunId: string, candidateRunId: string)
         bReads += bTrace.metrics.upstreamInputReadCount; bInputs += bTrace.metrics.verifiedInputCount;
         cReads += cTrace.metrics.upstreamInputReadCount; cInputs += cTrace.metrics.verifiedInputCount;
         bDeploy += bTrace.metrics.deploymentReadyCount; cDeploy += cTrace.metrics.deploymentReadyCount;
+        if (bMetrics) { bOmitted += bMetrics.raw.contextOmittedItemCount; bIncluded += bMetrics.raw.contextIncludedItemCount; }
+        if (cMetrics) { cOmitted += cMetrics.raw.contextOmittedItemCount; cIncluded += cMetrics.raw.contextIncludedItemCount; }
       }
-    } catch { /* skip failed fetches */ }
+    } catch { /* skip */ }
   }
+
+  const bTotal = bIncluded + bOmitted;
+  const cTotal = cIncluded + cOmitted;
 
   return {
     baselineStrategy: baselineRunId, candidateStrategy: candidateRunId, comparedAt: Date.now(),
@@ -208,7 +216,9 @@ async function generateComparison(baselineRunId: string, candidateRunId: string)
       candidateAvgReadRate: cInputs > 0 ? cReads / cInputs : 0,
       baselineAvgDeployRate: entries.length > 0 ? bDeploy / entries.length : 0,
       candidateAvgDeployRate: entries.length > 0 ? cDeploy / entries.length : 0,
-    },
+      baselineContextOmissionRate: bTotal > 0 ? bOmitted / bTotal : 0,
+      candidateContextOmissionRate: cTotal > 0 ? cOmitted / cTotal : 0,
+    } as StrategyComparisonReport["summary"],
   };
 }
 

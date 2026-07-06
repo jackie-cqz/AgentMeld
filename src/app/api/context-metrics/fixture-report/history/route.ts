@@ -18,11 +18,14 @@ export async function GET() {
       runId: r.runId,
       status: r.status,
       evaluatedAt: r.evaluatedAt,
+      durationMs: r.report.raw.evidenceCount > 0 ? undefined : undefined, // populated by benchmark runner
       metrics: {
         taskCount: r.report.raw.taskCount,
         completedTaskCount: r.report.raw.completedTaskCount,
         upstreamInputReadCount: r.report.raw.upstreamInputReadCount,
         deploymentReadyCount: r.report.raw.deploymentReadyCount,
+        failedToolCallCount: r.report.raw.failedToolCallCount,
+        toolCallCount: r.report.raw.toolCallCount,
       },
       warnings: r.warnings,
     })),

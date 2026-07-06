@@ -8,11 +8,14 @@ interface FixtureSummary {
   runId: string;
   status: "passed" | "failed" | "error";
   evaluatedAt: number;
+  durationMs?: number;
   metrics: {
     taskCount: number;
     completedTaskCount: number;
     upstreamInputReadCount: number;
     deploymentReadyCount: number;
+    failedToolCallCount?: number;
+    toolCallCount?: number;
   };
   warnings: string[];
 }
@@ -56,6 +59,8 @@ export function FixtureDashboard() {
   // Average metrics
   const avgTasks = data.recent.length > 0 ? Math.round(data.recent.reduce((s, r) => s + (r.metrics?.taskCount ?? 0), 0) / data.recent.length) : 0;
   const avgReads = data.recent.length > 0 ? Math.round(data.recent.reduce((s, r) => s + (r.metrics?.upstreamInputReadCount ?? 0), 0) / data.recent.length) : 0;
+  const avgDuration = data.recent.length > 0 ? Math.round(data.recent.reduce((s, r) => s + (r.durationMs ?? 0), 0) / data.recent.length / 1000) : 0;
+  const avgToolFails = data.recent.length > 0 ? Math.round(data.recent.reduce((s, r) => s + (r.metrics?.failedToolCallCount ?? 0), 0) / data.recent.length) : 0;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
@@ -75,9 +80,11 @@ export function FixtureDashboard() {
       </div>
 
       {/* Average metrics */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         <StatBlock label="平均任务数" value={String(avgTasks)} color="text-slate-600" />
         <StatBlock label="平均上游读取" value={String(avgReads)} color="text-slate-600" />
+        <StatBlock label="平均耗时" value={`${avgDuration}s`} color="text-slate-600" />
+        <StatBlock label="平均工具失败" value={String(avgToolFails)} color={avgToolFails > 2 ? "text-red-600" : "text-slate-600"} />
         <StatBlock label="Fixture 类型" value={String(fixtureRates.size)} color="text-slate-600" />
       </div>
 
