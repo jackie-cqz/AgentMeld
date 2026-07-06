@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy } from "lucide-react";
+import { X, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
+import { useAppStore } from "@/stores/app-store";
 import type { ContextTraceResponse, ContextTraceWarning } from "@/server/context-trace/context-trace-types";
 
 export function ContextTraceDrawer({
@@ -119,6 +120,7 @@ export function ContextTraceDrawer({
 // ── Tab content components ──────────────────────────────────────────────────
 
 function UpstreamInputsTab({ data }: { data: ContextTraceResponse }) {
+  const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
   if (data.upstreamInputs.length === 0) return <Empty text="无上游输入" />;
   return (
     <div className="space-y-1.5">
@@ -136,9 +138,22 @@ function UpstreamInputsTab({ data }: { data: ContextTraceResponse }) {
           {ui.bindingVerified && (
             <>
               <p className="mt-1 text-slate-600">{ui.artifactTitle} <span className="text-slate-400">({ui.artifactType} v{ui.artifactVersion})</span></p>
-              <p className="mt-0.5 font-mono text-[10px] text-slate-400 cursor-pointer hover:text-blue-500" onClick={() => navigator.clipboard.writeText(ui.artifactId)}>
-                <Copy className="inline h-2.5 w-2.5 mr-0.5" />{ui.artifactId}
-              </p>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span
+                  className="font-mono text-[10px] text-blue-500 cursor-pointer hover:text-blue-700 hover:underline flex items-center gap-0.5"
+                  onClick={() => setActiveArtifact(ui.artifactId)}
+                  title="在产物库中打开"
+                >
+                  <ExternalLink className="h-2.5 w-2.5" />{ui.artifactId}
+                </span>
+                <button
+                  className="text-[10px] text-slate-400 hover:text-slate-600"
+                  onClick={() => navigator.clipboard.writeText(ui.artifactId)}
+                  title="复制 artifactId"
+                >
+                  <Copy className="h-2.5 w-2.5" />
+                </button>
+              </div>
               <p className="mt-0.5 text-[10px]">
                 {ui.readByCurrentAttempt
                   ? <span className="text-emerald-600">✓ read_artifact called</span>

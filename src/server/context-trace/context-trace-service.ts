@@ -171,7 +171,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
   const outputBindings: ContextTraceOutputBinding[] = buildOutputBindings(att.conductorRunId, att.planId, att.taskId);
 
   // ── Upstream inputs ─────────────────────────────────────────────────────
-  const upstreamInputs = buildUpstreamInputs(att.taskId, att.conductorRunId, att.planId, att.childRunId ?? null);
+  const upstreamInputs = buildUpstreamInputs(att.taskId, att.conductorRunId, att.planId, att.childRunId ?? null, att.id);
 
   // ── Warnings ────────────────────────────────────────────────────────────
   const warnings = buildWarnings(att, snapshot, evidence, outputBindings, upstreamInputs, includedManifest);
@@ -215,64 +215,120 @@ function buildUpstreamInputs(
   taskId: string,
   conductorRunId: string,
   planId: string,
-  childRunId: string | null
+  childRunId: string | null,
+  attemptId?: string
 ): ContextTraceUpstreamInput[] {
   const db = getDatabase();
-  const results: ContextTraceUpstreamInput[] = [];
+  const dedup = new Map<string, ContextTraceUpstreamInput>();
 
-  // Get plan to find this task's declared inputs
-  const planRow = db
-    .prepare("SELECT plan_json FROM conductor_plans WHERE conductor_run_id = ? AND id = ? LIMIT 1")
-    .get(conductorRunId, planId) as { plan_json: string } | undefined;
-  if (!planRow) return results;
-
-  let tasks: Array<{ id: string; inputs?: Array<{ fromTaskId: string; outputId: string; required?: boolean }> }> = [];
-  try { tasks = JSON.parse(planRow.plan_json); } catch { return results; }
-
-  const task = tasks.find((t) => t.id === taskId);
-  if (!task?.inputs) return results;
-
-  // Get output bindings for ALL producer tasks to resolve artifact IDs
+  // Get all output bindings for this run
   const allBindings = db
     .prepare("SELECT * FROM conductor_output_bindings WHERE conductor_run_id = ? AND plan_id = ?")
     .all(conductorRunId, planId) as Array<{
       producer_task_id: string; output_key: string; artifact_id: string;
     }>;
 
-  for (const input of task.inputs) {
-    const binding = allBindings.find(
-      (b) => b.producer_task_id === input.fromTaskId && b.output_key === input.outputId
-    );
-    if (!binding) {
-      results.push({
-        fromTaskId: input.fromTaskId,
-        outputKey: input.outputId,
-        artifactId: "",
-        artifactTitle: `(not found: ${input.fromTaskId}.${input.outputId})`,
-        artifactType: "unknown",
-        artifactVersion: 0,
-        bindingVerified: false,
-        readByCurrentAttempt: false,
-      });
-      continue;
-    }
-
-    const art = getArtifact(binding.artifact_id);
-    const readResult = childRunId ? detectArtifactRead(childRunId, binding.artifact_id) : { readByChildRun: false, readEvidenceIds: [] };
-
-    results.push({
-      fromTaskId: input.fromTaskId,
-      outputKey: input.outputId,
-      artifactId: binding.artifact_id,
-      artifactTitle: art?.title ?? binding.artifact_id,
-      artifactType: art?.type ?? "unknown",
-      artifactVersion: art?.version ?? 1,
-      bindingVerified: true,
-      readByCurrentAttempt: readResult.readByChildRun,
-    });
+  // ── Source 1 (authoritative): context snapshot envelope.upstreamInputs ──
+  // This is what the Context Compiler ACTUALLY injected into the prompt.
+  // It includes both explicit task.inputs AND dependsOn-derived bindings.
+  if (attemptId) {
+    try {
+      const snapRow = db
+        .prepare("SELECT envelope_json FROM task_context_snapshots WHERE attempt_id = ? LIMIT 1")
+        .get(attemptId) as { envelope_json: string } | undefined;
+      if (snapRow) {
+        const envelope = JSON.parse(snapRow.envelope_json) as {
+          upstreamInputs?: Array<{ fromTaskId?: string; outputKey?: string; artifactId?: string; artifactVersion?: number; artifactType?: string; title?: string }>;
+        };
+        if (envelope.upstreamInputs) {
+          for (const ui of envelope.upstreamInputs) {
+            const key = `${ui.fromTaskId ?? ""}.${ui.outputKey ?? ""}`;
+            if (!key || key === "." || dedup.has(key)) continue;
+            const art = ui.artifactId ? getArtifact(ui.artifactId) : null;
+            const readResult = childRunId ? detectArtifactRead(childRunId, ui.artifactId ?? "") : { readByChildRun: false, readEvidenceIds: [] };
+            dedup.set(key, {
+              fromTaskId: ui.fromTaskId ?? "",
+              outputKey: ui.outputKey ?? "",
+              artifactId: ui.artifactId ?? "",
+              artifactTitle: ui.title ?? art?.title ?? (ui.artifactId ?? ""),
+              artifactType: ui.artifactType ?? art?.type ?? "unknown",
+              artifactVersion: ui.artifactVersion ?? art?.version ?? 1,
+              bindingVerified: true,
+              readByCurrentAttempt: readResult.readByChildRun,
+            });
+          }
+        }
+      }
+    } catch { /* fall through to plan-based derivation */ }
   }
 
-  return results;
+  // ── Source 2 (fallback): plan_json task.inputs + dependsOn-derived ──
+  // If the snapshot approach yielded nothing, derive from plan + bindings.
+  if (dedup.size === 0) {
+    const planRow = db
+      .prepare("SELECT plan_json FROM conductor_plans WHERE conductor_run_id = ? AND id = ? LIMIT 1")
+      .get(conductorRunId, planId) as { plan_json: string } | undefined;
+    if (planRow) {
+      let tasks: Array<{ id: string; dependsOn?: string[]; inputs?: Array<{ fromTaskId: string; outputId: string; required?: boolean }> }> = [];
+      try { tasks = JSON.parse(planRow.plan_json); } catch { /* ok */ }
+      const task = tasks.find((t) => t.id === taskId);
+
+      // Build input specs the same way the runtime does (buildInputSpecs in child-prompt-builder):
+      // explicit task.inputs + dependsOn-derived from output bindings
+      const specs = new Map<string, { fromTaskId: string; outputId: string }>();
+
+      // Explicit inputs
+      for (const input of task?.inputs ?? []) {
+        const key = `${input.fromTaskId}.${input.outputId}`;
+        specs.set(key, { fromTaskId: input.fromTaskId, outputId: input.outputId });
+      }
+
+      // dependsOn-derived: for each dependency, look up all its output bindings
+      for (const dep of task?.dependsOn ?? []) {
+        const prefix = `${dep}.`;
+        for (const b of allBindings) {
+          const bindingKey = `${b.producer_task_id}.${b.output_key}`;
+          if (bindingKey.startsWith(prefix) && !specs.has(bindingKey)) {
+            specs.set(bindingKey, { fromTaskId: b.producer_task_id, outputId: b.output_key });
+          }
+        }
+      }
+
+      for (const [, spec] of specs) {
+        const binding = allBindings.find(
+          (b) => b.producer_task_id === spec.fromTaskId && b.output_key === spec.outputId
+        );
+        if (!binding) {
+          dedup.set(`${spec.fromTaskId}.${spec.outputId}`, {
+            fromTaskId: spec.fromTaskId,
+            outputKey: spec.outputId,
+            artifactId: "",
+            artifactTitle: `(not found: ${spec.fromTaskId}.${spec.outputId})`,
+            artifactType: "unknown",
+            artifactVersion: 0,
+            bindingVerified: false,
+            readByCurrentAttempt: false,
+          });
+          continue;
+        }
+
+        const art = getArtifact(binding.artifact_id);
+        const readResult = childRunId ? detectArtifactRead(childRunId, binding.artifact_id) : { readByChildRun: false, readEvidenceIds: [] };
+        dedup.set(`${spec.fromTaskId}.${spec.outputId}`, {
+          fromTaskId: spec.fromTaskId,
+          outputKey: spec.outputId,
+          artifactId: binding.artifact_id,
+          artifactTitle: art?.title ?? binding.artifact_id,
+          artifactType: art?.type ?? "unknown",
+          artifactVersion: art?.version ?? 1,
+          bindingVerified: true,
+          readByCurrentAttempt: readResult.readByChildRun,
+        });
+      }
+    }
+  }
+
+  return Array.from(dedup.values());
 }
 
 function detectArtifactRead(childRunId: string, artifactId: string): ArtifactReadResult {
@@ -381,7 +437,66 @@ function buildWarnings(
     }
   }
 
+  // P1: unverified_output_not_propagated — task produced artifact_created
+  // evidence but verification was rejected, so output did NOT propagate.
+  if (att.verificationStatus === "rejected") {
+    const hasArtifactEvidence = evidence.some((e) => e.type === "artifact_created");
+    if (hasArtifactEvidence) {
+      warnings.push({
+        code: "unverified_output_not_propagated",
+        severity: "warning",
+        message: `Task ${att.taskId} created artifacts but verification was rejected — outputs were NOT propagated downstream.`,
+        taskId: att.taskId,
+        attemptId: att.id,
+      });
+    }
+  }
+
+  // P1: guessed_artifact_id — check if agent messages mention artifact IDs
+  // that don't appear in evidence (possible hallucination).
+  if (att.childRunId) {
+    try {
+      const db = getDatabase();
+      const msgRows = db
+        .prepare("SELECT parts, role FROM messages WHERE run_id = ? AND role = 'agent'")
+        .all(att.childRunId) as Array<{ parts: string; role: string }>;
+      const knownArtifactIds = new Set(evidence.map((e) => e.subjectId));
+      for (const row of msgRows) {
+        try {
+          const parts = JSON.parse(row.parts) as Array<{ type: string; content?: string; artifactId?: string }>;
+          for (const p of parts) {
+            const refs = extractArtifactRefs(JSON.stringify(p));
+            for (const refId of refs) {
+              if (!knownArtifactIds.has(refId) && outputBindings.some((b) => b.artifactId !== refId)) {
+                if (!warnings.some((w) => w.code === "guessed_artifact_id" && w.artifactId === refId)) {
+                  warnings.push({
+                    code: "guessed_artifact_id",
+                    severity: "warning",
+                    message: `Task ${att.taskId} referenced artifact "${refId}" in message but no evidence confirms it was created in this attempt.`,
+                    taskId: att.taskId,
+                    attemptId: att.id,
+                    artifactId: refId,
+                  });
+                }
+              }
+            }
+          }
+        } catch { /* skip unparseable */ }
+      }
+    } catch { /* best-effort */ }
+  }
+
   return warnings;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function extractArtifactRefs(text: string): string[] {
+  const refs: string[] = [];
+  // Match artifact ID patterns like art_xxx or art-xxx
+  const matches = text.match(/\b(art_[a-zA-Z0-9_-]{8,})\b/g);
+  if (matches) refs.push(...matches);
+  return [...new Set(refs)];
 }
 
 // ── Run metrics ─────────────────────────────────────────────────────────────

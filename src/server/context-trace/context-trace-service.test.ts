@@ -111,6 +111,36 @@ describe("getContextTraceByAttempt", () => {
       expect(result.outputBindings[0].outputKey).toBe("prd");
     }
   });
+
+  it("resolves upstream inputs from dependsOn when task has no explicit inputs", () => {
+    // P1: Task t2 depends on t1 but has no explicit inputs.
+    // The runtime (buildInputSpecs) derives inputs from dependsOn + outputBindings.
+    // The trace API should pick this up via envelope.upstreamInputs or
+    // the dependsOn-derived fallback path.
+    const db = getDatabase();
+    const now = Date.now();
+    const attId2 = newTaskAttemptId();
+    const snapId2 = newContextSnapshotId();
+
+    db.prepare(`INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, child_run_id, attempt, context_snapshot_id, execution_status, verification_status, started_at, finished_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 't2', 'ag_frontend', 'run_child_t2', 1, ?, 'reported_complete', 'verified', ?, ?, ?, ?)`).run(attId2, RUN_ID, CONV_ID, PLAN_ID, snapId2, now, now, now, now);
+
+    const envelope = JSON.stringify({
+      upstreamInputs: [{ fromTaskId: "t1", outputKey: "prd", artifactId: "art_prd", artifactVersion: 1, artifactType: "document", title: "PRD Doc" }],
+    });
+    db.prepare(`INSERT OR IGNORE INTO task_context_snapshots (id, conversation_id, conductor_run_id, plan_id, task_id, attempt_id, policy_version, schema_version, envelope_json, manifest_json, token_estimate, required_token_estimate, omitted_token_estimate, created_at) VALUES (?, ?, ?, ?, 't2', ?, 'evidence-context-p3-v1', 1, ?, '[]', 50, 50, 0, ?)`).run(snapId2, CONV_ID, RUN_ID, PLAN_ID, attId2, envelope, now);
+
+    db.prepare(`INSERT OR IGNORE INTO conductor_output_bindings (conductor_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at) VALUES (?, ?, 't2', 'app', 'art_app', ?)`).run(RUN_ID, PLAN_ID, now);
+    db.prepare(`INSERT OR IGNORE INTO artifacts (id, conversation_id, created_by_agent_id, type, title, content, version, created_at, updated_at) VALUES ('art_app', ?, 'ag_frontend', 'web_app', 'Todo App', '{}', 1, ?, ?)`).run(CONV_ID, now, now);
+
+    const result = getContextTraceByAttempt(attId2);
+    if (!("error" in result)) {
+      expect(result.upstreamInputs.length).toBeGreaterThan(0);
+      const prdInput = result.upstreamInputs.find((ui) => ui.fromTaskId === "t1" && ui.outputKey === "prd");
+      expect(prdInput).toBeDefined();
+      expect(prdInput!.bindingVerified).toBe(true);
+      expect(prdInput!.artifactId).toBe("art_prd");
+    }
+  });
 });
 
 describe("getContextTraceByRun", () => {
