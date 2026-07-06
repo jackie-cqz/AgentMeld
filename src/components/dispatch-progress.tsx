@@ -14,6 +14,7 @@ import type { EvidenceSummary } from "@/components/task-evidence-drawer";
 import type { VerdictItem } from "@/components/criterion-verdict-list";
 import type { ManifestEntry } from "@/components/task-context-manifest";
 import type { AttemptRecord } from "@/components/task-attempt-timeline";
+import { ContextTraceDrawer } from "@/components/context-trace-drawer";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
@@ -24,6 +25,9 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTaskId, setDrawerTaskId] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("context");
+  // P1: Context Trace drawer
+  const [traceDrawerOpen, setTraceDrawerOpen] = useState(false);
+  const [traceAttemptId, setTraceAttemptId] = useState<string | null>(null);
   const [drawerEvidence, setDrawerEvidence] = useState<EvidenceSummary[]>([]);
   const [drawerVerdicts, setDrawerVerdicts] = useState<VerdictItem[]>([]);
   const [drawerVerdictSummary, setDrawerVerdictSummary] = useState<{ passed: number; failed: number; missing: number; needsReview: number; total: number }>({ passed: 0, failed: 0, missing: 0, needsReview: 0, total: 0 });
@@ -118,6 +122,14 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
     setDrawerOpen(true);
   };
 
+  const handleOpenTrace = (taskId: string) => {
+    const attemptId = dispatch?.activeAttemptByTask[taskId];
+    if (attemptId) {
+      setTraceAttemptId(attemptId);
+      setTraceDrawerOpen(true);
+    }
+  };
+
   return (
     <>
       <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
@@ -138,7 +150,7 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
         </header>
         <div className="mt-3 space-y-2">
           {dispatch.plan.map((task) => (
-            <DispatchTaskRow key={task.id} dispatch={dispatch} taskId={task.id} onOpenDrawer={handleOpenDrawer} />
+            <DispatchTaskRow key={task.id} dispatch={dispatch} taskId={task.id} onOpenDrawer={handleOpenDrawer} onOpenTrace={handleOpenTrace} />
           ))}
         </div>
       </section>
@@ -157,11 +169,18 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
         manifestOmitted={drawerManifestOmitted}
         attempts={drawerAttempts}
       />
+
+      {/* P1: Context Trace drawer — full API-driven diagnostic view */}
+      <ContextTraceDrawer
+        attemptId={traceAttemptId}
+        open={traceDrawerOpen}
+        onClose={() => setTraceDrawerOpen(false)}
+      />
     </>
   );
 }
 
-function DispatchTaskRow({ dispatch, taskId, onOpenDrawer }: { dispatch: DispatchState; taskId: string; onOpenDrawer: (taskId: string, tab: DrawerTab) => void }) {
+function DispatchTaskRow({ dispatch, taskId, onOpenDrawer, onOpenTrace }: { dispatch: DispatchState; taskId: string; onOpenDrawer: (taskId: string, tab: DrawerTab) => void; onOpenTrace?: (taskId: string) => void }) {
   const agents = useAppStore((state) => state.agents);
   const task = dispatch.plan.find((item) => item.id === taskId);
   const [expanded, setExpanded] = useState(false);
@@ -256,6 +275,16 @@ function DispatchTaskRow({ dispatch, taskId, onOpenDrawer }: { dispatch: Dispatc
                   className="flex items-center gap-0.5 text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
                 >
                   第{dispatch.attempts[taskId]}次尝试
+                </button>
+              ) : null}
+              {/* P1: Trace button — opens full context trace drawer */}
+              {onOpenTrace ? (
+                <button
+                  onClick={() => onOpenTrace(taskId)}
+                  className="flex items-center gap-0.5 text-[10px] text-violet-600 hover:text-violet-800 hover:underline"
+                  title="查看完整上下文链路"
+                >
+                  Trace
                 </button>
               ) : null}
               {/* Expand inline summary */}
