@@ -1,6 +1,6 @@
 "use client";
 
-import { Circle, Folder, GitBranch, Layers, Loader2, Pencil, Pin, Reply, RotateCcw, UserPlus, Users, X } from "lucide-react";
+import { Circle, FileSearch, Folder, GitBranch, Layers, Loader2, Pencil, Pin, Reply, RotateCcw, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
@@ -8,6 +8,7 @@ import { MessageParts } from "@/components/message-parts";
 import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
+import { ContextTraceDrawer } from "@/components/context-trace-drawer";
 import { ConversationTimeline } from "@/components/conversation-timeline";
 import { ConversationTabBar } from "@/components/conversation-tab-bar";
 import { ConversationAgentManagerDialog } from "@/components/conversation-agent-manager-dialog";
@@ -58,7 +59,22 @@ export function ChatPanel() {
   const [agentProfile, setAgentProfile] = useState<{ agent: Agent; x: number; y: number } | null>(null);
   const [showFiles, setShowFiles] = useState(false);
   const [showAgentManager, setShowAgentManager] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceAttemptId, setTraceAttemptId] = useState<string | null>(null);
+  const dispatchesByRunId = useAppStore((s) => s.dispatchesByRunId);
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
+
+  // P1: Find attemptId from a child runId by scanning dispatch state
+  const handleOpenTrace = (runId: string) => {
+    for (const dispatch of Object.values(dispatchesByRunId)) {
+      for (const [taskId, childRunId] of Object.entries(dispatch.childRunIds)) {
+        if (childRunId === runId) {
+          const attemptId = dispatch.activeAttemptByTask[taskId];
+          if (attemptId) { setTraceAttemptId(attemptId); setTraceOpen(true); return; }
+        }
+      }
+    }
+  };
 
   const handleViewAgent = (agent: Agent, event: ReactMouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -269,6 +285,7 @@ export function ChatPanel() {
                     isLatestUser={message.id === latestUserId}
                     highlighted={message.id === highlightedMessageId}
                     onViewAgent={handleViewAgent}
+                    onOpenTrace={handleOpenTrace}
                   />
                 ))}
               </div>
@@ -338,6 +355,12 @@ export function ChatPanel() {
           onClose={() => setShowAgentManager(false)}
         />
       ) : null}
+      {/* P1: Global Context Trace Drawer — accessible from agent messages */}
+      <ContextTraceDrawer
+        attemptId={traceAttemptId}
+        open={traceOpen}
+        onClose={() => setTraceOpen(false)}
+      />
     </main>
   );
 }
@@ -348,7 +371,8 @@ function MessageBubble({
   conversation,
   isLatestUser,
   highlighted,
-  onViewAgent
+  onViewAgent,
+  onOpenTrace
 }: {
   message: Message;
   agent: Agent | null;
@@ -356,6 +380,7 @@ function MessageBubble({
   isLatestUser?: boolean;
   highlighted?: boolean;
   onViewAgent?: (agent: Agent, event: ReactMouseEvent<HTMLElement>) => void;
+  onOpenTrace?: (runId: string) => void;
 }) {
   const isUser = message.role === "user";
   const parentMessage = useAppStore((state) =>
@@ -487,6 +512,11 @@ function MessageBubble({
           <button type="button" disabled={busy !== null} onClick={() => void handlePin()} className={`grid h-7 w-7 place-items-center rounded-md ${pinned ? "bg-amber-50 text-amber-600" : "text-slate-400 hover:bg-amber-50 hover:text-amber-600"}`} title={pinned ? "取消置顶" : "置顶消息"}>
             <Pin className="h-3.5 w-3.5" />
           </button>
+          {!isUser && message.runId && onOpenTrace ? (
+            <button type="button" onClick={() => onOpenTrace(message.runId!)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-violet-50 hover:text-violet-600" title="上下文追踪">
+              <FileSearch className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           {isUser && isLatestUser && message.status === "complete" ? (
             <>
               <button type="button" disabled={busy !== null} onClick={() => setEditing((value) => !value)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="编辑">

@@ -134,6 +134,39 @@ export function FixtureDashboard() {
               </div>
             ))}
           </div>
+
+          {/* P6: Run-over-run comparison (latest vs previous) */}
+          {data.recent.length >= 2 ? (
+            <div className="mt-3 border-t border-slate-100 pt-2">
+              <h4 className="mb-1.5 text-[11px] font-medium text-slate-600">最近两次对比</h4>
+              <div className="grid grid-cols-2 gap-1 text-[10px]">
+                {(() => {
+                  const latest = data.recent[0];
+                  const prev = data.recent[1];
+                  const items = [
+                    { label: "通过", prev: prev.status === "passed" ? 1 : 0, cur: latest.status === "passed" ? 1 : 0, unit: "" },
+                    { label: "任务完成", prev: prev.metrics?.completedTaskCount ?? 0, cur: latest.metrics?.completedTaskCount ?? 0, unit: "" },
+                    { label: "上游读取", prev: prev.metrics?.upstreamInputReadCount ?? 0, cur: latest.metrics?.upstreamInputReadCount ?? 0, unit: "" },
+                    { label: "工具失败", prev: prev.metrics?.failedToolCallCount ?? 0, cur: latest.metrics?.failedToolCallCount ?? 0, unit: "", invert: true },
+                  ];
+                  return items.map((item) => {
+                    const delta = item.cur - item.prev;
+                    const deltaStr = delta > 0 ? `+${delta}` : String(delta);
+                    const better = item.invert ? delta < 0 : delta > 0;
+                    const same = delta === 0;
+                    return (
+                      <div key={item.label} className="flex items-center justify-between rounded border border-slate-100 px-1.5 py-0.5">
+                        <span className="text-slate-500">{item.label}</span>
+                        <span className={`font-medium ${same ? "text-slate-400" : better ? "text-emerald-600" : "text-red-600"}`}>
+                          {deltaStr}{item.unit}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
