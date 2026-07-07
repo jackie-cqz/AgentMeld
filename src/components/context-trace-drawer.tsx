@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
+import { X, XCircle, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import type { ContextTraceResponse, ContextTraceWarning } from "@/server/context-trace/context-trace-types";
 
@@ -35,6 +35,10 @@ export function ContextTraceDrawer({
 
   if (!open) return null;
 
+  // P0: Diagnostic summary from trace data
+  const diagnostic = buildDiagnostic(data, error);
+  const hasNoAttempt = !attemptId;
+
   const tabs = [
     { key: "inputs" as const, label: "上游输入", count: data?.upstreamInputs.length },
     { key: "manifest" as const, label: "上下文清单", count: (data?.includedManifest.length ?? 0) + (data?.omittedManifest.length ?? 0) },
@@ -51,7 +55,9 @@ export function ContextTraceDrawer({
           <h3 className="text-sm font-medium text-slate-800 truncate">
             Context Trace
           </h3>
-          {data && (
+          {hasNoAttempt ? (
+            <p className="text-[10px] text-amber-600 mt-0.5">未关联任务尝试 — 该消息可能不是子 Agent 执行结果</p>
+          ) : data && (
             <p className="text-[10px] text-slate-500 mt-0.5">
               {data.attempt.taskId} · {data.attempt.agentId} · attempt {data.attempt.attemptId?.slice(0, 12)}…
             </p>
@@ -62,22 +68,35 @@ export function ContextTraceDrawer({
         </button>
       </div>
 
-      {/* Loading / Error / Content */}
+      {/* Loading / Error / No-attempt / Content */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
         </div>
+      ) : hasNoAttempt ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-4 text-center space-y-2">
+          <AlertTriangle className="h-8 w-8 text-amber-400" />
+          <p className="text-sm text-slate-600">无法打开上下文追踪</p>
+          <p className="text-xs text-slate-400 max-w-xs">该消息没有关联的任务尝试记录。如果这是 Conductor 的聚合消息或历史消息，则无法追踪子 Agent 上下文。</p>
+        </div>
       ) : error ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-red-500 p-4 text-center">{error}</div>
+        <div className="flex-1 flex flex-col items-center justify-center p-4 text-center space-y-2">
+          <XCircle className="h-8 w-8 text-red-400" />
+          <p className="text-sm text-red-600">加载失败</p>
+          <p className="text-xs text-slate-400">{error}</p>
+        </div>
       ) : data ? (
         <>
-          {/* Status bar */}
-          <div className="flex items-center gap-3 border-b px-4 py-2 text-[11px]">
-            <StatusBadge label={data.attempt.executionStatus} kind="execution" />
-            <StatusBadge label={data.attempt.verificationStatus} kind="verification" />
-            {data.snapshot && (
-              <span className="text-slate-400">{data.snapshot.tokenEstimate} tok</span>
-            )}
+          {/* P0: Diagnostic summary bar */}
+          <div className="border-b px-4 py-2 space-y-1">
+            <div className="flex items-center gap-3 text-[11px]">
+              <StatusBadge label={data.attempt.executionStatus} kind="execution" />
+              <StatusBadge label={data.attempt.verificationStatus} kind="verification" />
+              {data.snapshot && (
+                <span className="text-slate-400">{data.snapshot.tokenEstimate} tok</span>
+              )}
+            </div>
+            <p className={`text-[10px] font-medium ${diagnostic.color}`}>{diagnostic.label}</p>
           </div>
 
           {/* Tabs */}
@@ -267,19 +286,70 @@ function WarningsTab({ data }: { data: ContextTraceResponse }) {
   );
 }
 
+// P0: Chinese warning code labels
+const WARNING_LABELS: Record<string, string> = {
+  missing_context_snapshot: "缺少上下文快照",
+  missing_required_upstream_input: "缺少必需上游输入",
+  unread_verified_input: "上游产物已验证，但当前 Agent 没有读取",
+  guessed_artifact_id: "疑似虚构产物 ID",
+  unverified_output_not_propagated: "产物未通过验证，未传播到下游",
+  output_binding_missing: "产物已创建但未绑定输出",
+  context_budget_omitted_high_priority: "上下文预算不足，高优先级项被省略",
+  tool_claim_without_evidence: "声称完成但缺少工具证据",
+};
+
 function WarningRow({ w }: { w: ContextTraceWarning }) {
   const icon = w.severity === "error" ? <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
     : w.severity === "warning" ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
     : null;
+  const label = WARNING_LABELS[w.code] ?? w.code;
   return (
     <div className={`flex items-start gap-2 rounded border px-2 py-1.5 text-[11px] ${w.severity === "error" ? "border-red-100 bg-red-50/30" : w.severity === "warning" ? "border-amber-100 bg-amber-50/30" : "border-slate-100 bg-white"}`}>
       {icon}
       <div className="min-w-0">
-        <span className="font-medium text-slate-600">{w.code}</span>
+        <span className="font-medium text-slate-600">{label}</span>
         <p className="text-slate-500">{w.message}</p>
       </div>
     </div>
   );
+}
+
+// ── P0: Diagnostic summary builder ──────────────────────────────────────────
+
+function buildDiagnostic(
+  data: import("@/server/context-trace/context-trace-types").ContextTraceResponse | null,
+  error: string | null
+): { label: string; color: string } {
+  if (!data) {
+    if (error) return { label: `加载失败：${error}`, color: "text-red-600" };
+    return { label: "正在加载…", color: "text-slate-400" };
+  }
+
+  const missingInputs = data.upstreamInputs.filter((u) => !u.bindingVerified).length;
+  const unreadVerified = data.upstreamInputs.filter((u) => u.bindingVerified && !u.readByCurrentAttempt).length;
+  const hasArtifactEvidence = data.evidence.some((e) => e.type === "artifact_created");
+  const hasOutputBindings = data.outputBindings.length > 0;
+  const failedVerdicts = data.verdicts.filter((v) => v.status === "failed").length;
+
+  if (missingInputs > 0) {
+    return { label: `⚠ 缺上游输入：${missingInputs} 个必需输入没有 output binding`, color: "text-red-600" };
+  }
+  if (unreadVerified > 0) {
+    return { label: `⚠ 未读取产物：${unreadVerified} 个已验证的上游产物未被 read_artifact`, color: "text-amber-600" };
+  }
+  if (hasArtifactEvidence && !hasOutputBindings) {
+    return { label: `⚠ 输出绑定失败：产物已创建但未成功绑定`, color: "text-amber-600" };
+  }
+  if (failedVerdicts > 0) {
+    return { label: `⚠ 验收未通过：${failedVerdicts} 条标准失败`, color: "text-red-600" };
+  }
+  if (data.evidence.length < 2 && data.attempt.executionStatus === "reported_complete") {
+    return { label: `⚠ 工具证据不足：仅 ${data.evidence.length} 条证据记录`, color: "text-amber-600" };
+  }
+  if (data.warnings.length === 0) {
+    return { label: "✓ 正常 — 上下文链路完整", color: "text-emerald-600" };
+  }
+  return { label: `检查完毕 — ${data.warnings.length} 条警告`, color: "text-amber-600" };
 }
 
 // ── Shared ──────────────────────────────────────────────────────────────────

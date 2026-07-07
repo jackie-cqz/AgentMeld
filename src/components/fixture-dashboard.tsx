@@ -67,7 +67,7 @@ export function FixtureDashboard() {
       {/* Summary bar */}
       <div className="flex items-center gap-3">
         <BarChart3 className="h-5 w-5 text-blue-500" />
-        <h3 className="text-sm font-medium text-slate-800">E2E 回归看板</h3>
+        <h3 className="text-sm font-medium text-slate-800">运行诊断看板</h3>
         <span className="text-xs text-slate-400">{data.summary.totalFixtures} 次运行</span>
       </div>
 
@@ -79,13 +79,12 @@ export function FixtureDashboard() {
         <StatBlock label="错误" value={String(data.summary.errors)} color="text-amber-600" />
       </div>
 
-      {/* Average metrics */}
-      <div className="grid grid-cols-5 gap-2">
-        <StatBlock label="平均任务数" value={String(avgTasks)} color="text-slate-600" />
-        <StatBlock label="平均上游读取" value={String(avgReads)} color="text-slate-600" />
+      {/* P4: Product-friendly metrics */}
+      <div className="grid grid-cols-4 gap-2">
+        <StatBlock label="上游产物注入率" value={avgReads > 0 ? `${Math.round(avgReads / Math.max(avgTasks, 1) * 100)}%` : "-"} color="text-blue-600" />
+        <StatBlock label="平均工具失败" value={String(avgToolFails)} color={avgToolFails > 1 ? "text-red-600" : "text-slate-600"} />
         <StatBlock label="平均耗时" value={`${avgDuration}s`} color="text-slate-600" />
-        <StatBlock label="平均工具失败" value={String(avgToolFails)} color={avgToolFails > 2 ? "text-red-600" : "text-slate-600"} />
-        <StatBlock label="Fixture 类型" value={String(fixtureRates.size)} color="text-slate-600" />
+        <StatBlock label="可预览率" value={data.recent.length > 0 ? `${Math.round(data.recent.filter(r => r.metrics?.deploymentReadyCount && r.metrics.deploymentReadyCount > 0).length / data.recent.length * 100)}%` : "-"} color="text-emerald-600" />
       </div>
 
       {/* Per-fixture success rate */}
