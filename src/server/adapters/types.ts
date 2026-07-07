@@ -19,6 +19,8 @@ export interface AdapterInput {
   apiKey: string | null;
   apiBaseUrl?: string | null;
   history?: ChatMessage[];
+  /** P0: Pre-rendered dynamic context XML (task, envelope, failure) */
+  contextXml?: string;
 }
 
 export interface AgentPlatformAdapter {

@@ -1017,17 +1017,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
 
-  // System prompt with workspace info (already composed by AgentRunner)
+  // P0: When dynamic context XML is provided, use stable prefix + dynamic suffix layout
+  if (input.contextXml) {
+    const { buildPromptLayout } = require("@/server/prompt-layout/prompt-layout-builder");
+    const triggerText = input.triggerMessage.parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.content)
+      .join("\n");
+
+    const layout = buildPromptLayout({
+      agentId: input.agent.id,
+      agentName: input.agent.name,
+      agentSystemPrompt: input.agent.systemPrompt,
+      agentCapabilities: input.agent.capabilities,
+      toolNames: input.toolNames,
+      roleContractVersion: "role-contracts-v1",
+      platformPromptVersion: "agentmeld-p0-v1",
+      stableSections: [
+        { id: "workspace_info", title: "Workspace", content: `<workspace_info>\n  <cwd>${input.workspacePath}</cwd>\n  <mode>sandbox</mode>\n</workspace_info>`, tokenEstimate: 30 },
+        { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 },
+      ],
+      userMessage: triggerText,
+      taskPrompt: input.taskExecution ? "Dispatched sub-task — see context below." : triggerText,
+      taskContextXml: input.contextXml,
+      failureContextXml: "",
+    });
+
+    messages.push({ role: "system", content: layout.stablePrefix });
+
+    // Cross-run history
+    if (input.history && input.history.length > 0) {
+      for (const h of input.history) {
+        messages.push({ role: h.role as "user" | "assistant" | "system", content: h.content });
+      }
+    }
+
+    messages.push({ role: "user", content: layout.dynamicSuffix });
+    return messages;
+  }
+
+  // Legacy path: no contextXml, use original behavior
   messages.push({ role: "system", content: input.systemPrompt });
 
-  // Cross-run history (from conversation-context service)
   if (input.history && input.history.length > 0) {
     for (const h of input.history) {
       messages.push({ role: h.role as "user" | "assistant" | "system", content: h.content });
     }
   }
 
-  // Current trigger message
   const triggerText = input.triggerMessage.parts
     .filter((p) => p.type === "text")
     .map((p) => p.content)
@@ -1035,6 +1072,15 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
   messages.push({ role: "user", content: triggerText });
 
   return messages;
+}
+
+/** Extract only the tool guidance section from the full system prompt. */
+function extractToolGuidance(systemPrompt: string): string {
+  const idx = systemPrompt.indexOf("## AgentMeld 工具调用规范");
+  if (idx < 0) return "";
+  // Find next "## " or end of string
+  const endIdx = systemPrompt.indexOf("\n## ", idx + 5);
+  return endIdx > idx ? systemPrompt.slice(idx, endIdx).trim() : systemPrompt.slice(idx).trim();
 }
 
 function formatApiError(err: unknown, model: string): string {
