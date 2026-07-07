@@ -21,6 +21,7 @@ import type {
   ContextTraceRunTask,
   ContextTraceRunMetrics,
   ContextTraceRunResponse,
+  ContextTraceDiagnostic,
   ArtifactReadResult,
 } from "@/server/context-trace/context-trace-types";
 
@@ -176,6 +177,9 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
   // ── Warnings ────────────────────────────────────────────────────────────
   const warnings = buildWarnings(att, snapshot, evidence, evidenceRecords, outputBindings, upstreamInputs, includedManifest);
 
+  // ── P0: Diagnostic summary — single server-side conclusion ─────────────
+  const diagnostic = buildDiagnostic(upstreamInputs, evidence, outputBindings, verdicts, warnings);
+
   return {
     attempt: traceAttempt,
     snapshot,
@@ -186,6 +190,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
     verdicts,
     outputBindings,
     warnings,
+    diagnostic,
   };
 }
 
@@ -566,6 +571,42 @@ function computeRunMetrics(
     artifactCreatedCount,
     deploymentReadyCount,
   };
+}
+
+// ── P0: Diagnostic summary builder ──────────────────────────────────────────
+
+function buildDiagnostic(
+  upstreamInputs: ContextTraceUpstreamInput[],
+  evidence: ContextTraceEvidenceSummary[],
+  outputBindings: ContextTraceOutputBinding[],
+  verdicts: ContextTraceVerdictSummary[],
+  warnings: ContextTraceWarning[],
+): ContextTraceDiagnostic {
+  const missingInputs = upstreamInputs.filter((u) => !u.bindingVerified).length;
+  const unreadVerified = upstreamInputs.filter((u) => u.bindingVerified && !u.readByCurrentAttempt).length;
+  const hasArtifactEvidence = evidence.some((e) => e.type === "artifact_created");
+  const hasOutputBindings = outputBindings.length > 0;
+  const failedVerdicts = verdicts.filter((v) => v.status === "failed").length;
+
+  if (missingInputs > 0) {
+    return { severity: "error", label: "缺上游输入", detail: `${missingInputs} 个必需输入没有 output binding — 上游任务可能未完成或 outputKey 不匹配` };
+  }
+  if (unreadVerified > 0) {
+    return { severity: "warning", label: "未读取产物", detail: `${unreadVerified} 个已验证的上游产物未被 read_artifact — Agent 可能不知道需要读取或 artifactId 传递失败` };
+  }
+  if (hasArtifactEvidence && !hasOutputBindings) {
+    return { severity: "warning", label: "输出绑定失败", detail: "产物已创建但未成功绑定 — verification 可能未通过或 outputKey 未在 expectedOutputs 中声明" };
+  }
+  if (failedVerdicts > 0) {
+    return { severity: "error", label: "验收未通过", detail: `${failedVerdicts} 条验收标准失败 — 查看 verdicts 标签获取详情` };
+  }
+  if (evidence.length < 2) {
+    return { severity: "warning", label: "工具证据不足", detail: `仅 ${evidence.length} 条证据记录 — 可能未执行构建/部署/测试` };
+  }
+  if (warnings.length > 0) {
+    return { severity: "warning", label: `${warnings.length} 条警告`, detail: "查看警告标签获取详情" };
+  }
+  return { severity: "normal", label: "正常", detail: "上下文链路完整，输入已验证，产物已绑定" };
 }
 
 // ── JSON util ───────────────────────────────────────────────────────────────

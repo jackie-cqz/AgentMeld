@@ -81,10 +81,10 @@ export function FixtureDashboard() {
 
       {/* P4: Product-friendly metrics */}
       <div className="grid grid-cols-4 gap-2">
-        <StatBlock label="上游产物注入率" value={avgReads > 0 ? `${Math.round(avgReads / Math.max(avgTasks, 1) * 100)}%` : "-"} color="text-blue-600" />
+        <StatBlock label="上游读取密度" value={avgReads > 0 ? `${(avgReads / Math.max(avgTasks, 1)).toFixed(1)}/任务` : "-"} color="text-blue-600" />
         <StatBlock label="平均工具失败" value={String(avgToolFails)} color={avgToolFails > 1 ? "text-red-600" : "text-slate-600"} />
         <StatBlock label="平均耗时" value={`${avgDuration}s`} color="text-slate-600" />
-        <StatBlock label="可预览率" value={data.recent.length > 0 ? `${Math.round(data.recent.filter(r => r.metrics?.deploymentReadyCount && r.metrics.deploymentReadyCount > 0).length / data.recent.length * 100)}%` : "-"} color="text-emerald-600" />
+        <StatBlock label="产物可预览率" value={data.recent.length > 0 ? `${Math.round(data.recent.filter(r => r.metrics?.deploymentReadyCount && r.metrics.deploymentReadyCount > 0).length / data.recent.length * 100)}%` : "-"} color="text-emerald-600" />
       </div>
 
       {/* Per-fixture success rate */}

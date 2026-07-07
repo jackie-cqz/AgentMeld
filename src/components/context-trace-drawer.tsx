@@ -96,7 +96,13 @@ export function ContextTraceDrawer({
                 <span className="text-slate-400">{data.snapshot.tokenEstimate} tok</span>
               )}
             </div>
-            <p className={`text-[10px] font-medium ${diagnostic.color}`}>{diagnostic.label}</p>
+            {data.diagnostic ? (
+              <p className={`text-[10px] font-medium ${data.diagnostic.severity === "error" ? "text-red-600" : data.diagnostic.severity === "warning" ? "text-amber-600" : "text-emerald-600"}`}>
+                {data.diagnostic.label} — {data.diagnostic.detail}
+              </p>
+            ) : (
+              <p className={`text-[10px] font-medium ${diagnostic.color}`}>{diagnostic.label}</p>
+            )}
           </div>
 
           {/* Tabs */}

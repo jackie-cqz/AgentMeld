@@ -106,6 +106,17 @@ export interface ContextTraceResponse {
   verdicts: ContextTraceVerdictSummary[];
   outputBindings: ContextTraceOutputBinding[];
   warnings: ContextTraceWarning[];
+  /** P0: Single diagnostic summary computed server-side from all trace data */
+  diagnostic?: ContextTraceDiagnostic;
+}
+
+export interface ContextTraceDiagnostic {
+  /** Short label for display: "✓ 正常", "⚠ 缺上游输入", etc. */
+  label: string;
+  /** Severity: normal, warning, error */
+  severity: "normal" | "warning" | "error";
+  /** Detailed explanation */
+  detail: string;
 }
 
 // ── Run-level trace ─────────────────────────────────────────────────────────
