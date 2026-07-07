@@ -7,7 +7,6 @@
   <img alt="SQLite local-first" src="https://img.shields.io/badge/SQLite-local--first-0b6b88?logo=sqlite&logoColor=white">
   <img alt="pnpm 10" src="https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white">
   <img alt="DeepSeek compatible" src="https://img.shields.io/badge/DeepSeek-compatible-4d6bfe">
-  <img alt="tests 445" src="https://img.shields.io/badge/tests-445_passing-22c55e">
   <a href="../LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22a06b"></a>
 </p>
 
@@ -15,67 +14,119 @@
   <a href="../README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-AgentMeld 是一个本地优先的多 Agent 协作工作空间。它把多 Agent 工作组织成团队群聊：Conductor 可以澄清需求、拆分复杂任务、调度不同角色的 Agent，并在对话旁统一管理工具调用、工作区文件和生成产物。
+AgentMeld 是一个本地优先的多 Agent 协作工作空间。它把复杂的 AI 辅助任务组织成可观察的团队群聊：Conductor 负责理解用户意图、澄清需求、拆分任务、调度不同角色的 Agent，并把工具执行、证据、文件工作区和生成产物统一放在同一个会话里。
+
+当前版本重点是 **证据驱动的上下文工程** 和 **Agent Runtime 可观测性**。AgentMeld 不只是让多个 Agent 聊天，而是记录每个 Agent 实际拿到了什么上下文、上游产物是否可用、工具是否真正执行、产物是否通过验证，以及任务为什么成功、失败、重试或阻塞。
 
 ![AgentMeld 工作空间](images/agentmeld-preview.png)
 
+## 适用场景
+
+AgentMeld 适合本地、可检查、可追踪的多 Agent 工作流，例如：
+
+- 从一句自然语言需求出发，完成 PRD、UI 风格、前端实现、审查和本地预览。
+- 在一个会话中协调 PM、UI 设计师、前端工程师、Reviewer 和自定义 Agent。
+- 让 Agent 安全地读写文件、执行验证命令、生成产物、请求用户审批、部署本地预览。
+- 排查为什么下游 Agent 没看到 PRD、没读取风格指南、构建失败、部署失败或产物无法验证。
+- 在本地探索上下文工程策略，而不是把工作区交给外部 SaaS。
+
+## 核心能力
+
+### 多 Agent 协作空间
+
+- 支持单 Agent 与多 Agent 群聊式会话。
+- Conductor 负责需求澄清、任务计划、DAG 调度、失败重试和结果聚合。
+- 每个 Agent 可以独立配置模型、API Key、Base URL、系统提示词、能力标签和工具权限。
+- 多步骤任务执行前支持计划审查。
+
+### 证据驱动 Runtime
+
+- 每个子任务可以声明 expected outputs、required inputs、acceptance criteria 和 required evidence。
+- Output Binding 把上游产物和下游任务连接起来。
+- Verification Engine 校验产物存在、产物类型、命令证据、部署证据和结构化验收结果。
+- 任务失败后可以携带失败上下文重试，而不是重放整段聊天历史。
+
+### 上下文工程
+
+- Task Context Compiler 会基于 DAG 依赖、已验证上游输出、当前事实、workspace 状态、失败原因和相关历史生成任务专属上下文。
+- Fact Registry 维护会话级结构化事实，支持事实校验、替换和过期。
+- 每次 task attempt 的上下文快照都会持久化，方便后续审查。
+- Context Trace 可以查看 included / omitted context、上游输入、证据、verdict、output binding、warnings 和后端诊断结论。
+
+### 工具与安全
+
+- 内置工具覆盖文件浏览、文件读取、完整写入、局部 patch、命令验证、产物生成、部署预览、用户询问、附件读取、证据读取、事实更新、任务规划和任务汇报。
+- 已有源码文件的局部修改优先使用 `fs_patch`，新建文件或明确完整覆盖时使用 `fs_write`。
+- Shell 工具只允许验证命令和经过用户审批的依赖安装；禁止用 shell 重定向、PowerShell 写文件、`sed` 或破坏性清理命令修改源码。
+- Workspace 路径会经过沙箱校验，限制越权访问。
+
+### 产物与本地预览
+
+- 支持文档、Web 应用、图片和演示文稿四类产物。
+- Web 应用产物和工作区构建产物可以部署为本地静态预览。
+- 产物库支持版本、预览、源码查看、编辑和部署卡片。
+
+### 可观测与诊断
+
+- 支持按 attempt、child run 和 conductor run 查询 Context Trace。
+- 前端 Context Trace Drawer 可以诊断缺少上游输入、上游产物未读取、output binding 失败、verdict 失败和工具证据不足。
+- 运行诊断看板展示上游读取密度、工具失败、耗时和产物可预览率。
+- SSE 流式事件覆盖消息、工具调用、审批、任务进度、上下文摘要、证据、verdict、产物和 token 用量。
+
 ## 工作流示例
 
+```text
+用户："帮我做一个番茄时钟 App"
+
+1. Conductor 分析需求和当前可用 Agent。
+2. 如果需求不明确，Conductor 先调用 ask_user 询问用户。
+3. 如果需求已经明确，Conductor 调用 plan_tasks 生成 DAG：
+   - PM：输出 PRD
+   - UI 设计师：输出风格指南
+   - 前端工程师：实现并部署应用
+   - Reviewer：审查最终产物
+4. 用户审查并批准计划。
+5. 不同 Agent 按依赖顺序执行。
+6. 每次工具调用都会记录为结构化证据。
+7. 上游产物经过验证后绑定到 outputKey。
+8. 下游 Agent 只收到和当前任务相关的上下文。
+9. Context Trace 可以解释每个 Agent 当时看到了什么。
+10. 最终产物和本地预览显示在会话右侧。
 ```
-你："帮我做一个番茄时钟"
-  → Conductor 分析需求，检查可用 Agent
-  → 若需求不明确，调用 ask_user 让用户选择（或直接 plan_tasks）
-  → 生成计划：t1: PM → PRD, t2: 设计师 → 风格指南, t3: 前端 → 编码, t4: Reviewer → 审查
-  → 你批准计划
-  → DAG 波次执行：PM 与设计师并行，前端等两者完成，Reviewer 等前端完成
-  → 每个 Agent 使用工具（fs_write、bash、write_artifact），敏感操作需审批
-  → 产物通过 output binding 向下游传递
-  → Conductor 聚合结果，生成自然语言总结
-  → 最终产物显示在右侧面板
+
+## 架构概览
+
+```text
+src/
+  app/          Next.js 页面与 API 路由
+  components/   对话、Agent、产物、审批、Trace 与工作区 UI
+  db/           SQLite 初始化、Schema、内置数据和持久化辅助代码
+  server/       Agent Runtime、Conductor、工具、Adapter、验证、上下文、证据
+  shared/       共享类型、ID、常量和显示辅助函数
+  stores/       Zustand 状态与 SSE 事件 reducer
 ```
 
-> 开发者参考文档见 [skills/](../skills/)：工具系统、产物管理、上下文工程、持久化。
+运行链路：
 
-## 主要功能
-
-**Agent 协作**
-- 单 Agent 与多 Agent 群聊会话，IM 风格界面
-- Conductor 负责计划、任务分派、DAG 调度与结果聚合
-- 任务失败时自动生成 Recovery Plan，只重跑必要部分
-- 每个 Agent 可独立配置 API Key、模型和 Base URL，三层优先级
-
-**工具与安全**
-- 12 个内置工具：文件读写、Shell、产物、部署、用户交互
-- 敏感操作审批关卡（fs_write、bash、plan_tasks）
-- Workspace 沙箱：路径校验、symlink 防护、磁盘配额
-- 平台特定命令黑名单（POSIX + Windows）
-
-**产物与工作区**
-- 四种产物类型：文档、Web 应用、图片、演示文稿
-- 版本链与 diff 对比
-- 本地部署预览（iframe）
-- 会话内文件浏览器，支持语法高亮
-
-**上下文工程**
-- Token 感知的历史窗口，模型特定预算计算
-- 增量上下文压缩 + 滚动 chunk 摘要
-- 置顶消息永不裁剪；超出窗口时返回明确错误
-- 会话置顶与消息置顶独立管理
-
-**可靠性**
-- 445 个测试通过（Vitest），TypeScript strict 模式，ESLint
-- 结构化 Logger，14 种错误分类，敏感数据脱敏
-- Run 生命周期持久化，启动孤儿恢复
-- 审批状态持久化到 SQLite，条件更新防并发
+```text
+Next.js UI
+  -> API Route
+  -> Conversation Service
+  -> Agent Runner
+  -> OpenAI-compatible Adapter
+  -> ToolRegistry
+  -> Evidence Ledger / Artifact Store / Workspace
+  -> SSE Events 返回前端
+```
 
 ## 技术栈
 
-- Next.js 16 与 React 19
-- TypeScript
+- Next.js 16、React 19、TypeScript
 - Zustand 与 Immer
 - SQLite、Drizzle ORM、`better-sqlite3`
+- OpenAI-compatible Adapter，当前推荐 DeepSeek
 - Tailwind CSS
-- Vitest 与 ESLint
+- Vitest、ESLint、TypeScript 检查
 
 ## 环境要求
 
@@ -103,6 +154,19 @@ Copy-Item .env.example .env.local
 
 应用启动后，也可以直接在 AgentMeld 设置面板中填写 API Key。
 
+## 配置
+
+常用环境变量：
+
+```env
+AGENTMELD_DATA_DIR=.agentmeld-data
+AGENTMELD_DB_PATH=.agentmeld-data/agentmeld.db
+DEEPSEEK_API_KEY=your_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+每个 Agent 也可以在界面中单独配置模型、API Key、Base URL 和工具权限。
+
 ## 常用命令
 
 ```bash
@@ -111,65 +175,51 @@ pnpm build      # 创建生产构建
 pnpm start      # 启动生产服务
 pnpm typecheck  # TypeScript 检查
 pnpm lint       # ESLint 检查
-pnpm test       # 运行测试
-pnpm db:push    # 应用 Drizzle 数据库结构
+pnpm test       # 运行 Vitest 测试
+pnpm db:push    # 开发数据库结构时应用 Drizzle schema
 ```
+
+仓库中也保留了早期评估和 fixture 脚本，但当前版本的核心定位是运行时可观测性，而不是完整 benchmark 平台。
 
 ## 本地数据
 
-AgentMeld 默认将数据库、工作区、预览和部署文件保存在：
+AgentMeld 默认将本地数据库、工作区、预览、部署和运行时生成文件保存在：
 
 ```text
 .agentmeld-data/
 ```
 
-首次启动时，AgentMeld 会自动创建 `.agentmeld-data/agentmeld.db`，初始化所需数据表，并写入内置 Agent。普通用户无需提前创建数据库，也不需要在启动前运行 `pnpm db:push`。
+首次启动时，AgentMeld 会自动创建 `.agentmeld-data/agentmeld.db`，初始化所需数据表，并写入内置 Agent。普通用户不需要提前创建数据库，也不需要在启动前运行 `pnpm db:push`。
 
-该目录已被 Git 忽略。可使用 `AGENTMELD_DATA_DIR` 修改数据目录，或使用 `AGENTMELD_DB_PATH` 单独指定数据库文件。
-
-请勿提交 `.env.local`、API Key、本地数据库、生成的 workspace 或部署产物。
-
-## 项目结构
-
-```text
-src/
-  app/          Next.js 页面与 API 路由
-  components/   对话、Agent、产物、审批和工作区界面
-  db/           SQLite Schema、初始化数据与持久化辅助代码
-  server/       Agent 运行时、工具、Adapter、编排与服务层
-  shared/       共享类型、常量和工具函数
-  stores/       Zustand 状态与流式事件 Reducer
-```
+该目录已被 Git 忽略。请勿提交 `.env.local`、API Key、本地数据库、生成的 workspace 或部署产物。
 
 ## 模型服务说明
 
-AgentMeld 可以通过 OpenAI-compatible 自定义 Adapter 使用 DeepSeek。项目中也包含 Claude 和 Codex Adapter 代码，但对应集成需要各自的 SDK 凭证和兼容运行环境。
+当前版本最推荐通过自定义 OpenAI-compatible Adapter 使用 DeepSeek 或其他兼容模型服务。
 
-系统默认把模型输出和生成命令视为不可信输入。工作区文件访问受沙箱约束，敏感文件写入和命令执行可以要求用户审批。
+项目中保留了 Claude Code 和 Codex Adapter 文件，但完整 SDK 执行链路不是本版本推荐运行路径。
 
 ## 已知限制
 
-- 当前推荐使用 DeepSeek 或其他 OpenAI-compatible 模型服务。
-- Claude Code 与 Codex Adapter 已包含基础代码，但完整 SDK 执行链路尚未完成。
-- 当前部署能力生成的是本地静态预览，AgentMeld 不负责发布到托管云平台。
-- AgentMeld 面向本地单用户环境，暂不提供多用户登录、鉴权和权限隔离。
-- 工具调用的稳定性仍会受到模型行为影响，尤其是生成较大的结构化参数时。
-- 项目仍处于活跃开发阶段，数据结构和内部 API 可能继续调整。
+- AgentMeld 面向本地单用户工作流，暂不提供多用户登录和权限隔离。
+- 当前部署能力生成的是本地静态预览，不负责发布到托管云平台。
+- 工具调用稳定性仍会受到模型行为影响，尤其是大段 JSON 工具参数。
+- 评估和 fixture 脚本尚不是完整自动化 benchmark 平台。
+- 项目仍处于活跃开发阶段，内部 schema 和 API 后续可能调整。
 
-## 后续改进
+## 后续方向
 
-- 完成并加固 Claude Code 与 Codex SDK Adapter。
-- 改进结构化工具参数的校验、修复、重试和失败诊断。
-- 加强 Conductor 的计划拆分、任务证据校验、失败重试与结果聚合。
-- 提升上下文工程、压缩质量和长会话运行稳定性。
-- 完善产物编辑、部署预览、版本对比和故障恢复流程。
-- 支持外部 MCP 工具配置，并提供清晰的权限和审批控制。
-- 持续优化前端无障碍、响应式布局、暗色模式和交互细节。
-- 增加发布自动化、贡献指南和更完整的集成测试。
+- Stable Prefix / Dynamic Suffix prompt 布局，提升 prefix cache 友好性。
+- Task State Context，让每个 Agent 先看到当前任务结构化状态。
+- Evidence Card，把长工具结果整理成短证据卡片后再进入上下文。
+- Playbook / Skill Registry，在事实记忆之外增加经验记忆。
+- Multi-intent Query Planner，在任务拆分前先解析用户多意图。
+- 更强的运行诊断、Trace 跳转和失败恢复体验。
+- 外部 MCP 工具接入，同时复用现有 ToolRegistry 的权限、审批、证据和 SSE 机制。
 
 ## 当前状态
 
-AgentMeld 目前仍处于活跃的早期开发阶段，API、数据结构和界面细节可能在后续版本中调整。
+AgentMeld 仍处于活跃开发阶段。当前版本可以视为 Context Observability 与 Evidence-Aware Runtime Diagnostics 版本。
 
 ## 开源许可证
 

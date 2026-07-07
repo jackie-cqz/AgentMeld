@@ -7,7 +7,6 @@
   <img alt="SQLite local-first" src="https://img.shields.io/badge/SQLite-local--first-0b6b88?logo=sqlite&logoColor=white">
   <img alt="pnpm 10" src="https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white">
   <img alt="DeepSeek compatible" src="https://img.shields.io/badge/DeepSeek-compatible-4d6bfe">
-  <img alt="tests 445" src="https://img.shields.io/badge/tests-445_passing-22c55e">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22a06b"></a>
 </p>
 
@@ -15,73 +14,125 @@
   <strong>English</strong> · <a href="docs/README.zh-CN.md">简体中文</a>
 </p>
 
-AgentMeld is a local-first workspace for coordinating multiple AI agents through a team-chat interface. A Conductor can clarify requirements, divide complex work among specialist agents, track tool activity, and collect generated artifacts beside the conversation.
+AgentMeld is a local-first multi-agent collaboration workspace. It turns complex AI-assisted work into a visible team conversation: a Conductor clarifies intent, plans tasks, delegates work to specialist agents, tracks tool evidence, and keeps generated files and artifacts next to the discussion.
+
+The current release focuses on **evidence-aware context engineering** and **runtime observability**. AgentMeld does not just let agents chat. It records what each agent received, which upstream artifacts were available, which tools were used, what evidence was produced, and why a task passed, failed, retried, or got blocked.
 
 ![AgentMeld workspace](docs/images/agentmeld-preview.png)
 
-## Features
+## What AgentMeld Is For
 
-**Agent Collaboration**
-- Single-agent and multi-agent conversations with IM-style interface
-- Conductor-led planning, task dispatch, DAG scheduling, and result aggregation
-- Recovery plans when tasks fail — only re-runs what's needed
-- Per-agent API key, model, and base URL configuration with three-tier resolution
+AgentMeld is built for local, inspectable workflows such as:
 
-**Tools & Safety**
-- 12 built-in tools: file I/O, bash, artifacts, deployment, user prompts
-- Approval gates for sensitive operations (fs_write, bash, plan_tasks)
-- Workspace sandbox with path validation, symlink protection, and quota limits
-- Platform-specific command blacklists (POSIX + Windows)
+- turning a natural-language request into PRD, design, implementation, review, and preview steps;
+- coordinating PM, UI Designer, Frontend Engineer, Reviewer, and custom agents in one workspace;
+- letting agents work with files, commands, artifacts, user approvals, and local deployment previews;
+- debugging why a downstream agent missed a PRD, ignored a style guide, failed a build, or produced an unverifiable artifact;
+- experimenting with context engineering strategies without sending your local workspace to an external SaaS product.
 
-**Artifacts & Workspace**
-- Four artifact types: document, web_app, image, presentation
-- Version chains with diff comparison and rollback
-- Local deployment previews via iframe
-- In-conversation file browser with syntax highlighting
+## Highlights
 
-**Context Engineering**
-- Token-aware history window with model-specific budget calculation
-- Incremental context compaction with rolling chunk summarization
-- Pinned messages immune to truncation; overflow detection before LLM calls
-- Conversation pinning separate from message pinning
+### Multi-Agent Workspace
 
-**Reliability**
-- 445 tests passing (Vitest), TypeScript strict mode, ESLint
-- Structured logger with 14 error categories and sensitive-data masking
-- Run lifecycle persistence with startup orphan recovery
-- Approval state persisted to SQLite with conditional write protection
+- Team-chat interface for single-agent or multi-agent conversations.
+- Conductor-led requirement clarification, task planning, DAG scheduling, retry, and aggregation.
+- Specialist agents with independent model, API key, base URL, system prompt, capabilities, and tool permissions.
+- Plan review flow before executing multi-step work.
 
-## How It Works
+### Evidence-Aware Runtime
 
+- Every dispatched task can carry expected outputs, required inputs, acceptance criteria, and required evidence.
+- Output bindings connect upstream artifacts to downstream tasks.
+- Verification checks artifact existence, artifact type, command evidence, deployment evidence, and structured acceptance results.
+- Failed tasks can be retried with failure-aware context instead of replaying the whole conversation.
+
+### Context Engineering
+
+- Task Context Compiler builds task-specific context from DAG dependencies, verified upstream outputs, active facts, workspace state, failure context, and relevant history.
+- Fact Registry keeps session-scoped structured facts, with validation and supersession support.
+- Context snapshots are persisted so a task attempt can be audited later.
+- Context Trace shows included and omitted context, upstream inputs, evidence, verdicts, output bindings, warnings, and a server-side diagnostic summary.
+
+### Tools And Safety
+
+- Built-in tools for file listing, file reading, full-file writes, focused patches, shell verification, artifacts, deployments, user questions, attachments, evidence reads, context fact updates, task planning, and task reporting.
+- `fs_patch` is preferred for local source edits; `fs_write` is reserved for new files or intentional full replacement.
+- Shell commands are restricted to verification and approved dependency installation. Source edits through shell redirection, PowerShell writes, `sed`, and destructive cleanup are blocked.
+- Workspace paths are sandboxed and validated.
+
+### Artifacts And Local Preview
+
+- Artifact types include document, web app, image, and presentation.
+- Web app artifacts and workspace builds can be deployed as local static previews.
+- Artifact library supports versions, preview, source view, edit flow, and generated deployment cards.
+
+### Observability
+
+- Context Trace API by attempt, child run, and conductor run.
+- Context Trace Drawer in the UI for diagnosing missing inputs, unread artifacts, output binding failures, failed verdicts, and weak tool evidence.
+- Runtime diagnostics dashboard with upstream read density, tool failures, duration, and preview readiness.
+- Structured run events over SSE for messages, tool calls, approvals, dispatch progress, context summaries, evidence, verdicts, artifacts, and usage.
+
+## Workflow Example
+
+```text
+User: "Build a pomodoro timer app"
+
+1. Conductor inspects the request and available agents.
+2. If the requirement is ambiguous, Conductor asks the user to clarify.
+3. If ready, Conductor calls plan_tasks and produces a DAG:
+   - PM: write a PRD
+   - UI Designer: write a style guide
+   - Frontend Engineer: implement and deploy the app
+   - Reviewer: inspect the result
+4. The user reviews and approves the plan.
+5. Agents run in dependency order.
+6. Each tool call is recorded as structured evidence.
+7. Upstream artifacts are verified and bound to output keys.
+8. Downstream agents receive only task-relevant context.
+9. Context Trace can explain what each agent saw and why.
+10. The final artifact and preview appear beside the conversation.
 ```
-You: "Build a pomodoro timer"
-  → Conductor reads the room, checks available agents
-  → asks user to clarify (ask_user) or plans immediately (plan_tasks)
-  → Plan: t1: PM → PRD, t2: Designer → style guide, t3: Frontend → code, t4: Reviewer → audit
-  → You approve the plan
-  → DAG waves execute: PM + Designer run in parallel, Frontend waits for both, Reviewer waits for Frontend
-  → Each agent uses tools (fs_write, bash, write_artifact) with optional approval gates
-  → Artifacts flow downstream via output bindings
-  → Conductor aggregates results into a natural-language summary
-  → You see the final artifact in the right panel
+
+## Architecture
+
+```text
+src/
+  app/          Next.js pages and API routes
+  components/   Chat, agent, artifact, approval, trace, and workspace UI
+  db/           SQLite bootstrap, schema, seed data, and persistence helpers
+  server/       Agent runtime, Conductor, tools, adapters, verification, context, evidence
+  shared/       Shared types, ids, constants, and display helpers
+  stores/       Zustand state and SSE event reducers
 ```
 
-> See [skills/](skills/) for developer reference on tools, artifacts, context management, and persistence.
+Runtime flow:
+
+```text
+Next.js UI
+  -> API route
+  -> Conversation service
+  -> Agent runner
+  -> OpenAI-compatible adapter
+  -> ToolRegistry
+  -> Evidence Ledger / Artifact store / Workspace
+  -> SSE events back to UI
+```
 
 ## Tech Stack
 
-- Next.js 16 and React 19
-- TypeScript
-- Zustand and Immer
-- SQLite, Drizzle ORM, and `better-sqlite3`
+- Next.js 16, React 19, TypeScript
+- Zustand and Immer for frontend state
+- SQLite, Drizzle ORM, and `better-sqlite3` for local persistence
+- OpenAI-compatible adapter, with DeepSeek as the recommended path
 - Tailwind CSS
-- Vitest and ESLint
+- Vitest, ESLint, and TypeScript checks
 
 ## Requirements
 
 - Node.js 20.9.0 or newer
 - pnpm 10 or newer
-- A model-provider API key, such as DeepSeek
+- A model provider API key, such as DeepSeek
 
 ## Getting Started
 
@@ -95,13 +146,26 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-On Windows PowerShell, copy the environment file with:
+On Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env.local
 ```
 
-API keys can also be entered from the AgentMeld settings panel after startup.
+You can also enter API keys in the AgentMeld settings panel after startup.
+
+## Configuration
+
+Common environment variables:
+
+```env
+AGENTMELD_DATA_DIR=.agentmeld-data
+AGENTMELD_DB_PATH=.agentmeld-data/agentmeld.db
+DEEPSEEK_API_KEY=your_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+Agent-level settings can override the default provider, model, base URL, and API key.
 
 ## Common Commands
 
@@ -111,65 +175,51 @@ pnpm build      # Create a production build
 pnpm start      # Run the production server
 pnpm typecheck  # Check TypeScript
 pnpm lint       # Run ESLint
-pnpm test       # Run the test suite
-pnpm db:push    # Apply the Drizzle schema
+pnpm test       # Run the Vitest suite
+pnpm db:push    # Apply the Drizzle schema when developing schema changes
 ```
+
+The repository also contains early evaluation and fixture scripts, but the current release is positioned around runtime observability rather than a complete benchmark platform.
 
 ## Local Data
 
-By default, AgentMeld stores its database, workspaces, previews, and deployments in:
+By default, AgentMeld stores its local database, workspaces, previews, deployments, and generated runtime files in:
 
 ```text
 .agentmeld-data/
 ```
 
-On the first startup, AgentMeld automatically creates `.agentmeld-data/agentmeld.db`, initializes the required tables, and seeds the built-in agents. Normal users do not need to create a database or run `pnpm db:push` before starting the app.
+On first startup, AgentMeld automatically creates `.agentmeld-data/agentmeld.db`, initializes the required tables, and seeds built-in agents. You do not need to create a database manually before running the app.
 
-This directory is ignored by Git. Override it with `AGENTMELD_DATA_DIR`, or set a database file directly with `AGENTMELD_DB_PATH`.
-
-Do not commit `.env.local`, API keys, local databases, generated workspaces, or deployment output.
-
-## Project Structure
-
-```text
-src/
-  app/          Next.js pages and API routes
-  components/   Chat, agent, artifact, approval, and workspace UI
-  db/           SQLite schema, bootstrap data, and persistence helpers
-  server/       Agent runtime, tools, adapters, orchestration, and services
-  shared/       Shared types, constants, and utilities
-  stores/       Zustand state and stream-event reducers
-```
+This directory is ignored by Git. Do not commit `.env.local`, API keys, local databases, generated workspaces, or deployment output.
 
 ## Provider Notes
 
-AgentMeld is usable with DeepSeek through the custom OpenAI-compatible adapter. Claude and Codex adapter code is included, but those integrations require their respective SDK credentials and compatible runtime configuration.
+AgentMeld is currently most practical with DeepSeek or another OpenAI-compatible provider through the custom adapter.
 
-Model output and generated commands are treated as untrusted input. Workspace file access is sandboxed, and sensitive file writes or commands can require approval.
+Claude Code and Codex adapter files are present as integration placeholders, but their complete SDK execution paths are not the recommended runtime path for this release.
 
 ## Known Limitations
 
-- DeepSeek and other OpenAI-compatible providers are currently the recommended runtime path.
-- Claude Code and Codex adapters are present but their full SDK execution flows are not yet complete.
-- Deployment currently produces local static previews; AgentMeld does not publish applications to a hosted cloud platform.
-- AgentMeld is designed for a local, single-user environment and does not provide multi-user authentication or access control.
-- Tool-call reliability still depends partly on model behavior, especially when generating large structured arguments.
-- Data schemas and internal APIs may change while the project remains in active early development.
+- AgentMeld is designed for a local, single-user workflow and does not include multi-user authentication.
+- Local deployment previews are static and local; AgentMeld does not publish generated apps to a hosted cloud platform.
+- Tool-call reliability still depends on model behavior, especially for large JSON tool arguments.
+- The benchmark/evaluation scripts are not yet a full automated benchmark platform.
+- Internal schemas and APIs may still change while the project is under active development.
 
 ## Roadmap
 
-- Complete and harden the Claude Code and Codex SDK adapters.
-- Improve structured tool-call validation, repair, retries, and failure diagnostics.
-- Strengthen Conductor planning, task evidence validation, retries, and result aggregation.
-- Expand context engineering, compaction quality, and long-running conversation reliability.
-- Improve artifact editing, deployment previews, version comparison, and recovery flows.
-- Add external MCP tool configuration with clear permission and approval controls.
-- Continue frontend accessibility, responsive-layout, dark-mode, and interaction polish.
-- Add release automation, contributor documentation, and broader integration tests.
+- Stable Prefix / Dynamic Suffix prompt layout for better prefix cache behavior.
+- Task State Context so each agent receives a structured view of current task status.
+- Evidence Cards that summarize long tool results before they enter context.
+- Playbook / Skill Registry for reusable process memory beyond factual memory.
+- Multi-intent Query Planner before Conductor task planning.
+- Stronger runtime diagnostics, trace navigation, and recovery UX.
+- External MCP tool integration while preserving ToolRegistry permissions, approvals, evidence, and SSE events.
 
 ## Status
 
-AgentMeld is an active early-stage project. APIs, data structures, and interface details may change between releases.
+AgentMeld is an active early-stage local-first agent runtime. The current release can be treated as a Context Observability and Evidence-Aware Runtime Diagnostics release.
 
 ## License
 
