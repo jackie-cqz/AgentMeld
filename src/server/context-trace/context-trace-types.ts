@@ -106,6 +106,8 @@ export interface ContextTraceResponse {
   verdicts: ContextTraceVerdictSummary[];
   outputBindings: ContextTraceOutputBinding[];
   warnings: ContextTraceWarning[];
+  /** P1: Task state from the context snapshot envelope (if available) */
+  taskState?: import("@/server/task-state/task-state-types").TaskState;
   /** P0: Single diagnostic summary computed server-side from all trace data */
   diagnostic?: ContextTraceDiagnostic;
 }

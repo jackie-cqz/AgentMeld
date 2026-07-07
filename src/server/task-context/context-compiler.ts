@@ -8,6 +8,7 @@ import type { Agent, Message } from "@/shared/types";
 import type { TaskExecutionIdentity, CriterionVerdict } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, FailureContext, ContextQualityMetrics } from "@/shared/task-context-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
+import { buildTaskState } from "@/server/task-state/task-state-builder";
 import type { ResolvedInput, UpstreamArtifact, ActiveFactEntry } from "@/server/child-prompt-builder";
 import { getArtifact } from "@/server/repositories";
 import { listCriterionVerdicts } from "@/server/repositories/evidence-repository";
@@ -411,6 +412,17 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     failureContext: failureCtx,
     manifest,
     budget,
+    // P1: Build structured task state from compiler input + DB evidence
+    taskState: buildTaskState({
+      task: input.task,
+      resolvedInputs: input.resolvedInputs,
+      attemptId: input.attemptId,
+      attempt: input.attempt,
+      previousAttemptId: input.previousAttemptId,
+      previousError: input.previousError,
+      agentCapabilities: input.assignedAgent.capabilities,
+      agentName: input.assignedAgent.name,
+    }),
     qualityMetrics: qm,
     createdAt: now,
   };

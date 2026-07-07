@@ -31,6 +31,38 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
   const wsItems = includedContextItems.filter(c => c.category === "workspace");
   const msgItems = includedContextItems.filter(c => c.category === "recent_message");
 
+  // P1: Render Task State first — structured status before material
+  if (envelope.taskState) {
+    parts.push(`<task_state>`);
+    const ts = envelope.taskState;
+    parts.push(`  <status>taskId: ${escapeXml(ts.taskId)} | agent: ${escapeXml(ts.agentId)} | role: ${ts.role ?? "unknown"} | attempt: ${ts.attempt} | status: ${ts.executionStatus}</status>`);
+    if (ts.requiredInputs.length > 0) {
+      parts.push(`  <required_inputs>`);
+      for (const ri of ts.requiredInputs) {
+        const flags = [!ri.available && "missing", ri.available && !ri.read && "unread"].filter(Boolean).join(", ");
+        parts.push(`    <input key="${escapeXml(ri.key)}" available="${ri.available}" read="${ri.read}"${flags ? ` flags="${flags}"` : ""}>${escapeXml(ri.title)}</input>`);
+      }
+      parts.push(`  </required_inputs>`);
+    }
+    if (ts.failedCriteria.length > 0) {
+      parts.push(`  <failed_criteria>`);
+      for (const fc of ts.failedCriteria) {
+        parts.push(`    <criterion id="${escapeXml(fc.criterionId)}">${escapeXml(fc.description)}</criterion>`);
+      }
+      parts.push(`  </failed_criteria>`);
+    }
+    if (ts.failedCommands.length > 0) {
+      parts.push(`  <failed_commands>`);
+      for (const fc of ts.failedCommands) {
+        parts.push(`    <command exit="${fc.exitCode}">${escapeXml(fc.command)}</command>`);
+      }
+      parts.push(`  </failed_commands>`);
+    }
+    parts.push(`  <next_action>${escapeXml(ts.nextActionHint)}</next_action>`);
+    parts.push(`</task_state>`);
+    parts.push("");
+  }
+
   parts.push(`<task_context`);
   parts.push(`  context_id="${escapeXml(identity.contextSnapshotId)}"`);
   parts.push(`  policy_version="${escapeXml(envelope.policyVersion)}"`);

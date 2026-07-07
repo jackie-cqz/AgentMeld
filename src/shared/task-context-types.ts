@@ -1,5 +1,6 @@
 // P0+P3+P6: Task context types
 import type { EvidenceTrustLevel } from "@/shared/evidence-types";
+import type { TaskState } from "@/server/task-state/task-state-types";
 
 // ── P6: Cross-agent context propagation ─────────────────────────────────────
 
@@ -91,6 +92,8 @@ export interface TaskContextEnvelope {
   failureContext: FailureContext | null;
   manifest: ContextManifestItem[];
   budget: { maxInputTokens: number; requiredTokens: number; optionalTokens: number; omittedTokens: number };
+  /** P1: Structured task state for model context */
+  taskState?: TaskState;
   /** P8: Context quality metrics for offline evaluation and observability */
   qualityMetrics?: ContextQualityMetrics;
   createdAt: number;

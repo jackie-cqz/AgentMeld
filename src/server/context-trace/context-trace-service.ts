@@ -177,6 +177,18 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
   // ── Warnings ────────────────────────────────────────────────────────────
   const warnings = buildWarnings(att, snapshot, evidence, evidenceRecords, outputBindings, upstreamInputs, includedManifest);
 
+  // ── P1: Task state from snapshot envelope (if available) ────────────────
+  let taskState = undefined;
+  if (att.contextSnapshotId) {
+    const snap = getContextSnapshot(att.contextSnapshotId);
+    if (snap) {
+      try {
+        const envelope = JSON.parse(snap.envelopeJson) as { taskState?: import("@/server/task-state/task-state-types").TaskState };
+        taskState = envelope.taskState;
+      } catch { /* ok */ }
+    }
+  }
+
   // ── P0: Diagnostic summary — single server-side conclusion ─────────────
   const diagnostic = buildDiagnostic(upstreamInputs, evidence, outputBindings, verdicts, warnings);
 
@@ -191,6 +203,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
     outputBindings,
     warnings,
     diagnostic,
+    taskState,
   };
 }
 
