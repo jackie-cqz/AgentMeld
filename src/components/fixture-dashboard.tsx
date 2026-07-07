@@ -135,35 +135,31 @@ export function FixtureDashboard() {
             ))}
           </div>
 
-          {/* P6: Run-over-run comparison (latest vs previous) */}
-          {data.recent.length >= 2 ? (
+          {/* P6: Per-fixture run-over-run comparison (latest vs previous for same fixture) */}
+          {fixtureRates.size > 0 && data.recent.length >= 2 ? (
             <div className="mt-3 border-t border-slate-100 pt-2">
-              <h4 className="mb-1.5 text-[11px] font-medium text-slate-600">最近两次对比</h4>
-              <div className="grid grid-cols-2 gap-1 text-[10px]">
-                {(() => {
-                  const latest = data.recent[0];
-                  const prev = data.recent[1];
-                  const items = [
-                    { label: "通过", prev: prev.status === "passed" ? 1 : 0, cur: latest.status === "passed" ? 1 : 0, unit: "" },
-                    { label: "任务完成", prev: prev.metrics?.completedTaskCount ?? 0, cur: latest.metrics?.completedTaskCount ?? 0, unit: "" },
-                    { label: "上游读取", prev: prev.metrics?.upstreamInputReadCount ?? 0, cur: latest.metrics?.upstreamInputReadCount ?? 0, unit: "" },
-                    { label: "工具失败", prev: prev.metrics?.failedToolCallCount ?? 0, cur: latest.metrics?.failedToolCallCount ?? 0, unit: "", invert: true },
-                  ];
-                  return items.map((item) => {
-                    const delta = item.cur - item.prev;
-                    const deltaStr = delta > 0 ? `+${delta}` : String(delta);
-                    const better = item.invert ? delta < 0 : delta > 0;
-                    const same = delta === 0;
-                    return (
-                      <div key={item.label} className="flex items-center justify-between rounded border border-slate-100 px-1.5 py-0.5">
-                        <span className="text-slate-500">{item.label}</span>
-                        <span className={`font-medium ${same ? "text-slate-400" : better ? "text-emerald-600" : "text-red-600"}`}>
-                          {deltaStr}{item.unit}
+              <h4 className="mb-1.5 text-[11px] font-medium text-slate-600">同 Fixture 对比（最新 vs 上次）</h4>
+              <div className="space-y-1">
+                {Array.from(fixtureRates.keys()).map((fixtureId) => {
+                  const sameFixture = data.recent.filter((r) => r.fixtureId === fixtureId);
+                  if (sameFixture.length < 2) return null;
+                  const latest = sameFixture[0];
+                  const prev = sameFixture[1];
+                  const readsDelta = (latest.metrics?.upstreamInputReadCount ?? 0) - (prev.metrics?.upstreamInputReadCount ?? 0);
+                  const toolsDelta = (latest.metrics?.failedToolCallCount ?? 0) - (prev.metrics?.failedToolCallCount ?? 0);
+                  return (
+                    <div key={fixtureId} className="rounded border border-slate-100 px-2 py-1 text-[10px]">
+                      <span className="font-medium text-slate-600 truncate block mb-0.5">{fixtureId}</span>
+                      <div className="flex gap-3">
+                        <DeltaBadge label="读取" delta={readsDelta} invert={false} />
+                        <DeltaBadge label="工具失败" delta={toolsDelta} invert={true} />
+                        <span className="text-slate-400">
+                          {latest.status === "passed" ? "✅" : "❌"} → {prev.status === "passed" ? "✅" : "❌"}
                         </span>
                       </div>
-                    );
-                  });
-                })()}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -179,5 +175,15 @@ function StatBlock({ label, value, color }: { label: string; value: string; colo
       <p className={`text-sm font-bold ${color}`}>{value}</p>
       <p className="text-[10px] text-slate-400">{label}</p>
     </div>
+  );
+}
+
+function DeltaBadge({ label, delta, invert }: { label: string; delta: number; invert: boolean }) {
+  const better = invert ? delta < 0 : delta > 0;
+  const same = delta === 0;
+  return (
+    <span className={`${same ? "text-slate-400" : better ? "text-emerald-600" : "text-red-600"}`}>
+      {label}: {delta > 0 ? `+${delta}` : delta}
+    </span>
   );
 }

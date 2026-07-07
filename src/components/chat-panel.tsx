@@ -64,8 +64,10 @@ export function ChatPanel() {
   const dispatchesByRunId = useAppStore((s) => s.dispatchesByRunId);
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
 
-  // P1: Find attemptId from a child runId by scanning dispatch state
-  const handleOpenTrace = (runId: string) => {
+  // P1: Find attemptId from a child runId.
+  // Try store first (instant for active runs), fall back to API (works after refresh).
+  const handleOpenTrace = async (runId: string) => {
+    // Try store lookup first
     for (const dispatch of Object.values(dispatchesByRunId)) {
       for (const [taskId, childRunId] of Object.entries(dispatch.childRunIds)) {
         if (childRunId === runId) {
@@ -74,6 +76,18 @@ export function ChatPanel() {
         }
       }
     }
+    // Fallback: query backend by childRunId
+    try {
+      const res = await fetch(`/api/context-trace/by-run/${runId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.attempt?.attemptId) {
+          setTraceAttemptId(data.attempt.attemptId);
+          setTraceOpen(true);
+          return;
+        }
+      }
+    } catch { /* silent — drawer will show error state */ }
   };
 
   const handleViewAgent = (agent: Agent, event: ReactMouseEvent<HTMLElement>) => {
