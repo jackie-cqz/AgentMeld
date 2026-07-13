@@ -72,6 +72,55 @@ describe("evaluateChildTaskResult evidence gates", () => {
     expect(result.error).toContain("验收标准漏报");
   });
 
+  it("accepts semantically equivalent acceptance result wording", () => {
+    const result = evaluateChildTaskResult(
+      task({
+        acceptanceCriteria: [
+          "番茄时钟核心功能完整（25分钟工作/5分钟短休息/15分钟长休息）",
+          "有开始/暂停/重置交互按钮"
+        ]
+      }),
+      report({
+        acceptanceResults: [
+          {
+            criterion: "番茄时钟核心功能：25分钟工作 + 5分钟短休息 + 15分钟长休息",
+            passed: true,
+            evidence: "App.jsx 定义了 focus、shortBreak、longBreak 三种模式。"
+          },
+          {
+            criterion: "开始、暂停和重置按钮均可交互",
+            passed: true,
+            evidence: "界面提供主控制按钮和重置按钮。"
+          }
+        ]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("does not require auto-verified contract criteria in the child report", () => {
+    const artifactCriterion = JSON.stringify({
+      id: "contract-prd-created",
+      description: "PRD 产物已创建",
+      required: true,
+      validator: { type: "artifact_exists", outputKey: "prd", artifactType: "document" }
+    });
+
+    const result = evaluateChildTaskResult(
+      task({ acceptanceCriteria: ["覆盖全部功能", artifactCriterion] }),
+      report({
+        acceptanceResults: [
+          { criterion: "覆盖全部功能", passed: true, evidence: "PRD 覆盖了完整需求。" }
+        ]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
   it("fails when a declared target path has no file evidence", () => {
     const result = evaluateChildTaskResult(
       task({ targetPaths: ["src/app.ts"] }),
@@ -111,6 +160,31 @@ describe("evaluateChildTaskResult evidence gates", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("命令证据失败");
+  });
+
+  it("ignores an earlier failed shell separator command when a later equivalent command succeeds", () => {
+    const result = evaluateChildTaskResult(
+      task({ requiredCommands: [{ command: "pnpm build" }] }),
+      report(),
+      evidence({
+        commands: [
+          {
+            command: "cd pomodoro-app && pnpm build 2>&1",
+            exitCode: 1,
+            timedOut: false,
+            isError: false
+          },
+          {
+            command: "cd pomodoro-app; pnpm build",
+            exitCode: 0,
+            timedOut: false,
+            isError: false
+          }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
   });
 
   it("accepts a required command backed by successful actual evidence", () => {

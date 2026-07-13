@@ -93,19 +93,12 @@ function validateCommandExit(command: string, expectedExitCode: number, evidence
 
 function validateArtifactExists(
   outputKey: string, artifactType: string | undefined,
-  evidence: EvidenceRecord[], taskReport: { artifacts?: Record<string, string> } | undefined
+  evidence: EvidenceRecord[], _taskReport: { artifacts?: Record<string, string> } | undefined
 ): ValidationResult {
   // Check evidence for artifact_created matching outputKey
   const matched = evidence.filter(e => e.type === "artifact_created" && e.subjectId === outputKey);
   if (matched.length === 0) {
     return { passed: false, evidenceIds: [], reason: `No artifact_created evidence for outputKey "${outputKey}".` };
-  }
-  // Also check report artifacts if available
-  if (taskReport?.artifacts) {
-    const artId = taskReport.artifacts[outputKey];
-    if (!artId) {
-      return { passed: false, evidenceIds: matched.map(e => e.id), reason: `Artifact "${outputKey}" not found in task report.` };
-    }
   }
   if (artifactType) {
     // Could verify type here — for V1 just note it

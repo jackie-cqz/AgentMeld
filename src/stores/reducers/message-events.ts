@@ -47,7 +47,12 @@ export function applyMessageEvent(state: StoreDraft, event: StreamEvent) {
   if (event.type === "part.start") {
     const message = state.messages[event.messageId];
     if (message) {
-      message.parts[event.partIndex] = event.part;
+      if (event.partIndex <= message.parts.length) {
+        message.parts[event.partIndex] = event.part;
+      } else {
+        message.parts.push(event.part);
+      }
+      message.parts = message.parts.filter(Boolean);
       message.updatedAt = event.timestamp;
     }
     return true;

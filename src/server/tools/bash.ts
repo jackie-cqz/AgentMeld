@@ -30,6 +30,12 @@ const APPROVAL_PATTERNS: RegExp[] = [
   /\bdocker\b/,
 ];
 
+const DEPENDENCY_COMMAND_PATTERNS: RegExp[] = [
+  /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|update|ci)\b/i,
+  /\bpip\s+install\b/i,
+  /\buv\s+sync\b/i
+];
+
 const SOURCE_MUTATION_PATTERNS: RegExp[] = [
   /\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item)\b/i,
   /\b(del|erase|copy|move|ren|rename)\b/i,
@@ -41,7 +47,7 @@ const SOURCE_MUTATION_PATTERNS: RegExp[] = [
 
 const VERIFICATION_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|lint|typecheck|check)\b/i,
-  /\bnpx\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i
@@ -75,6 +81,11 @@ function isVerificationSegment(segment: string): boolean {
   return VERIFICATION_PATTERNS.some((pattern) => pattern.test(command));
 }
 
+function isDependencyCommandSegment(segment: string): boolean {
+  const command = stripOutputFilter(segment);
+  return DEPENDENCY_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
+}
+
 function isVerificationOnlyCommand(command: string): boolean {
   const segments = command
     .split(/\s*(?:;|&&|\|\|)\s*/)
@@ -89,6 +100,22 @@ function isVerificationOnlyCommand(command: string): boolean {
     sawVerification = true;
   }
   return sawVerification;
+}
+
+function isDependencyOnlyCommand(command: string): boolean {
+  const segments = command
+    .split(/\s*(?:;|&&|\|\|)\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length === 0) return false;
+
+  let sawDependencyCommand = false;
+  for (const segment of segments) {
+    if (isDirectoryChange(segment)) continue;
+    if (!isDependencyCommandSegment(segment)) return false;
+    sawDependencyCommand = true;
+  }
+  return sawDependencyCommand;
 }
 
 function getShell(platform: Platform): { cmd: string; args: string[] } {
@@ -114,13 +141,13 @@ function getShell(platform: Platform): { cmd: string; args: string[] } {
 
 const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
   posix:
-    "Run a verification shell command inside workspace. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
-    "Use bash only for build/test/lint/typecheck verification. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Run a verification shell command inside workspace. Dependency installation commands are allowed only after user approval. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
+    "Use bash for build/test/lint/typecheck verification and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output: stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, recursive deletion, sudo, fork bombs, curl | sh.",
   windows:
     "Run a verification PowerShell 5.1 command inside workspace. " +
-    "Use PowerShell only for build/test/lint/typecheck verification. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Use PowerShell only for build/test/lint/typecheck verification and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output is UTF-8, stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, Remove-Item/rmdir deletion, format, shutdown, iex(iwr ...), reg delete."
 };
@@ -134,7 +161,7 @@ export const bashTool: ToolDef = {
     properties: {
       command: {
         type: "string",
-        description: `The build/test/lint/typecheck verification command to execute inside the workspace. ${
+        description: `The build/test/lint/typecheck verification command, or dependency installation command that requires user approval, to execute inside the workspace. ${
           currentPlatform() === "windows"
             ? "Uses PowerShell 5.1 syntax."
             : "Uses POSIX shell syntax."
@@ -165,18 +192,22 @@ export const bashTool: ToolDef = {
         ok: false,
         error:
           "Command blocked by bash verification-only policy. " +
-          "Use fs_patch for existing-file edits, fs_write for new/full files, and fs_list/fs_read for inspection " +
+          "Do not retry this with PowerShell/Bash. Use fs_mkdir for directories, fs_patch for existing source edits, fs_write for new/full files, and fs_list/fs_read for directory or file inspection. " +
+          "bash may still be used for npm/pnpm install after user approval, and for build/test/lint/typecheck verification commands " +
           `(pattern: ${mutationPattern.source}).`
       };
     }
 
-    if (!isVerificationOnlyCommand(command)) {
+    const isDependencyInstall = isDependencyOnlyCommand(command);
+    if (!isVerificationOnlyCommand(command) && !isDependencyInstall) {
       if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return {
         ok: false,
         error:
           "Command blocked by bash verification-only policy. " +
-          "bash is only for build/test/lint/typecheck commands; use fs_list/fs_read for inspection, fs_patch for existing-file edits, and fs_write for new/full files."
+          "bash is only for build/test/lint/typecheck commands or approved dependency installation. " +
+          "For directories call fs_mkdir, for inspection call fs_list/fs_read now, and for source changes call fs_patch for existing files or fs_write for new/full files. " +
+          "Do not use Get-ChildItem, mkdir, cat, Set-Content, echo redirection, sed, python scripts, or shell copy commands for source inspection or edits."
       };
     }
 

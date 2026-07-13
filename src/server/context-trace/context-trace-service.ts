@@ -70,6 +70,9 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
         attempts: [],
         producedBindings: [],
         consumedInputs: [],
+        evidence: [],
+        verdicts: [],
+        warnings: [],
       };
       taskMap.set(att.taskId, entry);
     }
@@ -77,6 +80,17 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
     const trace = buildAttemptTrace(att, db);
     entry.attempts.push(trace.attempt);
     entry.producedBindings.push(...trace.outputBindings);
+    for (const evidence of trace.evidence) {
+      if (!entry.evidence.some((item) => item.evidenceId === evidence.evidenceId)) {
+        entry.evidence.push(evidence);
+      }
+    }
+    for (const verdict of trace.verdicts) {
+      if (!entry.verdicts.some((item) => item.id === verdict.id)) {
+        entry.verdicts.push(verdict);
+      }
+    }
+    entry.warnings.push(...trace.warnings);
     for (const ci of trace.upstreamInputs) {
       if (!entry.consumedInputs.some((e) => e.artifactId === ci.artifactId)) {
         entry.consumedInputs.push(ci);
@@ -150,6 +164,8 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
       type: ev.type,
       status: ev.status,
       trustLevel: ev.trustLevel,
+      sourceKind: ev.sourceKind,
+      sourceId: ev.sourceId,
       subjectType: ev.subjectType,
       subjectId: ev.subjectId,
       excerpt: excerpt.slice(0, 200),

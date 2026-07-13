@@ -13,6 +13,7 @@ import {
   isDeployStatusRecord,
   mergeToolArgumentChunk,
   parseToolCallArguments,
+  shouldAutoDeployWorkspace,
   shouldAutoDeployWorkspaceFromText
 } from "@/server/adapters/custom-agent-adapter";
 import type { AdapterInput } from "@/server/adapters/types";
@@ -398,12 +399,39 @@ describe("custom-agent-adapter", () => {
     )).toBe(false);
   });
 
+  it("auto-deploys when a web_app task has a deployable workspace path", () => {
+    expect(shouldAutoDeployWorkspace(
+      "实现完成。",
+      ["deploy_workspace"],
+      false,
+      { acceptanceCriteria: [], expectedOutputs: [{ outputKey: "web_app", type: "web_app", required: true }] },
+      "."
+    )).toBe(true);
+
+    expect(shouldAutoDeployWorkspace(
+      "实现完成。",
+      ["deploy_workspace"],
+      false,
+      { acceptanceCriteria: [], expectedOutputs: [{ outputKey: "document", type: "document", required: true }] },
+      "."
+    )).toBe(false);
+  });
+
   it("finds a deployable workspace directory with index.html", () => {
     const root = path.join(tempDir, "workspace-auto-deploy");
     fs.mkdirSync(path.join(root, "todo-app"), { recursive: true });
     fs.writeFileSync(path.join(root, "todo-app", "index.html"), "<h1>ok</h1>");
 
     expect(findDeployableWorkspacePath(root)).toBe("todo-app");
+  });
+
+  it("does not deploy a package project's public directory as a build output", () => {
+    const root = path.join(tempDir, "workspace-auto-deploy-public");
+    fs.mkdirSync(path.join(root, "public"), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "vite build" } }));
+    fs.writeFileSync(path.join(root, "public", "index.html"), "<h1>template</h1>");
+
+    expect(findDeployableWorkspacePath(root)).toBeNull();
   });
 
   it("is registered in the adapter registry", () => {

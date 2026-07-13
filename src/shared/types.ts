@@ -19,6 +19,7 @@ export type CompanionMode = "off" | "lan" | "tailnet";
 export interface DeployStatusRecord {
   id: string;
   artifactId: string;
+  outputKey?: string;
   title: string;
   version: number;
   previewPath: string;

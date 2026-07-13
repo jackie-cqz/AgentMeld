@@ -82,11 +82,11 @@ export const FRONTEND_CONTRACT: RoleOutputContract = {
   type: "web_app",
   required: true,
   requiredInputs: ["prd", "style-guide"],
-  expectedTools: ["read_artifact", "write_artifact", "fs_read", "fs_write", "fs_patch", "bash", "deploy_workspace"],
+  expectedTools: ["read_artifact", "write_artifact", "fs_read", "fs_mkdir", "fs_write", "fs_patch", "bash", "deploy_workspace"],
   contentRequirements: [
     "实现 PRD 中定义的所有 P0 功能",
     "严格遵循风格指南中的设计参数",
-    "代码可构建（pnpm build exit 0）",
+    "若采用 npm/pnpm 项目结构，必须运行并通过构建；若采用纯 HTML/CSS/JS 静态实现，则以 index.html 可部署为准",
     "产物可通过 deploy_workspace 部署并预览",
   ],
   acceptanceCriteria: [
@@ -94,11 +94,6 @@ export const FRONTEND_CONTRACT: RoleOutputContract = {
       description: "web_app 产物已创建",
       required: true,
       validator: { type: "artifact_exists", outputKey: "web_app", artifactType: "web_app" },
-    },
-    {
-      description: "构建通过",
-      required: true,
-      validator: { type: "command_exit", command: "pnpm build", expectedExitCode: 0 },
     },
     {
       description: "部署成功",

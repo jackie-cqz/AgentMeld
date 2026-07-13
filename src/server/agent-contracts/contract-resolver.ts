@@ -100,16 +100,52 @@ function enrichTask(
     typeof c === "string" ? tryExtractCriterionId(c) : (c as { id: string }).id
   ));
   for (const crit of contract.acceptanceCriteria) {
-    if (!existingCriteria.has(crit.description.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase())) {
+    const criterionId = buildContractCriterionId(crit);
+    if (!existingCriteria.has(criterionId)) {
       enriched.acceptanceCriteria = [
         ...(enriched.acceptanceCriteria ?? []),
-        JSON.stringify({ id: `contract-${crit.description.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase().slice(0, 30)}`, description: crit.description, required: crit.required, validator: crit.validator }),
+        JSON.stringify({ id: criterionId, description: crit.description, required: crit.required, validator: crit.validator }),
       ];
+      existingCriteria.add(criterionId);
     }
   }
 
 function tryExtractCriterionId(c: string): string {
   try { const p = JSON.parse(c); return p.id ?? c; } catch { return c; }
+}
+
+function buildContractCriterionId(crit: RoleOutputContract["acceptanceCriteria"][number]): string {
+  const validator = crit.validator;
+  switch (validator.type) {
+    case "artifact_exists":
+      return compactCriterionId(["contract", "artifact", validator.outputKey, validator.artifactType]);
+    case "deployment_created":
+      return compactCriterionId(["contract", "deployment", validator.outputKey]);
+    case "command_exit":
+      return compactCriterionId(["contract", "command", validator.command, String(validator.expectedExitCode)]);
+    case "file_exists":
+      return compactCriterionId(["contract", "file", validator.path]);
+    case "file_changed":
+      return compactCriterionId(["contract", "file-changed", validator.path]);
+    case "user_confirmation":
+      return "contract-user-confirmation";
+    case "reviewer_verdict":
+      return compactCriterionId(["contract", "reviewer", validator.reviewerAgentId]);
+    default:
+      return compactCriterionId(["contract", crit.description]);
+  }
+}
+
+function compactCriterionId(parts: Array<string | undefined>): string {
+  const body = parts
+    .filter(Boolean)
+    .join("-")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase()
+    .slice(0, 80);
+  return body || "contract";
 }
 
   return enriched;

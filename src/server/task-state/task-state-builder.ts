@@ -15,6 +15,7 @@ export interface TaskStateBuilderInput {
   resolvedInputs: ResolvedInput[];
   attemptId: string;
   attempt: number;
+  planId?: string;
   previousAttemptId?: string;
   previousError?: string;
   agentCapabilities: string[];
@@ -123,7 +124,7 @@ export function buildTaskState(input: TaskStateBuilderInput): TaskState {
 
   return {
     taskId: task.id,
-    planId: "",
+    planId: input.planId ?? "",
     agentId: task.agentId,
     role,
     objective: task.title || task.prompt.slice(0, 100),

@@ -10,16 +10,26 @@ export const deployArtifactTool: ToolDef = {
     type: "object",
     required: ["artifactId"],
     properties: {
-      artifactId: { type: "string", description: "The artifact ID to deploy." }
+      artifactId: { type: "string", description: "The artifact ID to deploy." },
+      outputKey: {
+        type: "string",
+        description: "Optional expected output key satisfied by this deployed web_app artifact."
+      }
     }
   },
   async handler(args, ctx) {
-    const parsed = z.object({ artifactId: z.string().min(1) }).safeParse(args);
+    const parsed = z.object({
+      artifactId: z.string().min(1),
+      outputKey: z.string().optional()
+    }).safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid args: ${parsed.error.message}` };
     }
 
     const result = deployArtifact(parsed.data.artifactId, ctx.conversationId);
-    return { ok: true, value: result };
+    return {
+      ok: true,
+      value: parsed.data.outputKey ? { ...result, outputKey: parsed.data.outputKey } : result
+    };
   }
 };

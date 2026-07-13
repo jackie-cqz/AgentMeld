@@ -1,23 +1,9 @@
-// ---------------------------------------------------------------------------
-// P2: E2E runner shared types
-// ---------------------------------------------------------------------------
+import type {
+  AgentBenchmarkCase,
+  AssertionResult,
+} from "@/server/context-metrics/benchmark-types";
 
-export interface E2EFixture {
-  id: string;
-  title: string;
-  description: string;
-  userPrompt: string;
-  expectedTasks: string[];
-  expectedOutputs: Array<{
-    taskRole: string;
-    outputKey: string;
-    type: "web_app" | "document" | "image" | "ppt";
-  }>;
-  requiredToolEvidence: string[];
-  successCriteria: string[];
-  /** Minimum number of success criteria that must pass */
-  minPassCriteria: number;
-}
+export type E2EFixture = AgentBenchmarkCase;
 
 export interface E2ERunResult {
   fixtureId: string;
@@ -25,16 +11,14 @@ export interface E2ERunResult {
   startedAt: number;
   finishedAt: number;
   status: "passed" | "failed" | "error";
-  /** P7: Context strategy used for this run */
   strategy?: string;
   metrics: E2ERunMetrics;
-  criteriaResults: Array<{ criterion: string; passed: boolean; detail: string }>;
+  assertionResults: AssertionResult[];
   artifacts: Array<{ outputKey: string; artifactId: string; type: string; title: string }>;
   warnings: string[];
   error?: string;
 }
 
-/** P7: Compare two E2E runs with different strategies */
 export interface StrategyComparisonEntry {
   fixtureId: string;
   baseline: { strategy: string; status: string; metrics: Pick<E2ERunMetrics, "taskCount" | "attemptCount" | "completedTaskCount" | "upstreamInputReadCount" | "verifiedInputCount" | "failedToolCallCount" | "deploymentReadyCount"> };
@@ -75,3 +59,9 @@ export interface E2ERunMetrics {
   webAppOutputCount: number;
   deploymentReadyCount: number;
 }
+
+export type {
+  AgentBenchmarkCase,
+  AssertionResult,
+  BenchmarkAssertion,
+} from "@/server/context-metrics/benchmark-types";

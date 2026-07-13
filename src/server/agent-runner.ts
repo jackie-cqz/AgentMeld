@@ -485,6 +485,13 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
     lines.push(`fs_write: 新建或完整覆盖 workspace (${workspacePath}) 内的文本文件，上限 100KB。用于源码文件，不用于产物。`);
   }
 
+  if (toolNames.includes("fs_mkdir")) {
+    if (!toolNames.includes("fs_write")) {
+      lines.push("\n### workspace 文件与命令工具");
+    }
+    lines.push("fs_mkdir: 创建 workspace 内目录。需要目录时用它，不要用 bash / PowerShell mkdir。也可以直接用 fs_write 写目标文件，父目录会自动创建。");
+  }
+
   if (toolNames.includes("fs_patch")) {
     if (!toolNames.includes("fs_write")) {
       lines.push("\n### workspace 文件与命令工具");
@@ -498,7 +505,7 @@ function buildToolGuidance(toolNames: string[], workspacePath: string): string {
 
   if (toolNames.includes("bash")) {
     lines.push("bash: 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，或 npm/pnpm/yarn/bun/pip/uv 依赖安装/更新命令。依赖安装会进入用户审批，审批通过后才执行。输出截断到 10,000 字符，30s 超时。检查 exitCode。");
-    lines.push("禁止用 bash / PowerShell / sed / 重定向读取、写入、替换、移动、复制或删除源码文件；目录查看用 fs_list，文件读取用 fs_read，局部修改用 fs_patch，新建或完整覆盖用 fs_write。");
+    lines.push("禁止用 bash / PowerShell / sed / 重定向读取、写入、替换、移动、复制或删除源码文件；目录创建用 fs_mkdir，目录查看用 fs_list，文件读取用 fs_read，局部修改用 fs_patch，新建或完整覆盖用 fs_write。");
     lines.push("临时启动服务测试时，必须在同一个 bash 命令里清理后台进程。");
   }
 

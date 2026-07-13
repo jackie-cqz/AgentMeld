@@ -90,7 +90,7 @@ describe("database bootstrap", () => {
       "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
     ]);
     expect(toolsById.get("ag_mock_builder")).toEqual([
-      "fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact",
+      "fs_read", "fs_write", "fs_patch", "fs_mkdir", "bash", "write_artifact", "read_artifact",
       "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"
     ]);
     expect(toolsById.get("ag_reviewer")).toEqual([

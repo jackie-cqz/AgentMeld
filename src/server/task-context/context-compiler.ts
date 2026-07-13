@@ -418,6 +418,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
       resolvedInputs: input.resolvedInputs,
       attemptId: input.attemptId,
       attempt: input.attempt,
+      planId: input.planId,
       previousAttemptId: input.previousAttemptId,
       previousError: input.previousError,
       agentCapabilities: input.assignedAgent.capabilities,

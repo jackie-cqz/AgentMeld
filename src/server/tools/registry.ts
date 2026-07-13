@@ -72,6 +72,7 @@ export class ToolRegistry {
 
 import { bashTool } from "@/server/tools/bash";
 import { fsListTool } from "@/server/tools/fs-list";
+import { fsMkdirTool } from "@/server/tools/fs-mkdir";
 import { fsPatchTool } from "@/server/tools/fs-patch";
 import { fsReadTool } from "@/server/tools/fs-read";
 import { fsWriteTool } from "@/server/tools/fs-write";
@@ -90,6 +91,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(bashTool);
   registry.register(fsListTool);
   registry.register(fsReadTool);
+  registry.register(fsMkdirTool);
   registry.register(fsWriteTool);
   registry.register(fsPatchTool);
   registry.register(readArtifactTool);

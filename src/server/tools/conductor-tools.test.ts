@@ -198,8 +198,45 @@ describe("report_task_result tool", () => {
     });
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("Works");
+    if (!result.ok) {
+      expect(result.error).toContain("Works");
+      expect(result.error).toContain("call report_task_result again");
+      expect(result.error).toContain("Required acceptanceResults additions");
+    }
     expect(getTaskReport(runId)).toBeUndefined();
+  });
+
+  it("does not require auto-verified artifact contracts in acceptanceResults", async () => {
+    const runId = "run_auto_contract_acceptance";
+    clearTaskResultsForRun(runId);
+    const artifactCriterion = JSON.stringify({
+      id: "contract-prd-created",
+      description: "PRD 产物已创建",
+      required: true,
+      validator: { type: "artifact_exists", outputKey: "prd", artifactType: "document" }
+    });
+
+    const result = await toolRegistry.execute("report_task_result", {
+      status: "complete",
+      summary: "PRD completed.",
+      acceptanceResults: [
+        { criterion: "覆盖全部功能", passed: true, evidence: "PRD 功能表覆盖需求。" }
+      ]
+    }, {
+      conversationId: "c",
+      workspacePath: "/tmp",
+      agentId: "a",
+      runId,
+      taskContract: {
+        acceptanceCriteria: ["覆盖全部功能", artifactCriterion],
+        expectedOutputs: [{ outputKey: "prd", type: "document", required: true }]
+      },
+      abortSignal: new AbortController().signal
+    });
+
+    expect(result.ok).toBe(true);
+    expect(getTaskReport(runId)?.acceptanceResults).toHaveLength(1);
+    clearTaskResultsForRun(runId);
   });
 
   it("records a complete report after every task criterion is reported verbatim", async () => {

@@ -1,31 +1,32 @@
 {
+  "schemaVersion": 1,
   "id": "pomodoro-timer-basic",
   "title": "Pomodoro Timer",
-  "description": "25-minute focus + 5-minute break pomodoro timer. PM produces PRD, UI produces style guide, Frontend implements with timer logic, Reviewer checks.",
-  "userPrompt": "帮我做一个番茄时钟 Web App。React + TypeScript，经典 Pomodoro 模式：25分钟专注 + 5分钟短休息，每4个番茄后15分钟长休息。番茄红色调，环形进度条，开始/暂停/重置按钮。",
-  "expectedTasks": ["pm", "ui", "frontend", "reviewer"],
-  "expectedOutputs": [
-    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
-    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
-    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" },
-    { "taskRole": "reviewer", "outputKey": "review_report", "type": "document" }
+  "description": "Pomodoro timer exercising requirements, visual design, implementation, deployment, and review handoffs.",
+  "category": "collaboration",
+  "prompt": "帮我做一个番茄时钟 Web App。React + TypeScript，经典 Pomodoro 模式：25分钟专注 + 5分钟短休息，每4个番茄后15分钟长休息。番茄红色调，环形进度条，开始/暂停/重置按钮。",
+  "expectedRoles": ["pm", "ui", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-ui-complete", "type": "role_executed", "role": "ui", "mustComplete": true, "required": true },
+    { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer-complete", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-prd", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
+    { "id": "output-style-guide", "type": "output_binding", "role": "ui", "outputKey": "style-guide", "artifactType": "document", "required": true },
+    { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "output-review-report", "type": "output_binding", "role": "reviewer", "outputKey": "review_report", "artifactType": "document", "required": true },
+    { "id": "edge-pm-ui", "type": "dag_edge", "fromRole": "pm", "toRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "edge-pm-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "edge-ui-frontend", "type": "dag_edge", "fromRole": "ui", "toRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "edge-frontend-reviewer", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "web_app", "required": true },
+    { "id": "ui-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "reviewer-read-web-app", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "web_app", "required": true },
+    { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
   ],
-  "requiredToolEvidence": [
-    "write_artifact",
-    "read_artifact",
-    "fs_write",
-    "bash",
-    "deploy_workspace"
-  ],
-  "successCriteria": [
-    "PM creates PRD artifact",
-    "UI reads PRD and creates style guide",
-    "Frontend reads PRD and style guide",
-    "Frontend creates web_app artifact with timer logic",
-    "Frontend runs build successfully",
-    "Web app deploys with preview",
-    "Timer has start/pause/reset controls",
-    "Reviewer receives web_app artifact"
-  ],
-  "minPassCriteria": 6
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
+  "tags": ["web-app", "react", "timer", "full-chain", "smoke"]
 }

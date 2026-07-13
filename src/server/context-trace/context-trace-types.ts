@@ -48,6 +48,8 @@ export interface ContextTraceEvidenceSummary {
   type: string;
   status: string;
   trustLevel: string;
+  sourceKind: string;
+  sourceId: string;
   subjectType: string;
   subjectId: string;
   /** First 200 chars of sanitized payload */
@@ -131,6 +133,9 @@ export interface ContextTraceRunTask {
   attempts: ContextTraceAttempt[];
   producedBindings: ContextTraceOutputBinding[];
   consumedInputs: ContextTraceUpstreamInput[];
+  evidence: ContextTraceEvidenceSummary[];
+  verdicts: ContextTraceVerdictSummary[];
+  warnings: ContextTraceWarning[];
 }
 
 export interface ContextTraceRunMetrics {

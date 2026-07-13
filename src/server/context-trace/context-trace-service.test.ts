@@ -172,6 +172,8 @@ describe("getContextTraceByRun", () => {
       expect(result.conductorRunId).toBe(RUN_ID);
       expect(result.tasks.length).toBeGreaterThan(0);
       expect(result.metrics.taskCount).toBeGreaterThan(0);
+      expect(result.tasks.flatMap((task) => task.evidence).some((evidence) => evidence.type === "artifact_created")).toBe(true);
+      expect(result.tasks.flatMap((task) => task.evidence).every((evidence) => evidence.sourceId.length > 0)).toBe(true);
     }
   });
 });

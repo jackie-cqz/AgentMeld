@@ -1,28 +1,27 @@
 {
+  "schemaVersion": 1,
   "id": "expense-tracker-basic",
   "title": "Expense Tracker",
-  "description": "Form-based expense tracker with list and simple statistics. PM defines requirements, UI designs, Frontend implements with data persistence.",
-  "userPrompt": "帮我做一个记账本 Web App。React，可以添加收入/支出记录（金额、分类、日期、备注），展示记录列表，简单的月度统计。数据存 localStorage。蓝色主题。",
-  "expectedTasks": ["pm", "ui", "frontend"],
-  "expectedOutputs": [
-    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
-    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
-    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  "description": "Form-based expense tracker testing requirements, design, implementation, local persistence, and deployment handoffs.",
+  "category": "collaboration",
+  "prompt": "帮我做一个记账本 Web App。React，可以添加收入/支出记录（金额、分类、日期、备注），展示记录列表，简单的月度统计。数据存 localStorage。蓝色主题。",
+  "expectedRoles": ["pm", "ui", "frontend"],
+  "assertions": [
+    { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-ui-complete", "type": "role_executed", "role": "ui", "mustComplete": true, "required": true },
+    { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "output-prd", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
+    { "id": "output-style-guide", "type": "output_binding", "role": "ui", "outputKey": "style-guide", "artifactType": "document", "required": true },
+    { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "edge-pm-ui", "type": "dag_edge", "fromRole": "pm", "toRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "edge-pm-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "edge-ui-frontend", "type": "dag_edge", "fromRole": "ui", "toRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "ui-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
   ],
-  "requiredToolEvidence": [
-    "write_artifact",
-    "read_artifact",
-    "fs_write",
-    "deploy_workspace"
-  ],
-  "successCriteria": [
-    "PM creates PRD artifact",
-    "UI reads PRD and creates style guide",
-    "Frontend reads PRD and style guide",
-    "Frontend creates web_app artifact with form + list",
-    "Income/expense records persist to localStorage",
-    "Monthly statistics display correctly",
-    "Web app deploys with preview"
-  ],
-  "minPassCriteria": 5
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "tags": ["web-app", "react", "local-storage", "context-handoff"]
 }

@@ -223,13 +223,15 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
       // If no tool calls, we're done
       if (!hasToolCalls || toolCalls.size === 0) {
-        if (shouldAutoDeployWorkspaceFromText(textContent, input.toolNames, deployToolSucceededInRun)) {
-          const ctx = buildToolContext(input, signal);
-          const deployPath = findDeployableWorkspacePath(ctx.workspacePath);
+        const ctx = buildToolContext(input, signal);
+        const deployPath = findDeployableWorkspacePath(ctx.workspacePath);
+        if (shouldAutoDeployWorkspace(textContent, input.toolNames, deployToolSucceededInRun, input.taskContract, deployPath)) {
           if (deployPath) {
+            const outputKey = inferSingleWebAppOutputKey(input.taskContract);
             const args = {
               path: deployPath,
-              title: inferDeploymentTitle(textContent) ?? "Workspace Preview"
+              title: inferDeploymentTitle(textContent) ?? "Workspace Preview",
+              ...(outputKey ? { outputKey } : {})
             };
             const callId = `call_auto_deploy_${Date.now()}`;
             yield {
@@ -255,6 +257,9 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
             if (result.ok && isDeployStatusRecord(result.value)) {
               deployToolSucceededInRun = result.value.status === "ready";
+              if (typeof result.value.outputKey === "string") {
+                recordTaskArtifact(input.runId, result.value.outputKey, result.value.artifactId);
+              }
               yield {
                 type: "deploy.status",
                 conversationId,
@@ -333,7 +338,10 @@ export const customAgentAdapter: AgentPlatformAdapter = {
             };
           }
           if (typeof val.artifactId === "string") {
-            if (tc.name === "write_artifact" && typeof val.outputKey === "string") {
+            if (
+              (tc.name === "write_artifact" || tc.name === "deploy_workspace" || tc.name === "deploy_artifact") &&
+              typeof val.outputKey === "string"
+            ) {
               recordTaskArtifact(input.runId, val.outputKey, val.artifactId);
             }
             const loaded = getArtifact(val.artifactId as string);
@@ -451,27 +459,45 @@ function buildToolContext(input: AdapterInput, signal: AbortSignal): ToolContext
   };
 }
 
+function inferSingleWebAppOutputKey(taskContract: AdapterInput["taskContract"]): string | undefined {
+  const webAppOutputs = (taskContract?.expectedOutputs ?? []).filter((output) => output.type === "web_app");
+  if (webAppOutputs.length === 1) return webAppOutputs[0].outputKey;
+  const requiredWebAppOutputs = webAppOutputs.filter((output) => output.required !== false);
+  return requiredWebAppOutputs.length === 1 ? requiredWebAppOutputs[0].outputKey : undefined;
+}
+
 export function shouldAutoDeployWorkspaceFromText(
   text: string,
   toolNames: string[],
   deployToolSucceededInRun: boolean
 ): boolean {
+  return shouldAutoDeployWorkspace(text, toolNames, deployToolSucceededInRun, null, null) &&
+    looksLikeDeploymentSuccessClaim(text);
+}
+
+export function shouldAutoDeployWorkspace(
+  text: string,
+  toolNames: string[],
+  deployToolSucceededInRun: boolean,
+  taskContract: AdapterInput["taskContract"],
+  deployablePath: string | null
+): boolean {
   return (
     !deployToolSucceededInRun &&
     toolNames.includes("deploy_workspace") &&
-    looksLikeDeploymentSuccessClaim(text)
+    (looksLikeDeploymentSuccessClaim(text) || (!!deployablePath && expectsWebAppOutput(taskContract)))
   );
 }
 
+function expectsWebAppOutput(taskContract: AdapterInput["taskContract"]): boolean {
+  return (taskContract?.expectedOutputs ?? []).some((output) => output.type === "web_app");
+}
+
 export function findDeployableWorkspacePath(workspacePath: string): string | null {
-  const preferred = [
+  const buildOutputs = [
     "dist",
     "build",
     "out",
-    "public",
-    "todo-app",
-    "app",
-    "workspace",
     "client/dist",
     "client/build",
     "client/out",
@@ -480,7 +506,18 @@ export function findDeployableWorkspacePath(workspacePath: string): string | nul
     "apps/web/out"
   ];
 
-  for (const candidate of preferred) {
+  for (const candidate of buildOutputs) {
+    if (hasIndexHtml(path.join(workspacePath, candidate))) {
+      return normalizeRelativePath(candidate);
+    }
+  }
+
+  const rootHasPackageJson = hasFile(path.join(workspacePath, "package.json"));
+  const staticCandidates = rootHasPackageJson
+    ? []
+    : ["public", "todo-app", "app", "workspace"];
+
+  for (const candidate of staticCandidates) {
     if (hasIndexHtml(path.join(workspacePath, candidate))) {
       return normalizeRelativePath(candidate);
     }
@@ -505,6 +542,9 @@ export function findDeployableWorkspacePath(workspacePath: string): string | nul
     for (const entry of entries) {
       if (!entry.isDirectory() || shouldSkipDeploySearchDir(entry.name)) continue;
       const child = path.join(current.absolutePath, entry.name);
+      if (entry.name === "public" && hasFile(path.join(current.absolutePath, "package.json"))) {
+        continue;
+      }
       if (hasIndexHtml(child)) {
         return normalizeRelativePath(path.relative(workspacePath, child));
       }
@@ -554,6 +594,14 @@ function inferDeploymentTitle(text: string): string | null {
 function hasIndexHtml(dir: string): boolean {
   try {
     return fs.statSync(dir).isDirectory() && fs.statSync(path.join(dir, "index.html")).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function hasFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
   } catch {
     return false;
   }
@@ -1016,6 +1064,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+  const runtimePlatform = buildRuntimePlatformPrompt(input.workspacePath);
 
   // P0: When dynamic context XML is provided, use stable prefix + dynamic suffix layout
   if (input.contextXml) {
@@ -1035,6 +1084,7 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
       platformPromptVersion: "agentmeld-p0-v1",
       stableSections: [
         { id: "workspace_info", title: "Workspace", content: `<workspace_info>\n  <cwd>${input.workspacePath}</cwd>\n  <mode>sandbox</mode>\n</workspace_info>`, tokenEstimate: 30 },
+        { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
         { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 },
       ],
       userMessage: triggerText,
@@ -1057,7 +1107,7 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
   }
 
   // Legacy path: no contextXml, use original behavior
-  messages.push({ role: "system", content: input.systemPrompt });
+  messages.push({ role: "system", content: `${input.systemPrompt}\n\n${runtimePlatform}` });
 
   if (input.history && input.history.length > 0) {
     for (const h of input.history) {
@@ -1072,6 +1122,48 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
   messages.push({ role: "user", content: triggerText });
 
   return messages;
+}
+
+function buildRuntimePlatformPrompt(workspacePath: string): string {
+  const isWindows = process.platform === "win32";
+  if (isWindows) {
+    return [
+      "<runtime_platform>",
+      "  <os>windows</os>",
+      "  <shell>PowerShell</shell>",
+      `  <workspace_path>${escapePromptXml(workspacePath)}</workspace_path>`,
+      "  <command_rules>",
+      "    Use the real workspace_path above as the current project directory; do not use /workspace.",
+      "    Use PowerShell-compatible command separators. Prefer: cd \"<workspace_path>\"; pnpm build",
+      "    Do not use POSIX-only syntax such as &&, cp, mv, rm -rf, sed, cat > file, grep, chmod, or /tmp paths.",
+      "    Do not create directories or modify source files with shell commands. Use fs_mkdir for directories, fs_patch for focused edits, and fs_write for new files or intentional full replacement.",
+      "    bash is only for verification commands and dependency install/update commands that may require user approval.",
+      "  </command_rules>",
+      "</runtime_platform>",
+    ].join("\n");
+  }
+
+  return [
+    "<runtime_platform>",
+    "  <os>posix</os>",
+    "  <shell>sh-compatible</shell>",
+    `  <workspace_path>${escapePromptXml(workspacePath)}</workspace_path>`,
+    "  <command_rules>",
+    "    Use the real workspace_path above as the current project directory.",
+    "    POSIX command separators like && are allowed for verification commands.",
+    "    Do not create directories or modify source files with shell commands. Use fs_mkdir for directories, fs_patch for focused edits, and fs_write for new files or intentional full replacement.",
+    "    bash is only for verification commands and dependency install/update commands that may require user approval.",
+    "  </command_rules>",
+    "</runtime_platform>",
+  ].join("\n");
+}
+
+function escapePromptXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 /** Extract only the tool guidance section from the full system prompt. */

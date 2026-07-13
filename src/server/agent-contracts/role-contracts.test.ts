@@ -85,6 +85,34 @@ describe("applyRoleContracts", () => {
     expect(t3.expectedOutputs![0].id).toBe("web_app");
   });
 
+  it("does not require pnpm build by default for frontend tasks", () => {
+    const result = applyRoleContracts(fullPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
+    const criteria = (t3.acceptanceCriteria ?? []).map((criterion) =>
+      typeof criterion === "string" ? JSON.parse(criterion) : criterion
+    );
+
+    expect(criteria.some((criterion) => criterion.validator?.type === "command_exit")).toBe(false);
+    expect(criteria.some((criterion) => criterion.validator?.type === "artifact_exists")).toBe(true);
+    expect(criteria.some((criterion) => criterion.validator?.type === "deployment_created")).toBe(true);
+  });
+
+  it("generates stable unique contract criterion ids", () => {
+    const result = applyRoleContracts(fullPlan, agents);
+    const t3 = result.plan.find((t) => t.id === "t3")!;
+    const criteria = (t3.acceptanceCriteria ?? []).map((criterion) =>
+      typeof criterion === "string" ? JSON.parse(criterion) : criterion
+    );
+    const ids = criteria
+      .filter((criterion) => typeof criterion.id === "string" && criterion.id.startsWith("contract-"))
+      .map((criterion) => criterion.id);
+
+    expect(ids).toContain("contract-artifact-web_app-web_app");
+    expect(ids).toContain("contract-deployment-web_app");
+    expect(ids).not.toContain("contract-----");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("auto-fills inputs by agent role (not positional order)", () => {
     const result = applyRoleContracts(fullPlan, agents);
     const t3 = result.plan.find((t) => t.id === "t3")!;

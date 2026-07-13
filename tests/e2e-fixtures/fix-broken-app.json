@@ -1,31 +1,24 @@
 {
+  "schemaVersion": 1,
   "id": "fix-broken-app",
-  "title": "Fix Broken App — Debugging Scenario",
-  "description": "Given a broken React app that fails to build, the system must diagnose the error, fix the source, and produce a working deployment. Tests FailureContext, retry, and evidence-driven repair — the most important P5 scenario.",
-  "userPrompt": "我这里有一个 React Todo App，但是 pnpm build 失败了。请帮我找出问题并修复，让应用能正常构建和部署。项目文件在 src/ 目录下。",
-  "expectedTasks": ["pm", "frontend"],
-  "expectedOutputs": [
-    { "taskRole": "pm", "outputKey": "diagnosis", "type": "document" },
-    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  "title": "Fix Broken App",
+  "description": "Debugging scenario testing diagnosis handoff, source repair, build evidence, bounded retries, and deployment.",
+  "category": "recovery",
+  "prompt": "我这里有一个 React Todo App，但是 pnpm build 失败了。请帮我找出问题并修复，让应用能正常构建和部署。项目文件在 src/ 目录下。",
+  "expectedRoles": ["pm", "frontend"],
+  "assertions": [
+    { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "output-diagnosis", "type": "output_binding", "role": "pm", "outputKey": "diagnosis", "artifactType": "document", "required": true },
+    { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "edge-diagnosis-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "diagnosis", "required": true },
+    { "id": "frontend-read-diagnosis", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "diagnosis", "required": true },
+    { "id": "frontend-read-files", "type": "tool_succeeded", "toolName": "fs_read", "role": "frontend", "required": true },
+    { "id": "frontend-write-fix", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "frontend-attempt-bound", "type": "retry_bound", "role": "frontend", "minAttempts": 1, "maxAttempts": 3, "required": true }
   ],
-  "requiredToolEvidence": [
-    "read_artifact",
-    "fs_read",
-    "fs_write",
-    "bash",
-    "deploy_workspace"
-  ],
-  "requiredContextEdges": [
-    { "fromRole": "pm", "toRole": "frontend", "outputKey": "diagnosis", "mustBeRead": true }
-  ],
-  "successCriteria": [
-    "PM diagnoses the build failure and creates diagnosis document",
-    "Frontend reads diagnosis and applies fixes",
-    "Frontend modifies source files to fix build errors",
-    "pnpm build succeeds (exitCode 0)",
-    "Web app deploys successfully",
-    "At least one retry if first build attempt fails"
-  ],
-  "minPassCriteria": 4,
-  "maxAttempts": 3
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
+  "tags": ["web-app", "react", "debugging", "recovery"]
 }

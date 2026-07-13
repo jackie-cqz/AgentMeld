@@ -147,7 +147,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     if (desc.includes("前端") || desc.includes("代码") || desc.includes("react") || desc.includes("vue")) {
       draft.name = draft.name || "前端开发";
       draft.tools = ["fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact"];
-      draft.prompt = `You are a frontend developer. Write clean, working code. Use fs_patch for focused source edits, fs_write for new or complete files, bash for build/test, and write_artifact for deliverable demos. ${quickDesc}`;
+      draft.prompt = `You are a frontend developer. Write clean, working code. Use fs_patch for focused source edits, fs_write for new or complete files, bash for build/test or dependency installation that requires user approval, and write_artifact for deliverable demos. ${quickDesc}`;
     } else if (desc.includes("审查") || desc.includes("review") || desc.includes("代码审查")) {
       draft.name = draft.name || "代码审查";
       draft.tools = ["fs_list", "fs_read", "read_artifact"];

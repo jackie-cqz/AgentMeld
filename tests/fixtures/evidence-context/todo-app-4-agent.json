@@ -1,0 +1,104 @@
+{
+  "name": "Todo App — 4-agent collaboration (PM → UI → Frontend → Reviewer)",
+  "description": "Standard scenario: user asks for a green-themed React Todo app without auth. PM produces PRD, UI produces style guide, Frontend implements, Reviewer validates. Verifies that context propagation follows DAG edges, failed outputs are blocked, and evidence contracts are enforced.",
+  "conversation": {
+    "userRequest": "帮我做一个 Todo List Web App，使用 React，不需要登录，主色用绿色。每个任务可以设置一个最多30分钟的专注时长。"
+  },
+  "agents": [
+    { "id": "ag_pm", "role": "pm", "capabilities": ["pm", "planning"] },
+    { "id": "ag_ui", "role": "ui", "capabilities": ["ui", "design"] },
+    { "id": "ag_frontend", "role": "frontend", "capabilities": ["frontend", "react"] },
+    { "id": "ag_reviewer", "role": "reviewer", "capabilities": ["review"] }
+  ],
+  "activeFacts": [
+    { "canonicalKey": "technical.frontend.framework", "value": "React", "status": "active" },
+    { "canonicalKey": "feature.auth.required", "value": false, "status": "active" },
+    { "canonicalKey": "ui.theme.primaryColor", "value": "green", "status": "active" },
+    { "canonicalKey": "todo.task.focusDurationLimitMinutes", "value": 30, "status": "active" }
+  ],
+  "plan": {
+    "tasks": [
+      {
+        "id": "t1",
+        "agentId": "ag_pm",
+        "title": "PM: 生成PRD",
+        "dependsOn": [],
+        "expectedOutputs": [{ "id": "prd", "type": "document", "required": true }],
+        "acceptanceCriteria": [{ "id": "prd-created", "description": "PRD artifact created", "required": true, "validator": { "type": "artifact_exists", "outputKey": "prd" } }]
+      },
+      {
+        "id": "t2",
+        "agentId": "ag_ui",
+        "title": "UI: 生成Style Guide",
+        "dependsOn": ["t1"],
+        "inputs": [{ "fromTaskId": "t1", "outputId": "prd", "required": true }],
+        "expectedOutputs": [{ "id": "style", "type": "document", "required": true }],
+        "acceptanceCriteria": [{ "id": "style-created", "description": "Style guide created", "required": true, "validator": { "type": "artifact_exists", "outputKey": "style" } }]
+      },
+      {
+        "id": "t3",
+        "agentId": "ag_frontend",
+        "title": "Frontend: 实现应用",
+        "dependsOn": ["t1", "t2"],
+        "inputs": [
+          { "fromTaskId": "t1", "outputId": "prd", "required": true },
+          { "fromTaskId": "t2", "outputId": "style", "required": true }
+        ],
+        "expectedOutputs": [
+          { "id": "app", "type": "web_app", "required": true },
+          { "id": "deployment", "type": "web_app", "required": false }
+        ],
+        "acceptanceCriteria": [
+          { "id": "source-change", "description": "Must modify src directory", "required": true, "validator": { "type": "file_changed", "path": "src" } },
+          { "id": "build", "description": "pnpm build must pass", "required": true, "validator": { "type": "command_exit", "command": "pnpm build", "expectedExitCode": 0 } },
+          { "id": "app-artifact", "description": "App artifact created", "required": true, "validator": { "type": "artifact_exists", "outputKey": "app" } }
+        ],
+        "targetPaths": ["src/App.tsx", "src/index.tsx"],
+        "requiredCommands": [{ "command": "pnpm build" }]
+      },
+      {
+        "id": "t4",
+        "agentId": "ag_reviewer",
+        "title": "Reviewer: 验收",
+        "dependsOn": ["t3"],
+        "inputs": [{ "fromTaskId": "t3", "outputId": "app", "required": true }],
+        "expectedOutputs": [],
+        "acceptanceCriteria": [{ "id": "review", "description": "Visual review of the app", "required": false, "validator": { "type": "reviewer_verdict" } }]
+      }
+    ]
+  },
+  "expectedIncludedSources": [
+    "t1.prd → t2",
+    "t1.prd → t3",
+    "t2.style → t3",
+    "t3.app → t4"
+  ],
+  "expectedOmittedSources": [
+    "t4 should NOT see t1.prd or t2.style directly (no dependsOn edge)",
+    "t3 should NOT see t4 content",
+    "t1 should NOT see any upstream artifacts"
+  ],
+  "expectedVerifiedOutputs": ["t1.prd", "t2.style", "t3.app"],
+  "expectedBlockedTasks": ["t3 should block if t2 fails", "t4 should block if t3 fails"],
+  "expectedVerdicts": [
+    { "taskId": "t1", "criterionId": "prd-created", "expectedStatus": "passed" },
+    { "taskId": "t3", "criterionId": "build", "expectedStatus": "passed" }
+  ],
+  "failureScenarios": [
+    {
+      "name": "t2 style guide fails",
+      "expected": "t3 should be blocked (missing t2.style verified input)",
+      "blockedTasks": ["t3", "t4"]
+    },
+    {
+      "name": "t3 first build fails, retry succeeds",
+      "expected": "t4 receives verified t3 output, not failed attempt",
+      "verification": "t3 attempt 1 rejected, attempt 2 verified"
+    },
+    {
+      "name": "Agent claims build passed but exitCode=1",
+      "expected": "t3 verification rejected — evidence > declaration",
+      "verdicts": [{ "criterionId": "build", "expectedStatus": "failed" }]
+    }
+  ]
+}

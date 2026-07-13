@@ -8,15 +8,21 @@ import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ToolUseCard } from "@/components/tool-card";
 import type { MessagePart } from "@/shared/types";
 
+function isMessagePart(part: unknown): part is MessagePart {
+  return !!part && typeof part === "object" && "type" in part;
+}
+
 export function MessageParts({ parts, messageStatus }: { parts: MessagePart[]; messageStatus?: string }) {
-  if (parts.length === 0) {
+  const safeParts = parts.filter(isMessagePart);
+
+  if (safeParts.length === 0) {
     return <div className="h-5 w-40 animate-pulse rounded bg-stone-200" />;
   }
 
   // Separate tool calls from regular parts for merged rendering
-  const toolCallIds = new Set(parts.filter((p) => p.type === "tool_use" || p.type === "tool_result").map((p) => p.type === "tool_use" ? p.callId : (p as { callId: string }).callId));
-  const nonToolParts = parts.filter((p) => p.type !== "tool_use" && p.type !== "tool_result");
-  const hasVerifiedDeployment = parts.some((part) => part.type === "deploy_status");
+  const toolCallIds = new Set(safeParts.filter((p) => p.type === "tool_use" || p.type === "tool_result").map((p) => p.type === "tool_use" ? p.callId : (p as { callId: string }).callId));
+  const nonToolParts = safeParts.filter((p) => p.type !== "tool_use" && p.type !== "tool_result");
+  const hasVerifiedDeployment = safeParts.some((part) => part.type === "deploy_status");
 
   return (
     <div className="space-y-3">
@@ -27,7 +33,7 @@ export function MessageParts({ parts, messageStatus }: { parts: MessagePart[]; m
           hasVerifiedDeployment={hasVerifiedDeployment}
         />
       ))}
-      {toolCallIds.size > 0 ? <ToolUseCard parts={parts} messageStatus={messageStatus} /> : null}
+      {toolCallIds.size > 0 ? <ToolUseCard parts={safeParts} messageStatus={messageStatus} /> : null}
     </div>
   );
 }

@@ -1,28 +1,28 @@
 {
+  "schemaVersion": 1,
   "id": "personal-blog-basic",
   "title": "Personal Blog",
-  "description": "Multi-page static blog with content structure. PM defines requirements, UI designs visual style, Frontend implements and deploys.",
-  "userPrompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。",
-  "expectedTasks": ["pm", "ui", "frontend"],
-  "expectedOutputs": [
-    { "taskRole": "pm", "outputKey": "prd", "type": "document" },
-    { "taskRole": "ui", "outputKey": "style-guide", "type": "document" },
-    { "taskRole": "frontend", "outputKey": "web_app", "type": "web_app" }
+  "description": "Static blog testing structured requirements, design handoff, implementation, and deployment.",
+  "category": "collaboration",
+  "prompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。",
+  "expectedRoles": ["pm", "ui", "frontend"],
+  "assertions": [
+    { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-ui-complete", "type": "role_executed", "role": "ui", "mustComplete": true, "required": true },
+    { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "output-prd", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
+    { "id": "output-style-guide", "type": "output_binding", "role": "ui", "outputKey": "style-guide", "artifactType": "document", "required": true },
+    { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "edge-pm-ui", "type": "dag_edge", "fromRole": "pm", "toRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "edge-pm-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "edge-ui-frontend", "type": "dag_edge", "fromRole": "ui", "toRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "ui-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "ui", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "prd", "required": true },
+    { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
+    { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
   ],
-  "requiredToolEvidence": [
-    "write_artifact",
-    "read_artifact",
-    "fs_write",
-    "bash",
-    "deploy_workspace"
-  ],
-  "successCriteria": [
-    "PM creates PRD artifact",
-    "UI reads PRD and creates style guide",
-    "Frontend reads PRD and style guide",
-    "Frontend creates multi-page web_app artifact",
-    "Blog has article list and detail pages",
-    "Web app deploys with preview"
-  ],
-  "minPassCriteria": 4
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "tags": ["web-app", "react", "static-site", "context-handoff"]
 }

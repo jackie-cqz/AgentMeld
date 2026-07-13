@@ -1,37 +1,127 @@
 // ---------------------------------------------------------------------------
-// P8: Agent Benchmark types — standardized multi-agent evaluation
+// Agent Benchmark contracts — canonical types shared by runners and reports
 // ---------------------------------------------------------------------------
 
-import type { ContextQualityRunMetrics, ContextQualityDerivedRates } from "@/server/context-metrics/context-metrics-types";
+export const BENCHMARK_CASE_SCHEMA_VERSION = 1 as const;
+
+export type BenchmarkRole = "conductor" | "pm" | "ui" | "frontend" | "reviewer";
+export type BenchmarkArtifactType = "web_app" | "document" | "image" | "ppt";
+export type BenchmarkCaseCategory =
+  | "collaboration"
+  | "context_handoff"
+  | "fact_update"
+  | "recovery"
+  | "safety"
+  | "false_completion";
+
+export interface BenchmarkAssertionBase {
+  id: string;
+  required: boolean;
+  weight?: number;
+  description?: string;
+}
+
+export interface RoleExecutedAssertion extends BenchmarkAssertionBase {
+  type: "role_executed";
+  role: BenchmarkRole;
+  mustComplete?: boolean;
+}
+
+export interface DagEdgeAssertion extends BenchmarkAssertionBase {
+  type: "dag_edge";
+  fromRole: BenchmarkRole;
+  toRole: BenchmarkRole;
+  outputKey?: string;
+}
+
+export interface OutputBindingAssertion extends BenchmarkAssertionBase {
+  type: "output_binding";
+  role: BenchmarkRole;
+  outputKey: string;
+  artifactType: BenchmarkArtifactType;
+}
+
+export interface ArtifactReadAssertion extends BenchmarkAssertionBase {
+  type: "artifact_read";
+  producerRole: BenchmarkRole;
+  consumerRole: BenchmarkRole;
+  outputKey: string;
+  requireVerifiedBinding?: boolean;
+}
+
+export interface ToolSucceededAssertion extends BenchmarkAssertionBase {
+  type: "tool_succeeded";
+  toolName: string;
+  role?: BenchmarkRole;
+  commandPattern?: string;
+}
+
+export interface DeploymentReadyAssertion extends BenchmarkAssertionBase {
+  type: "deployment_ready";
+  role?: BenchmarkRole;
+  outputKey?: string;
+}
+
+export interface RetryBoundAssertion extends BenchmarkAssertionBase {
+  type: "retry_bound";
+  role?: BenchmarkRole;
+  minAttempts?: number;
+  maxAttempts?: number;
+}
+
+export type BenchmarkAssertion =
+  | RoleExecutedAssertion
+  | DagEdgeAssertion
+  | OutputBindingAssertion
+  | ArtifactReadAssertion
+  | ToolSucceededAssertion
+  | DeploymentReadyAssertion
+  | RetryBoundAssertion;
+
+export interface BenchmarkCaseLimits {
+  maxDurationMs: number;
+  maxModelCalls?: number;
+  maxToolCalls?: number;
+  maxInputTokens?: number;
+  maxAttemptsPerTask?: number;
+}
 
 export interface AgentBenchmarkCase {
+  schemaVersion: typeof BENCHMARK_CASE_SCHEMA_VERSION;
   id: string;
   title: string;
-  category: "web_app" | "document" | "workflow" | "debugging";
-  userPrompt: string;
-  expectedRoles: Array<"conductor" | "pm" | "ui" | "frontend" | "reviewer">;
-  expectedOutputs: Array<{
-    taskRole: string;
-    outputKey: string;
-    artifactType: string;
-    required: boolean;
-  }>;
-  requiredToolEvidence: string[];
-  /** Edges that MUST exist between tasks for context propagation */
-  requiredContextEdges: Array<{
-    fromRole: string;
-    toRole: string;
-    outputKey: string;
-    mustBeRead: boolean;
-  }>;
-  successCriteria: string[];
-  maxAttempts?: number;
-  maxDurationMs?: number;
+  description: string;
+  category: BenchmarkCaseCategory;
+  prompt: string;
+  expectedRoles: BenchmarkRole[];
+  assertions: BenchmarkAssertion[];
+  limits: BenchmarkCaseLimits;
+  tags: string[];
+}
+
+export interface AssertionReference {
+  runId?: string;
+  taskId?: string;
+  attemptId?: string;
+  contextSnapshotId?: string;
+  evidenceId?: string;
+  artifactId?: string;
+  toolCallId?: string;
+}
+
+export interface AssertionResult {
+  assertionId: string;
+  type: BenchmarkAssertion["type"];
+  required: boolean;
+  status: "passed" | "failed" | "blocked" | "not_applicable";
+  score: number;
+  maxScore: number;
+  reason: string;
+  references: AssertionReference[];
 }
 
 export interface AgentBenchmarkMetrics {
   success: boolean;
-  /** P8: Granular final status — passed / partial / failed / blocked */
   finalStatus: "passed" | "failed" | "partial" | "blocked";
   caseId: string;
   runId: string;
@@ -45,11 +135,8 @@ export interface AgentBenchmarkMetrics {
   failedTaskCount: number;
   retryCount: number;
 
-  /** Whether the conductor generated a valid DAG */
   planValid: boolean;
-  /** Ratio of expected roles that were assigned tasks */
   expectedRoleCoverage: number;
-  /** Ratio of expected outputs that were actually produced */
   expectedOutputCoverage: number;
 
   verifiedInputCount: number;
@@ -69,8 +156,6 @@ export interface AgentBenchmarkMetrics {
   reviewerPassed: boolean;
 
   estimatedInputTokens: number;
-
-  /** Whether all requiredContextEdges were satisfied */
   edgesSatisfied: boolean;
   missingEdges: string[];
   warnings: string[];

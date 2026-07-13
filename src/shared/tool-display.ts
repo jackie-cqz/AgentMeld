@@ -4,6 +4,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   deploy_artifact: "部署产物",
   deploy_workspace: "部署工作区",
   fs_list: "浏览文件",
+  fs_mkdir: "创建目录",
   fs_read: "读取文件",
   fs_write: "写入文件",
   fs_patch: "文件修改",

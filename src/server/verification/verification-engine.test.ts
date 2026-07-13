@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { resolveValidator, validateCriterion, type ValidationResult } from "@/server/verification/validator-registry";
 import { verifyTaskAttempt } from "@/server/verification/verification-engine";
 import { buildFailureContext } from "@/server/task-context/failure-context";
+import { insertEvidence } from "@/server/repositories/evidence-repository";
+import { getDatabase } from "@/db/client";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { AcceptanceCriterionSpec } from "@/shared/types";
 
@@ -65,6 +67,18 @@ describe("validator-registry", () => {
       sampleEvidence,
       { artifacts: { app: "art_1" } }
     );
+    expect(result.passed).toBe(true);
+    expect(result.evidenceIds).toContain("ev_art1");
+  });
+
+  it("validates artifact_exists from evidence without a task report artifact map", () => {
+    const result = validateCriterion(
+      { id: "c5b", description: "Artifact created", required: true, validator: { type: "artifact_exists", outputKey: "app" } },
+      { type: "artifact_exists", outputKey: "app" },
+      sampleEvidence,
+      undefined
+    );
+
     expect(result.passed).toBe(true);
     expect(result.evidenceIds).toContain("ev_art1");
   });
@@ -139,6 +153,133 @@ describe("validator-registry", () => {
 });
 
 describe("verification-engine", () => {
+  it("creates verified output bindings from artifact_created evidence", async () => {
+    const suffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const conversationId = `conv_verify_binding_${suffix}`;
+    const conductorRunId = `run_verify_binding_${suffix}`;
+    const childRunId = `run_child_verify_binding_${suffix}`;
+    const attemptId = `ta_verify_binding_${suffix}`;
+    const artifactId = `art_verify_${suffix}`;
+    seedEvidenceParents({ conversationId, conductorRunId, childRunId, attemptId });
+    insertEvidence({
+      id: `ev_verify_binding_${suffix}`,
+      conversationId,
+      conductorRunId,
+      planId: "plan_verify_binding",
+      taskId: "t1",
+      attemptId,
+      childRunId,
+      contextSnapshotId: "ctx_verify_binding",
+      agentId: "ag_pm",
+      type: "artifact_created",
+      status: "valid",
+      trustLevel: "verified",
+      sourceKind: "tool_call",
+      sourceId: "write_artifact_test",
+      subjectType: "artifact",
+      subjectId: "prd",
+      payloadJson: JSON.stringify({ outputKey: "prd", artifactId, artifactType: "document" }),
+      contentHash: null,
+      invalidatedAt: null,
+      createdAt: Date.now(),
+    });
+    const task = {
+      id: "t1", agentId: "ag_pm", title: "PRD", prompt: "",
+      dependsOn: [], inputs: [],
+      expectedOutputs: [{ id: "prd", type: "document", required: true }],
+      acceptanceCriteria: [
+        JSON.stringify({
+          id: "contract-prd",
+          description: "PRD 产物已创建",
+          required: true,
+          validator: { type: "artifact_exists", outputKey: "prd", artifactType: "document" },
+        })
+      ],
+      maxAttempts: 1,
+    } as ParsedTask;
+
+    const result = await verifyTaskAttempt(task, attemptId, undefined);
+
+    expect(result.status).toBe("verified");
+    expect(result.verifiedOutputBindings).toEqual([
+      { outputKey: "prd", artifactId, evidenceIds: expect.any(Array) }
+    ]);
+    expect(result.verifiedOutputBindings[0].evidenceIds.length).toBeGreaterThan(0);
+  });
+
+  it("does not require pnpm build for a deployed static web_app without package.json", async () => {
+    const suffix = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const conversationId = `conv_static_web_${suffix}`;
+    const conductorRunId = `run_static_web_${suffix}`;
+    const childRunId = `run_child_static_web_${suffix}`;
+    const attemptId = `ta_static_web_${suffix}`;
+    const artifactId = `art_static_web_${suffix}`;
+    seedEvidenceParents({ conversationId, conductorRunId, childRunId, attemptId });
+
+    const baseEvidence = {
+      conversationId,
+      conductorRunId,
+      planId: "plan_verify_binding",
+      taskId: "t1",
+      attemptId,
+      childRunId,
+      contextSnapshotId: "ctx_static_web",
+      agentId: "ag_pm",
+      status: "valid" as const,
+      trustLevel: "verified" as const,
+      sourceKind: "tool_call" as const,
+      contentHash: null,
+      invalidatedAt: null,
+      createdAt: Date.now(),
+    };
+
+    insertEvidence({
+      ...baseEvidence,
+      id: `ev_static_index_${suffix}`,
+      sourceId: "fs_write_index",
+      type: "file_written",
+      subjectType: "file",
+      subjectId: "index.html",
+      payloadJson: JSON.stringify({ path: "index.html", action: "created" }),
+    });
+    insertEvidence({
+      ...baseEvidence,
+      id: `ev_static_artifact_${suffix}`,
+      sourceId: "deploy_workspace_artifact",
+      type: "artifact_created",
+      subjectType: "artifact",
+      subjectId: "web_app",
+      payloadJson: JSON.stringify({ outputKey: "web_app", artifactId, artifactType: "web_app" }),
+    });
+    insertEvidence({
+      ...baseEvidence,
+      id: `ev_static_deploy_${suffix}`,
+      sourceId: "deploy_workspace_deployment",
+      type: "deployment_created",
+      subjectType: "deployment",
+      subjectId: "web_app",
+      payloadJson: JSON.stringify({ outputKey: "web_app", artifactId }),
+    });
+
+    const task = {
+      id: "t1", agentId: "ag_frontend", title: "Static web app", prompt: "",
+      dependsOn: [], inputs: [],
+      expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+      acceptanceCriteria: [
+        { id: "build", description: "Build passes", required: true, validator: { type: "command_exit", command: "pnpm build", expectedExitCode: 0 } },
+        { id: "artifact", description: "web_app exists", required: true, validator: { type: "artifact_exists", outputKey: "web_app", artifactType: "web_app" } },
+        { id: "deploy", description: "deployed", required: false, validator: { type: "deployment_created", outputKey: "web_app" } },
+      ] as unknown as string[],
+      maxAttempts: 1,
+    } as ParsedTask;
+
+    const result = await verifyTaskAttempt(task, attemptId, undefined);
+
+    expect(result.status).toBe("verified");
+    expect(result.verdicts.find((verdict) => verdict.criterionId === "build")?.status).toBe("passed");
+    expect(result.verdicts.find((verdict) => verdict.criterionId === "build")?.reason).toContain("Static web_app");
+  });
+
   it("returns verified when all required criteria pass", async () => {
     const task = {
       id: "t1", agentId: "ag1", title: "Test", prompt: "Do it",
@@ -190,6 +331,55 @@ describe("verification-engine", () => {
     }
   });
 });
+
+function seedEvidenceParents(input: {
+  conversationId: string;
+  conductorRunId: string;
+  childRunId: string;
+  attemptId: string;
+}) {
+  const db = getDatabase();
+  const now = Date.now();
+  db.prepare(`
+    INSERT OR IGNORE INTO agents (
+      id, name, avatar, description, capabilities, system_prompt,
+      adapter_name, tool_names, is_builtin, is_conductor, supports_vision,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run("ag_pm", "PM", "PM", "PM", "[]", "", "custom", "[]", 1, 0, 0, now, now);
+  db.prepare(`
+    INSERT OR IGNORE INTO agents (
+      id, name, avatar, description, capabilities, system_prompt,
+      adapter_name, tool_names, is_builtin, is_conductor, supports_vision,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run("ag_mock_conductor", "Conductor", "Co", "Conductor", "[]", "", "custom", "[]", 1, 1, 0, now, now);
+  db.prepare(`
+    INSERT OR IGNORE INTO conversations (
+      id, title, mode, agent_ids, pinned_message_ids, archived,
+      fs_write_approval_mode, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(input.conversationId, "Verification binding test", "group", JSON.stringify(["ag_mock_conductor", "ag_pm"]), "[]", 0, "review", now, now);
+  db.prepare(`
+    INSERT OR IGNORE INTO agent_runs (
+      id, conversation_id, agent_id, parent_run_id, status, usage,
+      interrupted, retryable, started_at, finished_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(input.conductorRunId, input.conversationId, "ag_mock_conductor", null, "running", "{}", 0, 0, now, null, now, now);
+  db.prepare(`
+    INSERT OR IGNORE INTO agent_runs (
+      id, conversation_id, agent_id, parent_run_id, status, usage,
+      interrupted, retryable, started_at, finished_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(input.childRunId, input.conversationId, "ag_pm", input.conductorRunId, "complete", "{}", 0, 0, now, now, now, now);
+  db.prepare(`
+    INSERT OR IGNORE INTO task_attempts (
+      id, conductor_run_id, conversation_id, plan_id, plan_revision,
+      task_id, agent_id, child_run_id, attempt, context_snapshot_id,
+      execution_status, verification_status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(input.attemptId, input.conductorRunId, input.conversationId, "plan_verify_binding", 0, "t1", "ag_pm", input.childRunId, 1, null, "reported_complete", "not_started", now, now);
+}
 
 // ── P5: Failure-driven retry context ──────────────────────────────────────
 

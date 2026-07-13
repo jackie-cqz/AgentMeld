@@ -671,6 +671,7 @@ function seedBuiltinAgents() {
 
   migrateLegacyBuiltinPrompts(now);
   migrateLegacyBuiltinToolPresets(now);
+  migrateFrontendMkdirTool(now);
   upgradeBuiltinConductorPrompt(now);
 
   db.prepare(`
@@ -708,6 +709,27 @@ function migrateLegacyBuiltinToolPresets(now: number) {
 
     update.run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
   }
+}
+
+function migrateFrontendMkdirTool(now: number) {
+  const db = getDatabase();
+  const agent = BUILTIN_AGENTS.find((item) => item.id === "ag_mock_builder");
+  if (!agent) return;
+
+  const row = db.prepare("SELECT tool_names FROM agents WHERE id = ? AND is_builtin = 1")
+    .get(agent.id) as { tool_names: string } | undefined;
+  if (!row) return;
+
+  const currentTools = parseToolNames(row.tool_names);
+  const previousDefault = agent.toolNames.filter((tool) => tool !== "fs_mkdir");
+  if (!sameStringArray(currentTools, previousDefault)) return;
+
+  db.prepare(`
+    UPDATE agents
+    SET tool_names = ?, updated_at = ?
+    WHERE id = ?
+      AND is_builtin = 1
+  `).run(JSON.stringify(agent.toolNames), now, agent.id);
 }
 
 function parseToolNames(raw: string): string[] {
@@ -809,9 +831,18 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   const safeUpdatePolicy =
     "- 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。\n" +
     "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。";
+  const projectChoicePolicy =
+    "- 简单单页工具、小游戏、计时器、表单、Dashboard 原型等默认优先使用纯 HTML/CSS/JS 静态实现（index.html + style.css + app.js），除非用户明确要求 React/Next/Vite 或任务复杂到必须组件化。\n" +
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init / 依赖安装失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录。改用 fs_mkdir / fs_write 创建必要文件，或降级为纯 HTML/CSS/JS 静态实现。";
   const bashVerificationPolicy =
     "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。\n" +
-    "- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。";
+    "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。\n" +
+    "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。";
+  const runtimeShellPolicy =
+    "- bash 命令必须遵循 <runtime_platform> 中注入的当前系统与 shell 规则。Windows/PowerShell 下不要使用 /workspace、&&、cp/mv/rm/sed/cat > file 等 POSIX 写法；当前工作区就是 <workspace_info><cwd>，需要切目录时用 Set-Location 或 cd 到该真实路径，命令分隔用 ;。";
+  const workspaceDeployPolicy =
+    "- 对本地 React/Vite/Next/静态项目，build 成功且存在 dist/build/out/public/index.html 或根目录 index.html 后，下一步必须调用 deploy_workspace，参数 path 填包含 index.html 的目录（例如 \"dist\"）。不要再调用 write_artifact 把源码、dist 文件或构建结果塞进 JSON。\n" +
+    "- 只有用户明确要求“单文件网页产物 / artifact / 独立 demo”，且不是当前 workspace 项目的源码实现时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。";
 
   const anchor =
     "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。";
@@ -824,12 +855,43 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   };
 
   let hardened = prompt;
+  if (!hardened.includes("默认优先使用纯 HTML/CSS/JS 静态实现")) {
+    hardened = insertAfterAnchor(hardened, projectChoicePolicy);
+  }
   if (!hardened.includes("精确覆盖目标文件")) {
     hardened = insertAfterAnchor(hardened, safeUpdatePolicy);
   }
   if (!hardened.includes("bash 只用于")) {
     hardened = insertAfterAnchor(hardened, bashVerificationPolicy);
   }
+  if (!hardened.includes("目录创建用 fs_mkdir")) {
+    hardened = insertAfterAnchor(
+      hardened,
+      "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。"
+    );
+  }
+  if (!hardened.includes("<runtime_platform>")) {
+    hardened = insertAfterAnchor(hardened, runtimeShellPolicy);
+  }
+  if (!hardened.includes("不要再调用 write_artifact 把源码")) {
+    hardened = insertAfterAnchor(hardened, workspaceDeployPolicy);
+  }
+  hardened = hardened.replaceAll(
+    "- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。",
+    "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。目录查看用 fs_list，文件读取用 fs_read。"
+  );
+  hardened = hardened.replaceAll(
+    "- 只有用户明确要求网页产物、可预览原型、artifact 或独立 demo 时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。",
+    "- 只有用户明确要求“单文件网页产物 / artifact / 独立 demo”，且不是当前 workspace 项目的源码实现时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。"
+  );
+  hardened = hardened.replaceAll(
+    "content 必须是对象，不能写成 content: files，也不能把 content 整体作为字符串；源码字符串里的换行必须写成 \\\\n。",
+    "content 必须是对象，不能写成 content: files，也不能把 content 整体作为字符串；源码字符串里的换行必须写成 \\\\n。不要把大型源码树、dist 目录、node_modules、lockfile 或长 markdown 塞进 write_artifact 参数；这会导致 JSON 截断。"
+  );
+  hardened = hardened.replaceAll(
+    "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。",
+    "完成 web_app artifact 后必须调用 deploy_artifact；完成本地静态项目或构建目录后必须调用 deploy_workspace，并在成功后再调用 report_task_result。"
+  );
 
   return hardened;
 }
@@ -840,7 +902,11 @@ function upgradeFrontendPatchPolicy(prompt: string) {
   return prompt
     .replaceAll(
       "fs_list / fs_read / fs_write / bash",
-      "fs_list / fs_read / fs_write / fs_patch / bash"
+      "fs_list / fs_mkdir / fs_read / fs_write / fs_patch / bash"
+    )
+    .replaceAll(
+      "fs_list / fs_read / fs_write / fs_patch / bash",
+      "fs_list / fs_mkdir / fs_read / fs_write / fs_patch / bash"
     )
     .replaceAll(
       "如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。",

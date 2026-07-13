@@ -278,6 +278,31 @@ describe("evidence-collector", () => {
     expect(payload.artifactId).toBe("art_prd_123");
   });
 
+  it("captures deployment and web_app artifact evidence for deploy_workspace", async () => {
+    const ctx = makeCtx({
+      taskContract: {
+        acceptanceCriteria: [],
+        expectedOutputs: [{ outputKey: "web_app", type: "web_app", required: true }]
+      }
+    });
+
+    await captureEvidence({
+      toolName: "deploy_workspace",
+      args: { path: "dist" },
+      result: { ok: true, value: { artifactId: "art_web_123", outputKey: "web_app" } },
+      context: ctx,
+      durationMs: 30,
+    });
+
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(2);
+    expect(mockInsertEvidence.mock.calls[0][0].type).toBe("deployment_created");
+    expect(mockInsertEvidence.mock.calls[1][0].type).toBe("artifact_created");
+    const payload = JSON.parse(mockInsertEvidence.mock.calls[1][0].payloadJson);
+    expect(payload.artifactType).toBe("web_app");
+    expect(payload.outputKey).toBe("web_app");
+    expect(payload.artifactId).toBe("art_web_123");
+  });
+
   it("evidence insert failure does not throw (fire-and-forget)", async () => {
     mockInsertEvidence.mockImplementationOnce(() => { throw new Error("DB down"); });
     const ctx = makeCtx();

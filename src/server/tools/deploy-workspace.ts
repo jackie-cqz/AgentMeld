@@ -38,21 +38,28 @@ export const deployWorkspaceTool: ToolDef = {
     required: ["path"],
     properties: {
       path: { type: "string", description: "Path relative to workspace root." },
-      title: { type: "string", description: "Optional deployment title." }
+      title: { type: "string", description: "Optional deployment title." },
+      outputKey: {
+        type: "string",
+        description:
+          "Optional expected output key for the produced web_app. Defaults to the task's only web_app expected output."
+      }
     }
   },
   async handler(args, ctx) {
     const parsed = z.object({
       path: z.string().min(1),
-      title: z.string().optional()
+      title: z.string().optional(),
+      outputKey: z.string().optional()
     }).safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid args: ${parsed.error.message}` };
     }
 
+    const outputKey = parsed.data.outputKey ?? inferWebAppOutputKey(ctx);
     const result = deployWorkspace(ctx.workspacePath, parsed.data.path, parsed.data.title);
     if (result.status !== "ready") {
-      return { ok: true, value: result };
+      return { ok: true, value: outputKey ? { ...result, outputKey } : result };
     }
 
     const workspaceDistPath = path.resolve(ctx.workspacePath, parsed.data.path);
@@ -76,11 +83,20 @@ export const deployWorkspaceTool: ToolDef = {
       value: {
         ...result,
         artifactId: artifact.id,
-        version: artifact.version
+        version: artifact.version,
+        ...(outputKey ? { outputKey } : {})
       }
     };
   }
 };
+
+function inferWebAppOutputKey(ctx: { taskContract?: { expectedOutputs?: Array<{ outputKey: string; type: string; required?: boolean }> } | null }) {
+  const webAppOutputs = (ctx.taskContract?.expectedOutputs ?? [])
+    .filter((output) => output.type === "web_app");
+  if (webAppOutputs.length === 1) return webAppOutputs[0].outputKey;
+  const requiredWebApp = webAppOutputs.filter((output) => output.required !== false);
+  return requiredWebApp.length === 1 ? requiredWebApp[0].outputKey : undefined;
+}
 
 function collectTextArtifactFiles(rootPath: string, workspacePath: string): Record<string, string> {
   if (!isPathWithin(rootPath, workspacePath)) {

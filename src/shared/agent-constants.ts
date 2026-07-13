@@ -17,6 +17,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
       "read_attachment",
       "ask_user",
       "fs_list",
+      "fs_mkdir",
       "fs_read",
       "fs_write",
       "fs_patch",
@@ -25,7 +26,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
   },
   "local-code": {
     label: "本地代码",
-    tools: ["fs_read", "fs_write", "fs_patch", "bash", "read_artifact"]
+    tools: ["fs_list", "fs_mkdir", "fs_read", "fs_write", "fs_patch", "bash", "read_artifact"]
   },
   artifact: {
     label: "产物创作",
@@ -37,7 +38,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
   },
   deployment: {
     label: "构建部署",
-    tools: ["fs_list", "fs_read", "fs_write", "fs_patch", "bash", "deploy_artifact", "deploy_workspace"]
+    tools: ["fs_list", "fs_mkdir", "fs_read", "fs_write", "fs_patch", "bash", "deploy_artifact", "deploy_workspace"]
   },
   research: {
     label: "研究分析",
@@ -47,6 +48,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
 
 export const ALL_TOOL_NAMES = [
   "fs_list",
+  "fs_mkdir",
   "fs_read",
   "fs_write",
   "fs_patch",
@@ -71,7 +73,7 @@ export const DEFAULT_CUSTOM_PROMPT = `You are a role-focused AI collaborator in 
 ## Tool use
 - Use the fewest tools needed to make verifiable progress.
 - Use ask_user when a required decision is ambiguous or progress is genuinely blocked.
-- Use fs_patch for focused edits to existing source files, fs_write only for new files or intentional full-file replacement, and bash only for focused verification.
+- Use fs_mkdir for directories, fs_patch for focused edits to existing source files, fs_write only for new files or intentional full-file replacement, and bash only for focused verification or dependency installation that requires user approval.
 - Use read_artifact for upstream handoffs and write_artifact for inspectable deliverables.
 - When producing a web app, deploy the completed artifact or workspace build when deployment tools are available.
 

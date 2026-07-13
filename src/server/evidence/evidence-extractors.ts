@@ -28,6 +28,24 @@ function getStr(v: unknown, key: string): string {
   return "";
 }
 
+function getResultValueStr(result: unknown, key: string): string {
+  if (!result || typeof result !== "object" || !("value" in result)) return "";
+  return getStr((result as { value?: unknown }).value, key);
+}
+
+function isToolResultOk(result: unknown): boolean {
+  return !!(result && typeof result === "object" && (result as { ok?: boolean }).ok === true);
+}
+
+function inferWebAppOutputKey(ctx: ToolContext): string {
+  const webAppOutputs = (ctx.taskContract?.expectedOutputs ?? []).filter(
+    (output) => output.type === "web_app"
+  );
+  if (webAppOutputs.length === 1) return webAppOutputs[0].outputKey;
+  const requiredWebAppOutputs = webAppOutputs.filter((output) => output.required !== false);
+  return requiredWebAppOutputs.length === 1 ? requiredWebAppOutputs[0].outputKey : "";
+}
+
 // ── fs_read ────────────────────────────────────────────────────────────────
 
 export const extractFileRead: EvidenceExtractor = (ctx, args) => {
@@ -127,15 +145,36 @@ export const extractArtifactCreated: EvidenceExtractor = (ctx, args, result) => 
 
 // ── deploy_artifact / deploy_workspace ─────────────────────────────────────
 
-export const extractDeployment: EvidenceExtractor = (ctx, args) => {
-  const outputKey = getStr(args, "outputKey");
-  return {
+export const extractDeployment: EvidenceExtractor = (ctx, args, result) => {
+  const outputKey =
+    getStr(args, "outputKey") || getResultValueStr(result, "outputKey") || inferWebAppOutputKey(ctx);
+  const artifactId = getResultValueStr(result, "artifactId");
+  const deploymentEvidence: ExtractedEvidence = {
     type: "deployment_created",
     subjectType: "deployment",
     subjectId: outputKey || "unknown",
-    payload: { outputKey, agentId: ctx.agentId },
+    payload: { outputKey, artifactId, agentId: ctx.agentId },
     contentHash: null,
   };
+
+  if (!outputKey || !artifactId || !isToolResultOk(result)) return deploymentEvidence;
+
+  return [
+    deploymentEvidence,
+    {
+      type: "artifact_created",
+      subjectType: "artifact",
+      subjectId: outputKey,
+      payload: {
+        artifactType: "web_app",
+        outputKey,
+        artifactId,
+        agentId: ctx.agentId,
+        sourceTool: "deploy_workspace",
+      },
+      contentHash: null,
+    },
+  ];
 };
 
 // ── ask_user ──────────────────────────────────────────────────────────────

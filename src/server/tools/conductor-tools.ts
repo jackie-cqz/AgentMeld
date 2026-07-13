@@ -2,6 +2,7 @@ import { z } from "zod";
 import { recordTaskReport } from "@/server/dispatch-task-results";
 import { getConversation } from "@/server/repositories";
 import type { ToolDef } from "@/server/tools/types";
+import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
 
 // ---------------------------------------------------------------------------
 // plan_tasks
@@ -178,7 +179,7 @@ export const reportTaskResultTool: ToolDef = {
       acceptanceResults: {
         type: "array",
         description:
-          "One entry for every acceptance criterion declared by the task. Copy each criterion verbatim.",
+          "One entry for every acceptance criterion declared by the task. Copy each criterion verbatim; do not merge, summarize, rename, translate, or reorder criteria.",
         items: {
           type: "object",
           required: ["criterion", "passed", "evidence"],
@@ -254,19 +255,22 @@ export const reportTaskResultTool: ToolDef = {
       return { ok: false, error: `Invalid report: ${parsed.error.message}` };
     }
     if (parsed.data.status === "complete" && ctx.taskContract) {
-      const expectedCriteria = ctx.taskContract.acceptanceCriteria.map((criterion) => criterion.trim());
-      const reportedCriteria = new Set(
-        (parsed.data.acceptanceResults ?? []).map((result) => result.criterion.trim())
-      );
-      const missingCriteria = expectedCriteria.filter(
-        (criterion) => !reportedCriteria.has(criterion)
-      );
+      const expectedCriteria = humanReviewedCriteria(ctx.taskContract.acceptanceCriteria);
+      const missingCriteria = findMissingCriteria(expectedCriteria, parsed.data.acceptanceResults ?? []);
       if (missingCriteria.length > 0) {
+        const additions = missingCriteria.map((criterion) => ({
+          criterion,
+          passed: true,
+          evidence: "Describe concrete evidence for this exact criterion."
+        }));
         return {
           ok: false,
-          error:
-            "Incomplete acceptanceResults. Report every criterion verbatim: " +
-            missingCriteria.join(" | ")
+          error: [
+            "Incomplete acceptanceResults. You must call report_task_result again.",
+            "Do not summarize or merge acceptance criteria. Copy each missing criterion exactly.",
+            `Missing criteria: ${missingCriteria.map((criterion) => JSON.stringify(criterion)).join(" | ")}`,
+            `Required acceptanceResults additions: ${JSON.stringify(additions)}`
+          ].join(" ")
         };
       }
     }

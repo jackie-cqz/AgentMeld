@@ -11,7 +11,7 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
-import { getAllPendingBashCommands } from "@/server/pending-bash";
+import { getAllPendingBashCommands, rejectPendingBash } from "@/server/pending-bash";
 import {
   clearAllToolEvidenceForTests,
   getRunToolEvidence
@@ -80,6 +80,7 @@ describe("tool registry", () => {
     const names = toolRegistry.listNames();
     expect(names).toContain("bash");
     expect(names).toContain("fs_list");
+    expect(names).toContain("fs_mkdir");
     expect(names).toContain("fs_read");
     expect(names).toContain("fs_write");
     expect(names).toContain("fs_patch");
@@ -99,6 +100,19 @@ describe("tool registry", () => {
 
   it("execute returns error for unknown tool", async () => {
     const result = await toolRegistry.execute("nope", {}, ctx());
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("fs_mkdir", () => {
+  it("creates nested directories inside the workspace", async () => {
+    const result = await toolRegistry.execute("fs_mkdir", { path: "nested/dir" }, ctx());
+    expect(result.ok).toBe(true);
+    expect(fs.statSync(path.join(workspacePath, "nested", "dir")).isDirectory()).toBe(true);
+  });
+
+  it("rejects paths outside the workspace", async () => {
+    const result = await toolRegistry.execute("fs_mkdir", { path: "../../../outside" }, ctx());
     expect(result.ok).toBe(false);
   });
 });
@@ -364,10 +378,16 @@ describe("bash", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects dependency installation commands before approval", async () => {
-    const result = await toolRegistry.execute("bash", { command: "pnpm install" }, ctx());
+  it("requires approval for dependency installation commands", async () => {
+    const promise = toolRegistry.execute("bash", { command: "pnpm install" }, ctx());
+    const pending = getAllPendingBashCommands();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.command).toBe("pnpm install");
+
+    rejectPendingBash(pending[0]!.id);
+    const result = await promise;
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("verification-only");
+    if (!result.ok) expect(result.error).toContain("rejected");
     expect(getAllPendingBashCommands()).toHaveLength(0);
   });
 
@@ -541,7 +561,12 @@ describe("deploy_workspace", () => {
     const result = await toolRegistry.execute("deploy_workspace", {
       path: "dist",
       title: "Workspace App"
-    }, ctx());
+    }, ctx({
+      taskContract: {
+        acceptanceCriteria: [],
+        expectedOutputs: [{ outputKey: "web_app", type: "web_app", required: true }]
+      }
+    }));
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -550,10 +575,12 @@ describe("deploy_workspace", () => {
         previewPath: string;
         sourceType: string;
         version: number;
+        outputKey?: string;
       };
       const artifact = getArtifact(value.artifactId);
 
       expect(value.sourceType).toBe("workspace");
+      expect(value.outputKey).toBe("web_app");
       expect(value.version).toBe(1);
       expect(artifact?.conversationId).toBe(conversationId);
       expect(artifact?.createdByAgentId).toBe("ag_mock_builder");

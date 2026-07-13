@@ -6,7 +6,7 @@ import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { CriterionVerdict } from "@/shared/evidence-types";
 import type { AcceptanceCriterionSpec } from "@/shared/types";
 import { listEvidenceForAttempt } from "@/server/repositories/evidence-repository";
-import { resolveValidator, validateCriterion } from "@/server/verification/validator-registry";
+import { resolveValidator, validateCriterion, type ValidationResult } from "@/server/verification/validator-registry";
 
 export interface TaskVerificationResult {
   status: "verified" | "rejected" | "needs_review";
@@ -33,7 +33,8 @@ export async function verifyTaskAttempt(
 
   for (const criterion of criteria) {
     const validator = resolveValidator(criterion.validator);
-    const result = validateCriterion(criterion, validator, evidence, taskReport);
+    let result = validateCriterion(criterion, validator, evidence, taskReport);
+    result = maybePassStaticWebAppBuildCriterion(task, criterion, evidence, result);
 
     // P4: reviewer_verdict that can't auto-resolve:
     // Required → needs_review (blocks task until reviewer resolves).
@@ -68,20 +69,32 @@ export async function verifyTaskAttempt(
     }
   }
 
-  // Build verified output bindings from artifact evidence
-  if (taskReport?.artifacts) {
-    for (const [outputKey, artifactId] of Object.entries(taskReport.artifacts)) {
-      const hasEvidence = evidence.some(
-        (e) => e.type === "artifact_created" && (e.subjectId === outputKey || e.payloadJson?.includes(outputKey))
-      );
-      if (hasEvidence) {
-        verifiedOutputBindings.push({
-          outputKey,
-          artifactId,
-          evidenceIds: evidence.filter(e => e.type === "artifact_created").map(e => e.id),
-        });
-      }
-    }
+  // Build verified output bindings from artifact evidence, not agent self-report.
+  // write_artifact records artifact_created evidence with outputKey + artifactId;
+  // that evidence is the authority for downstream task inputs.
+  const expectedOutputs = new Map((task.expectedOutputs ?? []).map((output) => [output.id, output]));
+  const evidenceByOutput = new Map<string, { artifactId: string; evidenceIds: string[] }>();
+  for (const item of evidence) {
+    if (item.type !== "artifact_created" || item.status !== "valid") continue;
+
+    const payload = parseArtifactPayload(item.payloadJson);
+    const outputKey = payload.outputKey || item.subjectId;
+    const artifactId = payload.artifactId;
+    if (!outputKey || !artifactId || !expectedOutputs.has(outputKey)) continue;
+
+    const existing = evidenceByOutput.get(outputKey);
+    evidenceByOutput.set(outputKey, {
+      artifactId,
+      evidenceIds: [...(existing?.evidenceIds ?? []), item.id],
+    });
+  }
+
+  for (const [outputKey, binding] of evidenceByOutput) {
+    verifiedOutputBindings.push({
+      outputKey,
+      artifactId: binding.artifactId,
+      evidenceIds: binding.evidenceIds,
+    });
   }
 
   const status: TaskVerificationResult["status"] = hasFailure ? "rejected" : hasReviewNeeded ? "needs_review" : "verified";
@@ -116,5 +129,70 @@ async function safeLoadEvidence(attemptId: string): Promise<Array<{ id: string; 
     return listEvidenceForAttempt(attemptId) as unknown as Array<{ id: string; type: string; subjectId: string; payloadJson: string; status: string }>;
   } catch {
     return [];
+  }
+}
+
+function maybePassStaticWebAppBuildCriterion(
+  task: ParsedTask,
+  criterion: AcceptanceCriterionSpec,
+  evidence: Array<{ id: string; type: string; subjectId: string; payloadJson: string; status: string }>,
+  result: ValidationResult
+): ValidationResult {
+  if (result.passed) return result;
+  if (criterion.validator.type !== "command_exit") return result;
+  if (normalizeCommand(criterion.validator.command) !== "pnpm build") return result;
+  if (!result.reason.includes("was not executed")) return result;
+  if (!task.expectedOutputs?.some((output) => output.type === "web_app")) return result;
+
+  const hasPackageJson = evidence.some((item) =>
+    item.status === "valid" &&
+    item.type === "file_written" &&
+    normalizePath(item.subjectId) === "package.json"
+  );
+  if (hasPackageJson) return result;
+
+  const webAppArtifact = evidence.filter((item) =>
+    item.status === "valid" &&
+    item.type === "artifact_created" &&
+    item.subjectId === "web_app"
+  );
+  const deployment = evidence.filter((item) =>
+    item.status === "valid" &&
+    item.type === "deployment_created" &&
+    (!item.subjectId || item.subjectId === "web_app")
+  );
+  const indexHtml = evidence.filter((item) =>
+    item.status === "valid" &&
+    item.type === "file_written" &&
+    normalizePath(item.subjectId).endsWith("index.html")
+  );
+
+  if (webAppArtifact.length === 0 || deployment.length === 0 || indexHtml.length === 0) return result;
+
+  return {
+    passed: true,
+    evidenceIds: [...webAppArtifact, ...deployment, ...indexHtml].map((item) => item.id),
+    reason:
+      "Static web_app was deployed without an npm project: index.html, web_app artifact, and deployment evidence are present; pnpm build is not required."
+  };
+}
+
+function normalizeCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizePath(filePath: string): string {
+  return filePath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+function parseArtifactPayload(payloadJson: string): { outputKey?: string; artifactId?: string } {
+  try {
+    const parsed = JSON.parse(payloadJson) as Record<string, unknown>;
+    return {
+      outputKey: typeof parsed.outputKey === "string" ? parsed.outputKey : undefined,
+      artifactId: typeof parsed.artifactId === "string" ? parsed.artifactId : undefined,
+    };
+  } catch {
+    return {};
   }
 }

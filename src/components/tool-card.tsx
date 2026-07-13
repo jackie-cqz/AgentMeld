@@ -22,11 +22,15 @@ type ToolUsePart = MessagePart & { type: "tool_use" };
 type ToolResultPart = MessagePart & { type: "tool_result" };
 type ToolCallEntry = { use: ToolUsePart; result?: ToolResultPart };
 
+function isMessagePart(part: unknown): part is MessagePart {
+  return !!part && typeof part === "object" && "type" in part;
+}
+
 export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; messageStatus?: string }) {
   const [groupExpanded, setGroupExpanded] = useState(false);
   const toolCalls = new Map<string, ToolCallEntry>();
 
-  for (const part of parts) {
+  for (const part of parts.filter(isMessagePart)) {
     if (part.type === "tool_use") {
       if (!toolCalls.has(part.callId)) {
         toolCalls.set(part.callId, { use: part });

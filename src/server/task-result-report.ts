@@ -1,5 +1,6 @@
 import type { DispatchTaskReport } from "@/server/dispatch-task-results";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
+import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
 
 export interface TaskEvidence {
   fileWrites: Array<{ path: string; action: string }>;
@@ -36,8 +37,8 @@ export function evaluateChildTaskResult(
 
   // ③ Any failed commands in evidence?
   if (evidence) {
-    const failedCommands = evidence.commands.filter(
-      (c) => c.isError || c.timedOut || (c.exitCode !== null && c.exitCode !== 0)
+    const failedCommands = evidence.commands.filter((command, index) =>
+      isFailedCommand(command) && !hasLaterSuccessfulEquivalentCommand(evidence.commands, index)
     );
     if (failedCommands.length > 0) {
       return {
@@ -56,13 +57,13 @@ export function evaluateChildTaskResult(
     };
   }
 
-  // ⑤ Any acceptance criteria MISSING from the report?
-  // P5: Normalize JSON criteria (from role contracts) to description text
-  // before comparison — must sync with what the prompt tells the agent.
+  // ⑤ Any human-reviewed acceptance criteria MISSING from the report?
+  // Structured JSON criteria from role contracts are verified from tool evidence
+  // by verification-engine. Requiring the child agent to repeat those criteria
+  // makes evidence-backed artifact tasks fail even when write_artifact succeeded.
   const criteria = task.acceptanceCriteria ?? [];
-  const normalizedCriteria = criteria.map((c) => extractCriterionDescription(c).trim());
-  const reportedCriteria = new Set((report.acceptanceResults ?? []).map((a) => a.criterion.trim()));
-  const missing = normalizedCriteria.filter((c) => !reportedCriteria.has(c));
+  const normalizedCriteria = humanReviewedCriteria(criteria);
+  const missing = findMissingCriteria(normalizedCriteria, report.acceptanceResults ?? []);
   if (missing.length > 0) {
     return {
       status: "failed",
@@ -153,14 +154,41 @@ function evidencePathMatches(targetPath: string, candidatePath: string): boolean
 }
 
 function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalizeCommandIntent(command);
 }
 
-/** P5: Extract description from JSON criteria, pass through plain strings. */
-function extractCriterionDescription(criterion: string): string {
-  try {
-    const parsed = JSON.parse(criterion) as Record<string, unknown>;
-    if (parsed && typeof parsed.description === "string") return parsed.description;
-  } catch { /* not JSON */ }
-  return criterion;
+function isFailedCommand(command: TaskEvidence["commands"][number]): boolean {
+  return Boolean(command.isError || command.timedOut || (command.exitCode !== null && command.exitCode !== 0));
+}
+
+function isSuccessfulCommand(command: TaskEvidence["commands"][number]): boolean {
+  return !command.isError && !command.timedOut && command.exitCode === 0;
+}
+
+function hasLaterSuccessfulEquivalentCommand(commands: TaskEvidence["commands"], failedIndex: number): boolean {
+  const failedIntent = normalizeCommandIntent(commands[failedIndex]?.command ?? "");
+  if (!failedIntent) return false;
+  return commands
+    .slice(failedIndex + 1)
+    .some((command) => isSuccessfulCommand(command) && normalizeCommandIntent(command.command) === failedIntent);
+}
+
+function normalizeCommandIntent(command: string): string {
+  const normalized = command
+    .trim()
+    .toLowerCase()
+    .replace(/2>\s*&1/g, "")
+    .replace(/\bset-location\b/g, "cd")
+    .replace(/\s*&&\s*/g, ";")
+    .replace(/\s*;\s*/g, ";")
+    .replace(/\s+/g, " ")
+    .replace(/;$/g, "");
+
+  const workSegments = normalized
+    .split(";")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter((segment) => !segment.startsWith("cd "));
+
+  return workSegments.join(";") || normalized;
 }

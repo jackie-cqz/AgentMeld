@@ -836,9 +836,10 @@ async function runChildTask(
     const report = finalReport;
 
     // P0: Check for missing required outputs — fail before binding anything
+    const verifiedOutputKeys = new Set(finalVerifiedBindings.map((binding) => binding.outputKey));
     const missingRequiredOutputs = (task.expectedOutputs ?? [])
       .filter((eo) => eo.required)
-      .filter((eo) => !report?.artifacts || !(eo.id in report.artifacts));
+      .filter((eo) => !verifiedOutputKeys.has(eo.id));
     if (missingRequiredOutputs.length > 0 && finalEvaluation.status === "complete") {
       const missingKeys = missingRequiredOutputs.map((eo) => eo.id).join(", ");
       console.warn(
