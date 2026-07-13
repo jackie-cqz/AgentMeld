@@ -60,17 +60,17 @@ export async function fetchAndEvaluateBenchmarkRun(
   try {
     const response = await fetch(`${apiBase}/api/context-trace/run/${runId}`);
     if (!response.ok) {
-      return errorResult(benchmarkCase.id, runId, startedAt, `Context trace API returned ${response.status}.`, options.strategy);
+      return createErrorRunResult(benchmarkCase.id, runId, startedAt, `Context trace API returned ${response.status}.`, options.strategy);
     }
     const body = await response.json() as ContextTraceRunResponse | { error: string };
-    if ("error" in body) return errorResult(benchmarkCase.id, runId, startedAt, body.error, options.strategy);
+    if ("error" in body) return createErrorRunResult(benchmarkCase.id, runId, startedAt, body.error, options.strategy);
     return evaluateBenchmarkTrace(benchmarkCase, body, {
       startedAt,
       finishedAt: Date.now(),
       strategy: options.strategy,
     });
   } catch (error) {
-    return errorResult(benchmarkCase.id, runId, startedAt, `Failed to fetch trace: ${String(error)}`, options.strategy);
+    return createErrorRunResult(benchmarkCase.id, runId, startedAt, `Failed to fetch trace: ${String(error)}`, options.strategy);
   }
 }
 
@@ -128,7 +128,7 @@ export function emptyRunMetrics(): E2ERunMetrics {
   };
 }
 
-function errorResult(
+export function createErrorRunResult(
   fixtureId: string,
   runId: string,
   startedAt: number,

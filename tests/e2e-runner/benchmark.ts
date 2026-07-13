@@ -9,6 +9,7 @@ import type {
 import type { ContextStrategyName } from "@/server/context-policy/strategy-registry";
 
 import { fetchAndEvaluateBenchmarkRun } from "../agent-benchmark/evaluate-case";
+import { runBenchmarkCase, type BenchmarkTrialReport } from "../agent-benchmark/runtime/benchmark-runner";
 import { loadBenchmarkCases } from "../agent-benchmark/schemas/benchmark-case";
 import type {
   E2ERunResult,
@@ -21,6 +22,8 @@ const FIXTURES_DIR = path.join(__dirname, "..", "e2e-fixtures");
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const runArgIdx = args.indexOf("--run");
+  const caseArgIdx = args.indexOf("--case");
+  const suiteArgIdx = args.indexOf("--suite");
   const strategyArgIdx = args.indexOf("--strategy");
   const compareIdx = args.indexOf("--compare");
   const allIdx = args.indexOf("--all");
@@ -31,6 +34,45 @@ async function main(): Promise<void> {
   } catch (error) {
     console.error(String(error));
     process.exitCode = 1;
+    return;
+  }
+
+  if (caseArgIdx >= 0 || suiteArgIdx >= 0) {
+    const selectedCases = selectAutomaticCases(args, cases, caseArgIdx, suiteArgIdx);
+    if (selectedCases.length === 0) return;
+    const repeat = readPositiveIntegerOption(args, "--repeat", 1);
+    if (repeat === null) return;
+    const outputDir = readStringOption(args, "--output-dir");
+    const strategy = readStringOption(args, "--strategy") ?? "evidence_aware_context";
+    const trials: BenchmarkTrialReport[] = [];
+
+    for (const benchmarkCase of selectedCases) {
+      for (let trialIndex = 1; trialIndex <= repeat; trialIndex++) {
+        console.error(`[agent:bench] ${benchmarkCase.id} trial ${trialIndex}/${repeat}`);
+        trials.push(await runBenchmarkCase(benchmarkCase, {
+          trialIndex,
+          outputDir,
+          strategy,
+        }));
+      }
+    }
+
+    const report = buildBenchmarkReport(trials.map((trial) => trial.result), strategy);
+    console.log(JSON.stringify({
+      ...report,
+      trials: trials.map((trial) => ({
+        caseId: trial.caseId,
+        trialIndex: trial.trialIndex,
+        status: trial.result.status,
+        conversationId: trial.conversationId,
+        conductorRunId: trial.conductorRunId,
+        taskAttemptIds: trial.taskAttemptIds,
+        timedOut: trial.timedOut,
+        reportPath: trial.reportPath,
+        tracePath: trial.tracePath,
+      })),
+    }, null, 2));
+    if (trials.some((trial) => trial.result.status !== "passed")) process.exitCode = 1;
     return;
   }
 
@@ -50,6 +92,8 @@ async function main(): Promise<void> {
         })),
       })),
       usage: {
+        automaticCase: "pnpm agent:bench --case pomodoro-timer-basic",
+        automaticSuite: "pnpm agent:bench --suite smoke",
         single: "pnpm agent:bench --run <runId> --fixture <fixtureId>",
         evaluateAll: "pnpm agent:bench --run <id1,id2,...> --all",
         compare: "pnpm agent:bench --compare <baselineRunIds> <candidateRunIds>",
@@ -105,11 +149,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.error("Usage: pnpm agent:bench --all | --run <runIds> [--fixture <id>] | --compare <baseline> <candidate>");
+  console.error("Usage: pnpm agent:bench --case <id> [--repeat N] | --suite <smoke|full|tag> | --run <runIds> [--fixture <id>] | --compare <baseline> <candidate> | --all");
   process.exitCode = 1;
 }
 
-function buildBenchmarkReport(results: E2ERunResult[], strategy: string): AgentBenchmarkReport {
+export function buildBenchmarkReport(results: E2ERunResult[], strategy: string): AgentBenchmarkReport {
   const cases: AgentBenchmarkMetrics[] = results.map((result) => {
     const durationMs = result.finishedAt - result.startedAt;
     const roleResults = result.assertionResults.filter((item) => item.type === "role_executed");
@@ -182,6 +226,64 @@ function buildBenchmarkReport(results: E2ERunResult[], strategy: string): AgentB
     overallSuccessRate: cases.length > 0 ? passed / cases.length : 0,
     cases,
   };
+}
+
+function selectAutomaticCases(
+  args: string[],
+  cases: ReturnType<typeof loadBenchmarkCases>,
+  caseArgIdx: number,
+  suiteArgIdx: number,
+) {
+  if (caseArgIdx >= 0) {
+    const requested = args[caseArgIdx + 1];
+    if (!requested || requested.startsWith("--")) {
+      console.error("Usage: --case <fixtureId>");
+      process.exitCode = 1;
+      return [];
+    }
+    const exact = cases.find((benchmarkCase) => benchmarkCase.id === requested);
+    if (exact) return [exact];
+    const prefixMatches = cases.filter((benchmarkCase) => benchmarkCase.id.startsWith(requested));
+    if (prefixMatches.length === 1) return prefixMatches;
+    console.error(prefixMatches.length > 1
+      ? `Ambiguous fixture prefix ${requested}: ${prefixMatches.map((item) => item.id).join(", ")}`
+      : `Unknown fixture: ${requested}`);
+    process.exitCode = 1;
+    return [];
+  }
+
+  const suite = args[suiteArgIdx + 1];
+  if (!suite || suite.startsWith("--")) {
+    console.error("Usage: --suite <smoke|full|tag>");
+    process.exitCode = 1;
+    return [];
+  }
+  if (suite === "full") return cases;
+  const selected = cases.filter((benchmarkCase) => benchmarkCase.tags.includes(suite));
+  if (selected.length === 0) {
+    console.error(`No benchmark cases are tagged with suite ${suite}.`);
+    process.exitCode = 1;
+  }
+  return selected;
+}
+
+function readStringOption(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  return value && !value.startsWith("--") ? value : undefined;
+}
+
+function readPositiveIntegerOption(args: string[], name: string, fallback: number): number | null {
+  const raw = readStringOption(args, name);
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    console.error(`${name} must be a positive integer.`);
+    process.exitCode = 1;
+    return null;
+  }
+  return parsed;
 }
 
 async function generateComparison(

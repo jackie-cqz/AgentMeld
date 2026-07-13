@@ -19,6 +19,23 @@ const benchmarkCaseCategorySchema = z.enum([
   "false_completion",
 ]);
 
+const benchmarkRuntimeSchema = z.object({
+  fsWriteApprovalMode: z.enum(["auto", "review"]).optional(),
+  userScript: z.object({
+    questions: z.array(z.object({
+      match: z.string().trim().min(1).optional(),
+      answers: z.record(z.string(), z.string()),
+    }).strict()).optional(),
+    approvals: z.array(z.object({
+      type: z.enum(["dispatch_plan", "fs_write", "bash"]),
+      match: z.string().trim().min(1).optional(),
+      decision: z.enum(["approve", "reject"]),
+    }).strict()).optional(),
+    onUnmatchedQuestion: z.enum(["first_option", "fail"]).optional(),
+    onUnmatchedApproval: z.enum(["approve", "reject", "fail"]).optional(),
+  }).strict().optional(),
+}).strict();
+
 export const benchmarkCaseSchema = z
   .object({
     schemaVersion: z.literal(BENCHMARK_CASE_SCHEMA_VERSION),
@@ -36,6 +53,7 @@ export const benchmarkCaseSchema = z
       maxInputTokens: z.number().int().positive().optional(),
       maxAttemptsPerTask: z.number().int().positive().optional(),
     }).strict(),
+    runtime: benchmarkRuntimeSchema.optional(),
     tags: z.array(z.string().trim().min(1)),
   })
   .strict()

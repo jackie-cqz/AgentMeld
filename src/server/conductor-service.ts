@@ -48,6 +48,7 @@ export interface ConductorInput {
   conductorRunId: string;
   /** messageId of the conductor's streaming response bubble, so events can target it */
   messageId: string;
+  signal?: AbortSignal;
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
@@ -197,7 +198,8 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
 
     await executeConductorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
-      input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId
+      input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId,
+      input.signal
     );
   }
 }
@@ -1634,7 +1636,10 @@ async function runConductorAssess(
   };
 
   const adapter = getAdapter(agent.adapterName);
-  const signal = AbortSignal.timeout(60000);
+  const requestTimeout = AbortSignal.timeout(60000);
+  const signal = input.signal
+    ? AbortSignal.any([input.signal, requestTimeout])
+    : requestTimeout;
 
   // Stream events AND watch for plan_tasks via onEvent callback
   // We capture on tool.result (success) rather than tool.call, because the tool handler

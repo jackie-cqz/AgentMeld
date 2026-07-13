@@ -86,6 +86,34 @@ export interface BenchmarkCaseLimits {
   maxAttemptsPerTask?: number;
 }
 
+export type BenchmarkApprovalType = "dispatch_plan" | "fs_write" | "bash";
+
+export interface BenchmarkQuestionScriptEntry {
+  /** Case-insensitive substring matched against question headers and text. */
+  match?: string;
+  /** ask_user answers keyed by the zero-based question index. */
+  answers: Record<string, string>;
+}
+
+export interface BenchmarkApprovalScriptEntry {
+  type: BenchmarkApprovalType;
+  /** Case-insensitive substring matched against the plan, path, or command. */
+  match?: string;
+  decision: "approve" | "reject";
+}
+
+export interface BenchmarkUserScript {
+  questions?: BenchmarkQuestionScriptEntry[];
+  approvals?: BenchmarkApprovalScriptEntry[];
+  onUnmatchedQuestion?: "first_option" | "fail";
+  onUnmatchedApproval?: "approve" | "reject" | "fail";
+}
+
+export interface BenchmarkRuntimeConfig {
+  fsWriteApprovalMode?: "auto" | "review";
+  userScript?: BenchmarkUserScript;
+}
+
 export interface AgentBenchmarkCase {
   schemaVersion: typeof BENCHMARK_CASE_SCHEMA_VERSION;
   id: string;
@@ -96,6 +124,7 @@ export interface AgentBenchmarkCase {
   expectedRoles: BenchmarkRole[];
   assertions: BenchmarkAssertion[];
   limits: BenchmarkCaseLimits;
+  runtime?: BenchmarkRuntimeConfig;
   tags: string[];
 }
 

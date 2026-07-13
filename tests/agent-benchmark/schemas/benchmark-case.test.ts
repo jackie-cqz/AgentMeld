@@ -64,4 +64,52 @@ describe("benchmark case schema", () => {
       tags: [],
     })).toThrow(/absent from expectedRoles/);
   });
+
+  it("accepts structured ask_user and approval scripts", () => {
+    const parsed = parseBenchmarkCase({
+      schemaVersion: 1,
+      id: "scripted-case",
+      title: "Scripted case",
+      description: "Exercises unattended user interactions.",
+      category: "collaboration",
+      prompt: "Create an app.",
+      expectedRoles: ["pm"],
+      assertions: [{
+        id: "pm-ran",
+        type: "role_executed",
+        role: "pm",
+        required: true,
+      }],
+      limits: { maxDurationMs: 1000 },
+      runtime: {
+        fsWriteApprovalMode: "review",
+        userScript: {
+          questions: [{ match: "theme", answers: { "0": "Dark" } }],
+          approvals: [{ type: "bash", match: "pnpm install", decision: "approve" }],
+          onUnmatchedQuestion: "first_option",
+          onUnmatchedApproval: "reject",
+        },
+      },
+      tags: [],
+    });
+
+    expect(parsed.runtime?.userScript?.questions?.[0].answers["0"]).toBe("Dark");
+    expect(parsed.runtime?.userScript?.approvals?.[0].decision).toBe("approve");
+  });
+
+  it("rejects malformed user scripts before a run starts", () => {
+    expect(() => parseBenchmarkCase({
+      schemaVersion: 1,
+      id: "bad-script",
+      title: "Bad script",
+      description: "Invalid approval decision.",
+      category: "collaboration",
+      prompt: "Create an app.",
+      expectedRoles: ["pm"],
+      assertions: [{ id: "pm-ran", type: "role_executed", role: "pm", required: true }],
+      limits: { maxDurationMs: 1000 },
+      runtime: { userScript: { approvals: [{ type: "bash", decision: "maybe" }] } },
+      tags: [],
+    })).toThrow(/runtime\.userScript\.approvals/);
+  });
 });

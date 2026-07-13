@@ -622,6 +622,19 @@ N 次全部成功率
 
 ### 9.2 P1：自动 Run Driver 与隔离环境
 
+> 实施状态：已完成（2026-07-13）。已落地独立 trial 数据目录、自动会话与 Agent 组创建、Prompt 驱动、事件总线与数据库双通道等待、`ask_user`/审批脚本模拟、超时 abort、trace/report 兜底落盘及自动 CLI；TypeScript、专项测试、全量 Vitest 和 Next.js 生产构建均已通过。
+
+#### 实施结果
+
+- `environment-manager.ts` 为每个 trial 创建唯一 `AGENTMELD_DATA_DIR`，数据库、Workspace、Fact 与 Artifact 不跨 trial 复用。
+- `conversation-driver.ts` 根据 `expectedRoles` 解析内置 Agent，自动创建群聊、Workspace，并发送 Case Prompt；返回 conversation、Conductor run 和 Workspace 身份。
+- `user-simulator.ts` 在发送 Prompt 前订阅事件，支持按 Case 脚本回答 `ask_user`，以及批准或拒绝 dispatch plan、文件写入和依赖安装命令。
+- `run-waiter.ts` 同时监听 `run.end` 与轮询数据库终态；超时后级联 abort，并保留短暂收敛窗口，避免关闭仍在使用的 SQLite。
+- `trace-collector.ts` 归档当前 trial 的事件、runs、task attempt IDs 和可用的 run-level Context Trace。
+- `benchmark-runner.ts` 对 passed、failed、异常和 timeout 使用同一 finally 收口，无论评分是否可用都尝试写出 `trace.json` 与 `report.json`。
+- CLI 新增 `--case`、`--suite`、`--repeat`、`--output-dir`，原 `--run` 保留为已有 run 的重评分入口。
+- P1 验收由 runtime/schema 测试覆盖，包括跨 trial 数据隔离、自动问答、审批决策、事件丢失后的轮询、超时 abort、ID 关联和失败报告兜底。
+
 #### 目标
 
 让 Benchmark 能自动发起 AgentMeld 任务，而不是依赖人工提供 runId。

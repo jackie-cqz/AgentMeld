@@ -164,7 +164,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         triggerMessage: input.triggerMessage,
         availableAgentIds: conversation.agentIds,
         conductorRunId: run.id,
-        messageId: message.id
+        messageId: message.id,
+        signal: abortController.signal
       });
       // If executeConductor streamed events, update message parts from the DB record
       // (the adapter's streaming events were published with message.id)
