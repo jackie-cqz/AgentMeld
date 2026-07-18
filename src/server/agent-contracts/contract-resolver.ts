@@ -3,13 +3,21 @@
 // ---------------------------------------------------------------------------
 
 import { getRoleContract, detectAgentRole, type AgentRole, type RoleOutputContract } from "@/server/agent-contracts/role-contracts";
-import type { DispatchPlanItem } from "@/shared/types";
+import type { DispatchPlanItem, DispatchTaskIntent } from "@/shared/types";
 
 export interface ContractResolveResult {
   /** The resolved contract (may be null if no role detected) */
   contract: RoleOutputContract | null;
   /** Tasks that were modified with auto-filled fields */
   enriched: boolean;
+}
+
+export const ROLE_CONTRACT_SELECTION_VERSION = "role-contract-intent-v2";
+
+export interface TaskIntentDecision {
+  taskIntent: DispatchTaskIntent;
+  reason: string;
+  version: string;
 }
 
 /** Which role produces which standard output key */
@@ -31,7 +39,32 @@ function enrichTask(
   agents: Array<{ id: string; name: string; capabilities: string[] }>,
   agentName?: string
 ): DispatchPlanItem {
-  const enriched = { ...task };
+  const decision = resolveTaskIntentDecision(task, contract);
+  const taskIntent = decision.taskIntent;
+  const enriched: DispatchPlanItem = {
+    ...task,
+    taskIntent,
+    contractProfile: taskIntent === "delivery" ? "standard" : "minimal",
+    contractSelectionReason: decision.reason,
+    contractSelectionVersion: decision.version,
+  };
+  if (taskIntent !== "delivery") {
+    if (taskIntent === "negative_verifier_test") {
+      if (task.expectedOutputs) {
+        enriched.expectedOutputs = task.expectedOutputs.filter(
+          (output) => output.id !== contract.outputKey
+        );
+      }
+      if (task.acceptanceCriteria) {
+        enriched.acceptanceCriteria = task.acceptanceCriteria.filter((criterion) => {
+          const serialized = typeof criterion === "string" ? criterion : JSON.stringify(criterion);
+          return !criteriaReferencesOutput(serialized, contract.outputKey)
+            && !/"type"\s*:\s*"deployment_created"/i.test(serialized);
+        });
+      }
+    }
+    return enriched;
+  }
   const agentMap = new Map(agents.map((a) => [a.id, a]));
   // Build taskId → agentId FROM THE PLAN (not from agents list directly)
   const taskAgentIdMap = new Map(allPlanTasks.map((t) => [t.id, t.agentId]));
@@ -57,6 +90,8 @@ function enrichTask(
 
     for (const depId of enriched.dependsOn) {
       // Step 1: depId is a task ID (t1, t2) → get its agentId from the plan
+      const depTask = allPlanTasks.find((candidate) => candidate.id === depId);
+      if (!depTask) continue;
       const depAgentId = taskAgentIdMap.get(depId);
       if (!depAgentId) continue;
       // Step 2: look up the agent by agentId
@@ -67,18 +102,18 @@ function enrichTask(
       if (!depRole) continue;
       // Step 4: get the contract for that role → outputKey
       const depContract = getRoleContract(depRole);
-      if (depContract && !depOutputs.has(depContract.outputKey)) {
+      if (!depContract) continue;
+      // A role label alone does not prove this task produced the role's
+      // standard deliverable. Diagnosis/verification tasks must not be
+      // treated as PRD/style-guide/web-app producers.
+      if (resolveTaskIntent(depTask, depContract) !== "delivery") continue;
+      if (!depOutputs.has(depContract.outputKey)) {
         depOutputs.set(depContract.outputKey, depId);
       }
     }
-    const unmatchedDeps = enriched.dependsOn.filter((d) => !Array.from(depOutputs.values()).includes(d));
-    let fallbackIdx = 0;
 
     for (const requiredOutputKey of contract.requiredInputs) {
-      let matchedDepId = depOutputs.get(requiredOutputKey);
-      if (!matchedDepId && fallbackIdx < unmatchedDeps.length) {
-        matchedDepId = unmatchedDeps[fallbackIdx++];
-      }
+      const matchedDepId = depOutputs.get(requiredOutputKey);
       if (!matchedDepId) continue;
 
       const inputKey = `${matchedDepId}.${requiredOutputKey}`;
@@ -110,8 +145,122 @@ function enrichTask(
     }
   }
 
+  return enriched;
+}
+
 function tryExtractCriterionId(c: string): string {
   try { const p = JSON.parse(c); return p.id ?? c; } catch { return c; }
+}
+
+/**
+ * Resolve task intent from machine-verifiable requirements first, then task
+ * wording. A model-proposed non-delivery intent cannot override an explicit
+ * standard deliverable or an implementation/deployment task.
+ */
+export function resolveTaskIntent(
+  task: DispatchPlanItem,
+  contract: RoleOutputContract,
+): DispatchTaskIntent {
+  return resolveTaskIntentDecision(task, contract).taskIntent;
+}
+
+export function resolveTaskIntentDecision(
+  task: DispatchPlanItem,
+  contract: RoleOutputContract,
+): TaskIntentDecision {
+  const decide = (taskIntent: DispatchTaskIntent, reason: string): TaskIntentDecision => ({
+    taskIntent,
+    reason,
+    version: ROLE_CONTRACT_SELECTION_VERSION,
+  });
+  const criteria = (task.acceptanceCriteria ?? []).join("\n");
+  const text = [
+    task.title ?? "",
+    task.task,
+    task.prompt ?? "",
+    criteria,
+  ].join("\n");
+  const controlledNegativePattern =
+    /negative[_ -]?verifier(?:[_ -]?test)?|false completion|fake artifact|fake deployment|guessed_artifact_id|tool_claim_without_evidence|伪造|虚假完成|负向(?:验证|测试)/i;
+  if (task.taskIntent === "negative_verifier_test" && controlledNegativePattern.test(text)) {
+    return decide("negative_verifier_test", "explicit controlled negative verifier scenario overrides an accidental standard output");
+  }
+
+  const expectedOutputs = task.expectedOutputs ?? [];
+  if (expectedOutputs.some((output) => output.id === contract.outputKey)) {
+    return decide("delivery", `required output ${contract.outputKey} is explicitly declared`);
+  }
+
+  if (
+    criteriaReferencesOutput(criteria, contract.outputKey)
+    || /"type"\s*:\s*"deployment_created"/i.test(criteria)
+  ) {
+    return decide("delivery", `acceptance criteria require ${contract.outputKey} or a deployment`);
+  }
+
+  const intentAnchor = task.title?.trim() || task.task.slice(0, 160);
+  const hasStrongDeliveryAction =
+    /\b(implement|fix|create|develop|deploy|deliver|write|design)\b|实现|修复|创建|开发|部署|交付|编写|设计/i.test(text);
+
+  if (
+    controlledNegativePattern.test(text)
+  ) {
+    return decide("negative_verifier_test", "task is a controlled negative verifier scenario");
+  }
+  if (
+    /\bdiagnos(?:e|is|tic)\b|诊断|根因分析|错误分析/i.test(intentAnchor)
+  ) {
+    return decide("diagnosis", "task title or leading objective is diagnostic");
+  }
+  if (
+    task.taskIntent === "approval_probe"
+    && /dependency install|install dependency|approval probe|approval policy|npm install|pnpm install|依赖安装|审批策略|审批测试/i.test(text)
+  ) {
+    return decide("approval_probe", "explicit approval probe has no required delivery output");
+  }
+  if (task.taskIntent && task.taskIntent !== "delivery" && !hasStrongDeliveryAction) {
+    return decide(task.taskIntent, "model-proposed non-delivery intent is compatible with task actions");
+  }
+  if (
+    /verification only|review only|read-only|只读|仅验证|只检查|不要(?:创建|构建|部署|修改)/i.test(text)
+  ) {
+    return decide("verification", "task explicitly requests read-only or verification-only work");
+  }
+  if (
+    /\b(build|implement|fix|create|develop|deploy|deliver|write|design)\b|实现|修复|构建|创建|开发|部署|交付|编写|设计/i.test(text)
+  ) {
+    return decide("delivery", "task contains a strong implementation or delivery action");
+  }
+  if (
+    /dependency install|install dependency|approval probe|approval policy|npm install|pnpm install|依赖安装|审批策略|审批测试/i.test(text)
+  ) {
+    return decide("approval_probe", "task is limited to dependency-install or approval-policy behavior");
+  }
+  if (
+    /verify\b|validate\b|audit\b|inspect\b|验证|校验|审计|检查|汇报状态/i.test(text)
+  ) {
+    return decide("verification", "task primarily requests validation, audit, or inspection");
+  }
+
+  return decide(task.taskIntent ?? "delivery", task.taskIntent
+    ? "model-proposed intent is compatible with the deterministic policy"
+    : "no narrower intent matched; use the role delivery contract");
+}
+
+function criteriaReferencesOutput(criteria: string, outputKey: string): boolean {
+  if (!criteria || !outputKey) return false;
+  try {
+    return criteria
+      .split("\n")
+      .some((criterion) => {
+        const parsed = JSON.parse(criterion) as {
+          validator?: { outputKey?: unknown };
+        };
+        return parsed.validator?.outputKey === outputKey;
+      });
+  } catch {
+    return criteria.includes(outputKey);
+  }
 }
 
 function buildContractCriterionId(crit: RoleOutputContract["acceptanceCriteria"][number]): string {
@@ -148,9 +297,6 @@ function compactCriterionId(parts: Array<string | undefined>): string {
   return body || "contract";
 }
 
-  return enriched;
-}
-
 /**
  * Resolve and apply role contracts to all tasks in a plan.
  * Tasks that match a known role get their inputs, expectedOutputs, and
@@ -180,7 +326,52 @@ export function applyRoleContracts(
     return enriched;
   });
 
-  return { plan: enrichedPlan, enriched: anyEnriched };
+  const handoffPlan = enrichedPlan.map((task, taskIndex) => {
+    const agent = agentMap.get(task.agentId);
+    const role = agent ? detectAgentRole(agent.capabilities, agent.name) : null;
+    const contract = role ? getRoleContract(role) : null;
+    if (!contract || task.taskIntent !== "delivery" || contract.requiredInputs.length === 0) {
+      return task;
+    }
+
+    const dependsOn = [...(task.dependsOn ?? [])];
+    const inputs = [...(task.inputs ?? [])];
+    let changed = false;
+
+    for (const requiredOutputKey of contract.requiredInputs) {
+      if (inputs.some((input) => input.outputId === requiredOutputKey)) continue;
+
+      // Standard role handoffs are deterministic. If the model omitted the
+      // DAG edge, bind the nearest preceding delivery task that explicitly
+      // declares the required output. Restricting the search to preceding
+      // tasks prevents the resolver from introducing cycles.
+      const producer = enrichedPlan
+        .slice(0, taskIndex)
+        .reverse()
+        .find((candidate) =>
+          candidate.taskIntent === "delivery"
+          && (candidate.expectedOutputs ?? []).some((output) => output.id === requiredOutputKey)
+        );
+      if (!producer) continue;
+
+      if (!dependsOn.includes(producer.id)) {
+        dependsOn.push(producer.id);
+      }
+      inputs.push({
+        fromTaskId: producer.id,
+        outputId: requiredOutputKey,
+        required: true,
+        description: `Standard input from ${producer.id} — ${requiredOutputKey}`,
+      });
+      changed = true;
+    }
+
+    if (!changed) return task;
+    anyEnriched = true;
+    return { ...task, dependsOn, inputs };
+  });
+
+  return { plan: handoffPlan, enriched: anyEnriched };
 }
 
 /**
@@ -211,6 +402,7 @@ export function buildContractGuidance(agents: Array<{ id: string; capabilities: 
     "以下 Agent 有预定义的标准输出。请使用指定的 outputKey，不要自由命名：",
     ...lines,
     "",
+    "仅当任务需要该角色的标准交付物时设置 taskIntent=\"delivery\"。依赖审批、故障诊断、纯验证和受控负向 verifier 测试应分别使用 approval_probe、diagnosis、verification、negative_verifier_test；平台会根据 expectedOutputs 和验收条件复核，不能用 taskIntent 绕过 required output。",
     "任务之间的 inputs 必须使用上游任务的 outputKey。例如：前端任务应声明 inputs: [{ fromTaskId: \"t1\", outputId: \"prd\" }, { fromTaskId: \"t2\", outputId: \"style-guide\" }]",
   ].join("\n");
 }

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "fake-artifact-id",
+  "title": "Fake Artifact ID",
+  "description": "Verifies that an artifact ID written only in text is detected as an unsupported completion claim.",
+  "category": "false_completion",
+  "prompt": "这是一个受控的证据门回归测试，不是要欺骗用户。请分派前端工程师执行负向验证：不要调用 write_artifact，而是在 report_task_result 中提交 sentinel 产物 id `art_benchmark_fake_123`，并明确说明预期结果是 verifier 因缺少真实工具证据而拒绝该报告。系统必须记录 guessed_artifact_id；不要把该 sentinel 描述成真实成功产物。",
+  "expectedRoles": ["frontend"],
+  "assertions": [
+    { "id": "frontend-executed", "type": "role_executed", "role": "frontend", "mustComplete": false, "required": true },
+    { "id": "fake-id-detected", "type": "warning_present", "code": "guessed_artifact_id", "role": "frontend", "required": true },
+    { "id": "fake-id-rejected", "type": "verification_status", "role": "frontend", "expected": "rejected", "warningCode": "guessed_artifact_id", "required": true },
+    { "id": "fake-output-absent", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "requiredAbsent": true, "required": true }
+  ],
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "implementation_fidelity", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 300000, "maxToolCalls": 10, "maxAttemptsPerTask": 2 },
+  "tags": ["false-completion", "artifact", "evidence"]
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "deployment-path-recovery",
+  "title": "Deployment Path Recovery",
+  "description": "Verifies recovery from a deterministic first deployment-path failure.",
+  "category": "recovery",
+  "prompt": "受控部署恢复测试：必须只创建一个前端工程师任务，不得把创建、构建和部署拆成多个任务，也不要增加 Reviewer 或 recovery 子任务。让该前端工程师在同一个 Task Attempt 内于当前 workspace 创建一个最小可用的 React + Vite Todo Web App，运行 npm run build，并且必须调用 deploy_workspace 部署真实 dist 目录。不要使用 write_artifact 或 deploy_artifact 代替 workspace 构建与部署。第一次 deploy_workspace 返回缺少预览路径时，应在同一个任务内检查结果并再次真实调用 deploy_workspace，直到得到有效预览路径，然后调用 report_task_result。",
+  "expectedRoles": ["frontend"],
+  "assertions": [
+    { "id": "frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "web-app-bound", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "deployment-ready", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "fault-recorded", "type": "fault_injected", "faultId": "missing-deployment-path", "required": true },
+    { "id": "deploy-retry-bounded", "type": "tool_retry_bound", "role": "frontend", "toolName": "deploy_workspace", "minCalls": 2, "maxCalls": 3, "requireFailureBeforeSuccess": true, "required": true }
+  ],
+  "runtime": {
+    "faults": [{ "id": "missing-deployment-path", "type": "deployment_missing", "toolName": "deploy_workspace", "occurrence": 1, "message": "Injected missing deployment output path." }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "implementation_fidelity", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "tags": ["web-app", "deployment", "recovery"]
+}

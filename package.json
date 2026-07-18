@@ -14,10 +14,10 @@
     "db:seed": "tsx src/db/seed.ts",
     "e2e:fixture": "tsx tests/e2e-runner/evaluate-run.ts",
     "e2e:report": "tsx tests/e2e-runner/report.ts",
-    "agent:bench": "node --import tsx tests/e2e-runner/benchmark.ts",
-    "agent:bench:all": "node --import tsx tests/e2e-runner/benchmark.ts --all",
-    "agent:bench:smoke": "node --import tsx tests/e2e-runner/benchmark.ts --suite smoke",
-    "agent:bench:full": "node --import tsx tests/e2e-runner/benchmark.ts --suite full",
+    "agent:bench": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts",
+    "agent:bench:all": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --all",
+    "agent:bench:smoke": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --suite smoke",
+    "agent:bench:full": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --suite full",
     "quality:gates": "tsx tests/e2e-runner/quality-gates.ts"
   },
   "engines": {
@@ -55,6 +55,7 @@
     "drizzle-kit": "latest",
     "eslint": "9.39.2",
     "eslint-config-next": "16.2.6",
+    "playwright": "^1.61.1",
     "tsx": "latest",
     "typescript": "5.9.3",
     "typescript-eslint": "latest",

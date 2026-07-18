@@ -11,6 +11,7 @@ describe("compileAndValidateDispatchPlan", () => {
         prompt: "Implement the feature",
         dependsOn: [],
         maxAttempts: 3,
+        taskIntent: "verification",
         expectedOutputs: [{ id: "app", type: "web_app", required: true }]
       }],
       ["ag_conductor", "ag_worker"],
@@ -22,7 +23,8 @@ describe("compileAndValidateDispatchPlan", () => {
       expect(result[0]).toMatchObject({
         title: "Implement",
         task: "Implement the feature",
-        maxAttempts: 3
+        maxAttempts: 3,
+        taskIntent: "verification",
       });
     }
   });

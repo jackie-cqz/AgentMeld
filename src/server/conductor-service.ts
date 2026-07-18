@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -17,7 +17,7 @@ import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
-import { clearRunToolEvidence, getRunToolEvidence } from "@/server/dispatch-tool-evidence";
+import { clearRunToolEvidence, getRunToolEvidence, getTaskToolEvidence } from "@/server/dispatch-tool-evidence";
 import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { verifyTaskAttempt } from "@/server/verification/verification-engine";
@@ -158,7 +158,11 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       maxAttempts: t.maxAttempts,
       targetPaths: t.targetPaths,
       requiredCommands: t.requiredCommands,
-      requiredEvidence: t.requiredEvidence
+      requiredEvidence: t.requiredEvidence,
+      taskIntent: t.taskIntent,
+      contractProfile: t.contractProfile,
+      contractSelectionReason: t.contractSelectionReason,
+      contractSelectionVersion: t.contractSelectionVersion
     }));
 
     const result = await registerPendingPlan(input.conversationId, input.conductorRunId, planItems);
@@ -193,7 +197,11 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       maxAttempts: t.maxAttempts ?? 1,
       targetPaths: t.targetPaths,
       requiredCommands: t.requiredCommands,
-      requiredEvidence: t.requiredEvidence
+      requiredEvidence: t.requiredEvidence,
+      taskIntent: t.taskIntent,
+      contractProfile: t.contractProfile,
+      contractSelectionReason: t.contractSelectionReason,
+      contractSelectionVersion: t.contractSelectionVersion
     } as ParsedTask));
 
     await executeConductorPlan(
@@ -215,6 +223,68 @@ export interface TaskResult {
   childRunId?: string;
 }
 
+export interface RecoveryTask extends ParsedTask {
+  replacesTaskId: string;
+}
+
+/**
+ * Bind model-proposed recovery work to failed original tasks.
+ *
+ * The model may decide how to repair a task, but the platform owns the task
+ * identity and evidence contract. Inheriting these fields prevents a recovery
+ * plan from weakening acceptance criteria or inventing impossible target paths.
+ */
+export function bindRecoveryTasksToOriginalPlan(
+  proposedTasks: ParsedTask[],
+  originalPlan: ParsedTask[],
+  results: Map<string, TaskResult>
+): RecoveryTask[] {
+  const failedTasks = originalPlan.filter((task) => {
+    const status = results.get(task.id)?.status;
+    return status === "failed" || status === "blocked";
+  });
+  const unmatched = new Set(failedTasks.map((task) => task.id));
+
+  return proposedTasks.flatMap((proposed) => {
+    const explicit = proposed.replacesTaskId
+      ? failedTasks.find((task) => task.id === proposed.replacesTaskId && unmatched.has(task.id))
+      : undefined;
+    const candidates = failedTasks.filter((task) => unmatched.has(task.id));
+    const original = explicit ?? candidates
+      .map((task) => ({
+        task,
+        score:
+          (task.agentId === proposed.agentId ? 100 : 0) +
+          task.expectedOutputs.filter((output) =>
+            proposed.expectedOutputs.some((candidate) => candidate.id === output.id)
+          ).length * 10
+      }))
+      .sort((left, right) => right.score - left.score)[0]?.task;
+
+    if (!original) return [];
+    unmatched.delete(original.id);
+
+    return [{
+      ...proposed,
+      replacesTaskId: original.id,
+      agentId: original.agentId,
+      prompt: `${original.prompt}\n\n## 恢复执行补充\n${proposed.prompt}`,
+      dependsOn: [...original.dependsOn],
+      inputs: original.inputs.map((input) => ({ ...input })),
+      expectedOutputs: original.expectedOutputs.map((output) => ({ ...output })),
+      acceptanceCriteria: [...original.acceptanceCriteria],
+      targetPaths: [...(original.targetPaths ?? [])],
+      requiredCommands: (original.requiredCommands ?? []).map((command) => ({ ...command })),
+      requiredEvidence: [...(original.requiredEvidence ?? [])],
+      taskIntent: original.taskIntent,
+      contractProfile: original.contractProfile,
+      contractSelectionReason: original.contractSelectionReason,
+      contractSelectionVersion: original.contractSelectionVersion,
+      maxAttempts: Math.max(1, proposed.maxAttempts)
+    }];
+  });
+}
+
 /** Structured conflict info per P0 */
 export interface StructuredConflict {
   path: string;
@@ -234,6 +304,7 @@ export async function executeConductorPlan(
   conductorAgentId: string,
   signal?: AbortSignal
 ): Promise<{ results: Map<string, TaskResult>; completionStatus: CompletionStatus; conflicts: StructuredConflict[] }> {
+  plan = enforceExplicitFrameworkContracts(plan, extractTextFromMessage(triggerMessage));
   const results = new Map<string, TaskResult>();
   const outputBindings = new Map<string, string>();
   const allConflicts: StructuredConflict[] = [];
@@ -404,15 +475,14 @@ export async function executeConductorPlan(
         createSystemMessage(conversationId, `🔧 恢复计划：${recoveryResult.tasks.length} 个修复任务`);
 
         // Execute recovery tasks — they can depend on already-completed tasks
+        let recoveredTaskCount = 0;
         const recoveryWaves = topologicalWaves(recoveryResult.tasks.filter((t) => availableAgents.includes(t.agentId)));
         for (const wave of recoveryWaves) {
           if (abortSignal.aborted) break;
           const recoveryPromises = wave.map((task) =>
             runChildTask(conversationId, task, triggerMessage, conductorRunId, planId, outputBindings, abortSignal)
               .then((r) => {
-                results.set(task.id, r);
                 createSystemMessage(conversationId, `${r.status === "complete" ? "✅" : "❌"} [恢复] ${task.title}: ${r.summary}`);
-                // P1: Persist recovery task result
                 persistConductorTask({
                   id: `${conductorRunId}_${task.id}`,
                   conductorRunId,
@@ -426,11 +496,35 @@ export async function executeConductorPlan(
                   attempt: 1,
                   now: Date.now()
                 });
+                if (r.status !== "complete") return;
+
+                promoteRecoveryResult({
+                  task,
+                  result: r,
+                  results,
+                  outputBindings,
+                  conductorRunId,
+                  planId,
+                  conversationId
+                });
+                recoveredTaskCount++;
               })
           );
           await Promise.all(recoveryPromises);
         }
-        recovered = true;
+        if (recoveredTaskCount > 0) {
+          recovered = true;
+          await resumeSkippedOriginalTasks({
+            conversationId,
+            plan,
+            results,
+            triggerMessage,
+            conductorRunId,
+            planId,
+            outputBindings,
+            signal: abortSignal
+          });
+        }
       }
     } catch {
       createSystemMessage(conversationId, "⚠️ 恢复计划生成失败，将使用已有结果进行聚合。");
@@ -453,6 +547,115 @@ export async function executeConductorPlan(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function promoteRecoveryResult(input: {
+  task: RecoveryTask;
+  result: TaskResult;
+  results: Map<string, TaskResult>;
+  outputBindings: Map<string, string>;
+  conductorRunId: string;
+  planId: string;
+  conversationId: string;
+}): void {
+  const {
+    task,
+    result,
+    results,
+    outputBindings,
+    conductorRunId,
+    planId,
+    conversationId
+  } = input;
+
+  for (const output of task.expectedOutputs) {
+    const artifactId = outputBindings.get(`${task.id}.${output.id}`);
+    if (!artifactId) continue;
+    outputBindings.set(`${task.replacesTaskId}.${output.id}`, artifactId);
+  }
+
+  const promotedResult: TaskResult = {
+    ...result,
+    taskId: task.replacesTaskId,
+    summary: `[恢复任务 ${task.id}] ${result.summary}`
+  };
+  results.set(task.replacesTaskId, promotedResult);
+  persistConductorTask({
+    id: `${conductorRunId}_${task.replacesTaskId}`,
+    conductorRunId,
+    conversationId,
+    taskId: task.replacesTaskId,
+    agentId: task.agentId,
+    title: task.title,
+    status: promotedResult.status,
+    summary: promotedResult.summary,
+    childRunId: promotedResult.childRunId ?? null,
+    attempt: 2,
+    now: Date.now()
+  });
+}
+
+async function resumeSkippedOriginalTasks(input: {
+  conversationId: string;
+  plan: ParsedTask[];
+  results: Map<string, TaskResult>;
+  triggerMessage: Message;
+  conductorRunId: string;
+  planId: string;
+  outputBindings: Map<string, string>;
+  signal: AbortSignal;
+}): Promise<void> {
+  const {
+    conversationId,
+    plan,
+    results,
+    triggerMessage,
+    conductorRunId,
+    planId,
+    outputBindings,
+    signal
+  } = input;
+  const attempted = new Set<string>();
+
+  while (!signal.aborted) {
+    const ready = plan.filter((task) => {
+      if (attempted.has(task.id) || results.get(task.id)?.status !== "skipped") return false;
+      return task.dependsOn.every((dependencyId) => results.get(dependencyId)?.status === "complete");
+    });
+    if (ready.length === 0) return;
+
+    await Promise.all(ready.map(async (task) => {
+      attempted.add(task.id);
+      createSystemMessage(conversationId, `▶️ [恢复后继续] ${task.title}`);
+      const result = await runChildTask(
+        conversationId,
+        task,
+        triggerMessage,
+        conductorRunId,
+        planId,
+        outputBindings,
+        signal
+      );
+      results.set(task.id, result);
+      persistConductorTask({
+        id: `${conductorRunId}_${task.id}`,
+        conductorRunId,
+        conversationId,
+        taskId: task.id,
+        agentId: task.agentId,
+        title: task.title,
+        status: result.status,
+        summary: result.summary,
+        childRunId: result.childRunId ?? null,
+        attempt: 1,
+        now: Date.now()
+      });
+      createSystemMessage(
+        conversationId,
+        `${result.status === "complete" ? "✅" : "❌"} [恢复后继续] ${task.title}: ${result.summary}`
+      );
+    }));
+  }
+}
 
 async function runChildTask(
   conversationId: string,
@@ -710,7 +913,14 @@ async function runChildTask(
       }
 
       const report = getTaskReport(attemptRunId);
-      const evidence = getRunToolEvidence(attemptRunId);
+      const currentRunEvidence = getRunToolEvidence(attemptRunId);
+      const replacedTaskId = getReplacedTaskId(task);
+      const evidence = getTaskToolEvidence({
+        conductorRunId: parentRunId,
+        planId,
+        taskIds: replacedTaskId ? [replacedTaskId, task.id] : [task.id],
+        currentRunId: attemptRunId,
+      });
       finalEvaluation = evaluateChildTaskResult(task, report, evidence);
       // P5: Capture this attempt's identity for the NEXT retry iteration.
       // These become previousAttemptId / previousChildRunId / previousError
@@ -727,7 +937,7 @@ async function runChildTask(
       // P7: Emit evidence.summary for frontend observability
       // P7: Emit evidence.summary — query SQLite ledger for full count,
       // not just the in-memory fileWrites + commands snapshot.
-      let evidenceCount = evidence.fileWrites.length + evidence.commands.length;
+      let evidenceCount = currentRunEvidence.fileWrites.length + currentRunEvidence.commands.length;
       try {
         const ledgerRecords = listEvidenceForAttempt(attemptId);
         if (ledgerRecords.length > 0) {
@@ -901,10 +1111,25 @@ async function runChildTask(
         console.log(
           `[output-binding] task ${task.id}: binding "${outputKey}" → ${artifactId} (evidence: ${evidenceIds.join(", ") || "none"})`
         );
+        const logicalProducerTaskId = task.replacesTaskId ?? task.id;
         outputBindings.set(`${task.id}.${outputKey}`, artifactId);
+        outputBindings.set(`${logicalProducerTaskId}.${outputKey}`, artifactId);
+        if (task.replacesTaskId) {
+          supersedeOutputBinding({
+            conductorRunId: parentRunId,
+            producerTaskId: task.replacesTaskId,
+            outputKey,
+            replacedByTaskId: task.id,
+            now: Date.now(),
+          });
+        }
         persistOutputBinding({
           conductorRunId: parentRunId, planId,
-          producerTaskId: task.id, outputKey, artifactId, now: Date.now()
+          producerTaskId: logicalProducerTaskId,
+          actualProducerTaskId: task.replacesTaskId ? task.id : undefined,
+          outputKey,
+          artifactId,
+          now: Date.now()
         });
       }
     } else if (finalEvaluation.status === "complete" && finalVerifiedBindings.length === 0) {
@@ -945,7 +1170,9 @@ async function runChildTask(
     return {
       taskId: task.id,
       status: finalEvaluation.status === "complete" ? "complete" : "failed",
-      summary: report?.summary ?? finalEvaluation.error ?? `Task "${task.title}" completed.`,
+      summary: finalEvaluation.status === "complete"
+        ? report?.summary ?? `Task "${task.title}" completed.`
+        : finalEvaluation.error ?? report?.summary ?? `Task "${task.title}" failed.`,
       childRunId: finalRunId
     };
   } finally {
@@ -1283,6 +1510,9 @@ export function buildConductorPlanPrompt(
 5. 如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
    例如用户已明确“React+TS、25+5、极简、不需要后端”，或明确说“细节你决定”。
 6. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
+7. 用户明确指定两个或以上角色、明确要求“先由 A 再由 B”、或明确要求 Agent 间产物交接时，
+   该请求必定属于 READY_TO_PLAN；你必须调用 plan_tasks。只读侦察只能帮助形成计划，
+   不能在侦察后由 Conductor 自己完成诊断、实现或审查并直接回复。
 
 ## 可用 Agent
 
@@ -1329,8 +1559,9 @@ ${agentList}
   拿不准时倾向加依赖（串行更安全）。
 - Only declare expectedOutputs when the assigned agent must create a real artifact
   via write_artifact for downstream handoff or user inspection.
-- Do NOT declare expectedOutputs for text-only tasks such as review, validation,
-  diagnosis, status check, explanation, or summary.
+- Reviewer tasks use the standard review_report document output so the review can
+  be verified and handed off. Only ad-hoc validation, diagnosis, status checks,
+  explanations, or summaries that need no persisted handoff may omit expectedOutputs.
 - If a task needs an upstream artifact, declare inputs with fromTaskId and outputId.
 - For tasks with quality requirements, add concise acceptanceCriteria.
 
@@ -1814,7 +2045,7 @@ async function generateRecoveryPlan(
   originalPlan: ParsedTask[],
   results: Map<string, TaskResult>,
   signal: AbortSignal
-): Promise<{ reasoning: string; tasks: ParsedTask[] } | null> {
+): Promise<{ reasoning: string; tasks: RecoveryTask[] } | null> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
   if (!agent || agent.adapterName !== "custom") return null;
@@ -1853,7 +2084,20 @@ ${otherAgents.map((a) => `- id: "${a.id}", name: "${a.name}", capabilities: [${a
 
 ## 约束
 - 每个任务必须有唯一的 id（使用 r1, r2, ... 避免与原始 t1, t2 冲突）
-- dependsOn 可以引用原始任务 id（t1, t2, ...）或修复任务 id（r1, r2, ...）`;
+- 每个恢复任务必须填写 replacesTaskId，且只能填写下面失败任务中的一个原任务 id。
+- 一个失败原任务最多生成一个恢复任务；不要为 skipped 任务生成恢复任务，平台会在上游恢复后自动继续它。
+- 恢复任务应继续交给原任务的专业 Agent；平台会强制继承原任务的 inputs、expectedOutputs、acceptanceCriteria、targetPaths、requiredCommands 和 requiredEvidence。
+- 不要自行填写或修改上述契约字段，它们不会被采信。
+- dependsOn 可以引用已经成功的原始任务 id。
+
+## 可替换的失败任务
+${originalPlan
+  .filter((task) => {
+    const status = results.get(task.id)?.status;
+    return status === "failed" || status === "blocked";
+  })
+  .map((task) => `- id: "${task.id}", agentId: "${task.agentId}", title: "${task.title}"`)
+  .join("\n")}`;
 
   const adapterInput: AdapterInput = {
     conversationId,
@@ -1915,29 +2159,98 @@ ${otherAgents.map((a) => `- id: "${a.id}", name: "${a.name}", capabilities: [${a
   );
   if (typeof compiled === "string") return null;
 
+  const replacementIds = new Map(
+    planResult.tasks.map((task) => [task.id, task.replacesTaskId])
+  );
+  const proposedTasks: ParsedTask[] = compiled.map((task) => ({
+    id: task.id,
+    replacesTaskId: replacementIds.get(task.id),
+    agentId: task.agentId,
+    title: task.title ?? task.id,
+    prompt: task.task,
+    dependsOn: task.dependsOn,
+    inputs: (task.inputs ?? []).map((input) => ({
+      ...input,
+      required: input.required ?? true
+    })),
+    expectedOutputs: (task.expectedOutputs ?? []).map((output) => ({
+      ...output,
+      required: output.required ?? true
+    })),
+    acceptanceCriteria: task.acceptanceCriteria ?? [],
+    maxAttempts: task.maxAttempts ?? 1,
+    taskIntent: task.taskIntent,
+    contractProfile: task.contractProfile,
+    contractSelectionReason: task.contractSelectionReason,
+    contractSelectionVersion: task.contractSelectionVersion,
+    targetPaths: task.targetPaths ?? [],
+    requiredCommands: task.requiredCommands ?? [],
+    requiredEvidence: task.requiredEvidence ?? []
+  }));
+
   return {
     reasoning: planResult.reasoning,
-    tasks: compiled.map((task) => ({
-      id: task.id,
-      agentId: task.agentId,
-      title: task.title ?? task.id,
-      prompt: task.task,
-      dependsOn: task.dependsOn,
-      inputs: (task.inputs ?? []).map((input) => ({
-        ...input,
-        required: input.required ?? true
-      })),
-      expectedOutputs: (task.expectedOutputs ?? []).map((output) => ({
-        ...output,
-        required: output.required ?? true
-      })),
-      acceptanceCriteria: task.acceptanceCriteria ?? [],
-      maxAttempts: task.maxAttempts ?? 1,
-      targetPaths: task.targetPaths ?? [],
-      requiredCommands: task.requiredCommands ?? [],
-      requiredEvidence: task.requiredEvidence ?? []
-    }))
+    tasks: bindRecoveryTasksToOriginalPlan(proposedTasks, originalPlan, results)
   };
+}
+
+function getReplacedTaskId(task: ParsedTask): string | null {
+  const candidate = (task as Partial<RecoveryTask>).replacesTaskId;
+  return typeof candidate === "string" && candidate.length > 0 && candidate !== task.id
+    ? candidate
+    : null;
+}
+
+export function enforceExplicitFrameworkContracts(
+  plan: ParsedTask[],
+  userText: string
+): ParsedTask[] {
+  const frameworks = detectExplicitFrameworks(userText);
+  if (frameworks.length === 0) return plan;
+
+  const frameworkLabel = frameworks.join(" / ");
+  const policyMarker = "## 平台显式框架契约";
+
+  return plan.map((task) => {
+    const producesWebApp = task.expectedOutputs.some((output) => output.type === "web_app");
+    if (!producesWebApp) return task;
+
+    const targetPaths = [...new Set([...(task.targetPaths ?? []), "package.json"])];
+    const requiredCommands = [...(task.requiredCommands ?? [])];
+    if (!requiredCommands.some((entry) => /\bbuild\b/i.test(entry.command))) {
+      requiredCommands.push({ command: "npm run build", timeoutMs: 120_000 });
+    }
+
+    const frameworkPolicy = [
+      policyMarker,
+      `原始用户请求明确指定 ${frameworkLabel}。该技术栈是硬性验收条件，不得降级成单文件静态 HTML、CDN UMD 或浏览器 Babel。`,
+      "必须在 workspace 中创建 package.json 和对应源码，使用 npm install / npm ci 安装依赖，运行 npm run build 并取得 exitCode 0。",
+      "build 成功后部署真实构建目录，并在 deploy_workspace 成功后调用 report_task_result。",
+    ].join("\n");
+
+    return {
+      ...task,
+      prompt: task.prompt.includes(policyMarker)
+        ? task.prompt
+        : `${task.prompt}\n\n${frameworkPolicy}`,
+      targetPaths,
+      requiredCommands,
+    };
+  });
+}
+
+function detectExplicitFrameworks(userText: string): string[] {
+  const candidates: Array<[string, RegExp]> = [
+    ["React", /\breact(?:\.js)?\b/i],
+    ["Vite", /\bvite\b/i],
+    ["Next.js", /\bnext(?:\.js)?\b/i],
+    ["Vue", /\bvue(?:\.js)?\b/i],
+    ["Nuxt", /\bnuxt(?:\.js)?\b/i],
+    ["Svelte", /\bsvelte(?:kit)?\b/i],
+  ];
+  return candidates
+    .filter(([, pattern]) => pattern.test(userText))
+    .map(([name]) => name);
 }
 
 function readPlanToolResult(

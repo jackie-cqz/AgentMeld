@@ -19,8 +19,22 @@ const benchmarkCaseCategorySchema = z.enum([
   "false_completion",
 ]);
 
+const benchmarkWorkspacePathSchema = z.string()
+  .trim()
+  .min(1)
+  .refine((value) => {
+    const portable = value.replaceAll("\\", "/");
+    return !portable.startsWith("/")
+      && !/^[a-zA-Z]:\//.test(portable)
+      && !portable.split("/").some((segment) => segment === "..");
+  }, "Workspace file path must be relative and may not traverse outside the workspace.");
+
 const benchmarkRuntimeSchema = z.object({
   fsWriteApprovalMode: z.enum(["auto", "review"]).optional(),
+  workspaceFiles: z.array(z.object({
+    path: benchmarkWorkspacePathSchema,
+    content: z.string(),
+  }).strict()).min(1).optional(),
   userScript: z.object({
     questions: z.array(z.object({
       match: z.string().trim().min(1).optional(),
@@ -30,10 +44,54 @@ const benchmarkRuntimeSchema = z.object({
       type: z.enum(["dispatch_plan", "fs_write", "bash"]),
       match: z.string().trim().min(1).optional(),
       decision: z.enum(["approve", "reject"]),
+      maxMatches: z.number().int().positive().optional(),
     }).strict()).optional(),
     onUnmatchedQuestion: z.enum(["first_option", "fail"]).optional(),
     onUnmatchedApproval: z.enum(["approve", "reject", "fail"]).optional(),
   }).strict().optional(),
+  browserScripts: z.array(z.object({
+    id: z.string().trim().min(1),
+    outputKey: z.string().trim().min(1).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+    initialTimeMs: z.number().int().nonnegative().optional(),
+    steps: z.array(z.discriminatedUnion("action", [
+      z.object({ action: z.literal("fill"), selector: z.string().min(1), value: z.string() }).strict(),
+      z.object({ action: z.literal("click"), selector: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("press"), selector: z.string().min(1), key: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("check"), selector: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("select_option"), selector: z.string().min(1), index: z.number().int().nonnegative() }).strict(),
+      z.object({ action: z.literal("wait"), timeoutMs: z.number().int().nonnegative() }).strict(),
+      z.object({ action: z.literal("reload") }).strict(),
+      z.object({ action: z.literal("navigate"), path: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("advance_clock"), timeoutMs: z.number().int().nonnegative() }).strict(),
+      z.object({
+        action: z.literal("assert_storage"),
+        key: z.string().min(1).optional(),
+        valuePattern: z.string().min(1).optional(),
+        minEntries: z.number().int().nonnegative().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      }).strict(),
+      z.object({ action: z.literal("assert_text"), text: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("assert_visible"), selector: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("assert_dom_changed") }).strict(),
+    ])).min(1),
+  }).strict()).optional(),
+  faults: z.array(z.object({
+    id: z.string().trim().min(1),
+    type: z.enum([
+      "tool_arguments_json",
+      "tool_failure",
+      "command_nonzero",
+      "deployment_missing",
+      "task_report_fake_deployment",
+      "sse_disconnect",
+      "child_run_abort",
+    ]),
+    toolName: z.string().trim().min(1),
+    occurrence: z.number().int().positive().optional(),
+    commandPattern: z.string().trim().min(1).optional(),
+    message: z.string().trim().min(1).optional(),
+  }).strict()).optional(),
 }).strict();
 
 export const benchmarkCaseSchema = z
@@ -54,11 +112,25 @@ export const benchmarkCaseSchema = z
       maxAttemptsPerTask: z.number().int().positive().optional(),
     }).strict(),
     runtime: benchmarkRuntimeSchema.optional(),
+    judge: z.object({
+      enabled: z.boolean(),
+      requiredForPass: z.boolean().optional(),
+      rubricVersion: z.string().trim().min(1).optional(),
+      dimensions: z.array(z.string().trim().min(1)).min(1).optional(),
+    }).strict().optional(),
     tags: z.array(z.string().trim().min(1)),
   })
   .strict()
   .superRefine((benchmarkCase, ctx) => {
     const ids = new Set<string>();
+    const declaredBindings = new Set<string>();
+    for (const rawAssertion of benchmarkCase.assertions) {
+      const assertion = rawAssertion as BenchmarkAssertion;
+      if (assertion.type !== "output_binding" || assertion.requiredAbsent) continue;
+      for (const key of [assertion.outputKey, ...(assertion.aliases ?? [])]) {
+        declaredBindings.add(`${assertion.role}:${key}`);
+      }
+    }
     for (let index = 0; index < benchmarkCase.assertions.length; index++) {
       const assertion = benchmarkCase.assertions[index] as BenchmarkAssertion;
       if (ids.has(assertion.id)) {
@@ -78,6 +150,24 @@ export const benchmarkCaseSchema = z
             message: `Assertion ${assertion.id} references role ${role}, but it is absent from expectedRoles.`,
           });
         }
+      }
+
+      const outputReference = assertion.type === "dag_edge" && assertion.outputKey
+        ? { role: assertion.fromRole, outputKey: assertion.outputKey }
+        : assertion.type === "artifact_read"
+          ? { role: assertion.producerRole, outputKey: assertion.outputKey }
+          : null;
+      if (
+        outputReference
+        && !declaredBindings.has(`${outputReference.role}:${outputReference.outputKey}`)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["assertions", index],
+          message:
+            `Assertion ${assertion.id} references ${outputReference.role}.${outputReference.outputKey}, `
+            + "but no required output_binding assertion declares that producer output.",
+        });
       }
     }
   });
@@ -121,8 +211,20 @@ function referencedRoles(assertion: BenchmarkAssertion): BenchmarkRole[] {
     case "artifact_read":
       return [assertion.producerRole, assertion.consumerRole];
     case "tool_succeeded":
+    case "tool_rejected":
+    case "warning_present":
+    case "approval_resolved":
     case "deployment_ready":
+    case "build_succeeded":
+    case "preview_http":
     case "retry_bound":
+    case "tool_retry_bound":
+    case "verification_status":
       return assertion.role ? [assertion.role] : [];
+    case "artifact_valid":
+      return [assertion.role];
+    case "browser_interaction":
+    case "fault_injected":
+      return [];
   }
 }

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "child-run-interrupted",
+  "title": "Child Run Interrupted",
+  "description": "Verifies that an interrupted child run creates a new bounded attempt instead of losing the task.",
+  "category": "recovery",
+  "prompt": "请让 PM 编写一份个人记账应用的简要 PRD，包含目标用户、核心功能和验收标准。",
+  "expectedRoles": ["pm"],
+  "assertions": [
+    { "id": "pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "prd-bound", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
+    { "id": "fault-recorded", "type": "fault_injected", "faultId": "abort-first-child", "required": true },
+    { "id": "retry-bounded", "type": "retry_bound", "role": "pm", "minAttempts": 2, "maxAttempts": 3, "required": true }
+  ],
+  "runtime": {
+    "faults": [{ "id": "abort-first-child", "type": "child_run_abort", "toolName": "child_run", "occurrence": 1, "message": "Injected first child-run interruption." }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "implementation_fidelity", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 600000, "maxToolCalls": 30, "maxAttemptsPerTask": 3 },
+  "tags": ["child-run", "retry", "recovery"]
+}

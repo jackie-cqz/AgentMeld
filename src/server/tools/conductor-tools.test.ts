@@ -417,17 +417,36 @@ describe("parsePlanArgs", () => {
   it("parses valid args", () => {
     const result = parsePlanArgs({
       reasoning: "Test",
-      tasks: [{ id: "t1", agentId: "a1", title: "T", prompt: "P" }]
+      tasks: [{ id: "t1", agentId: "a1", title: "T", prompt: "P", taskIntent: "verification" }]
     });
     expect(typeof result).not.toBe("string");
     if (typeof result !== "string") {
       expect(result.tasks).toHaveLength(1);
       expect(result.tasks[0].maxAttempts).toBe(1); // default
+      expect(result.tasks[0].taskIntent).toBe("verification");
     }
   });
 
   it("returns error string for invalid args", () => {
     const result = parsePlanArgs({ reasoning: "Bad", tasks: "not-an-array" });
     expect(typeof result).toBe("string");
+  });
+
+  it("preserves recovery replacement identity", () => {
+    const result = parsePlanArgs({
+      reasoning: "Recover failed frontend task",
+      tasks: [{
+        id: "r1",
+        replacesTaskId: "t3",
+        agentId: "ag_frontend",
+        title: "Retry implementation",
+        prompt: "Continue from existing workspace evidence."
+      }]
+    });
+
+    expect(typeof result).not.toBe("string");
+    if (typeof result !== "string") {
+      expect(result.tasks[0].replacesTaskId).toBe("t3");
+    }
   });
 });

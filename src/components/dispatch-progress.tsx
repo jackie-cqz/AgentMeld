@@ -8,7 +8,7 @@ import {
 import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
 import type { ReactElement } from "react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { TaskEvidenceDrawer, type DrawerTab } from "@/components/task-evidence-drawer";
 import type { EvidenceSummary } from "@/components/task-evidence-drawer";
 import type { VerdictItem } from "@/components/criterion-verdict-list";
@@ -92,14 +92,7 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
     } catch {
       // API not available — drawer shows empty state
     }
-  }, [dispatch?.activeAttemptByTask, dispatch?.attemptIdsByTask, dispatch?.childRunIds, dispatch?.verificationStatusByTask, dispatch?.contextSummaryByAttempt, dispatch?.evidenceCountByAttempt]);
-
-  // Fetch when drawer opens
-  useEffect(() => {
-    if (drawerOpen && drawerTaskId) {
-      fetchDrawerData(drawerTaskId);
-    }
-  }, [drawerOpen, drawerTaskId, fetchDrawerData]);
+  }, [dispatch]);
 
   if (!dispatch || dispatch.plan.length === 0) return null;
 
@@ -120,6 +113,7 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
     setDrawerTaskId(taskId);
     setDrawerTab(tab);
     setDrawerOpen(true);
+    void fetchDrawerData(taskId);
   };
 
   const handleOpenTrace = (taskId: string) => {

@@ -9,10 +9,12 @@ import { getAdapter, clearRegistryForTests } from "@/server/adapters/registry";
 import {
   buildChatCompletionTools,
   CUSTOM_AGENT_MAX_TOOL_ROUNDS,
+  TASK_REPORT_FINALIZATION_ROUNDS,
   findDeployableWorkspacePath,
   isDeployStatusRecord,
   mergeToolArgumentChunk,
   parseToolCallArguments,
+  shouldFinalizeTaskReport,
   shouldAutoDeployWorkspace,
   shouldAutoDeployWorkspaceFromText
 } from "@/server/adapters/custom-agent-adapter";
@@ -116,7 +118,17 @@ afterEach(() => {
 
 describe("custom-agent-adapter", () => {
   it("allows enough tool rounds for coding workflows", () => {
-    expect(CUSTOM_AGENT_MAX_TOOL_ROUNDS).toBeGreaterThanOrEqual(16);
+    expect(CUSTOM_AGENT_MAX_TOOL_ROUNDS).toBeGreaterThanOrEqual(48);
+    expect(TASK_REPORT_FINALIZATION_ROUNDS).toBe(1);
+  });
+
+  it("reserves finalization only for child tasks missing a report", () => {
+    const input = buildAdapterInput({ toolNames: ["fs_read", "report_task_result"] });
+    expect(shouldFinalizeTaskReport(input, false)).toBe(true);
+    expect(shouldFinalizeTaskReport(input, true)).toBe(false);
+    expect(
+      shouldFinalizeTaskReport(buildAdapterInput({ toolNames: ["fs_read"] }), false)
+    ).toBe(false);
   });
 
   it("parses standard tool arguments", () => {
@@ -127,6 +139,7 @@ describe("custom-agent-adapter", () => {
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.args.title).toBe("PRD");
+      expect(parsed.repair).toEqual({ applied: false, kinds: [] });
     }
   });
 
@@ -142,6 +155,8 @@ describe("custom-agent-adapter", () => {
 
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
+      expect(parsed.repair.applied).toBe(true);
+      expect(parsed.repair.kinds).toContain("json_string_unwrapped");
       expect(parsed.args).toEqual({
         type: "document",
         title: "PRD",
@@ -183,6 +198,8 @@ describe("custom-agent-adapter", () => {
 
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
+      expect(parsed.repair.applied).toBe(true);
+      expect(parsed.repair.kinds).toContain("syntax_repaired");
       expect(parsed.args).toEqual({
         type: "document",
         title: "TodoList 应用 PRD",

@@ -24,7 +24,7 @@ export class UserSimulator {
   private unsubscribe: (() => void) | null = null;
   private handledIds = new Set<string>();
   private usedQuestionScripts = new Set<number>();
-  private usedApprovalScripts = new Set<number>();
+  private approvalScriptUseCounts = new Map<number, number>();
   private actions: UserSimulatorAction[] = [];
   private errors: string[] = [];
 
@@ -103,14 +103,14 @@ export class UserSimulator {
   ): void {
     if (!this.claim(pendingId)) return;
     const candidates = (this.script.approvals ?? []).filter((entry) => entry.type === type);
-    const match = findApprovalMatch(candidates, this.script.approvals ?? [], this.usedApprovalScripts, haystack);
+    const match = findApprovalMatch(candidates, this.script.approvals ?? [], this.approvalScriptUseCounts, haystack);
 
     let decision: "approve" | "reject";
     let matchedScriptIndex: number | null = null;
     if (match) {
       decision = match.entry.decision;
       matchedScriptIndex = match.index;
-      this.usedApprovalScripts.add(match.index);
+      this.approvalScriptUseCounts.set(match.index, (this.approvalScriptUseCounts.get(match.index) ?? 0) + 1);
     } else {
       const fallback = this.script.onUnmatchedApproval ?? "approve";
       if (fallback === "fail") {
@@ -206,12 +206,13 @@ function findScriptMatch<T extends { match?: string }>(entries: T[], used: Set<n
 function findApprovalMatch(
   candidates: BenchmarkApprovalScriptEntry[],
   allEntries: BenchmarkApprovalScriptEntry[],
-  used: Set<number>,
+  useCounts: Map<number, number>,
   haystack: string,
 ) {
   for (const entry of candidates) {
     const index = allEntries.indexOf(entry);
-    if (index < 0 || used.has(index) || !matches(entry.match, haystack)) continue;
+    const used = useCounts.get(index) ?? 0;
+    if (index < 0 || used >= (entry.maxMatches ?? 1) || !matches(entry.match, haystack)) continue;
     return { entry, index };
   }
   return null;

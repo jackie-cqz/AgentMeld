@@ -20,8 +20,35 @@
     { "id": "frontend-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "prd", "required": true },
     { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
     { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
-    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "artifact-web-app-valid", "type": "artifact_valid", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "minContentBytes": 200, "requiredFiles": ["index.html"], "required": true },
+    { "id": "build-succeeded", "type": "build_succeeded", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "preview-http", "type": "preview_http", "role": "frontend", "outputKey": "web_app", "expectedStatus": 200, "minBodyBytes": 50, "required": true },
+    { "id": "browser-add-expense", "type": "browser_interaction", "scriptId": "add-expense", "required": true }
   ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "add-expense",
+      "outputKey": "web_app",
+      "steps": [
+        { "action": "click", "selector": "button:has-text('添加记录'), button:has-text('新增记录'), button[title='添加记录'], button[aria-label*='添加'], [data-testid='add-record']" },
+        { "action": "fill", "selector": "input[name='amount'], input[inputmode='decimal'], input[placeholder='0.00'], input[type='number']", "value": "42" },
+        { "action": "select_option", "selector": "select[name='category'], select", "index": 1 },
+        { "action": "fill", "selector": "input[name='note'], textarea[name='note'], input[placeholder*='备注'], input[placeholder*='选填'], textarea", "value": "Benchmark expense" },
+        { "action": "click", "selector": "button[type='submit'], button:has-text('保存'), button:has-text('添加记录'), form button" },
+        { "action": "assert_dom_changed" },
+        { "action": "assert_storage", "minEntries": 1, "timeoutMs": 5000 },
+        { "action": "reload" },
+        { "action": "assert_text", "text": "Benchmark expense" }
+      ]
+    }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "cross_artifact_consistency", "implementation_fidelity", "final_summary_accuracy"]
+  },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "local-storage", "context-handoff"]
 }

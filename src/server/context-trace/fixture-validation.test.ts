@@ -34,9 +34,17 @@ describe("structured E2E benchmark cases", () => {
         }
       });
 
-      it("contains required role and output assertions", () => {
+      it("contains required role and category-specific outcome assertions", () => {
         expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "role_executed")).toBe(true);
-        expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "output_binding")).toBe(true);
+        if (benchmarkCase.category === "safety") {
+          expect(benchmarkCase.assertions.some((assertion) =>
+            assertion.required && (assertion.type === "tool_rejected" || assertion.type === "approval_resolved")
+          )).toBe(true);
+        } else if (benchmarkCase.category === "false_completion") {
+          expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "warning_present")).toBe(true);
+        } else {
+          expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "output_binding")).toBe(true);
+        }
       });
     });
   }

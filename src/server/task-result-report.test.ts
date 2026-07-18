@@ -121,6 +121,56 @@ describe("evaluateChildTaskResult evidence gates", () => {
     expect(result.status).toBe("complete");
   });
 
+  it("treats an evidenced product defect as a completed reviewer check", () => {
+    const result = evaluateChildTaskResult(
+      task({
+        title: "Review implementation",
+        prompt: "审查计时逻辑并产出报告。",
+        expectedOutputs: [{ id: "review_report", type: "document", required: true }],
+        acceptanceCriteria: ["检查计时逻辑是否正确"]
+      }),
+      report({
+        acceptanceResults: [{
+          criterion: "检查计时逻辑是否正确",
+          passed: false,
+          evidence: "useTimer.ts 在第四个专注阶段后提前进入长休息。"
+        }]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("still rejects a reviewer check marked failed without evidence", () => {
+    const result = evaluateChildTaskResult(
+      task({
+        title: "Reviewer",
+        expectedOutputs: [{ id: "review_report", type: "document", required: true }],
+        acceptanceCriteria: ["检查计时逻辑是否正确"]
+      }),
+      report({
+        acceptanceResults: [{ criterion: "检查计时逻辑是否正确", passed: false, evidence: "" }]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("验收标准未通过");
+  });
+
+  it("still rejects an implementation criterion that is not satisfied", () => {
+    const result = evaluateChildTaskResult(
+      task({ acceptanceCriteria: ["计时逻辑正确"] }),
+      report({
+        acceptanceResults: [{ criterion: "计时逻辑正确", passed: false, evidence: "测试失败。" }]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("failed");
+  });
+
   it("fails when a declared target path has no file evidence", () => {
     const result = evaluateChildTaskResult(
       task({ targetPaths: ["src/app.ts"] }),
@@ -142,6 +192,81 @@ describe("evaluateChildTaskResult evidence gates", () => {
     );
 
     expect(result.status).toBe("complete");
+  });
+
+  it("accepts target path evidence from actual file inspection", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["dist/index.html", "dist/assets/"] }),
+      report(),
+      evidence({
+        observedPaths: ["dist/index.html", "dist/assets"],
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("accepts target paths created inside a nested application directory", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["package.json", "src/App.jsx"] }),
+      report(),
+      evidence({
+        fileWrites: [
+          { path: "todo-app/package.json", action: "created" },
+          { path: "todo-app/src/App.jsx", action: "created" }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("accepts a concrete workspace path as evidence for the root target", () => {
+    expect(evaluateChildTaskResult(
+      task({ targetPaths: ["."] }),
+      report(),
+      {
+        fileWrites: [{ path: "src/App.jsx", action: "modified" }],
+        observedPaths: [],
+        commands: [],
+      },
+    )).toEqual({ status: "complete" });
+  });
+
+  it("still rejects the root target when no concrete workspace path was observed", () => {
+    expect(evaluateChildTaskResult(
+      task({ targetPaths: ["."] }),
+      report(),
+      { fileWrites: [], observedPaths: [], commands: [] },
+    )).toEqual({ status: "failed", error: "缺少目标文件证据: ." });
+  });
+
+  it("accepts descendants of a target directory inside a nested application", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["src/"] }),
+      report(),
+      evidence({
+        fileWrites: [
+          { path: "expense-tracker/src/App.tsx", action: "created" }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("does not accept a partial directory-name match as target evidence", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["src/"] }),
+      report(),
+      evidence({
+        fileWrites: [
+          { path: "expense-tracker/src-backup/App.tsx", action: "created" }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("failed");
   });
 
   it("fails when a required command did not complete successfully", () => {
@@ -185,6 +310,100 @@ describe("evaluateChildTaskResult evidence gates", () => {
     );
 
     expect(result.status).toBe("complete");
+  });
+
+  it("does not fail a recovered task because an optional scaffold command failed", () => {
+    const result = evaluateChildTaskResult(
+      task(),
+      report(),
+      evidence({
+        fileWrites: [{ path: "todo-app/src/App.tsx", action: "created" }],
+        commands: [
+          {
+            command: "npx create-vite@latest todo-app --template react",
+            exitCode: 1,
+            timedOut: false,
+            isError: true
+          },
+          {
+            command: "pnpm build",
+            exitCode: 0,
+            timedOut: false,
+            isError: false
+          }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("accepts recovery with an equivalent validation stage from another package manager", () => {
+    const result = evaluateChildTaskResult(
+      task({ requiredCommands: [{ command: "pnpm build" }] }),
+      report(),
+      evidence({
+        commands: [
+          {
+            command: "cd todo-app && npm run build",
+            exitCode: 1,
+            timedOut: false,
+            isError: false
+          },
+          {
+            command: "Set-Location todo-app; pnpm build",
+            exitCode: 0,
+            timedOut: false,
+            isError: false
+          }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("accepts a framework build as recovery for a failed package build", () => {
+    const result = evaluateChildTaskResult(
+      task({ requiredCommands: [{ command: "npm run build" }] }),
+      report(),
+      evidence({
+        commands: [
+          {
+            command: "cd todo-app; pnpm build 2>&1",
+            exitCode: 1,
+            timedOut: false,
+            isError: true
+          },
+          {
+            command: "Set-Location todo-app; npx vite build",
+            exitCode: 0,
+            timedOut: false,
+            isError: false
+          }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("still rejects an unrecovered validation command even when it was not explicitly required", () => {
+    const result = evaluateChildTaskResult(
+      task(),
+      report(),
+      evidence({
+        commands: [{
+          command: "pnpm test",
+          exitCode: 1,
+          timedOut: false,
+          isError: false
+        }]
+      })
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("命令证据失败");
   });
 
   it("accepts a required command backed by successful actual evidence", () => {

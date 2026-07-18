@@ -94,7 +94,7 @@ describe("database bootstrap", () => {
       "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"
     ]);
     expect(toolsById.get("ag_reviewer")).toEqual([
-      "read_artifact", "read_attachment", "fs_list", "fs_read", "bash"
+      "read_artifact", "write_artifact", "read_attachment", "fs_list", "fs_read", "bash"
     ]);
     expect(toolsById.get("ag_custom_assistant")).toEqual(["write_artifact", "read_artifact"]);
   });
@@ -240,6 +240,33 @@ describe("database bootstrap", () => {
     expect(row.system_prompt).not.toContain("当 workspace_info mode=local");
   });
 
+  it("migrates the legacy Reviewer contract to artifact-backed reports", () => {
+    ensureDatabase();
+    const legacyPrompt = `你是 Reviewer，负责对群聊中已产出的产物或本地 workspace 代码做审查。
+
+不要写代码或新的产物，只输出审查报告（文字）。`;
+
+    getDatabase()
+      .prepare("UPDATE agents SET system_prompt = ?, tool_names = ? WHERE id = ?")
+      .run(
+        legacyPrompt,
+        JSON.stringify(["read_artifact", "read_attachment", "fs_list", "fs_read", "bash"]),
+        "ag_reviewer"
+      );
+
+    resetBootstrapForTests();
+    ensureDatabase();
+
+    const row = getDatabase()
+      .prepare("SELECT system_prompt, tool_names FROM agents WHERE id = ?")
+      .get("ag_reviewer") as { system_prompt: string; tool_names: string };
+
+    expect(row.system_prompt).toContain("<expected_outputs>");
+    expect(row.system_prompt).toContain("write_artifact 创建 document 产物");
+    expect(row.system_prompt).not.toContain("不要写代码或新的产物");
+    expect(JSON.parse(row.tool_names)).toContain("write_artifact");
+  });
+
   it("adds bash verification-only policy to already hardened frontend prompts", () => {
     ensureDatabase();
     const partiallyHardenedPrompt = [
@@ -265,6 +292,7 @@ describe("database bootstrap", () => {
     expect(row.system_prompt).toContain("精确覆盖目标文件");
     expect(row.system_prompt).toContain("已有源码文件的局部修改必须使用 fs_patch");
     expect(row.system_prompt).toContain("目录查看用 fs_list，文件读取用 fs_read");
+    expect(row.system_prompt).toContain("创建项目时禁止使用 pnpm install");
   });
 
   it("supports inserting an agent run through the repository layer", () => {

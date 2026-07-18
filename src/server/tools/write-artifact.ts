@@ -29,7 +29,13 @@ directly; do not write content: format and do not nest another content field. Fo
 is a JSON object. Escape Markdown, HTML, CSS, and JS newlines as \\n inside JSON strings. Keep a
 single artifact concise enough to fit in one tool call; split unusually large deliverables into
 multiple artifacts. For a dispatched task with expected_outputs, outputKey is required and must
-exactly match one declared output id. Never invent or rename an output id.`,
+exactly match one declared output id. Never invent or rename an output id.
+
+FINAL OUTPUT RULE: every required outputKey must be one complete, self-contained deliverable.
+For long documents or apps, assemble and revise the content in workspace files with fs_write/fs_patch,
+then call write_artifact once with the complete final content. If you call write_artifact again for
+the same outputKey in the same task attempt, the newer complete artifact replaces the older binding;
+do not split one logical document across competing artifacts.`,
   parameters: {
     type: "object",
     required: ["type", "title", "content"],
@@ -112,7 +118,8 @@ exactly match one declared output id. Never invent or rename an output id.`,
         artifactId: artifact.id,
         title: artifact.title,
         type: artifact.type,
-        outputKey: parsed.data.outputKey ?? undefined
+        outputKey: parsed.data.outputKey ?? undefined,
+        bindingMode: "replace"
       }
     };
   }

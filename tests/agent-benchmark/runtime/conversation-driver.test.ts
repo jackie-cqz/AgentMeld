@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createConversation, sendMessage } from "@/server/conversation-service";
@@ -6,7 +9,11 @@ import type { AgentBenchmarkCase } from "@/server/context-metrics/benchmark-type
 import type { Message } from "@/shared/types";
 import { setupTestDatabase } from "@/test/test-database";
 
-import { ConversationDriver, resolveRoleAgentIds } from "./conversation-driver";
+import {
+  ConversationDriver,
+  resolveRoleAgentIds,
+  seedBenchmarkWorkspace,
+} from "./conversation-driver";
 
 let cleanupDatabase: (() => void) | undefined;
 
@@ -51,6 +58,25 @@ describe("ConversationDriver", () => {
     ]));
     expect(started.workspacePath).toContain(started.conversationId);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: "Build the benchmark app." }));
+  });
+
+  it("seeds fixture files inside the conversation workspace", () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-benchmark-seed-"));
+    try {
+      seedBenchmarkWorkspace(workspacePath, [{
+        path: "src/App.tsx",
+        content: "export default function App() { return null; }\n",
+      }]);
+
+      expect(fs.readFileSync(path.join(workspacePath, "src", "App.tsx"), "utf-8"))
+        .toContain("function App");
+      expect(() => seedBenchmarkWorkspace(workspacePath, [{
+        path: "../outside.ts",
+        content: "unsafe",
+      }])).toThrow(/escapes the workspace/);
+    } finally {
+      fs.rmSync(workspacePath, { recursive: true, force: true });
+    }
   });
 });
 

@@ -3,6 +3,8 @@
 // ---------------------------------------------------------------------------
 
 import type { ContextManifestItem } from "@/shared/task-context-types";
+import type { ContextQualityRunMetrics } from "@/server/context-metrics/context-metrics-types";
+import type { DispatchTaskIntent } from "@/shared/types";
 
 // ── Attempt-level trace ────────────────────────────────────────────────────
 
@@ -130,6 +132,10 @@ export interface ContextTraceRunTask {
   agentId: string;
   title: string;
   dependsOn: string[];
+  taskIntent?: DispatchTaskIntent;
+  contractProfile?: "standard" | "minimal";
+  contractSelectionReason?: string;
+  contractSelectionVersion?: string;
   attempts: ContextTraceAttempt[];
   producedBindings: ContextTraceOutputBinding[];
   consumedInputs: ContextTraceUpstreamInput[];
@@ -138,20 +144,7 @@ export interface ContextTraceRunTask {
   warnings: ContextTraceWarning[];
 }
 
-export interface ContextTraceRunMetrics {
-  taskCount: number;
-  attemptCount: number;
-  completedTaskCount: number;
-  failedTaskCount: number;
-  verifiedInputCount: number;
-  missingRequiredInputCount: number;
-  upstreamInputReadCount: number;
-  upstreamInputUnreadCount: number;
-  evidenceCount: number;
-  verifiedOutputBindingCount: number;
-  artifactCreatedCount: number;
-  deploymentReadyCount: number;
-}
+export type ContextTraceRunMetrics = Omit<ContextQualityRunMetrics, "runId">;
 
 export interface ContextTraceRunResponse {
   conductorRunId: string;

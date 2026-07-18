@@ -3,12 +3,14 @@ import type {
   AssertionReference,
   AssertionResult,
   BenchmarkAssertion,
+  BenchmarkRuntimeValidation,
 } from "@/server/context-metrics/benchmark-types";
 import type { ContextTraceRunResponse } from "@/server/context-trace/context-trace-types";
 
 export interface BenchmarkGraderContext {
   benchmarkCase: AgentBenchmarkCase;
   trace: ContextTraceRunResponse;
+  runtimeValidation?: BenchmarkRuntimeValidation;
 }
 
 export interface BenchmarkGrader {

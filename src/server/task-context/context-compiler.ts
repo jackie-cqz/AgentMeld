@@ -21,6 +21,8 @@ import { compressCandidate } from "@/server/task-context/context-compressor";
 import { externalizeCandidate } from "@/server/task-context/context-externalizer";
 import { packContext } from "@/server/task-context/context-packer";
 import { computeBudget, isMandatoryOverBudget } from "@/server/task-context/context-budget";
+import { getActiveStrategy } from "@/server/context-policy/strategy-registry";
+import { getLatestSummary } from "@/server/context-compaction-service";
 
 export interface CompileTaskContextInput {
   conversationId: string;
@@ -50,6 +52,7 @@ export interface CompileTaskContextInput {
 
 export async function compileTaskContext(input: CompileTaskContextInput): Promise<TaskContextEnvelope> {
   const now = Date.now();
+  const strategy = getActiveStrategy();
 
   // Step 1: Build identity — use conductor-generated contextSnapshotId, NOT derived
   const identity: TaskExecutionIdentity = {
@@ -81,7 +84,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   });
 
   // Step 5-6: Active facts — use pre-filtered agent-specific facts, NOT loadAllActiveFacts
-  for (const fact of input.activeFacts) {
+  for (const fact of strategy.useActiveFacts ? input.activeFacts : []) {
     candidates.push({
       id: `${estimateId}_fact_${fact.canonicalKey}`, category: "fact", sourceType: "fact_registry", sourceId: fact.canonicalKey,
       content: { canonicalKey: fact.canonicalKey, value: fact.value },
@@ -99,6 +102,17 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
       namespaces: [], pathRefs: [], criterionIds: [],
       tokenEstimate: Math.ceil(userText.length / 4), createdAt: now,
     });
+  }
+
+  if (strategy.useSummary) {
+    const summary = getLatestSummary(input.conversationId);
+    if (summary?.summary) {
+      candidates.push({
+        id: `${estimateId}_summary`, category: "recent_message", sourceType: "conversation_summary", sourceId: summary.id,
+        content: summary.summary, trustLevel: "accepted", required: false, taskIds: [input.task.id],
+        namespaces: [], pathRefs: [], criterionIds: [], tokenEstimate: estimateToken(summary.summary), createdAt: summary.coveredUntilCreatedAt,
+      });
+    }
   }
 
   // Step 8-9: Verified inputs with full artifact metadata + producer verification
@@ -199,6 +213,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   // the Optional budget. They must NEVER override active Facts or verified inputs.
   let retrievalHitCount = 0;
   try {
+    if (!strategy.useRetrieval) throw new Error("retrieval_disabled_by_strategy");
     const userQuery = extractTextFromMessage(input.triggerMessage);
     if (userQuery && userQuery.length > 10) {
       // Collect source IDs already in candidates to avoid duplicates
@@ -324,7 +339,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     });
     return {
       schemaVersion: 1,
-      policyVersion: "evidence-context-p3-v1",
+      policyVersion: `context-strategy:${strategy.name}:v1`,
       blocked: true,
       identity,
       task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
@@ -399,7 +414,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
   // Step 17: Build envelope — only packed items become context
   return {
     schemaVersion: 1,
-    policyVersion: "evidence-context-p3-v1",
+    policyVersion: `context-strategy:${strategy.name}:v1`,
     blocked: false,
     identity,
     task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },

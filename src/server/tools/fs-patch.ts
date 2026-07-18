@@ -23,6 +23,7 @@ export const fsPatchTool: ToolDef = {
   name: "fs_patch",
   description:
     "Modify an existing workspace text file by replacing an exact oldText snippet with newText. " +
+    "oldText and newText must differ; a no-op replacement is rejected. " +
     "By default oldText must occur exactly once; set replaceAll=true only for an intentional bulk replacement. " +
     "Read the file with fs_read before patching. Uses the same approval and workspace safety policy as fs_write.",
   parameters: {
@@ -52,12 +53,27 @@ export const fsPatchTool: ToolDef = {
     if (!parsed.success) {
       return { ok: false, error: `Invalid args: ${parsed.error.message}` };
     }
+    if (parsed.data.oldText === parsed.data.newText) {
+      return {
+        ok: false,
+        error:
+          "No-op patch rejected: oldText and newText are identical, so no source change is needed. " +
+          "Treat this edit as complete and continue with the next requirement; do not retry the same patch.",
+        code: "NO_OP_PATCH",
+        category: "validation_error",
+      };
+    }
 
     let absolutePath: string;
     try {
       absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Path validation failed.",
+        code: "WORKSPACE_PATH_ESCAPE",
+        category: "security_policy",
+      };
     }
 
     let oldContent: string;
@@ -140,7 +156,12 @@ export const fsPatchTool: ToolDef = {
         newContent
       );
       if (!approved) {
-        return { ok: false, error: "User rejected the file change." };
+        return {
+          ok: false,
+          error: "User rejected the file change.",
+          code: "APPROVAL_REJECTED",
+          category: "approval_rejected",
+        };
       }
 
       const staleError = verifyFileUnchanged(absolutePath, oldContent, parsed.data.path);
@@ -213,7 +234,7 @@ function recordPatchEvidence(
     recordFileWriteEvidence(ctx.runId, {
       path: relativePath,
       absolutePath,
-      action: "modified"
+      action: "modified",
     });
   }
 }

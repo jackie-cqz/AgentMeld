@@ -173,6 +173,9 @@ export function ensureDatabase() {
       output_key TEXT NOT NULL,
       artifact_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
+      superseded_at INTEGER,
+      replaced_by_task_id TEXT,
+      actual_producer_task_id TEXT,
       PRIMARY KEY (plan_id, producer_task_id, output_key)
     );
 
@@ -474,6 +477,9 @@ function migrateLegacyTables() {
   // P1: Conductor task results - verification status columns for existing databases.
   ensureColumn("conductor_task_results", "verification_status", "TEXT NOT NULL DEFAULT 'not_started'");
   ensureColumn("conductor_task_results", "verified_attempt_id", "TEXT");
+  ensureColumn("conductor_output_bindings", "superseded_at", "INTEGER");
+  ensureColumn("conductor_output_bindings", "replaced_by_task_id", "TEXT");
+  ensureColumn("conductor_output_bindings", "actual_producer_task_id", "TEXT");
 
   // P2: value_json for dynamic definition proposals (added after initial P2 schema)
   try { getDatabase().exec("ALTER TABLE conversation_fact_definitions ADD COLUMN value_json TEXT"); } catch { /* already exists */ }
@@ -820,7 +826,27 @@ function hardenLegacyArtifactPromptExamples(prompt: string) {
       "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。"
     );
 
-  return upgradeFrontendPatchPolicy(hardenFrontendWorkspaceUpdatePolicy(hardened));
+  return upgradeReviewerArtifactPolicy(
+    upgradeFrontendPatchPolicy(hardenFrontendWorkspaceUpdatePolicy(hardened))
+  );
+}
+
+function upgradeReviewerArtifactPolicy(prompt: string) {
+  if (!prompt.includes("你是 Reviewer")) {
+    return prompt;
+  }
+
+  const upgraded = prompt.replace(
+    "不要写代码或新的产物，只输出审查报告（文字）。",
+    "不要修改源码。若当前任务的 <expected_outputs> 声明了 review_report，必须调用 write_artifact 创建 document 产物，并严格使用该 outputKey；未声明 review_report 时，可以直接输出文字审查结论。"
+  );
+  const evidencePolicy =
+    "5. “通过”必须引用实际执行得到的 build/test/browser/tool Evidence。只阅读源码或看到 Agent 自述不能证明运行通过；没有执行的验收项必须写“未验证”，不能写“通过”。";
+  if (upgraded.includes(evidencePolicy)) return upgraded;
+  return upgraded.replace(
+    "4. 如果没有明显问题，要明确说\"未发现阻塞问题\"，再列出剩余风险或未验证项。",
+    `4. 如果没有明显问题，要明确说"未发现阻塞问题"，再列出剩余风险或未验证项。\n${evidencePolicy}`
+  );
 }
 
 function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
@@ -833,11 +859,15 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
     "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。";
   const projectChoicePolicy =
     "- 简单单页工具、小游戏、计时器、表单、Dashboard 原型等默认优先使用纯 HTML/CSS/JS 静态实现（index.html + style.css + app.js），除非用户明确要求 React/Next/Vite 或任务复杂到必须组件化。\n" +
-    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init / 依赖安装失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录。改用 fs_mkdir / fs_write 创建必要文件，或降级为纯 HTML/CSS/JS 静态实现。";
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。";
+  const frameworkCompliancePolicy =
+    "- 用户、PRD 或当前任务一旦明确指定 React / Vue / Next / Vite 等框架，就必须创建对应的 package.json 和源码结构，安装所需依赖并运行 build。不得用 CDN UMD、浏览器内 Babel 或纯静态脚本冒充框架项目；安装或构建失败时应继续修复，确实无法完成则如实 report_task_result 为 failed/blocked，不能擅自降级技术栈。";
   const bashVerificationPolicy =
     "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。\n" +
     "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。\n" +
     "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。";
+  const managedWorkspacePackagePolicy =
+    "- AgentMeld 管理的 workspace 位于宿主项目目录内，创建项目时禁止使用 pnpm install/add/remove/update/ci，以免 pnpm 识别宿主 workspace 并修改 AgentMeld 根目录 node_modules；必须使用 npm install / npm ci，验证使用 npm run build/test/lint/typecheck/check。只有绑定到宿主目录之外的独立本地项目时，才可沿用该项目自己的 pnpm/yarn/bun。";
   const runtimeShellPolicy =
     "- bash 命令必须遵循 <runtime_platform> 中注入的当前系统与 shell 规则。Windows/PowerShell 下不要使用 /workspace、&&、cp/mv/rm/sed/cat > file 等 POSIX 写法；当前工作区就是 <workspace_info><cwd>，需要切目录时用 Set-Location 或 cd 到该真实路径，命令分隔用 ;。";
   const workspaceDeployPolicy =
@@ -858,11 +888,17 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   if (!hardened.includes("默认优先使用纯 HTML/CSS/JS 静态实现")) {
     hardened = insertAfterAnchor(hardened, projectChoicePolicy);
   }
+  if (!hardened.includes("不得用 CDN UMD")) {
+    hardened = insertAfterAnchor(hardened, frameworkCompliancePolicy);
+  }
   if (!hardened.includes("精确覆盖目标文件")) {
     hardened = insertAfterAnchor(hardened, safeUpdatePolicy);
   }
   if (!hardened.includes("bash 只用于")) {
     hardened = insertAfterAnchor(hardened, bashVerificationPolicy);
+  }
+  if (!hardened.includes("创建项目时禁止使用 pnpm install")) {
+    hardened = insertAfterAnchor(hardened, managedWorkspacePackagePolicy);
   }
   if (!hardened.includes("目录创建用 fs_mkdir")) {
     hardened = insertAfterAnchor(
@@ -891,6 +927,14 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   hardened = hardened.replaceAll(
     "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。",
     "完成 web_app artifact 后必须调用 deploy_artifact；完成本地静态项目或构建目录后必须调用 deploy_workspace，并在成功后再调用 report_task_result。"
+  );
+  hardened = hardened.replaceAll(
+    "需要安装依赖时，用 bash 发起 npm/pnpm/yarn/bun install/add 或 pip install/uv sync，等待用户审批；不要手写“已安装成功”。",
+    "AgentMeld 管理的 workspace 需要安装前端依赖时，用 bash 发起 npm install / npm ci 并等待用户审批；不要使用 pnpm 安装依赖，也不要手写“已安装成功”。"
+  );
+  hardened = hardened.replaceAll(
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init / 依赖安装失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录。改用 fs_mkdir / fs_write 创建必要文件，或降级为纯 HTML/CSS/JS 静态实现。",
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。"
   );
 
   return hardened;

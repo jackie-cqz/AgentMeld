@@ -41,6 +41,27 @@ describe("RunWaiter", () => {
     await expect(pending).resolves.toMatchObject({ status: "complete", timedOut: false });
   });
 
+  it("recovers through polling when an injected run.end event is dropped", async () => {
+    const bus = new EventBus();
+    let run = createRun("running");
+    const waiter = new RunWaiter({ bus, getRun: () => run, abortRun: () => false });
+    const ignored: number[] = [];
+    const pending = waiter.waitForEnd(run.id, {
+      timeoutMs: 500,
+      pollIntervalMs: 5,
+      shouldIgnoreRunEndEvent: (eventIndex) => {
+        ignored.push(eventIndex);
+        return eventIndex === 1;
+      },
+    });
+    run = { ...run, status: "complete", finishedAt: Date.now() };
+    bus.publish({
+      type: "run.end", conversationId: run.conversationId, timestamp: Date.now(), runId: run.id, status: "complete",
+    });
+    await expect(pending).resolves.toMatchObject({ status: "complete", timedOut: false });
+    expect(ignored).toEqual([1]);
+  });
+
   it("does not trust run.end before the persisted run reaches a terminal state", async () => {
     const bus = new EventBus();
     let run = createRun("running");

@@ -15,23 +15,39 @@ export function ContextTraceDrawer({
   onClose: () => void;
 }) {
   const [data, setData] = useState<ContextTraceResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<{ attemptId: string; message: string } | null>(null);
   const [tab, setTab] = useState<"inputs" | "manifest" | "evidence" | "verdicts" | "warnings">("inputs");
 
   useEffect(() => {
     if (!open || !attemptId) return;
-    setLoading(true);
-    setError(null);
+    const controller = new AbortController();
     fetch(`/api/context-trace/${attemptId}`)
       .then((r) => r.json())
       .then((d) => {
-        if (d.error) { setError(d.error); setData(null); }
-        else setData(d);
+        if (controller.signal.aborted) return;
+        if (d.error) {
+          setRequestError({ attemptId, message: d.error });
+          setData(null);
+        } else {
+          setRequestError(null);
+          setData(d);
+        }
       })
-      .catch(() => setError("Failed to load trace data"))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setRequestError({ attemptId, message: "Failed to load trace data" });
+        }
+      });
+    return () => controller.abort();
   }, [open, attemptId]);
+
+  const error = attemptId && requestError?.attemptId === attemptId ? requestError.message : null;
+  const loading = Boolean(
+    open &&
+    attemptId &&
+    data?.attempt.attemptId !== attemptId &&
+    requestError?.attemptId !== attemptId
+  );
 
   if (!open) return null;
 

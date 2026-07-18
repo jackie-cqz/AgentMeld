@@ -59,6 +59,20 @@ describe("buildChildTaskPrompt", () => {
     expect(prompt).toContain("Do not repeat artifact ids inside report_task_result");
   });
 
+  it("defines review acceptance as evidence collection rather than a defect-free product", () => {
+    const prompt = buildChildTaskPrompt({
+      ...emptyInput,
+      task: makeStubTask({
+        agentId: "ag_reviewer",
+        title: "Review implementation",
+        prompt: "审查应用并记录缺陷。",
+        expectedOutputs: [{ id: "review_report", type: "document", required: true }],
+      }),
+    });
+    expect(prompt).toContain("whether you actually performed that review check");
+    expect(prompt).toContain("not whether the reviewed product is defect-free");
+  });
+
   it("renders required_inputs when resolvedInputs has entries", () => {
     const input: BuildChildPromptInput = {
       ...emptyInput,
@@ -134,6 +148,19 @@ describe("buildChildTaskPrompt", () => {
     expect(prompt).toContain("<target_paths>");
     expect(prompt).toContain("<path>index.html</path>");
     expect(prompt).toContain("<path>style.css</path>");
+    expect(prompt).toContain("TARGET PATHS ARE A HARD VERIFICATION CONTRACT");
+    expect(prompt).toContain('The required workspace-relative targets are ["index.html","style.css","script.js"]');
+    expect(prompt).toContain("every fs_write/fs_patch path");
+    expect(prompt).toContain("call fs_list on each target");
+  });
+
+  it("normalizes Windows separators in the target path instruction", () => {
+    const input: BuildChildPromptInput = {
+      ...emptyInput,
+      task: makeStubTask({ targetPaths: ["todo-list-app\\src\\"] })
+    };
+    const prompt = buildChildTaskPrompt(input);
+    expect(prompt).toContain('["todo-list-app/src/"]');
   });
 
   it("renders task_evidence_contract with requiredCommands", () => {

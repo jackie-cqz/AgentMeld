@@ -53,7 +53,8 @@ describe("GET /deployments/[id]/[[...path]]", () => {
       { params: Promise.resolve({ id: deployment.id, path: undefined }) }
     );
     expect(rootResponse.status).toBe(200);
-    expect(rootResponse.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts allow-same-origin");
+    expect(rootResponse.headers.get("Content-Security-Policy"))
+      .toContain("sandbox allow-scripts allow-same-origin allow-forms");
     expect(rootResponse.headers.get("Content-Security-Policy")).toContain("connect-src 'self' https:");
     const rootHtml = await rootResponse.text();
     expect(rootHtml).toContain(`<base href="/deployments/${deployment.id}/">`);

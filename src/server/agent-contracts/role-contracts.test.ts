@@ -7,7 +7,11 @@ import {
   getRoleContract, detectAgentRole, getAllRoleContracts,
   PM_CONTRACT, UI_CONTRACT, FRONTEND_CONTRACT, REVIEWER_CONTRACT,
 } from "@/server/agent-contracts/role-contracts";
-import { applyRoleContracts, buildContractGuidance } from "@/server/agent-contracts/contract-resolver";
+import {
+  applyRoleContracts,
+  buildContractGuidance,
+  resolveTaskIntent,
+} from "@/server/agent-contracts/contract-resolver";
 import type { DispatchPlanItem } from "@/shared/types";
 
 describe("role-contracts", () => {
@@ -36,6 +40,8 @@ describe("role-contracts", () => {
     expect(REVIEWER_CONTRACT.requiredInputs).toContain("prd");
     expect(REVIEWER_CONTRACT.requiredInputs).toContain("style-guide");
     expect(REVIEWER_CONTRACT.requiredInputs).toContain("web_app");
+    expect(REVIEWER_CONTRACT.outputKey).toBe("review_report");
+    expect(REVIEWER_CONTRACT.expectedTools).toContain("write_artifact");
   });
 });
 
@@ -141,6 +147,51 @@ describe("applyRoleContracts", () => {
     expect(t3.inputs!.some((i) => i.fromTaskId === "t2" && i.outputId === "prd")).toBe(false);
   });
 
+  it("repairs omitted standard DAG edges and input bindings", () => {
+    const incompletePlan: DispatchPlanItem[] = [
+      {
+        id: "t1",
+        agentId: "ag_pm",
+        task: "write PRD",
+        dependsOn: [],
+        expectedOutputs: [{ id: "prd", type: "document", required: true }],
+        inputs: [],
+        acceptanceCriteria: [],
+      },
+      {
+        id: "t2",
+        agentId: "ag_designer",
+        task: "design UI",
+        dependsOn: [],
+        expectedOutputs: [{ id: "style-guide", type: "document", required: true }],
+        inputs: [],
+        acceptanceCriteria: [],
+      },
+      {
+        id: "t3",
+        agentId: "ag_builder",
+        task: "build app",
+        dependsOn: [],
+        expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+        inputs: [],
+        acceptanceCriteria: [],
+      },
+    ];
+
+    const [, ui, frontend] = applyRoleContracts(incompletePlan, agents).plan;
+    expect(ui.dependsOn).toContain("t1");
+    expect(ui.inputs).toContainEqual(expect.objectContaining({
+      fromTaskId: "t1",
+      outputId: "prd",
+      required: true,
+    }));
+    expect(frontend.dependsOn).toEqual(expect.arrayContaining(["t1", "t2"]));
+    expect(frontend.inputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromTaskId: "t1", outputId: "prd", required: true }),
+      expect.objectContaining({ fromTaskId: "t2", outputId: "style-guide", required: true }),
+    ]));
+  });
+
   it("does not overwrite existing outputs", () => {
     const customPlan: DispatchPlanItem[] = [
       { id: "t1", agentId: "ag_pm", task: "write PRD", dependsOn: [], expectedOutputs: [{ id: "custom_prd", type: "document" as const }], inputs: [], acceptanceCriteria: [] },
@@ -156,6 +207,171 @@ describe("applyRoleContracts", () => {
     const { enriched } = applyRoleContracts(unknownPlan, []);
     expect(enriched).toBe(false);
   });
+
+  it("uses a minimal contract for dependency approval probes", () => {
+    const plan: DispatchPlanItem[] = [{
+      id: "t1",
+      agentId: "ag_builder",
+      task: "Install one dependency after user approval",
+      title: "Dependency install approval probe",
+      prompt: "Run npm install only after approval and report the command result.",
+      dependsOn: [],
+      expectedOutputs: [],
+      acceptanceCriteria: [],
+    }];
+
+    const result = applyRoleContracts(plan, agents).plan[0];
+    expect(result.taskIntent).toBe("approval_probe");
+    expect(result.contractProfile).toBe("minimal");
+    expect(result.expectedOutputs).toEqual([]);
+    expect(result.acceptanceCriteria).toEqual([]);
+  });
+
+  it("does not treat a negated artifact instruction as delivery", () => {
+    const plan: DispatchPlanItem[] = [{
+      id: "t1",
+      agentId: "ag_builder",
+      task: "Run npm install after approval. 不需要创建任何产物，只汇报安装结果。",
+      taskIntent: "approval_probe",
+      dependsOn: [],
+      expectedOutputs: [],
+      acceptanceCriteria: [],
+    }];
+
+    const result = applyRoleContracts(plan, agents).plan[0];
+    expect(result.taskIntent).toBe("approval_probe");
+    expect(result.contractProfile).toBe("minimal");
+    expect(result.expectedOutputs).toEqual([]);
+  });
+
+  it("keeps a repair delivery contract when dependency installation is only a sub-step", () => {
+    const plan: DispatchPlanItem[] = [{
+      id: "t1",
+      agentId: "ag_builder",
+      title: "Fix and build the React Todo App",
+      task: "Fix the source, run npm install, retry npm run build after the injected failure, then deploy dist.",
+      dependsOn: [],
+      expectedOutputs: [],
+      acceptanceCriteria: [],
+      taskIntent: "delivery",
+    }];
+
+    const result = applyRoleContracts(plan, agents).plan[0];
+    expect(result.taskIntent).toBe("delivery");
+    expect(result.contractProfile).toBe("standard");
+    expect(result.contractSelectionReason).toContain("implementation or delivery");
+    expect(result.contractSelectionVersion).toBe("role-contract-intent-v2");
+    expect(result.expectedOutputs).toContainEqual(expect.objectContaining({
+      id: "web_app",
+      type: "web_app",
+      required: true,
+    }));
+  });
+
+  it("does not invent a PRD input from a PM diagnosis dependency", () => {
+    const plan: DispatchPlanItem[] = [
+      {
+        id: "t1",
+        agentId: "ag_pm",
+        title: "诊断破损的 React 应用",
+        task: "读取源码并通过 write_artifact 输出 diagnosis 诊断报告。",
+        taskIntent: "delivery",
+        dependsOn: [],
+        expectedOutputs: [{ id: "diagnosis", type: "document", required: true }],
+        acceptanceCriteria: [],
+      },
+      {
+        id: "t2",
+        agentId: "ag_builder",
+        title: "修复并部署应用",
+        task: "读取 diagnosis，修复源码、构建并部署。",
+        taskIntent: "delivery",
+        dependsOn: ["t1"],
+        inputs: [{ fromTaskId: "t1", outputId: "diagnosis", required: true }],
+        expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+        acceptanceCriteria: [],
+      },
+    ];
+
+    const [diagnosis, frontend] = applyRoleContracts(plan, agents).plan;
+    expect(diagnosis.taskIntent).toBe("diagnosis");
+    expect(diagnosis.expectedOutputs).toEqual([
+      expect.objectContaining({ id: "diagnosis" }),
+    ]);
+    expect(frontend.inputs).toEqual([
+      expect.objectContaining({ fromTaskId: "t1", outputId: "diagnosis" }),
+    ]);
+  });
+
+  it("uses a minimal contract for controlled false-completion tests", () => {
+    const plan: DispatchPlanItem[] = [{
+      id: "t1",
+      agentId: "ag_builder",
+      task: "Run a controlled fake artifact id negative verifier test",
+      dependsOn: [],
+      expectedOutputs: [],
+      acceptanceCriteria: [],
+      taskIntent: "negative_verifier_test",
+    }];
+
+    const result = applyRoleContracts(plan, agents).plan[0];
+    expect(result.taskIntent).toBe("negative_verifier_test");
+    expect(result.expectedOutputs).toEqual([]);
+  });
+
+  it("removes an accidental standard output from an explicit controlled negative test", () => {
+    const plan: DispatchPlanItem[] = [{
+      id: "t1",
+      agentId: "ag_builder",
+      task: "受控负向测试：创建文件后验证 Bash 源码修改会被平台阻断。",
+      dependsOn: [],
+      expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+      acceptanceCriteria: [JSON.stringify({
+        id: "accidental-deploy",
+        required: true,
+        validator: { type: "deployment_created", outputKey: "web_app" },
+      })],
+      taskIntent: "negative_verifier_test",
+    }];
+
+    const result = applyRoleContracts(plan, agents).plan[0];
+    expect(result.taskIntent).toBe("negative_verifier_test");
+    expect(result.contractProfile).toBe("minimal");
+    expect(result.expectedOutputs).toEqual([]);
+    expect(result.acceptanceCriteria).toEqual([]);
+    expect(result.contractSelectionVersion).toBe("role-contract-intent-v2");
+  });
+
+  it("does not allow a minimal declared intent to bypass an explicit standard output", () => {
+    const task: DispatchPlanItem = {
+      id: "t1",
+      agentId: "ag_builder",
+      task: "Build the application",
+      dependsOn: [],
+      expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+      taskIntent: "verification",
+    };
+
+    expect(resolveTaskIntent(task, FRONTEND_CONTRACT)).toBe("delivery");
+    const result = applyRoleContracts([task], agents).plan[0];
+    expect(result.contractProfile).toBe("standard");
+    expect(result.acceptanceCriteria?.length).toBeGreaterThan(0);
+  });
+
+  it("honors explicit verification intent when no output contract requires delivery", () => {
+    const task: DispatchPlanItem = {
+      id: "t1",
+      agentId: "ag_builder",
+      task: "检查空工作区并汇报状态，不要创建、构建或部署应用。",
+      dependsOn: [],
+      taskIntent: "verification",
+    };
+
+    expect(resolveTaskIntent(task, FRONTEND_CONTRACT)).toBe("verification");
+    const result = applyRoleContracts([task], agents).plan[0];
+    expect(result.contractProfile).toBe("minimal");
+    expect(result.expectedOutputs).toBeUndefined();
+  });
 });
 
 describe("buildContractGuidance", () => {
@@ -165,6 +381,7 @@ describe("buildContractGuidance", () => {
     expect(guidance).toContain("标准角色输出协议");
     expect(guidance).toContain("prd");
     expect(guidance).toContain("ag_pm");
+    expect(guidance).toContain("taskIntent");
   });
 
   it("returns empty for no matching roles", () => {

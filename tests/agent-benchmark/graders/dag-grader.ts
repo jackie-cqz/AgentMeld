@@ -12,7 +12,14 @@ export const dagEdgeGrader: BenchmarkGrader = {
       producers
         .filter((producer) =>
           consumer.dependsOn.includes(producer.taskId) &&
-          (!assertion.outputKey || producer.producedBindings.some((binding) => binding.outputKey === assertion.outputKey))
+          (!assertion.outputKey || (
+            producer.producedBindings.some((binding) => binding.outputKey === assertion.outputKey) ||
+            consumer.consumedInputs.some((input) =>
+              input.fromTaskId === producer.taskId &&
+              input.outputKey === assertion.outputKey &&
+              input.bindingVerified
+            )
+          ))
         )
         .map((producer) => ({ producer, consumer }))
     )[0];

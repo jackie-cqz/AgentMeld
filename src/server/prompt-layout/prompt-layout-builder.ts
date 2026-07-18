@@ -6,7 +6,7 @@ import type { PromptLayout, PromptLayoutInput, PromptLayoutSection } from "@/ser
 import { generateCacheKey } from "@/server/prompt-layout/prompt-cache-key";
 
 const PLATFORM_PROMPT_VERSION = "agentmeld-p0-v1";
-const ROLE_CONTRACT_VERSION = "role-contracts-v1";
+export const ROLE_CONTRACT_VERSION = "role-contracts-v1";
 const TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4;
 
 function estimateTokens(text: string): number {

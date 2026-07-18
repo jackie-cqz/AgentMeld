@@ -1,6 +1,12 @@
-import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
+import type {
+  ToolContext,
+  ToolDef,
+  ToolExecutionMeta,
+  ToolFailureCategory,
+  ToolResult,
+} from "@/server/tools/types";
 import { captureEvidence } from "@/server/evidence/evidence-collector";
-import { classifyToolError, type ToolFailureCategory } from "@/server/logger";
+import { classifyToolError } from "@/server/logger";
 
 function normalizeToolError(error: unknown, toolName?: string): ToolResult {
   const message = error instanceof Error ? error.message : "Tool handler threw an unexpected error.";
@@ -13,6 +19,7 @@ function normalizeToolError(error: unknown, toolName?: string): ToolResult {
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDef>();
+  private executionInterceptor: ((name: string, args: unknown, ctx: ToolContext) => ToolResult | null) | null = null;
 
   register(tool: ToolDef): void {
     if (this.tools.has(tool.name)) {
@@ -33,7 +40,12 @@ export class ToolRegistry {
     });
   }
 
-  async execute(name: string, args: unknown, ctx: ToolContext): Promise<ToolResult> {
+  async execute(
+    name: string,
+    args: unknown,
+    ctx: ToolContext,
+    meta?: ToolExecutionMeta,
+  ): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       return { ok: false, error: `Unknown tool: ${name}` };
@@ -42,22 +54,52 @@ export class ToolRegistry {
     const startedAt = Date.now();
     let result: ToolResult;
     try {
-      result = await tool.handler(args, ctx);
+      const injected = this.executionInterceptor?.(name, args, ctx) ?? null;
+      result = injected ?? await tool.handler(args, ctx);
     } catch (error) {
       result = normalizeToolError(error, name);
     }
 
-    // P1: Capture evidence for every tool execution (fire-and-forget, never blocks)
-    captureEvidence({
+    // Persist the terminal result before returning so verification cannot race
+    // against an unfinished evidence write.
+    await captureEvidence({
       toolName: name,
       args,
       result,
       context: ctx,
       durationMs: Date.now() - startedAt,
-    }).catch(() => {
-      // Silently ignore — evidence capture failure must never affect task execution
+      callId: meta?.callId,
+    }).catch((error) => {
+      // Tool behavior remains available even if observability storage fails, but
+      // the failure is explicit instead of becoming an unhandled background task.
+      console.error(`[tool-registry] failed to capture terminal evidence for ${name}:`, error);
     });
 
+    return result;
+  }
+
+  async recordPreflightFailure(
+    name: string,
+    args: unknown,
+    error: string,
+    ctx: ToolContext,
+    meta: ToolExecutionMeta,
+    options?: { code?: string; category?: ToolFailureCategory },
+  ): Promise<ToolResult> {
+    const result: ToolResult = {
+      ok: false,
+      error,
+      code: options?.code ?? "TOOL_ARGUMENTS_INVALID",
+      category: options?.category ?? "validation_error",
+    };
+    await captureEvidence({
+      toolName: name,
+      args,
+      result,
+      context: ctx,
+      durationMs: 0,
+      callId: meta.callId,
+    });
     return result;
   }
 
@@ -67,6 +109,15 @@ export class ToolRegistry {
 
   clearForTests(): void {
     this.tools.clear();
+  }
+
+  setExecutionInterceptorForTests(
+    interceptor: ((name: string, args: unknown, ctx: ToolContext) => ToolResult | null) | null,
+  ): void {
+    if (interceptor && process.env.AGENTMELD_BENCH_FAULT_INJECTION !== "1") {
+      throw new Error("Tool fault injection is only available inside an explicit benchmark environment.");
+    }
+    this.executionInterceptor = interceptor;
   }
 }
 

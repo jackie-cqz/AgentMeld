@@ -39,6 +39,8 @@ export interface OutputBindingAssertion extends BenchmarkAssertionBase {
   role: BenchmarkRole;
   outputKey: string;
   artifactType: BenchmarkArtifactType;
+  aliases?: string[];
+  requiredAbsent?: boolean;
 }
 
 export interface ArtifactReadAssertion extends BenchmarkAssertionBase {
@@ -56,10 +58,67 @@ export interface ToolSucceededAssertion extends BenchmarkAssertionBase {
   commandPattern?: string;
 }
 
+export interface ToolRejectedAssertion extends BenchmarkAssertionBase {
+  type: "tool_rejected";
+  toolName: string;
+  role?: BenchmarkRole;
+  category?: "security_policy" | "approval_rejected" | "tool_error";
+  reasonPattern?: string;
+}
+
+export interface WarningPresentAssertion extends BenchmarkAssertionBase {
+  type: "warning_present";
+  code: string;
+  role?: BenchmarkRole;
+}
+
+export interface FaultInjectedAssertion extends BenchmarkAssertionBase {
+  type: "fault_injected";
+  faultId: string;
+}
+
+export interface ApprovalResolvedAssertion extends BenchmarkAssertionBase {
+  type: "approval_resolved";
+  approvalType: BenchmarkApprovalType;
+  decision: "approved" | "rejected";
+  role?: BenchmarkRole;
+  match?: string;
+}
+
 export interface DeploymentReadyAssertion extends BenchmarkAssertionBase {
   type: "deployment_ready";
   role?: BenchmarkRole;
   outputKey?: string;
+}
+
+export interface ArtifactValidAssertion extends BenchmarkAssertionBase {
+  type: "artifact_valid";
+  role: BenchmarkRole;
+  outputKey: string;
+  artifactType: BenchmarkArtifactType;
+  minContentBytes?: number;
+  requiredFiles?: string[];
+  requiredContentPatterns?: string[];
+  requireUniqueBinding?: boolean;
+}
+
+export interface BuildSucceededAssertion extends BenchmarkAssertionBase {
+  type: "build_succeeded";
+  role?: BenchmarkRole;
+  commandPattern?: string;
+}
+
+export interface PreviewHttpAssertion extends BenchmarkAssertionBase {
+  type: "preview_http";
+  role?: BenchmarkRole;
+  outputKey?: string;
+  expectedStatus?: number;
+  minBodyBytes?: number;
+}
+
+export interface BrowserInteractionAssertion extends BenchmarkAssertionBase {
+  type: "browser_interaction";
+  scriptId: string;
 }
 
 export interface RetryBoundAssertion extends BenchmarkAssertionBase {
@@ -69,14 +128,41 @@ export interface RetryBoundAssertion extends BenchmarkAssertionBase {
   maxAttempts?: number;
 }
 
+export interface ToolRetryBoundAssertion extends BenchmarkAssertionBase {
+  type: "tool_retry_bound";
+  role?: BenchmarkRole;
+  toolName: string;
+  commandPattern?: string;
+  minCalls?: number;
+  maxCalls?: number;
+  requireFailureBeforeSuccess?: boolean;
+}
+
+export interface VerificationStatusAssertion extends BenchmarkAssertionBase {
+  type: "verification_status";
+  role?: BenchmarkRole;
+  expected: "verified" | "rejected" | "needs_review";
+  warningCode?: string;
+}
+
 export type BenchmarkAssertion =
   | RoleExecutedAssertion
   | DagEdgeAssertion
   | OutputBindingAssertion
   | ArtifactReadAssertion
   | ToolSucceededAssertion
+  | ToolRejectedAssertion
+  | WarningPresentAssertion
+  | FaultInjectedAssertion
+  | ApprovalResolvedAssertion
   | DeploymentReadyAssertion
-  | RetryBoundAssertion;
+  | ArtifactValidAssertion
+  | BuildSucceededAssertion
+  | PreviewHttpAssertion
+  | BrowserInteractionAssertion
+  | RetryBoundAssertion
+  | ToolRetryBoundAssertion
+  | VerificationStatusAssertion;
 
 export interface BenchmarkCaseLimits {
   maxDurationMs: number;
@@ -100,6 +186,8 @@ export interface BenchmarkApprovalScriptEntry {
   /** Case-insensitive substring matched against the plan, path, or command. */
   match?: string;
   decision: "approve" | "reject";
+  /** Number of matching approvals this entry may resolve, including recovery attempts. */
+  maxMatches?: number;
 }
 
 export interface BenchmarkUserScript {
@@ -111,7 +199,180 @@ export interface BenchmarkUserScript {
 
 export interface BenchmarkRuntimeConfig {
   fsWriteApprovalMode?: "auto" | "review";
+  workspaceFiles?: BenchmarkWorkspaceFile[];
   userScript?: BenchmarkUserScript;
+  browserScripts?: BenchmarkBrowserScript[];
+  faults?: BenchmarkFaultSpec[];
+}
+
+export interface BenchmarkWorkspaceFile {
+  /** Portable path relative to the benchmark conversation workspace. */
+  path: string;
+  content: string;
+}
+
+export interface BenchmarkFaultSpec {
+  id: string;
+  type:
+    | "tool_arguments_json"
+    | "tool_failure"
+    | "command_nonzero"
+    | "deployment_missing"
+    | "task_report_fake_deployment"
+    | "sse_disconnect"
+    | "child_run_abort";
+  toolName: string;
+  occurrence?: number;
+  commandPattern?: string;
+  message?: string;
+}
+
+export interface BenchmarkFaultRecord {
+  id: string;
+  type: BenchmarkFaultSpec["type"];
+  toolName: string;
+  occurrence: number;
+  runId: string;
+  taskId: string | null;
+  injectedAt: number;
+  detail: string;
+}
+
+export type BenchmarkBrowserStep =
+  | { action: "fill"; selector: string; value: string }
+  | { action: "click"; selector: string }
+  | { action: "press"; selector: string; key: string }
+  | { action: "check"; selector: string }
+  | { action: "select_option"; selector: string; index: number }
+  | { action: "wait"; timeoutMs: number }
+  | { action: "reload" }
+  | { action: "navigate"; path: string }
+  | { action: "advance_clock"; timeoutMs: number }
+  | { action: "assert_storage"; key?: string; valuePattern?: string; minEntries?: number; timeoutMs?: number }
+  | { action: "assert_text"; text: string }
+  | { action: "assert_visible"; selector: string }
+  | { action: "assert_dom_changed" };
+
+export interface BenchmarkBrowserScript {
+  id: string;
+  outputKey?: string;
+  timeoutMs?: number;
+  initialTimeMs?: number;
+  steps: BenchmarkBrowserStep[];
+}
+
+export interface BenchmarkArtifactValidation {
+  taskId: string;
+  outputKey: string;
+  artifactId: string;
+  artifactType: string;
+  title: string;
+  contentBytes: number;
+  contentText?: string;
+  files: string[];
+  valid: boolean;
+  errors: string[];
+}
+
+export interface BenchmarkBuildValidation {
+  taskId: string;
+  attemptId?: string;
+  evidenceId: string;
+  toolCallId?: string;
+  command: string;
+  exitCode: number;
+  timedOut: boolean;
+  status: string;
+  outputExcerpt: string;
+}
+
+export interface BenchmarkDeploymentValidation {
+  taskId: string;
+  attemptId?: string;
+  outputKey: string;
+  artifactId: string;
+  evidenceId: string | null;
+  toolCallId: string | null;
+  previewPath: string;
+  previewUrl: string;
+  ready: boolean;
+  supersededEvidenceIds?: string[];
+}
+
+export interface BenchmarkPreviewValidation {
+  outputKey: string;
+  artifactId: string;
+  previewUrl: string;
+  status: number | null;
+  bodyBytes: number;
+  contentType: string | null;
+  error: string | null;
+}
+
+export interface BenchmarkBrowserStepResult {
+  index: number;
+  action: BenchmarkBrowserStep["action"];
+  status: "passed" | "failed";
+  detail: string;
+}
+
+export interface BenchmarkBrowserValidation {
+  scriptId: string;
+  outputKey: string;
+  previewUrl: string;
+  status: "passed" | "failed" | "blocked";
+  steps: BenchmarkBrowserStepResult[];
+  consoleErrors: string[];
+  pageErrors: string[];
+  failedRequests: string[];
+  screenshotPath: string | null;
+  error: string | null;
+}
+
+export interface BenchmarkToolRejectionValidation {
+  runId: string;
+  taskId: string | null;
+  attemptId?: string;
+  callId: string;
+  toolName: string;
+  category: "security_policy" | "approval_rejected" | "tool_error";
+  code?: string;
+  reason: string;
+  conflictingSuccessEvidenceIds?: string[];
+}
+
+export interface BenchmarkToolCallValidation {
+  runId: string;
+  taskId: string | null;
+  attemptId?: string;
+  callId: string;
+  toolName: string;
+  args: unknown;
+  status: "succeeded" | "failed" | "pending";
+  result: unknown;
+  sequence: number;
+}
+
+export interface BenchmarkApprovalValidation {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  approvalType: BenchmarkApprovalType;
+  status: string;
+  payload: string;
+}
+
+export interface BenchmarkRuntimeValidation {
+  collectedAt: number;
+  artifacts: BenchmarkArtifactValidation[];
+  builds: BenchmarkBuildValidation[];
+  deployments: BenchmarkDeploymentValidation[];
+  previews: BenchmarkPreviewValidation[];
+  browsers: BenchmarkBrowserValidation[];
+  toolRejections: BenchmarkToolRejectionValidation[];
+  toolCalls?: BenchmarkToolCallValidation[];
+  injectedFaults: BenchmarkFaultRecord[];
+  approvals: BenchmarkApprovalValidation[];
 }
 
 export interface AgentBenchmarkCase {
@@ -125,7 +386,15 @@ export interface AgentBenchmarkCase {
   assertions: BenchmarkAssertion[];
   limits: BenchmarkCaseLimits;
   runtime?: BenchmarkRuntimeConfig;
+  judge?: BenchmarkJudgeConfig;
   tags: string[];
+}
+
+export interface BenchmarkJudgeConfig {
+  enabled: boolean;
+  requiredForPass?: boolean;
+  rubricVersion?: string;
+  dimensions?: string[];
 }
 
 export interface AssertionReference {
@@ -136,6 +405,8 @@ export interface AssertionReference {
   evidenceId?: string;
   artifactId?: string;
   toolCallId?: string;
+  url?: string;
+  filePath?: string;
 }
 
 export interface AssertionResult {
@@ -162,6 +433,9 @@ export interface AgentBenchmarkMetrics {
   taskCount: number;
   completedTaskCount: number;
   failedTaskCount: number;
+  taskRetryCount: number;
+  toolRetryCount: number;
+  /** @deprecated Use taskRetryCount. */
   retryCount: number;
 
   planValid: boolean;
@@ -172,8 +446,12 @@ export interface AgentBenchmarkMetrics {
   verifiedInputCoverage: number;
   upstreamArtifactReadRate: number;
   contextOmissionRate: number;
+  contextIncludedItemCount: number;
+  contextOmittedItemCount: number;
+  contextOmittedReasonCounts: Record<string, number>;
   staleFactRejectedCount: number;
   unverifiedOutputBlockedCount: number;
+  unverifiedOutputPropagationCount: number;
 
   toolCallCount: number;
   toolFailureRate: number;
@@ -184,6 +462,10 @@ export interface AgentBenchmarkMetrics {
   deploymentReady: boolean;
   reviewerPassed: boolean;
 
+  inputTokens: number;
+  outputTokens: number;
+  modelRunCount: number;
+  /** @deprecated Kept in report JSON compatibility; equals inputTokens. */
   estimatedInputTokens: number;
   edgesSatisfied: boolean;
   missingEdges: string[];

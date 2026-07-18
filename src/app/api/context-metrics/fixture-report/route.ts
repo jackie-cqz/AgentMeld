@@ -27,7 +27,20 @@ export async function POST(request: Request) {
       errors++;
       entries.push({
         fixtureId: f.id, runId: f.runId, status: "error",
-        report: { runId: f.runId, raw: emptyRawMetrics(f.runId), derived: emptyDerivedRates() },
+        report: {
+          runId: f.runId,
+          raw: emptyRawMetrics(f.runId),
+          derived: emptyDerivedRates(),
+          sources: {
+            runIds: [],
+            taskAttemptIds: [],
+            contextSnapshotIds: [],
+            evidenceIds: [],
+            outputBindingKeys: [],
+            messageIds: [],
+            approvalIds: [],
+          },
+        },
         warnings: [result.error], evaluatedAt: Date.now(),
       });
       continue;
@@ -64,7 +77,42 @@ export async function POST(request: Request) {
 }
 
 function emptyRawMetrics(runId: string) {
-  return { runId, taskCount: 0, attemptCount: 0, completedTaskCount: 0, failedTaskCount: 0, verifiedInputCount: 0, missingRequiredInputCount: 0, upstreamInputReadCount: 0, upstreamInputUnreadCount: 0, contextIncludedItemCount: 0, contextOmittedItemCount: 0, contextOmittedByBudgetCount: 0, staleRejectedCount: 0, unverifiedRejectedCount: 0, unrelatedRejectedCount: 0, evidenceCount: 0, toolCallCount: 0, failedToolCallCount: 0, verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0, artifactCreatedCount: 0, webAppOutputCount: 0, deploymentReadyCount: 0 };
+  return {
+    runId,
+    taskCount: 0,
+    attemptCount: 0,
+    completedTaskCount: 0,
+    failedTaskCount: 0,
+    verifiedInputCount: 0,
+    missingRequiredInputCount: 0,
+    upstreamInputReadCount: 0,
+    upstreamInputUnreadCount: 0,
+    contextIncludedItemCount: 0,
+    contextOmittedItemCount: 0,
+    contextOmittedByBudgetCount: 0,
+    staleRejectedCount: 0,
+    staleFactLeakageCount: 0,
+    unverifiedRejectedCount: 0,
+    unrelatedRejectedCount: 0,
+    contextOmittedReasonCounts: {},
+    evidenceCount: 0,
+    toolCallCount: 0,
+    failedToolCallCount: 0,
+    verifiedOutputBindingCount: 0,
+    rejectedOutputClaimCount: 0,
+    unverifiedOutputPropagationCount: 0,
+    approvalRequestCount: 0,
+    jsonRepairCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    modelRunCount: 0,
+    verifiedTaskCount: 0,
+    rejectedTaskCount: 0,
+    needsReviewTaskCount: 0,
+    artifactCreatedCount: 0,
+    webAppOutputCount: 0,
+    deploymentReadyCount: 0,
+  };
 }
 
 function emptyDerivedRates() {

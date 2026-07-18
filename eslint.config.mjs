@@ -5,7 +5,16 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [".next/**", "node_modules/**", "release/**", "dist/**"]
+    ignores: [
+      ".next/**",
+      "node_modules/**",
+      "release/**",
+      "dist/**",
+      "coverage/**",
+      ".agentmeld-data/**",
+      ".agent-conference-data/**",
+      "AgentMeld/**",
+    ]
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

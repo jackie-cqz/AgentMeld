@@ -27,6 +27,27 @@ beforeAll(() => {
   db.prepare(`INSERT OR IGNORE INTO agent_runs (id, conversation_id, agent_id, trigger_message_id, parent_run_id, status, started_at, created_at, updated_at) VALUES (?, ?, 'ag_pm', NULL, NULL, 'complete', ?, ?, ?)`).run(RUN_ID, CONV_ID, now, now, now);
   db.prepare(`INSERT OR IGNORE INTO agent_runs (id, conversation_id, agent_id, trigger_message_id, parent_run_id, status, started_at, created_at, updated_at) VALUES ('run_child_m1', ?, 'ag_pm', NULL, ?, 'complete', ?, ?, ?)`).run(CONV_ID, RUN_ID, now, now, now);
   db.prepare(`INSERT OR IGNORE INTO agent_runs (id, conversation_id, agent_id, trigger_message_id, parent_run_id, status, started_at, created_at, updated_at) VALUES ('run_child_m2', ?, 'ag_frontend', NULL, ?, 'complete', ?, ?, ?)`).run(CONV_ID, RUN_ID, now, now, now);
+  db.prepare("UPDATE agent_runs SET usage = ? WHERE id = ?").run(JSON.stringify({ inputTokens: 100, outputTokens: 20 }), RUN_ID);
+  db.prepare("UPDATE agent_runs SET usage = ? WHERE id = ?").run(JSON.stringify({ inputTokens: 200, outputTokens: 40 }), "run_child_m1");
+  db.prepare("UPDATE agent_runs SET usage = ? WHERE id = ?").run(JSON.stringify({ inputTokens: 300, outputTokens: 60 }), "run_child_m2");
+
+  const pmParts = JSON.stringify([
+    { type: "tool_use", callId: "call_1", toolName: "write_artifact", args: {}, argumentRepair: { applied: true, kinds: ["syntax_repaired"] } },
+    { type: "tool_result", callId: "call_1", result: { artifactId: "art_prd" } },
+  ]);
+  const frontendParts = JSON.stringify([
+    { type: "tool_use", callId: "call_2", toolName: "read_artifact", args: { artifactId: "art_prd" } },
+    { type: "tool_result", callId: "call_2", result: { artifactId: "art_prd" } },
+    { type: "tool_use", callId: "call_3", toolName: "write_artifact", args: {} },
+    { type: "tool_result", callId: "call_3", result: { artifactId: "art_app" } },
+    { type: "tool_use", callId: "call_4", toolName: "bash", args: { command: "pnpm build" } },
+    { type: "tool_result", callId: "call_4", result: { exitCode: 0 } },
+    { type: "tool_use", callId: "call_5", toolName: "deploy_workspace", args: {} },
+    { type: "tool_result", callId: "call_5", result: { status: "ready" } },
+  ]);
+  db.prepare(`INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, created_at, updated_at) VALUES ('msg_metrics_pm', ?, 'assistant', 'ag_pm', 'run_child_m1', ?, 'complete', '[]', ?, ?)`).run(CONV_ID, pmParts, now, now);
+  db.prepare(`INSERT INTO messages (id, conversation_id, role, agent_id, run_id, parts, status, mentioned_agent_ids, created_at, updated_at) VALUES ('msg_metrics_fe', ?, 'assistant', 'ag_frontend', 'run_child_m2', ?, 'complete', '[]', ?, ?)`).run(CONV_ID, frontendParts, now, now);
+  db.prepare(`INSERT INTO pending_approvals (id, conversation_id, agent_id, run_id, approval_type, status, payload_json, created_at, updated_at) VALUES ('approval_metrics_1', ?, 'ag_frontend', 'run_child_m2', 'bash', 'approved', '{}', ?, ?)`).run(CONV_ID, now, now);
 
   const planJson = JSON.stringify([
     { id: "t1", agentId: "ag_pm", title: "PM: PRD", dependsOn: [], expectedOutputs: [{ id: "prd", type: "document", required: true }], inputs: [] },
@@ -89,6 +110,20 @@ describe("computeRunMetrics", () => {
       expect(result.raw.verifiedOutputBindingCount).toBe(2);
       expect(result.raw.artifactCreatedCount).toBe(2);
       expect(result.raw.deploymentReadyCount).toBe(1);
+      expect(result.raw.toolCallCount).toBe(5);
+      expect(result.raw.failedToolCallCount).toBe(0);
+      expect(result.raw.approvalRequestCount).toBe(1);
+      expect(result.raw.jsonRepairCount).toBe(1);
+      expect(result.raw.inputTokens).toBe(600);
+      expect(result.raw.outputTokens).toBe(120);
+      expect(result.raw.modelRunCount).toBe(3);
+      expect(result.sources.runIds).toEqual(expect.arrayContaining([RUN_ID, "run_child_m1", "run_child_m2"]));
+      expect(result.sources.taskAttemptIds).toHaveLength(2);
+      expect(result.sources.contextSnapshotIds).toHaveLength(2);
+      expect(result.sources.evidenceIds).toHaveLength(5);
+      expect(result.sources.messageIds).toEqual(expect.arrayContaining(["msg_metrics_pm", "msg_metrics_fe"]));
+      expect(result.sources.messageIds).toHaveLength(2);
+      expect(result.sources.approvalIds).toEqual(["approval_metrics_1"]);
     }
   });
 
@@ -99,10 +134,14 @@ describe("computeRunMetrics", () => {
       verifiedInputCount: 2, missingRequiredInputCount: 0,
       upstreamInputReadCount: 1, upstreamInputUnreadCount: 1,
       contextIncludedItemCount: 2, contextOmittedItemCount: 1,
-      contextOmittedByBudgetCount: 0, staleRejectedCount: 1,
+      contextOmittedByBudgetCount: 0, staleRejectedCount: 1, staleFactLeakageCount: 0,
       unverifiedRejectedCount: 0, unrelatedRejectedCount: 0,
+      contextOmittedReasonCounts: { stale: 1 },
       evidenceCount: 5, toolCallCount: 5, failedToolCallCount: 0,
-      verifiedOutputBindingCount: 2, rejectedOutputClaimCount: 0,
+      verifiedOutputBindingCount: 2, rejectedOutputClaimCount: 0, unverifiedOutputPropagationCount: 0,
+      approvalRequestCount: 1, jsonRepairCount: 1,
+      inputTokens: 600, outputTokens: 120, modelRunCount: 3,
+      verifiedTaskCount: 2, rejectedTaskCount: 0, needsReviewTaskCount: 0,
       artifactCreatedCount: 2, webAppOutputCount: 1, deploymentReadyCount: 1,
     };
     const rates = computeDerivedRates(raw);
@@ -120,10 +159,14 @@ describe("computeRunMetrics", () => {
       verifiedInputCount: 0, missingRequiredInputCount: 0,
       upstreamInputReadCount: 0, upstreamInputUnreadCount: 0,
       contextIncludedItemCount: 0, contextOmittedItemCount: 0,
-      contextOmittedByBudgetCount: 0, staleRejectedCount: 0,
+      contextOmittedByBudgetCount: 0, staleRejectedCount: 0, staleFactLeakageCount: 0,
       unverifiedRejectedCount: 0, unrelatedRejectedCount: 0,
+      contextOmittedReasonCounts: {},
       evidenceCount: 0, toolCallCount: 0, failedToolCallCount: 0,
-      verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0,
+      verifiedOutputBindingCount: 0, rejectedOutputClaimCount: 0, unverifiedOutputPropagationCount: 0,
+      approvalRequestCount: 0, jsonRepairCount: 0,
+      inputTokens: 0, outputTokens: 0, modelRunCount: 0,
+      verifiedTaskCount: 0, rejectedTaskCount: 0, needsReviewTaskCount: 0,
       artifactCreatedCount: 0, webAppOutputCount: 0, deploymentReadyCount: 0,
     };
     const rates = computeDerivedRates(empty);

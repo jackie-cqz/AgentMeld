@@ -266,6 +266,20 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
   parts.push("</context>");
   parts.push("");
 
+  if (task.targetPaths && task.targetPaths.length > 0) {
+    const targetPaths = task.targetPaths.map((targetPath) => targetPath.replace(/\\/g, "/"));
+    parts.push(
+      "TARGET PATHS ARE A HARD VERIFICATION CONTRACT, not suggestions. " +
+      `The required workspace-relative targets are ${JSON.stringify(targetPaths)}. ` +
+      "For a directory target ending in '/', treat it as the project root prefix: every fs_write/fs_patch path, " +
+      "the build command working directory, and the deploy_workspace path must be inside that directory. " +
+      "Do not place the project at workspace root when a directory target is declared. Before report_task_result, " +
+      "call fs_list on each target and confirm the required files exist there; a successful build or deployment " +
+      "from a different path will still be rejected."
+    );
+    parts.push("");
+  }
+
   // Task instructions
   parts.push(`<your_task>${task.prompt}</your_task>`);
 
@@ -283,7 +297,11 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
       "For every artifact that fulfills one of them, call write_artifact with outputKey " +
       "set to the exact matching id. A successful artifact call without outputKey does not " +
       "satisfy expected_outputs. Do not repeat artifact ids inside report_task_result; " +
-      "the system records them automatically."
+      "the system records them automatically. Each required output must be a complete, " +
+      "self-contained final deliverable. For long documents or applications, assemble and " +
+      "revise workspace files with fs_write/fs_patch first, then call write_artifact once " +
+      "with the complete result. A later complete write for the same outputKey replaces the " +
+      "earlier candidate; never split one deliverable across multiple partial artifacts."
     );
   }
   // P5: Build acceptanceResults with human-readable descriptions.
@@ -294,6 +312,15 @@ export function buildChildTaskPrompt(input: BuildChildPromptInput): string {
     passed: true,
     evidence: "concrete evidence for this criterion"
   }));
+  if (isReviewTask(task)) {
+    parts.push(
+      "This is a review task. In report_task_result, acceptanceResults[].passed means " +
+      "whether you actually performed that review check and collected evidence, not whether " +
+      "the reviewed product is defect-free. Record discovered defects, severity, and product " +
+      "pass/fail conclusions in evidence, summary, and the review artifact. Set passed=false " +
+      "only when you could not perform the requested review check itself."
+    );
+  }
   parts.push(
     "At completion, call report_task_result using this contract: " +
     JSON.stringify({
@@ -320,6 +347,11 @@ function extractCriterionDescription(criterion: string): string {
     if (parsed && typeof parsed.description === "string") return parsed.description;
   } catch { /* not JSON, use as-is */ }
   return criterion;
+}
+
+function isReviewTask(task: ParsedTask): boolean {
+  return task.expectedOutputs?.some((output) => output.id === "review_report") ||
+    /\breview(?:er)?\b|审查|评审/i.test(`${task.title} ${task.prompt}`);
 }
 
 function escapeXml(s: string): string {

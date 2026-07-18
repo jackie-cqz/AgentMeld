@@ -4,10 +4,14 @@
 
 import { describe, expect, it } from "vitest";
 import { resolveValidator, validateCriterion, type ValidationResult } from "@/server/verification/validator-registry";
-import { verifyTaskAttempt } from "@/server/verification/verification-engine";
+import {
+  findUnsupportedArtifactClaims,
+  verifyTaskAttempt,
+} from "@/server/verification/verification-engine";
 import { buildFailureContext } from "@/server/task-context/failure-context";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
 import { getDatabase } from "@/db/client";
+import { createArtifact } from "@/server/repositories";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { AcceptanceCriterionSpec } from "@/shared/types";
 
@@ -161,6 +165,17 @@ describe("verification-engine", () => {
     const attemptId = `ta_verify_binding_${suffix}`;
     const artifactId = `art_verify_${suffix}`;
     seedEvidenceParents({ conversationId, conductorRunId, childRunId, attemptId });
+    createArtifact({
+      id: artifactId,
+      conversationId,
+      createdByAgentId: "ag_pm",
+      type: "document",
+      title: "PRD",
+      content: { type: "document", format: "markdown", content: "# PRD\n\nComplete requirements." },
+      version: 1,
+      parentArtifactId: null,
+      now: Date.now(),
+    });
     insertEvidence({
       id: `ev_verify_binding_${suffix}`,
       conversationId,
@@ -215,6 +230,17 @@ describe("verification-engine", () => {
     const attemptId = `ta_static_web_${suffix}`;
     const artifactId = `art_static_web_${suffix}`;
     seedEvidenceParents({ conversationId, conductorRunId, childRunId, attemptId });
+    createArtifact({
+      id: artifactId,
+      conversationId,
+      createdByAgentId: "ag_pm",
+      type: "web_app",
+      title: "Static app",
+      content: { type: "web_app", files: { "index.html": "<main>Ready</main>" }, entry: "index.html" },
+      version: 1,
+      parentArtifactId: null,
+      now: Date.now(),
+    });
 
     const baseEvidence = {
       conversationId,
@@ -380,6 +406,55 @@ function seedEvidenceParents(input: {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(input.attemptId, input.conductorRunId, input.conversationId, "plan_verify_binding", 0, "t1", "ag_pm", input.childRunId, 1, null, "reported_complete", "not_started", now, now);
 }
+
+describe("unsupported artifact claims", () => {
+  it("rejects an artifact id that appears only in the task report", () => {
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Created art_benchmark_fake_123." },
+      [],
+    )).toEqual(["art_benchmark_fake_123"]);
+  });
+
+  it("accepts artifact ids backed by valid attempt evidence", () => {
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Created art_real_123." },
+      [{
+        subjectId: "web_app",
+        payloadJson: JSON.stringify({ artifactId: "art_real_123" }),
+        status: "valid",
+      }],
+    )).toEqual([]);
+  });
+
+  it("preserves a legal trailing hyphen when matching an evidenced artifact id", () => {
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Created art_real_trailing_123-." },
+      [{
+        subjectId: "web_app",
+        payloadJson: JSON.stringify({ artifactId: "art_real_trailing_123-" }),
+        status: "valid",
+      }],
+    )).toEqual([]);
+  });
+
+  it("reports the complete unsupported artifact id when it ends in a hyphen", () => {
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: { web_app: "art_fake_trailing_123-" } },
+      [],
+    )).toEqual(["art_fake_trailing_123-"]);
+  });
+
+  it("does not accept invalid or historical evidence as support", () => {
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: { web_app: "art_invalid_123" } },
+      [{
+        subjectId: "art_invalid_123",
+        payloadJson: "{}",
+        status: "invalid",
+      }],
+    )).toEqual(["art_invalid_123"]);
+  });
+});
 
 // ── P5: Failure-driven retry context ──────────────────────────────────────
 

@@ -162,7 +162,8 @@ function applyPartsState(parts: MessagePart[], event: StreamEvent): PartsResult 
         type: "tool_use",
         callId: event.callId,
         toolName: event.toolName,
-        args: event.args
+        args: event.args,
+        argumentRepair: event.argumentRepair
       } as MessagePart);
       return { parts: next, sideEvents: noSide };
     }

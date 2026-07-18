@@ -4,7 +4,7 @@
   "title": "Personal Blog",
   "description": "Static blog testing structured requirements, design handoff, implementation, and deployment.",
   "category": "collaboration",
-  "prompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。",
+  "prompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。部署环境使用 /deployments/{id} 子路径托管静态文件，客户端路由必须使用 HashRouter 或等价的子路径兼容方案，不能让首次打开部署预览落入应用内 404。所有 Markdown/front matter 解析必须在浏览器中直接运行，禁止使用依赖 Node.js Buffer、process 或 fs 的解析库；可以使用浏览器兼容库、构建时 import.meta.glob eager 导入或简单的本地解析函数。",
   "expectedRoles": ["pm", "ui", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
@@ -12,6 +12,17 @@
     { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
     { "id": "output-prd", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
     { "id": "output-style-guide", "type": "output_binding", "role": "ui", "outputKey": "style-guide", "artifactType": "document", "required": true },
+    {
+      "id": "style-guide-complete",
+      "type": "artifact_valid",
+      "role": "ui",
+      "outputKey": "style-guide",
+      "artifactType": "document",
+      "minContentBytes": 800,
+      "requiredContentPatterns": ["颜色|color", "字体|typography|font", "间距|spacing", "组件状态|component state|hover|focus"],
+      "requireUniqueBinding": true,
+      "required": true
+    },
     { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
     { "id": "edge-pm-ui", "type": "dag_edge", "fromRole": "pm", "toRole": "ui", "outputKey": "prd", "required": true },
     { "id": "edge-pm-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "prd", "required": true },
@@ -21,8 +32,26 @@
     { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
     { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
     { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
-    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "browser-blog-route", "type": "browser_interaction", "scriptId": "blog-about-route", "required": true }
   ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "blog-about-route",
+      "outputKey": "web_app",
+      "steps": [
+        { "action": "assert_visible", "selector": "main, [role='main'], article" },
+        { "action": "click", "selector": "a[href*='about'], a[href*='About'], button:has-text('关于'), button:has-text('About')" },
+        { "action": "assert_dom_changed" }
+      ]
+    }]
+  },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "cross_artifact_consistency", "implementation_fidelity", "final_summary_accuracy"]
+  },
   "tags": ["web-app", "react", "static-site", "context-handoff"]
 }

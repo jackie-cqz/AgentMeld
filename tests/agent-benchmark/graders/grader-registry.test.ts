@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentBenchmarkCase } from "@/server/context-metrics/benchmark-types";
+import type {
+  AgentBenchmarkCase,
+  BenchmarkRuntimeValidation,
+} from "@/server/context-metrics/benchmark-types";
 import type {
   ContextTraceAttempt,
   ContextTraceEvidenceSummary,
@@ -64,6 +67,50 @@ describe("benchmark grader registry", () => {
     });
   });
 
+  it("recognizes a verified logical input edge after a producer recovery task", () => {
+    const trace = buildTrace();
+    const originalFrontend = trace.tasks[1];
+    originalFrontend.taskId = "t3";
+    originalFrontend.attempts[0].taskId = "t3";
+    originalFrontend.producedBindings = [];
+    const reviewer: ContextTraceRunTask = {
+      taskId: "t4",
+      agentId: "ag_reviewer",
+      title: "Reviewer",
+      dependsOn: ["t3"],
+      attempts: [attempt("att_review", "t4", "ag_reviewer")],
+      producedBindings: [],
+      consumedInputs: [{
+        fromTaskId: "t3",
+        outputKey: "web_app",
+        artifactId: "art_recovered",
+        artifactTitle: "Recovered app",
+        artifactType: "web_app",
+        artifactVersion: 1,
+        bindingVerified: true,
+        readByCurrentAttempt: true,
+      }],
+      evidence: [],
+      verdicts: [],
+      warnings: [],
+    };
+    trace.tasks.push(reviewer);
+    const recoveryCase: AgentBenchmarkCase = {
+      ...benchmarkCase,
+      assertions: [{
+        id: "frontend-reviewer",
+        type: "dag_edge",
+        fromRole: "frontend",
+        toRole: "reviewer",
+        outputKey: "web_app",
+        required: true,
+      }],
+    };
+
+    const result = evaluateBenchmarkTrace(recoveryCase, trace);
+    expect(result.status).toBe("passed");
+  });
+
   it("does not depend on assertion description wording", () => {
     const changedWording: AgentBenchmarkCase = {
       ...benchmarkCase,
@@ -78,7 +125,100 @@ describe("benchmark grader registry", () => {
       original.assertionResults.map((item) => item.status),
     );
   });
+
+  it("grades tool-level failure-before-success independently from task attempts", () => {
+    const recoveryCase: AgentBenchmarkCase = {
+      ...benchmarkCase,
+      assertions: [{
+        id: "deploy-tool-retry",
+        type: "tool_retry_bound",
+        role: "frontend",
+        toolName: "deploy_workspace",
+        minCalls: 2,
+        maxCalls: 3,
+        requireFailureBeforeSuccess: true,
+        required: true,
+      }],
+    };
+    const runtime = emptyRuntime();
+    runtime.toolCalls = [
+      {
+        runId: "run_frontend",
+        taskId: "r2",
+        attemptId: "att_frontend",
+        callId: "call_deploy_1",
+        toolName: "deploy_workspace",
+        args: { path: "dist" },
+        status: "failed",
+        result: "missing path",
+        sequence: 0,
+      },
+      {
+        runId: "run_frontend",
+        taskId: "r2",
+        attemptId: "att_frontend",
+        callId: "call_deploy_2",
+        toolName: "deploy_workspace",
+        args: { path: "dist" },
+        status: "succeeded",
+        result: { previewPath: "/deployments/dep_1" },
+        sequence: 1,
+      },
+    ];
+
+    const result = evaluateBenchmarkTrace(recoveryCase, buildTrace(), { runtimeValidation: runtime });
+    expect(result.status).toBe("passed");
+    expect(result.assertionResults[0].references).toHaveLength(2);
+  });
+
+  it("passes an expected verifier rejection without requiring task completion", () => {
+    const negativeCase: AgentBenchmarkCase = {
+      ...benchmarkCase,
+      assertions: [{
+        id: "fake-artifact-rejected",
+        type: "verification_status",
+        role: "frontend",
+        expected: "rejected",
+        warningCode: "guessed_artifact_id",
+        required: true,
+      }, {
+        id: "no-fake-binding",
+        type: "output_binding",
+        role: "frontend",
+        outputKey: "web_app",
+        artifactType: "web_app",
+        requiredAbsent: true,
+        required: true,
+      }],
+    };
+    const trace = buildTrace();
+    trace.tasks[1].attempts[0].verificationStatus = "rejected";
+    trace.tasks[1].producedBindings = [];
+    trace.tasks[1].warnings.push({
+      code: "guessed_artifact_id",
+      severity: "error",
+      message: "Fake artifact id was rejected.",
+    });
+
+    const result = evaluateBenchmarkTrace(negativeCase, trace);
+    expect(result.status).toBe("passed");
+    expect(result.assertionResults.every((item) => item.status === "passed")).toBe(true);
+  });
 });
+
+function emptyRuntime(): BenchmarkRuntimeValidation {
+  return {
+    collectedAt: 1,
+    artifacts: [],
+    builds: [],
+    deployments: [],
+    previews: [],
+    browsers: [],
+    toolRejections: [],
+    injectedFaults: [],
+    approvals: [],
+  };
+}
 
 function buildTrace(): ContextTraceRunResponse {
   const pmAttempt = attempt("att_pm", "r1", "ag_pm");
@@ -149,9 +289,30 @@ function buildTrace(): ContextTraceRunResponse {
       missingRequiredInputCount: 0,
       upstreamInputReadCount: 1,
       upstreamInputUnreadCount: 0,
+      contextIncludedItemCount: 1,
+      contextOmittedItemCount: 0,
+      contextOmittedByBudgetCount: 0,
+      staleRejectedCount: 0,
+      staleFactLeakageCount: 0,
+      unverifiedRejectedCount: 0,
+      unrelatedRejectedCount: 0,
+      contextOmittedReasonCounts: {},
       evidenceCount: 4,
+      toolCallCount: 4,
+      failedToolCallCount: 0,
       verifiedOutputBindingCount: 2,
+      rejectedOutputClaimCount: 0,
+      unverifiedOutputPropagationCount: 0,
+      approvalRequestCount: 0,
+      jsonRepairCount: 0,
+      inputTokens: 100,
+      outputTokens: 20,
+      modelRunCount: 2,
+      verifiedTaskCount: 2,
+      rejectedTaskCount: 0,
+      needsReviewTaskCount: 0,
       artifactCreatedCount: 2,
+      webAppOutputCount: 1,
       deploymentReadyCount: 1,
     },
   };

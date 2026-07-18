@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useShallow } from "zustand/react/shallow";
-import { BarChart3, Brain, Clock, Zap } from "lucide-react";
+import { BarChart3, Brain, Clock, FlaskConical, Zap } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList, selectConversationList } from "@/stores/selectors";
 import type { AgentRun } from "@/shared/types";
@@ -129,12 +130,14 @@ export function AnalyticsPanel() {
         <BarChart3 className={`h-10 w-10 ${muted}`} />
         <p className={`text-sm ${muted}`}>暂无运行数据</p>
         <p className={`text-xs ${muted}`}>发起一次对话后，这里会显示 Token 用量统计</p>
+        <BenchmarkLink />
       </div>
     );
   }
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4">
+      <BenchmarkLink />
       {/* Overview cards */}
       <div className="grid grid-cols-2 gap-2">
         <div className={`rounded-lg ${cardBg} p-3`}>
@@ -225,5 +228,14 @@ export function AnalyticsPanel() {
         </div>
       </div>
     </div>
+  );
+}
+
+function BenchmarkLink() {
+  return (
+    <Link href="/benchmark" className="mb-4 flex h-10 w-full items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+      <FlaskConical className="h-4 w-4" />
+      Collaboration Benchmark
+    </Link>
   );
 }

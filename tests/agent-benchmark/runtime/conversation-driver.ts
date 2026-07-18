@@ -1,6 +1,13 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 import { createConversation, sendMessage } from "@/server/conversation-service";
 import { getWorkspaceForConversation, listAgents } from "@/server/repositories";
-import type { AgentBenchmarkCase, BenchmarkRole } from "@/server/context-metrics/benchmark-types";
+import type {
+  AgentBenchmarkCase,
+  BenchmarkRole,
+  BenchmarkWorkspaceFile,
+} from "@/server/context-metrics/benchmark-types";
 import type { Agent, Conversation, Workspace } from "@/shared/types";
 
 const BUILTIN_ROLE_AGENT_IDS: Record<BenchmarkRole, string> = {
@@ -56,6 +63,8 @@ export class ConversationDriver {
     });
     const workspace: Workspace | null = this.dependencies.getWorkspaceForConversation(conversation.id);
     if (!workspace) throw new Error(`Workspace was not created for conversation ${conversation.id}.`);
+    const workspacePath = workspace.boundPath ?? workspace.rootPath;
+    seedBenchmarkWorkspace(workspacePath, benchmarkCase.runtime?.workspaceFiles ?? []);
 
     const response = await this.dependencies.sendMessage({
       conversationId: conversation.id,
@@ -69,10 +78,30 @@ export class ConversationDriver {
       conversationId: conversation.id,
       conductorRunId: response.runIds[0],
       triggerMessageId: response.message.id,
-      workspacePath: workspace.boundPath ?? workspace.rootPath,
+      workspacePath,
       agentIds,
       roleAgentIds,
     };
+  }
+}
+
+export function seedBenchmarkWorkspace(
+  workspacePath: string,
+  files: BenchmarkWorkspaceFile[],
+): void {
+  const root = path.resolve(workspacePath);
+  for (const file of files) {
+    const target = path.resolve(root, file.path);
+    const relative = path.relative(root, target);
+    if (
+      relative === ""
+      || relative.startsWith("..")
+      || path.isAbsolute(relative)
+    ) {
+      throw new Error(`Benchmark workspace file escapes the workspace: ${file.path}`);
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.content, "utf-8");
   }
 }
 

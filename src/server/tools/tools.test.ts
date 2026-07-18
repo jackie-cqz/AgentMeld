@@ -174,6 +174,23 @@ describe("fs_read", () => {
 });
 
 describe("fs_write", () => {
+  it("rejects rewriting an existing file with identical content", async () => {
+    fs.writeFileSync(path.join(workspacePath, "unchanged.txt"), "same content");
+
+    const result = await toolRegistry.execute(
+      "fs_write",
+      { path: "unchanged.txt", content: "same content" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("NO_OP_WRITE");
+      expect(result.error).toContain("already has the requested content");
+      expect(result.error).toContain("do not retry the same write");
+    }
+  });
+
   it("writes a file in auto mode", async () => {
     const result = await toolRegistry.execute(
       "fs_write",
@@ -215,16 +232,39 @@ describe("fs_write", () => {
   });
 
   it("rejects path outside workspace", async () => {
+    const escapedPath = path.resolve(workspacePath, "../../../etc/danger.txt");
     const result = await toolRegistry.execute(
       "fs_write",
       { path: "../../../etc/danger.txt", content: "x" },
       ctx()
     );
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("WORKSPACE_PATH_ESCAPE");
+      expect(result.category).toBe("security_policy");
+    }
+    expect(fs.existsSync(escapedPath)).toBe(false);
   });
 });
 
 describe("fs_patch", () => {
+  it("rejects a no-op replacement instead of reporting a false successful edit", async () => {
+    fs.writeFileSync(path.join(workspacePath, "noop.ts"), "const value = 1;\n");
+
+    const result = await toolRegistry.execute(
+      "fs_patch",
+      { path: "noop.ts", oldText: "const value = 1;", newText: "const value = 1;" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("NO_OP_PATCH");
+      expect(result.error).toContain("identical");
+    }
+    expect(fs.readFileSync(path.join(workspacePath, "noop.ts"), "utf-8")).toBe("const value = 1;\n");
+  });
+
   it("replaces one exact snippet without rewriting unrelated content", async () => {
     fs.writeFileSync(
       path.join(workspacePath, "component.ts"),
@@ -366,6 +406,20 @@ describe("bash", () => {
     ]);
   }, 10000);
 
+  it("allows read-only dependency list verification", async () => {
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ name: "dependency-list-test", version: "1.0.0" })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm ls" }, ctx());
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.value as { exitCode: number }).exitCode).toBe(0);
+    }
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  }, 10000);
+
   it("rejects shell inspection commands because fs_list/fs_read must be used", async () => {
     const cmd = process.platform === "win32" ? "Get-ChildItem" : "ls";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
@@ -391,7 +445,26 @@ describe("bash", () => {
     expect(getAllPendingBashCommands()).toHaveLength(0);
   });
 
+  it("blocks pnpm dependency mutation in a workspace nested under the host project", async () => {
+    const nestedWorkspace = path.join(process.cwd(), ".agentmeld-data", "workspaces", "conv_nested_test");
+    const result = await toolRegistry.execute(
+      "bash",
+      { command: "pnpm install" },
+      ctx({ workspacePath: nestedWorkspace })
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Use npm install");
+      expect(result.error).toContain("root node_modules");
+    }
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  });
+
   it("rejects source mutation commands and redirects", async () => {
+    const sourcePath = path.join(workspacePath, "src", "App.tsx");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, "const original = true;\n", "utf-8");
     const writeCommand = process.platform === "win32"
       ? "Set-Content src/App.tsx 'x'"
       : "sed -i 's/a/b/' src/App.tsx";
@@ -404,8 +477,18 @@ describe("bash", () => {
 
     expect(writeResult.ok).toBe(false);
     expect(redirectResult.ok).toBe(false);
-    if (!writeResult.ok) expect(writeResult.error).toContain("fs_write");
-    if (!redirectResult.ok) expect(redirectResult.error).toContain("fs_write");
+    if (!writeResult.ok) {
+      expect(writeResult.error).toContain("fs_write");
+      expect(writeResult.code).toBe("BASH_SOURCE_MUTATION_BLOCKED");
+      expect(writeResult.category).toBe("security_policy");
+    }
+    if (!redirectResult.ok) {
+      expect(redirectResult.error).toContain("fs_write");
+      expect(redirectResult.code).toBe("BASH_SOURCE_MUTATION_BLOCKED");
+      expect(redirectResult.category).toBe("security_policy");
+    }
+    expect(fs.readFileSync(sourcePath, "utf-8")).toBe("const original = true;\n");
+    expect(fs.existsSync(path.join(workspacePath, "build.log"))).toBe(false);
   });
 });
 

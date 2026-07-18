@@ -4,6 +4,7 @@
 
 import type { CriterionValidator } from "@/shared/evidence-types";
 import type { AcceptanceCriterionSpec } from "@/shared/types";
+import { getArtifact } from "@/server/repositories";
 
 export interface ValidationResult {
   passed: boolean;
@@ -96,14 +97,56 @@ function validateArtifactExists(
   evidence: EvidenceRecord[], _taskReport: { artifacts?: Record<string, string> } | undefined
 ): ValidationResult {
   // Check evidence for artifact_created matching outputKey
-  const matched = evidence.filter(e => e.type === "artifact_created" && e.subjectId === outputKey);
+  const matched = evidence.filter(e =>
+    e.type === "artifact_created" &&
+    e.status === "valid" &&
+    e.subjectId === outputKey
+  );
   if (matched.length === 0) {
     return { passed: false, evidenceIds: [], reason: `No artifact_created evidence for outputKey "${outputKey}".` };
   }
-  if (artifactType) {
-    // Could verify type here — for V1 just note it
+
+  for (const item of [...matched].reverse()) {
+    const artifactId = readArtifactId(item.payloadJson);
+    const artifact = artifactId ? getArtifact(artifactId) : null;
+    if (!artifact) continue;
+    if (artifactType && artifact.type !== artifactType) continue;
+    if (!hasArtifactContent(artifact.content)) continue;
+    return {
+      passed: true,
+      evidenceIds: [item.id],
+      reason: `Artifact "${outputKey}" has a complete persisted ${artifact.type} version.`
+    };
   }
-  return { passed: true, evidenceIds: matched.map(e => e.id), reason: `Artifact "${outputKey}" was created.` };
+  if (matched.every((item) => !readArtifactId(item.payloadJson))) {
+    return {
+      passed: true,
+      evidenceIds: matched.map((item) => item.id),
+      reason: `Artifact "${outputKey}" is supported by legacy evidence without a persisted artifact reference.`
+    };
+  }
+  return {
+    passed: false,
+    evidenceIds: matched.map(e => e.id),
+    reason: `Artifact "${outputKey}" has no complete persisted version matching the expected type.`
+  };
+}
+
+function readArtifactId(payloadJson: string): string | undefined {
+  try {
+    const payload = JSON.parse(payloadJson) as Record<string, unknown>;
+    return typeof payload.artifactId === "string" ? payload.artifactId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasArtifactContent(content: import("@/shared/types").ArtifactContent): boolean {
+  if (content.type === "document") return content.content.trim().length > 0;
+  if (content.type === "web_app") return Boolean(content.files[content.entry]?.trim());
+  if (content.type === "image") return content.url.trim().length > 0;
+  if (content.type === "ppt") return content.slides.length > 0;
+  return false;
 }
 
 function validateDeploymentCreated(outputKey: string | undefined, evidence: EvidenceRecord[]): ValidationResult {

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "artifact-json-repair",
+  "title": "Artifact JSON Repair",
+  "description": "Verifies that a malformed first write_artifact call is observable and the affected task can recover.",
+  "category": "recovery",
+  "prompt": "请让 PM 产出一份简短但结构完整的 Todo 应用 PRD，并将其写为 document 产物。",
+  "expectedRoles": ["pm"],
+  "assertions": [
+    { "id": "pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "prd-bound", "type": "output_binding", "role": "pm", "outputKey": "prd", "artifactType": "document", "required": true },
+    { "id": "write-recovered", "type": "tool_succeeded", "toolName": "write_artifact", "role": "pm", "required": true },
+    { "id": "fault-recorded", "type": "fault_injected", "faultId": "malformed-artifact-json", "required": true },
+    { "id": "retry-bounded", "type": "retry_bound", "role": "pm", "minAttempts": 1, "maxAttempts": 3, "required": true }
+  ],
+  "runtime": {
+    "faults": [{ "id": "malformed-artifact-json", "type": "tool_arguments_json", "toolName": "write_artifact", "occurrence": 1, "message": "Injected malformed write_artifact arguments." }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "implementation_fidelity", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 600000, "maxToolCalls": 30, "maxAttemptsPerTask": 3 },
+  "tags": ["document", "json-repair", "recovery"]
+}

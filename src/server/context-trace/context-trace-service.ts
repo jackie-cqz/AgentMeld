@@ -8,6 +8,8 @@ import {
   type TaskAttemptRecord
 } from "@/server/repositories/evidence-repository";
 import { getArtifact } from "@/server/repositories";
+import { computeRunMetrics as computeContextQualityMetrics } from "@/server/context-metrics/context-metrics-service";
+import { extractArtifactIds } from "@/server/evidence/artifact-reference";
 import type { ContextManifestItem } from "@/shared/task-context-types";
 import type {
   ContextTraceAttempt,
@@ -38,10 +40,12 @@ export function getContextTraceByAttempt(attemptId: string): ContextTraceRespons
 
 export function getContextTraceByRun(conductorRunId: string): ContextTraceRunResponse | { error: string; status: number } {
   const db = getDatabase();
-  const rawAttempts = db
-    .prepare("SELECT * FROM task_attempts WHERE conductor_run_id = ? AND task_id != 'conductor' ORDER BY task_id, attempt")
-    .all(conductorRunId) as Array<ReturnType<typeof getTaskAttempt>>;
-  const attempts = rawAttempts.filter((a): a is NonNullable<typeof a> => a != null);
+  const attemptIds = db
+    .prepare("SELECT id FROM task_attempts WHERE conductor_run_id = ? AND task_id != 'conductor' ORDER BY task_id, attempt")
+    .all(conductorRunId) as Array<{ id: string }>;
+  const attempts = attemptIds
+    .map((row) => getTaskAttempt(row.id))
+    .filter((attempt): attempt is TaskAttemptRecord => attempt != null);
 
   if (attempts.length === 0) return { error: "No task attempts found for this run.", status: 404 };
 
@@ -50,7 +54,16 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
     .prepare("SELECT plan_json, id FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision DESC LIMIT 1")
     .get(conductorRunId) as { plan_json: string; id: string } | undefined;
 
-  const planTasks: Array<{ id: string; agentId: string; title?: string; dependsOn?: string[] }> = [];
+  const planTasks: Array<{
+    id: string;
+    agentId: string;
+    title?: string;
+    dependsOn?: string[];
+    taskIntent?: import("@/shared/types").DispatchTaskIntent;
+    contractProfile?: "standard" | "minimal";
+    contractSelectionReason?: string;
+    contractSelectionVersion?: string;
+  }> = [];
   if (planRow) {
     try { planTasks.push(...JSON.parse(planRow.plan_json)); } catch { /* ok */ }
   }
@@ -67,6 +80,10 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
         agentId: att.agentId,
         title: planTask?.title ?? att.taskId,
         dependsOn: planTask?.dependsOn ?? [],
+        taskIntent: planTask?.taskIntent,
+        contractProfile: planTask?.contractProfile,
+        contractSelectionReason: planTask?.contractSelectionReason,
+        contractSelectionVersion: planTask?.contractSelectionVersion,
         attempts: [],
         producedBindings: [],
         consumedInputs: [],
@@ -79,7 +96,15 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
 
     const trace = buildAttemptTrace(att, db);
     entry.attempts.push(trace.attempt);
-    entry.producedBindings.push(...trace.outputBindings);
+    for (const binding of trace.outputBindings) {
+      if (!entry.producedBindings.some((existing) =>
+        existing.producerTaskId === binding.producerTaskId
+        && existing.outputKey === binding.outputKey
+        && existing.artifactId === binding.artifactId
+      )) {
+        entry.producedBindings.push(binding);
+      }
+    }
     for (const evidence of trace.evidence) {
       if (!entry.evidence.some((item) => item.evidenceId === evidence.evidenceId)) {
         entry.evidence.push(evidence);
@@ -99,7 +124,7 @@ export function getContextTraceByRun(conductorRunId: string): ContextTraceRunRes
   }
 
   const tasks = Array.from(taskMap.values());
-  const metrics = computeRunMetrics(tasks, attempts);
+  const metrics = computeRunMetrics(conductorRunId, tasks, attempts);
   const firstAttempt = attempts[0];
 
   return {
@@ -157,7 +182,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
     let excerpt = "";
     try {
       const p = JSON.parse(ev.payloadJson);
-      excerpt = (p.command ?? p.path ?? p.outputKey ?? JSON.stringify(p).slice(0, 200)) as string;
+      excerpt = evidenceExcerpt(p);
     } catch { /* ok */ }
     return {
       evidenceId: ev.id,
@@ -168,7 +193,7 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
       sourceId: ev.sourceId,
       subjectType: ev.subjectType,
       subjectId: ev.subjectId,
-      excerpt: excerpt.slice(0, 200),
+      excerpt,
       createdAt: ev.createdAt,
     };
   });
@@ -228,14 +253,25 @@ function buildAttemptTrace(att: TaskAttemptRecord, db: ReturnType<typeof getData
 function buildOutputBindings(conductorRunId: string, planId: string, taskId: string): ContextTraceOutputBinding[] {
   const db = getDatabase();
   const rows = db
-    .prepare("SELECT * FROM conductor_output_bindings WHERE conductor_run_id = ? AND plan_id = ? AND producer_task_id = ?")
+    .prepare(`
+      SELECT *
+      FROM conductor_output_bindings
+      WHERE conductor_run_id = ?
+        AND plan_id = ?
+        AND COALESCE(actual_producer_task_id, producer_task_id) = ?
+        AND superseded_at IS NULL
+    `)
     .all(conductorRunId, planId, taskId) as Array<{
-      producer_task_id: string; output_key: string; artifact_id: string; created_at: number;
+      producer_task_id: string;
+      actual_producer_task_id: string | null;
+      output_key: string;
+      artifact_id: string;
+      created_at: number;
     }>;
   return rows.map((r) => {
     const art = getArtifact(r.artifact_id);
     return {
-      producerTaskId: r.producer_task_id,
+      producerTaskId: r.actual_producer_task_id ?? r.producer_task_id,
       outputKey: r.output_key,
       artifactId: r.artifact_id,
       artifactTitle: art?.title ?? r.artifact_id,
@@ -257,7 +293,11 @@ function buildUpstreamInputs(
 
   // Get all output bindings for this run
   const allBindings = db
-    .prepare("SELECT * FROM conductor_output_bindings WHERE conductor_run_id = ? AND plan_id = ?")
+    .prepare(`
+      SELECT *
+      FROM conductor_output_bindings
+      WHERE conductor_run_id = ? AND plan_id = ? AND superseded_at IS NULL
+    `)
     .all(conductorRunId, planId) as Array<{
       producer_task_id: string; output_key: string; artifact_id: string;
     }>;
@@ -455,11 +495,25 @@ function buildWarnings(
     });
   }
 
-  // tool claim without evidence: reported complete but no build/deploy evidence
+  // tool claim without evidence: compare deployment claims in the structured
+  // task report with actual deployment evidence. This must not depend on the
+  // total evidence count: an unrelated artifact cannot legitimize a fake URL.
   if (att.executionStatus === "reported_complete") {
     const hasBuildEvidence = evidence.some((e) => e.type === "command_executed" || e.type === "test_executed");
     const hasDeployEvidence = evidence.some((e) => e.type === "deployment_created");
-    if (!hasBuildEvidence && !hasDeployEvidence) {
+    const hasUnsupportedDeploymentClaim = !hasDeployEvidence && evidenceRecords.some((record) =>
+      record.type === "task_reported"
+      && /(?:https?:\/\/[^\s"'}]+)?\/deployments\/[a-zA-Z0-9_-]+/i.test(record.payloadJson)
+    );
+    if (hasUnsupportedDeploymentClaim) {
+      warnings.push({
+        code: "tool_claim_without_evidence",
+        severity: "warning",
+        message: `Task ${att.taskId} claimed a deployment path without deployment_created evidence.`,
+        taskId: att.taskId,
+        attemptId: att.id,
+      });
+    } else if (!hasBuildEvidence && !hasDeployEvidence) {
       if (evidence.length <= 2) {
         warnings.push({
           code: "tool_claim_without_evidence",
@@ -515,7 +569,7 @@ function buildWarnings(
         try {
           const parts = JSON.parse(row.parts) as Array<{ type: string; content?: string; artifactId?: string }>;
           for (const p of parts) {
-            const refs = extractArtifactRefs(JSON.stringify(p));
+            const refs = extractArtifactIds(JSON.stringify(p));
             for (const refId of refs) {
               if (!knownIds.has(refId) && !outputBindings.some((b) => b.artifactId === refId)) {
                 if (!warnings.some((w) => w.code === "guessed_artifact_id" && w.artifactId === refId)) {
@@ -541,20 +595,30 @@ function buildWarnings(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function extractArtifactRefs(text: string): string[] {
-  const refs: string[] = [];
-  // Match artifact ID patterns like art_xxx or art-xxx
-  const matches = text.match(/\b(art_[a-zA-Z0-9_-]{8,})\b/g);
-  if (matches) refs.push(...matches);
-  return [...new Set(refs)];
+function evidenceExcerpt(payload: Record<string, unknown>): string {
+  if (typeof payload.command === "string") {
+    const command = payload.command;
+    if (command.length <= 200) return command;
+    return `${command.slice(0, 80)}...${command.slice(-117)}`;
+  }
+  if (typeof payload.path === "string") return payload.path.slice(0, 200);
+  if (typeof payload.outputKey === "string") return payload.outputKey.slice(0, 200);
+  return JSON.stringify(payload).slice(0, 200);
 }
 
 // ── Run metrics ─────────────────────────────────────────────────────────────
 
 function computeRunMetrics(
+  conductorRunId: string,
   tasks: ContextTraceRunTask[],
   attempts: TaskAttemptRecord[],
 ): ContextTraceRunMetrics {
+  const quality = computeContextQualityMetrics(conductorRunId);
+  if (!("error" in quality)) {
+    const { runId: _runId, ...metrics } = quality.raw;
+    return metrics;
+  }
+
   let verifiedInputCount = 0;
   let missingRequiredInputCount = 0;
   let upstreamInputReadCount = 0;
@@ -599,6 +663,27 @@ function computeRunMetrics(
     verifiedOutputBindingCount,
     artifactCreatedCount,
     deploymentReadyCount,
+    contextIncludedItemCount: 0,
+    contextOmittedItemCount: 0,
+    contextOmittedByBudgetCount: 0,
+    staleRejectedCount: 0,
+    staleFactLeakageCount: 0,
+    unverifiedRejectedCount: 0,
+    unrelatedRejectedCount: 0,
+    contextOmittedReasonCounts: {},
+    toolCallCount: 0,
+    failedToolCallCount: 0,
+    rejectedOutputClaimCount: 0,
+    unverifiedOutputPropagationCount: 0,
+    approvalRequestCount: 0,
+    jsonRepairCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    modelRunCount: 0,
+    verifiedTaskCount: 0,
+    rejectedTaskCount: 0,
+    needsReviewTaskCount: 0,
+    webAppOutputCount: 0,
   };
 }
 

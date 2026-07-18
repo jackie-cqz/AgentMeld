@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   buildConductorPlanPrompt,
   buildConductorAggregatePrompt,
+  bindRecoveryTasksToOriginalPlan,
   buildReplanContext,
   buildReviseContext,
   buildContinuationPrompt,
+  enforceExplicitFrameworkContracts,
   CONDUCTOR_PLAN_TOOLS
 } from "@/server/conductor-service";
 import type { TaskResult } from "@/server/conductor-service";
@@ -79,6 +81,8 @@ describe("buildConductorPlanPrompt", () => {
     expect(prompt).toContain("READY_TO_PLAN");
     expect(prompt).toContain("第一个工具调用必须是 ask_user");
     expect(prompt).toContain("细节你决定");
+    expect(prompt).toContain("用户明确指定两个或以上角色");
+    expect(prompt).toContain("你必须调用 plan_tasks");
 
     // Block 4: tool guidance
     expect(prompt).toContain("## AgentMeld 工具调用规范");
@@ -205,6 +209,143 @@ describe("buildReplanContext", () => {
     expect(ctx).toContain("t1");
     expect(ctx).toContain("✅ 已完成");
     expect(ctx).toContain("补救指示");
+  });
+});
+
+describe("bindRecoveryTasksToOriginalPlan", () => {
+  it("inherits the original task contract and rejects model-invented target paths", () => {
+    const original: ParsedTask = {
+      id: "t3",
+      agentId: "ag_frontend",
+      title: "实现应用",
+      prompt: "基于 PRD 和风格指南实现应用。",
+      dependsOn: ["t1", "t2"],
+      inputs: [
+        { fromTaskId: "t1", outputId: "prd", required: true },
+        { fromTaskId: "t2", outputId: "style_guide", required: true }
+      ],
+      expectedOutputs: [
+        { id: "web_app", type: "web_app", required: true }
+      ],
+      acceptanceCriteria: ["构建通过", "部署成功"],
+      maxAttempts: 1,
+      taskIntent: "delivery",
+      contractProfile: "standard",
+      contractSelectionReason: "required output web_app is explicitly declared",
+      contractSelectionVersion: "role-contract-intent-v1",
+      targetPaths: [],
+      requiredCommands: [{ command: "npm run build" }],
+      requiredEvidence: ["部署产物"]
+    };
+    const proposed: ParsedTask = {
+      id: "r1",
+      replacesTaskId: "t3",
+      agentId: "ag_other",
+      title: "修复实现",
+      prompt: "修复并重新部署。",
+      dependsOn: [],
+      inputs: [],
+      expectedOutputs: [],
+      acceptanceCriteria: [],
+      maxAttempts: 2,
+      targetPaths: ["C:\\absolute\\workspace"],
+      requiredCommands: [],
+      requiredEvidence: []
+    };
+    const results = new Map<string, TaskResult>([
+      ["t1", { taskId: "t1", status: "complete", summary: "ok" }],
+      ["t2", { taskId: "t2", status: "complete", summary: "ok" }],
+      ["t3", { taskId: "t3", status: "failed", summary: "missing report" }]
+    ]);
+
+    const [bound] = bindRecoveryTasksToOriginalPlan([proposed], [original], results);
+
+    expect(bound.replacesTaskId).toBe("t3");
+    expect(bound.agentId).toBe("ag_frontend");
+    expect(bound.dependsOn).toEqual(["t1", "t2"]);
+    expect(bound.inputs).toEqual(original.inputs);
+    expect(bound.expectedOutputs).toEqual(original.expectedOutputs);
+    expect(bound.acceptanceCriteria).toEqual(original.acceptanceCriteria);
+    expect(bound.targetPaths).toEqual([]);
+    expect(bound.requiredCommands).toEqual(original.requiredCommands);
+    expect(bound.requiredEvidence).toEqual(original.requiredEvidence);
+    expect(bound.taskIntent).toBe("delivery");
+    expect(bound.contractProfile).toBe("standard");
+    expect(bound.contractSelectionReason).toBe(original.contractSelectionReason);
+    expect(bound.contractSelectionVersion).toBe("role-contract-intent-v1");
+    expect(bound.prompt).toContain(original.prompt);
+    expect(bound.prompt).toContain(proposed.prompt);
+  });
+
+  it("does not bind recovery work to skipped downstream tasks", () => {
+    const failed: ParsedTask = {
+      id: "t1", agentId: "ag_frontend", title: "实现", prompt: "实现",
+      dependsOn: [], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1
+    };
+    const skipped: ParsedTask = {
+      id: "t2", agentId: "ag_reviewer", title: "审查", prompt: "审查",
+      dependsOn: ["t1"], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1
+    };
+    const proposed: ParsedTask = {
+      id: "r1", replacesTaskId: "t2", agentId: "ag_reviewer", title: "恢复审查", prompt: "恢复",
+      dependsOn: [], inputs: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1
+    };
+    const results = new Map<string, TaskResult>([
+      ["t1", { taskId: "t1", status: "failed", summary: "failed" }],
+      ["t2", { taskId: "t2", status: "skipped", summary: "upstream failed" }]
+    ]);
+
+    const [bound] = bindRecoveryTasksToOriginalPlan([proposed], [failed, skipped], results);
+    expect(bound.replacesTaskId).toBe("t1");
+    expect(bound.agentId).toBe("ag_frontend");
+  });
+});
+
+describe("enforceExplicitFrameworkContracts", () => {
+  const webTask = (): ParsedTask => ({
+    id: "t3",
+    agentId: "ag_frontend",
+    title: "实现应用",
+    prompt: "实现并部署应用。",
+    dependsOn: [],
+    inputs: [],
+    expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+    acceptanceCriteria: [],
+    maxAttempts: 1,
+    targetPaths: ["src"],
+    requiredCommands: [],
+    requiredEvidence: []
+  });
+
+  it("turns an explicitly requested React stack into a hard execution contract", () => {
+    const [result] = enforceExplicitFrameworkContracts(
+      [webTask()],
+      "请使用 React + Vite 实现 Todo 应用"
+    );
+
+    expect(result.targetPaths).toEqual(["src", "package.json"]);
+    expect(result.requiredCommands).toContainEqual({
+      command: "npm run build",
+      timeoutMs: 120_000
+    });
+    expect(result.prompt).toContain("## 平台显式框架契约");
+    expect(result.prompt).toContain("React / Vite");
+    expect(result.prompt).toContain("不得降级成单文件静态 HTML");
+    expect(result.prompt).toContain("deploy_workspace");
+    expect(result.prompt).toContain("report_task_result");
+  });
+
+  it("does not alter non-web tasks or infer a framework that the user did not request", () => {
+    const documentTask: ParsedTask = {
+      ...webTask(),
+      id: "t1",
+      expectedOutputs: [{ id: "prd", type: "document", required: true }]
+    };
+
+    expect(enforceExplicitFrameworkContracts([documentTask], "使用 React 实现应用"))
+      .toEqual([documentTask]);
+    expect(enforceExplicitFrameworkContracts([webTask()], "实现一个 Todo 应用"))
+      .toEqual([webTask()]);
   });
 });
 

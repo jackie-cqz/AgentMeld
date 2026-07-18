@@ -4,7 +4,7 @@
   "title": "Markdown Editor",
   "description": "Split-pane Markdown editor testing PM, UI, and Frontend context handoffs.",
   "category": "collaboration",
-  "prompt": "帮我做一个 Markdown 编辑器。React，左边编辑区，右边实时预览。支持标题、列表、代码块、链接、图片语法。暗色主题，可以本地保存草稿。",
+  "prompt": "帮我做一个 Markdown 编辑器。React，左边编辑区，右边实时预览。支持标题、列表、代码块、链接、图片语法。暗色主题，可以本地保存草稿。必须保证首次无 localStorage 数据时，默认草稿 id 与 activeId 在同一次初始化中一致，编辑 textarea 后预览立即更新并在刷新后恢复。",
   "expectedRoles": ["pm", "ui", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
@@ -20,8 +20,29 @@
     { "id": "frontend-read-prd", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "prd", "required": true },
     { "id": "frontend-read-style", "type": "artifact_read", "producerRole": "ui", "consumerRole": "frontend", "outputKey": "style-guide", "required": true },
     { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
-    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "browser-markdown-preview", "type": "browser_interaction", "scriptId": "markdown-preview-persistence", "required": true }
   ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "markdown-preview-persistence",
+      "outputKey": "web_app",
+      "steps": [
+        { "action": "fill", "selector": "textarea", "value": "# Benchmark heading\n\n[AgentMeld](https://example.com)\n\n```js\nconsole.log('ok')\n```" },
+        { "action": "assert_text", "text": "Benchmark heading" },
+        { "action": "wait", "timeoutMs": 1000 },
+        { "action": "assert_storage", "minEntries": 1, "timeoutMs": 5000 },
+        { "action": "reload" },
+        { "action": "assert_text", "text": "Benchmark heading" }
+      ]
+    }]
+  },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "cross_artifact_consistency", "implementation_fidelity", "final_summary_accuracy"]
+  },
   "tags": ["web-app", "react", "editor", "context-handoff"]
 }

@@ -25,8 +25,25 @@
     { "id": "reviewer-read-web-app", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "web_app", "required": true },
     { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
     { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
-    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "artifact-web-app-valid", "type": "artifact_valid", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "minContentBytes": 200, "requiredFiles": ["index.html"], "required": true },
+    { "id": "build-succeeded", "type": "build_succeeded", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "preview-http", "type": "preview_http", "role": "frontend", "outputKey": "web_app", "expectedStatus": 200, "minBodyBytes": 50, "required": true },
+    { "id": "browser-start-timer", "type": "browser_interaction", "scriptId": "start-timer", "required": true }
   ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "start-timer",
+      "outputKey": "web_app",
+      "initialTimeMs": 1704067200000,
+      "steps": [
+        { "action": "click", "selector": "button:has-text('开始'), button:has-text('Start'), [data-testid='timer-start']" },
+        { "action": "advance_clock", "timeoutMs": 1200 },
+        { "action": "assert_dom_changed" }
+      ]
+    }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1" },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "timer", "full-chain", "smoke"]
 }

@@ -1,5 +1,6 @@
 import type { DispatchPlanItem } from "@/shared/types";
 import { applyRoleContracts } from "@/server/agent-contracts/contract-resolver";
+import { getActiveStrategy } from "@/server/context-policy/strategy-registry";
 import { listAgents } from "@/server/repositories";
 
 // ---------------------------------------------------------------------------
@@ -48,8 +49,9 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
       : undefined;
 
     const maxAttempts = typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined;
+    const taskIntent = readTaskIntent(raw.taskIntent);
 
-    return { id, agentId, task, dependsOn, expectedOutputs, inputs, acceptanceCriteria, maxAttempts };
+    return { id, agentId, task, dependsOn, expectedOutputs, inputs, acceptanceCriteria, maxAttempts, taskIntent };
   });
 }
 
@@ -66,7 +68,7 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
  *   Layer 3 — approval gate, re-validated before execution
  */
 export function compileAndValidateDispatchPlan(
-  rawTasks: Array<{ id: string; agentId: string; task?: string; prompt?: string; title?: string; dependsOn?: string[]; inputs?: unknown[]; expectedOutputs?: unknown[]; acceptanceCriteria?: string[]; maxAttempts?: number; targetPaths?: string[]; requiredCommands?: unknown[]; requiredEvidence?: string[] }>,
+  rawTasks: Array<{ id: string; agentId: string; task?: string; prompt?: string; title?: string; taskIntent?: DispatchPlanItem["taskIntent"]; dependsOn?: string[]; inputs?: unknown[]; expectedOutputs?: unknown[]; acceptanceCriteria?: string[]; maxAttempts?: number; targetPaths?: string[]; requiredCommands?: unknown[]; requiredEvidence?: string[] }>,
   availableAgentIds: string[],
   conductorAgentId: string,
   resolvedExternalTaskIds: string[] = []
@@ -79,6 +81,7 @@ export function compileAndValidateDispatchPlan(
     dependsOn: t.dependsOn ?? [],
     title: t.title,
     prompt: t.prompt,
+    taskIntent: t.taskIntent,
     expectedOutputs: t.expectedOutputs as DispatchPlanItem["expectedOutputs"],
     inputs: t.inputs as DispatchPlanItem["inputs"],
     acceptanceCriteria: t.acceptanceCriteria,
@@ -90,7 +93,10 @@ export function compileAndValidateDispatchPlan(
 
   // P5: Auto-fill from role contracts before compilation
   const agents = listAgents();
-  const { plan: contractEnriched, enriched } = applyRoleContracts(items, agents);
+  const strategy = getActiveStrategy();
+  const { plan: contractEnriched, enriched } = strategy.useRoleContracts
+    ? applyRoleContracts(items, agents)
+    : { plan: items, enriched: false };
   if (enriched) {
     console.log(`[dispatch-plan] role contracts enriched plan fields`);
   }
@@ -236,6 +242,19 @@ function readArtifactOutputType(
     return value;
   }
   throw new Error(`Invalid dispatch plan: ${context} is invalid. Got: ${JSON.stringify(value)}`);
+}
+
+function readTaskIntent(value: unknown): DispatchPlanItem["taskIntent"] {
+  if (
+    value === "delivery" ||
+    value === "diagnosis" ||
+    value === "verification" ||
+    value === "approval_probe" ||
+    value === "negative_verifier_test"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function isReviewTask(task: DispatchPlanItem): boolean {

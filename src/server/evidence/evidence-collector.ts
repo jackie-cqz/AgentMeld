@@ -36,16 +36,17 @@ export async function captureEvidence(input: EvidenceCaptureInput): Promise<void
   // Only capture for child task runs with task identity
   if (!context.taskExecution) return;
 
-  const extractor = EXTRACTOR_MAP[toolName];
-  if (!extractor) return; // No extractor for this tool — skip silently
-
   const identity = context.taskExecution;
 
   try {
-    const extracted = extractor(context, args, result, durationMs);
-    if (!extracted) return;
-
-    const items = Array.isArray(extracted) ? extracted : [extracted];
+    const extractor = EXTRACTOR_MAP[toolName];
+    const extracted = extractor?.(context, args, result, durationMs) ?? null;
+    const items = extracted
+      ? (Array.isArray(extracted) ? [...extracted] : [extracted])
+      : [];
+    const rejection = extractToolRejection(toolName, args, result);
+    if (rejection) items.push(rejection);
+    if (items.length === 0) return;
 
     for (const item of items) {
       const evidenceId = newEvidenceId();
@@ -92,4 +93,92 @@ function extractEvidenceStatus(result: unknown): "valid" | "invalid" | "diagnost
     return (result as { ok: boolean }).ok ? "valid" : "invalid";
   }
   return "valid";
+}
+
+function extractToolRejection(
+  toolName: string,
+  args: unknown,
+  result: unknown,
+): ExtractedEvidence | null {
+  if (!result || typeof result !== "object" || !("ok" in result)) return null;
+  const failure = result as {
+    ok?: boolean;
+    error?: unknown;
+    code?: unknown;
+    category?: unknown;
+  };
+  if (failure.ok !== false) return null;
+
+  const reason = typeof failure.error === "string"
+    ? failure.error
+    : "Tool execution failed.";
+  const code = typeof failure.code === "string"
+    ? failure.code
+    : inferFailureCode(toolName, reason);
+  const category = isFailureCategory(failure.category)
+    ? failure.category
+    : inferFailureCategory(reason);
+
+  return {
+    type: "tool_rejected",
+    subjectType: "tool",
+    subjectId: toolName,
+    payload: {
+      toolName,
+      category,
+      code,
+      reason,
+      argsSummary: summarizeArgs(args),
+      sideEffectApplied: false,
+    },
+    contentHash: null,
+  };
+}
+
+function isFailureCategory(
+  value: unknown,
+): value is "security_policy" | "approval_rejected" | "validation_error" | "tool_error" {
+  return value === "security_policy"
+    || value === "approval_rejected"
+    || value === "validation_error"
+    || value === "tool_error";
+}
+
+function inferFailureCategory(
+  reason: string,
+): "security_policy" | "approval_rejected" | "validation_error" | "tool_error" {
+  if (/reject|declin|cancel|拒绝|取消/i.test(reason)) return "approval_rejected";
+  if (/security policy|verification-only|source mutation|outside.*workspace|escapes?.*workspace|path traversal|blocked|越界|安全策略/i.test(reason)) {
+    return "security_policy";
+  }
+  if (/invalid args|validation|oldText|not found|matched \d+ locations/i.test(reason)) {
+    return "validation_error";
+  }
+  return "tool_error";
+}
+
+function inferFailureCode(toolName: string, reason: string): string {
+  if (toolName === "bash" && /source mutation|verification-only/i.test(reason)) {
+    return "BASH_SOURCE_MUTATION_BLOCKED";
+  }
+  if (/outside.*workspace|escapes?.*workspace|path traversal|越界/i.test(reason)) {
+    return "WORKSPACE_PATH_ESCAPE";
+  }
+  if (/user rejected|approval.*reject|用户拒绝/i.test(reason)) {
+    return "APPROVAL_REJECTED";
+  }
+  if (/invalid args/i.test(reason)) return "TOOL_ARGUMENTS_INVALID";
+  return "TOOL_EXECUTION_FAILED";
+}
+
+function summarizeArgs(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return {};
+  const value = args as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["path", "file_path", "outputKey", "artifactId", "command"]) {
+    const item = value[key];
+    if (typeof item !== "string") continue;
+    summary[key] = item.slice(0, key === "command" ? 500 : 240);
+  }
+  return summary;
 }

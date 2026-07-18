@@ -4,6 +4,7 @@ import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-
 
 export interface TaskEvidence {
   fileWrites: Array<{ path: string; action: string }>;
+  observedPaths?: string[];
   commands: Array<{
     command: string;
     exitCode: number | null;
@@ -35,21 +36,30 @@ export function evaluateChildTaskResult(
     };
   }
 
-  // ③ Any failed commands in evidence?
+  // ③ Any unrecovered verification commands in evidence?
+  // Setup and dependency commands may fail before the Agent recovers through
+  // workspace tools. Build/test/lint/typecheck failures remain blocking unless
+  // a later command proves the same validation stage succeeded.
   if (evidence) {
     const failedCommands = evidence.commands.filter((command, index) =>
-      isFailedCommand(command) && !hasLaterSuccessfulEquivalentCommand(evidence.commands, index)
+      isFailedCommand(command) &&
+      getValidationCommandKind(command.command) !== null &&
+      !hasLaterSuccessfulValidationCommand(evidence.commands, index)
     );
     if (failedCommands.length > 0) {
+      const commands = [...new Set(failedCommands.map((command) => command.command))];
       return {
         status: "failed",
-        error: `命令证据失败: ${failedCommands.map((c) => c.command).join(", ")}`
+        error: `命令证据失败: ${commands.join(", ")}`
       };
     }
   }
 
   // ④ All acceptance criteria passed?
-  const failedAcceptance = (report.acceptanceResults ?? []).filter((r) => !r.passed);
+  const reviewTask = isReviewTask(task);
+  const failedAcceptance = (report.acceptanceResults ?? []).filter((result) =>
+    !result.passed && (!reviewTask || result.evidence.trim().length === 0)
+  );
   if (failedAcceptance.length > 0) {
     return {
       status: "failed",
@@ -63,7 +73,13 @@ export function evaluateChildTaskResult(
   // makes evidence-backed artifact tasks fail even when write_artifact succeeded.
   const criteria = task.acceptanceCriteria ?? [];
   const normalizedCriteria = humanReviewedCriteria(criteria);
-  const missing = findMissingCriteria(normalizedCriteria, report.acceptanceResults ?? []);
+  const coverageResults = reviewTask
+    ? (report.acceptanceResults ?? []).map((result) => ({
+        ...result,
+        passed: result.passed || result.evidence.trim().length > 0,
+      }))
+    : (report.acceptanceResults ?? []);
+  const missing = findMissingCriteria(normalizedCriteria, coverageResults);
   if (missing.length > 0) {
     return {
       status: "failed",
@@ -72,7 +88,10 @@ export function evaluateChildTaskResult(
   }
 
   // ⑥ targetPaths have evidence?
-  const actualPaths = evidence?.fileWrites.map((file) => file.path) ?? [];
+  const actualPaths = [
+    ...(evidence?.fileWrites.map((file) => file.path) ?? []),
+    ...(evidence?.observedPaths ?? []),
+  ];
   const reportedPaths = (report.files ?? [])
     .filter((file) => file.action !== "read")
     .map((file) => file.path);
@@ -104,13 +123,13 @@ export function evaluateChildTaskResult(
     const normalized = normalizeCommand(required.command);
     const actualPassed = actualCommands.some(
       (command) =>
-        normalizeCommand(command.command) === normalized &&
+        commandSatisfiesRequirement(command.command, normalized) &&
         !command.isError &&
         !command.timedOut &&
         command.exitCode === 0
     );
     const reportedPassed = reportedCommands.some(
-      (command) => normalizeCommand(command.command) === normalized && command.passed
+      (command) => commandSatisfiesRequirement(command.command, normalized) && command.passed
     );
     return !actualPassed && !reportedPassed;
   });
@@ -143,6 +162,11 @@ export function evaluateChildTaskResult(
   return { status: "complete" };
 }
 
+function isReviewTask(task: ParsedTask): boolean {
+  return task.expectedOutputs?.some((output) => output.id === "review_report") ||
+    /\breview(?:er)?\b|审查|评审/i.test(`${task.title} ${task.prompt}`);
+}
+
 function normalizeEvidencePath(value: string): string {
   return value.trim().replaceAll("\\", "/").replace(/^\.\/+/, "").replace(/\/+$/, "").toLowerCase();
 }
@@ -150,7 +174,14 @@ function normalizeEvidencePath(value: string): string {
 function evidencePathMatches(targetPath: string, candidatePath: string): boolean {
   const target = normalizeEvidencePath(targetPath);
   const candidate = normalizeEvidencePath(candidatePath);
-  return candidate === target || candidate.startsWith(`${target}/`);
+  // A root target means the task owns the workspace root. Every workspace tool
+  // path is already sandbox-relative, so any concrete path is valid evidence
+  // that the task inspected or changed that target.
+  if (target === "." || target === "") return candidate.length > 0;
+  return candidate === target ||
+    candidate.startsWith(`${target}/`) ||
+    candidate.endsWith(`/${target}`) ||
+    candidate.includes(`/${target}/`);
 }
 
 function normalizeCommand(command: string): string {
@@ -165,12 +196,35 @@ function isSuccessfulCommand(command: TaskEvidence["commands"][number]): boolean
   return !command.isError && !command.timedOut && command.exitCode === 0;
 }
 
-function hasLaterSuccessfulEquivalentCommand(commands: TaskEvidence["commands"], failedIndex: number): boolean {
+function hasLaterSuccessfulValidationCommand(commands: TaskEvidence["commands"], failedIndex: number): boolean {
   const failedIntent = normalizeCommandIntent(commands[failedIndex]?.command ?? "");
-  if (!failedIntent) return false;
+  const failedKind = getValidationCommandKind(failedIntent);
+  if (!failedIntent || !failedKind) return false;
   return commands
     .slice(failedIndex + 1)
-    .some((command) => isSuccessfulCommand(command) && normalizeCommandIntent(command.command) === failedIntent);
+    .some((command) => {
+      if (!isSuccessfulCommand(command)) return false;
+      const successfulIntent = normalizeCommandIntent(command.command);
+      return successfulIntent === failedIntent || getValidationCommandKind(successfulIntent) === failedKind;
+    });
+}
+
+function getValidationCommandKind(command: string): "build" | "test" | "lint" | "typecheck" | "check" | null {
+  const normalized = normalizeCommandIntent(command);
+  const packageScript = normalized.match(/\b(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(build|test|lint|typecheck|check)\b/);
+  if (packageScript) return packageScript[1] as "build" | "test" | "lint" | "typecheck" | "check";
+  if (/\b(?:vite|next|astro|nuxt)\s+build\b/.test(normalized)) return "build";
+  if (/\b(?:vitest|jest|pytest)\b/.test(normalized)) return "test";
+  if (/\beslint\b/.test(normalized)) return "lint";
+  if (/\b(?:tsc|mypy)\b/.test(normalized)) return "typecheck";
+  return null;
+}
+
+function commandSatisfiesRequirement(command: string, normalizedRequirement: string): boolean {
+  const normalizedCommand = normalizeCommand(command);
+  if (normalizedCommand === normalizedRequirement) return true;
+  const requiredKind = getValidationCommandKind(normalizedRequirement);
+  return requiredKind !== null && getValidationCommandKind(normalizedCommand) === requiredKind;
 }
 
 function normalizeCommandIntent(command: string): string {

@@ -25,8 +25,24 @@
     { "id": "reviewer-read-web-app", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "web_app", "requireVerifiedBinding": true, "required": true },
     { "id": "frontend-write-source", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
     { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
-    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true }
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "artifact-web-app-valid", "type": "artifact_valid", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "minContentBytes": 200, "requiredFiles": ["index.html"], "required": true },
+    { "id": "build-succeeded", "type": "build_succeeded", "role": "frontend", "commandPattern": "build", "required": true },
+    { "id": "preview-http", "type": "preview_http", "role": "frontend", "outputKey": "web_app", "expectedStatus": 200, "minBodyBytes": 50, "required": true },
+    { "id": "browser-add-todo", "type": "browser_interaction", "scriptId": "add-todo", "required": true }
   ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "add-todo",
+      "outputKey": "web_app",
+      "steps": [
+        { "action": "fill", "selector": "input[type='text'], input:not([type])", "value": "Benchmark task" },
+        { "action": "click", "selector": "button[type='submit'], button:has-text('添加'), button:has-text('新增'), .add-btn, button[aria-label='添加任务'], form button" },
+        { "action": "assert_text", "text": "Benchmark task" }
+      ]
+    }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1" },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "full-chain", "smoke"]
 }

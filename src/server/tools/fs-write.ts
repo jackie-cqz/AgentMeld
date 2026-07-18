@@ -22,6 +22,7 @@ export const fsWriteTool: ToolDef = {
   name: "fs_write",
   description:
     "Write a text file inside the workspace. Creates parent directories automatically. " +
+    "Rejects rewriting an existing file with identical content. " +
     "Max 100 KB per file. In sandbox mode, the total workspace cannot exceed 1 GB / 50,000 files.",
   parameters: {
     type: "object",
@@ -54,7 +55,12 @@ export const fsWriteTool: ToolDef = {
     try {
       absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Path validation failed.",
+        code: "WORKSPACE_PATH_ESCAPE",
+        category: "security_policy",
+      };
     }
 
     let oldContent: string | null = null;
@@ -64,6 +70,17 @@ export const fsWriteTool: ToolDef = {
       oldBytes = Buffer.byteLength(oldContent, "utf-8");
     } catch {
       // File doesn't exist yet.
+    }
+
+    if (oldContent === parsed.data.content) {
+      return {
+        ok: false,
+        error:
+          `No-op write rejected: "${parsed.data.path}" already has the requested content. ` +
+          "Treat this file as complete and continue with the next requirement; do not retry the same write.",
+        code: "NO_OP_WRITE",
+        category: "validation_error",
+      };
     }
 
     // Sandbox quota check
@@ -90,7 +107,7 @@ export const fsWriteTool: ToolDef = {
         recordFileWriteEvidence(ctx.runId, {
           path: parsed.data.path,
           absolutePath,
-          action: oldContent === null ? "created" : "modified"
+          action: oldContent === null ? "created" : "modified",
         });
       }
       return {
@@ -117,7 +134,12 @@ export const fsWriteTool: ToolDef = {
     );
 
     if (!approved) {
-      return { ok: false, error: "User rejected the file change." };
+      return {
+        ok: false,
+        error: "User rejected the file change.",
+        code: "APPROVAL_REJECTED",
+        category: "approval_rejected",
+      };
     }
 
     // Approved — write to disk
@@ -130,7 +152,7 @@ export const fsWriteTool: ToolDef = {
       recordFileWriteEvidence(ctx.runId, {
         path: parsed.data.path,
         absolutePath,
-        action: oldContent === null ? "created" : "modified"
+        action: oldContent === null ? "created" : "modified",
       });
     }
     return {

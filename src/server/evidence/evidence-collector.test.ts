@@ -151,6 +151,35 @@ describe("evidence-collector", () => {
     expect(record.attemptId).toBe("ta_test_1");
   });
 
+  it("captures the requested directory and listed entries for fs_list", async () => {
+    const ctx = makeCtx();
+    await captureEvidence({
+      toolName: "fs_list",
+      args: { path: "dist" },
+      result: {
+        ok: true,
+        value: {
+          path: "dist",
+          entries: [
+            { name: "assets", path: "dist/assets", type: "directory" },
+            { name: "index.html", path: "dist/index.html", type: "file" },
+          ],
+        },
+      },
+      context: ctx,
+      durationMs: 5,
+    });
+
+    const records = mockInsertEvidence.mock.calls.map((call) => call[0]);
+    expect(records).toHaveLength(3);
+    expect(records.map((record) => record.subjectId)).toEqual([
+      "dist",
+      "dist/assets",
+      "dist/index.html",
+    ]);
+    expect(records.every((record) => record.type === "file_read")).toBe(true);
+  });
+
   it("captures command_executed evidence for bash tool", async () => {
     const ctx = makeCtx();
     await captureEvidence({
@@ -179,10 +208,65 @@ describe("evidence-collector", () => {
       durationMs: 50,
     });
 
+    expect(mockInsertEvidence).toHaveBeenCalledTimes(2);
+    const records = mockInsertEvidence.mock.calls.map((call) => call[0]);
+    expect(records.find((record) => record.type === "command_executed")?.status).toBe("invalid");
+    expect(records.find((record) => record.type === "tool_rejected")?.status).toBe("invalid");
+  });
+
+  it("captures a structured security rejection with the original callId", async () => {
+    const ctx = makeCtx();
+    await captureEvidence({
+      toolName: "bash",
+      args: { command: "Set-Content src/App.tsx 'bad'" },
+      result: {
+        ok: false,
+        error: "Command blocked by bash verification-only policy.",
+        code: "BASH_SOURCE_MUTATION_BLOCKED",
+        category: "security_policy",
+      },
+      context: ctx,
+      durationMs: 3,
+      callId: "call_security_1",
+    });
+
+    const rejection = mockInsertEvidence.mock.calls
+      .map((call) => call[0])
+      .find((record) => record.type === "tool_rejected");
+    expect(rejection).toMatchObject({
+      sourceId: "call_security_1",
+      subjectId: "bash",
+      status: "invalid",
+    });
+    expect(JSON.parse(rejection.payloadJson)).toMatchObject({
+      toolName: "bash",
+      category: "security_policy",
+      code: "BASH_SOURCE_MUTATION_BLOCKED",
+      sideEffectApplied: false,
+      argsSummary: { command: "Set-Content src/App.tsx 'bad'" },
+    });
+  });
+
+  it("records rejections even when a tool has no normal extractor", async () => {
+    const ctx = makeCtx();
+    await captureEvidence({
+      toolName: "custom_guarded_tool",
+      args: { path: "../outside.txt", content: "secret" },
+      result: {
+        ok: false,
+        error: "Path escapes workspace.",
+        code: "WORKSPACE_PATH_ESCAPE",
+        category: "security_policy",
+      },
+      context: ctx,
+      durationMs: 1,
+      callId: "call_escape_1",
+    });
+
     expect(mockInsertEvidence).toHaveBeenCalledTimes(1);
     const record = mockInsertEvidence.mock.calls[0][0];
-    expect(record.type).toBe("command_executed");
-    expect(record.status).toBe("invalid");
+    expect(record.type).toBe("tool_rejected");
+    expect(record.sourceId).toBe("call_escape_1");
   });
 
   it("skips capture when taskExecution is null (non-task runs)", async () => {
@@ -289,7 +373,16 @@ describe("evidence-collector", () => {
     await captureEvidence({
       toolName: "deploy_workspace",
       args: { path: "dist" },
-      result: { ok: true, value: { artifactId: "art_web_123", outputKey: "web_app" } },
+      result: {
+        ok: true,
+        value: {
+          id: "dep_ws_123",
+          artifactId: "art_web_123",
+          outputKey: "web_app",
+          previewPath: "/deployments/dep_ws_123",
+          status: "ready"
+        }
+      },
       context: ctx,
       durationMs: 30,
     });
@@ -297,6 +390,10 @@ describe("evidence-collector", () => {
     expect(mockInsertEvidence).toHaveBeenCalledTimes(2);
     expect(mockInsertEvidence.mock.calls[0][0].type).toBe("deployment_created");
     expect(mockInsertEvidence.mock.calls[1][0].type).toBe("artifact_created");
+    const deploymentPayload = JSON.parse(mockInsertEvidence.mock.calls[0][0].payloadJson);
+    expect(deploymentPayload.previewPath).toBe("/deployments/dep_ws_123");
+    expect(deploymentPayload.deploymentId).toBe("dep_ws_123");
+    expect(deploymentPayload.deploymentStatus).toBe("ready");
     const payload = JSON.parse(mockInsertEvidence.mock.calls[1][0].payloadJson);
     expect(payload.artifactType).toBe("web_app");
     expect(payload.outputKey).toBe("web_app");

@@ -4,6 +4,8 @@ import path from "node:path";
 import { getDatabase } from "@/db/client";
 import { getContextTraceByRun } from "@/server/context-trace/context-trace-service";
 import type { ContextTraceRunResponse } from "@/server/context-trace/context-trace-types";
+import { computeRunMetrics } from "@/server/context-metrics/context-metrics-service";
+import type { ContextQualityReport } from "@/server/context-metrics/context-metrics-types";
 import { eventBus, type EventBus, type EventBusEntry } from "@/server/event-bus";
 import { listRuns } from "@/server/repositories";
 import type { AgentRun } from "@/shared/types";
@@ -17,6 +19,7 @@ export interface BenchmarkTraceArchive {
   taskAttemptIds: string[];
   events: EventBusEntry[];
   contextTrace?: ContextTraceRunResponse;
+  contextMetrics?: ContextQualityReport;
   traceError?: string;
 }
 
@@ -43,12 +46,15 @@ export class TraceCollector {
     const runs = conversationId ? listRuns(conversationId) : [];
     const taskAttemptIds = conductorRunId ? readTaskAttemptIds(conductorRunId) : [];
     let contextTrace: ContextTraceRunResponse | undefined;
+    let contextMetrics: ContextQualityReport | undefined;
     let traceError: string | undefined;
 
     if (conductorRunId) {
       const result = getContextTraceByRun(conductorRunId);
       if ("error" in result) traceError = result.error;
       else contextTrace = result;
+      const metricResult = computeRunMetrics(conductorRunId);
+      if (!("error" in metricResult)) contextMetrics = metricResult;
     }
 
     return {
@@ -60,6 +66,7 @@ export class TraceCollector {
       taskAttemptIds,
       events,
       contextTrace,
+      contextMetrics,
       traceError,
     };
   }

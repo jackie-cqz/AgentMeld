@@ -181,6 +181,13 @@ export function getTaskAttempt(attemptId: string): TaskAttemptRecord | undefined
   return row ? mapAttemptRow(row) : undefined;
 }
 
+export function getTaskAttemptByChildRun(childRunId: string): TaskAttemptRecord | undefined {
+  const row = getDatabase()
+    .prepare("SELECT * FROM task_attempts WHERE child_run_id = ? LIMIT 1")
+    .get(childRunId) as SnakeRow | undefined;
+  return row ? mapAttemptRow(row) : undefined;
+}
+
 export function listTaskAttempts(
   conductorRunId: string,
   taskId: string

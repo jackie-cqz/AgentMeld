@@ -18,6 +18,7 @@ export interface RunWaitOptions {
   pollIntervalMs?: number;
   abortGraceMs?: number;
   signal?: AbortSignal;
+  shouldIgnoreRunEndEvent?: (eventIndex: number) => boolean;
 }
 
 interface RunWaiterDependencies {
@@ -50,6 +51,7 @@ export class RunWaiter {
       } = {};
       let deadlineExceeded = false;
       let timeoutAbortRequested = false;
+      let runEndEventIndex = 0;
 
       const finish = (result: Omit<RunWaitResult, "runId" | "startedAt" | "finishedAt">) => {
         if (settled) return;
@@ -89,6 +91,8 @@ export class RunWaiter {
 
       unsubscribe = this.dependencies.bus.subscribe(({ event }) => {
         if (event.type === "run.end" && event.runId === runId) {
+          runEndEventIndex += 1;
+          if (options.shouldIgnoreRunEndEvent?.(runEndEventIndex)) return;
           // run.end is a wake-up signal. The persisted run row is authoritative
           // because some Conductor error paths publish before AgentRunner commits.
           inspect();

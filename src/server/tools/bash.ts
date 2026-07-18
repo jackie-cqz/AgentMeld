@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { z } from "zod";
 import { currentPlatform, type Platform } from "@/server/platform";
 import { registerPendingBash } from "@/server/pending-bash";
@@ -47,6 +48,7 @@ const SOURCE_MUTATION_PATTERNS: RegExp[] = [
 
 const VERIFICATION_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|lint|typecheck|check)\b/i,
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:ls|list)\b/i,
   /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
@@ -118,6 +120,17 @@ function isDependencyOnlyCommand(command: string): boolean {
   return sawDependencyCommand;
 }
 
+function containsPnpmDependencyMutation(command: string): boolean {
+  return /\bpnpm\s+(?:install|add|remove|update|ci)\b/i.test(command);
+}
+
+function isNestedInsideHostProject(workspacePath: string): boolean {
+  const hostRoot = path.resolve(process.cwd());
+  const resolvedWorkspace = path.resolve(workspacePath);
+  const relative = path.relative(hostRoot, resolvedWorkspace);
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 function getShell(platform: Platform): { cmd: string; args: string[] } {
   if (platform === "windows") {
     return {
@@ -142,12 +155,12 @@ function getShell(platform: Platform): { cmd: string; args: string[] } {
 const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
   posix:
     "Run a verification shell command inside workspace. Dependency installation commands are allowed only after user approval. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
-    "Use bash for build/test/lint/typecheck verification and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Use bash for build/test/lint/typecheck/dependency-list verification and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output: stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, recursive deletion, sudo, fork bombs, curl | sh.",
   windows:
     "Run a verification PowerShell 5.1 command inside workspace. " +
-    "Use PowerShell only for build/test/lint/typecheck verification and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Use PowerShell only for build/test/lint/typecheck/dependency-list verification and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output is UTF-8, stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, Remove-Item/rmdir deletion, format, shutdown, iex(iwr ...), reg delete."
 };
@@ -161,7 +174,7 @@ export const bashTool: ToolDef = {
     properties: {
       command: {
         type: "string",
-        description: `The build/test/lint/typecheck verification command, or dependency installation command that requires user approval, to execute inside the workspace. ${
+        description: `The build/test/lint/typecheck/dependency-list verification command, or dependency installation command that requires user approval, to execute inside the workspace. ${
           currentPlatform() === "windows"
             ? "Uses PowerShell 5.1 syntax."
             : "Uses POSIX shell syntax."
@@ -181,15 +194,20 @@ export const bashTool: ToolDef = {
     // 1. Check banned patterns
     const banned = findBannedPattern(command, platform);
     if (banned) {
-      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
-      return { ok: false, error: `Command blocked by security policy (pattern: ${banned.source}).` };
+      return {
+        ok: false,
+        error: `Command blocked by security policy (pattern: ${banned.source}).`,
+        code: "BASH_SECURITY_POLICY_BLOCKED",
+        category: "security_policy",
+      };
     }
 
     const mutationPattern = findSourceMutationPattern(command);
     if (mutationPattern) {
-      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return {
         ok: false,
+        code: "BASH_SOURCE_MUTATION_BLOCKED",
+        category: "security_policy",
         error:
           "Command blocked by bash verification-only policy. " +
           "Do not retry this with PowerShell/Bash. Use fs_mkdir for directories, fs_patch for existing source edits, fs_write for new/full files, and fs_list/fs_read for directory or file inspection. " +
@@ -200,14 +218,30 @@ export const bashTool: ToolDef = {
 
     const isDependencyInstall = isDependencyOnlyCommand(command);
     if (!isVerificationOnlyCommand(command) && !isDependencyInstall) {
-      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
       return {
         ok: false,
+        code: "BASH_VERIFICATION_ONLY",
+        category: "security_policy",
         error:
           "Command blocked by bash verification-only policy. " +
-          "bash is only for build/test/lint/typecheck commands or approved dependency installation. " +
+          "bash is only for build/test/lint/typecheck/dependency-list commands or approved dependency installation. " +
           "For directories call fs_mkdir, for inspection call fs_list/fs_read now, and for source changes call fs_patch for existing files or fs_write for new/full files. " +
           "Do not use Get-ChildItem, mkdir, cat, Set-Content, echo redirection, sed, python scripts, or shell copy commands for source inspection or edits."
+      };
+    }
+
+    if (
+      isDependencyInstall &&
+      containsPnpmDependencyMutation(command) &&
+      isNestedInsideHostProject(ctx.workspacePath)
+    ) {
+      return {
+        ok: false,
+        code: "BASH_NESTED_PNPM_BLOCKED",
+        category: "security_policy",
+        error:
+          "pnpm dependency changes are blocked in AgentMeld-managed nested workspaces because pnpm may resolve the host workspace and mutate AgentMeld's root node_modules. " +
+          "Do not retry with pnpm or custom store-dir flags. Use npm install / npm ci inside the generated project, then use npm run build/test/lint for verification."
       };
     }
 
@@ -216,8 +250,12 @@ export const bashTool: ToolDef = {
     try {
       cwd = assertPathWithinWorkspace(ctx.workspacePath, ".");
     } catch (error) {
-      if (ctx.parentRunId) recordCommandFailure(ctx.runId, command);
-      return { ok: false, error: error instanceof Error ? error.message : "Workspace validation failed." };
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Workspace validation failed.",
+        code: "WORKSPACE_PATH_ESCAPE",
+        category: "security_policy",
+      };
     }
 
     // 3. Approval check for dangerous-but-not-banned commands
@@ -227,8 +265,12 @@ export const bashTool: ToolDef = {
         `Command requires user approval: ${command.slice(0, 80)}`
       );
       if (!approved) {
-        if (ctx.parentRunId) recordCommandFailure(ctx.runId, command, cwd);
-        return { ok: false, error: "User rejected command execution." };
+        return {
+          ok: false,
+          error: "User rejected command execution.",
+          code: "APPROVAL_REJECTED",
+          category: "approval_rejected",
+        };
       }
     }
 
@@ -252,10 +294,9 @@ export const bashTool: ToolDef = {
         cwd,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
-        isError: result.exitCode === null && !result.timedOut
+        isError: result.exitCode === null && !result.timedOut,
       });
     }
-
     return {
       ok: true,
       value: {
@@ -269,16 +310,6 @@ export const bashTool: ToolDef = {
     };
   }
 };
-
-function recordCommandFailure(runId: string, command: string, cwd?: string): void {
-  recordCommandEvidence(runId, {
-    command,
-    cwd,
-    exitCode: null,
-    timedOut: false,
-    isError: true
-  });
-}
 
 interface CommandResult {
   exitCode: number | null;

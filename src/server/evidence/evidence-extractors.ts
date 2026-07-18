@@ -60,6 +60,33 @@ export const extractFileRead: EvidenceExtractor = (ctx, args) => {
   };
 };
 
+// ── fs_list ────────────────────────────────────────────────────────────────
+
+export const extractFileList: EvidenceExtractor = (ctx, args, result) => {
+  const requestedPath = getStr(args, "path");
+  if (!requestedPath) return null;
+
+  const resultValue = result && typeof result === "object" && "value" in result
+    ? (result as { value?: { entries?: Array<{ path?: unknown }> } }).value
+    : undefined;
+  const listedPaths = (resultValue?.entries ?? [])
+    .map((entry) => typeof entry.path === "string" ? entry.path : "")
+    .filter(Boolean);
+
+  return [requestedPath, ...listedPaths].map((path) => ({
+    type: "file_read",
+    subjectType: "path",
+    subjectId: path,
+    payload: {
+      path,
+      operation: "list",
+      requestedPath,
+      agentId: ctx.agentId,
+    },
+    contentHash: null,
+  }));
+};
+
 // ── fs_write ───────────────────────────────────────────────────────────────
 
 export const extractFileWrite: EvidenceExtractor = (ctx, args) => {
@@ -149,11 +176,24 @@ export const extractDeployment: EvidenceExtractor = (ctx, args, result) => {
   const outputKey =
     getStr(args, "outputKey") || getResultValueStr(result, "outputKey") || inferWebAppOutputKey(ctx);
   const artifactId = getResultValueStr(result, "artifactId");
+  const previewPath =
+    getResultValueStr(result, "previewPath") ||
+    getResultValueStr(result, "localPreviewPath") ||
+    getResultValueStr(result, "deploymentPath");
+  const deploymentId = getResultValueStr(result, "id");
+  const deploymentStatus = getResultValueStr(result, "status");
   const deploymentEvidence: ExtractedEvidence = {
     type: "deployment_created",
     subjectType: "deployment",
     subjectId: outputKey || "unknown",
-    payload: { outputKey, artifactId, agentId: ctx.agentId },
+    payload: {
+      outputKey,
+      artifactId,
+      previewPath,
+      deploymentId,
+      deploymentStatus,
+      agentId: ctx.agentId
+    },
     contentHash: null,
   };
 
@@ -208,6 +248,7 @@ export const extractTaskReport: EvidenceExtractor = (ctx, args) => {
 
 export const EXTRACTOR_MAP: Record<string, EvidenceExtractor> = {
   fs_read: extractFileRead,
+  fs_list: extractFileList,
   fs_write: extractFileWrite,
   fs_patch: extractFileWrite,
   bash: extractCommand,

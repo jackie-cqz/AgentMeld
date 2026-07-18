@@ -5,7 +5,9 @@
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { CriterionVerdict } from "@/shared/evidence-types";
 import type { AcceptanceCriterionSpec } from "@/shared/types";
+import { extractArtifactIds } from "@/server/evidence/artifact-reference";
 import { listEvidenceForAttempt } from "@/server/repositories/evidence-repository";
+import { getArtifact } from "@/server/repositories";
 import { resolveValidator, validateCriterion, type ValidationResult } from "@/server/verification/validator-registry";
 
 export interface TaskVerificationResult {
@@ -69,6 +71,22 @@ export async function verifyTaskAttempt(
     }
   }
 
+  const unsupportedArtifactClaims = findUnsupportedArtifactClaims(taskReport, evidence);
+  if (unsupportedArtifactClaims.length > 0) {
+    hasFailure = true;
+    verdicts.push({
+      id: `vd_report-artifact-claims-supported_${now}`,
+      criterionId: "report-artifact-claims-supported",
+      status: "failed",
+      validatorType: "artifact_exists",
+      evidenceIds: [],
+      reason:
+        `guessed_artifact_id: task report referenced artifact ids without attempt evidence: ` +
+        unsupportedArtifactClaims.join(", "),
+      checkedAt: now,
+    });
+  }
+
   // Build verified output bindings from artifact evidence, not agent self-report.
   // write_artifact records artifact_created evidence with outputKey + artifactId;
   // that evidence is the authority for downstream task inputs.
@@ -81,11 +99,17 @@ export async function verifyTaskAttempt(
     const outputKey = payload.outputKey || item.subjectId;
     const artifactId = payload.artifactId;
     if (!outputKey || !artifactId || !expectedOutputs.has(outputKey)) continue;
+    const expectedOutput = expectedOutputs.get(outputKey);
+    const artifact = getArtifact(artifactId);
+    if (!artifact || artifact.type !== expectedOutput?.type || !isCompleteArtifact(artifact.content)) {
+      continue;
+    }
 
-    const existing = evidenceByOutput.get(outputKey);
+    // Evidence is loaded oldest-first. A later complete write for the same outputKey
+    // is the final version for this attempt and replaces the previous candidate.
     evidenceByOutput.set(outputKey, {
       artifactId,
-      evidenceIds: [...(existing?.evidenceIds ?? []), item.id],
+      evidenceIds: [item.id],
     });
   }
 
@@ -194,5 +218,50 @@ function parseArtifactPayload(payloadJson: string): { outputKey?: string; artifa
     };
   } catch {
     return {};
+  }
+}
+
+export function findUnsupportedArtifactClaims(
+  taskReport: { artifacts?: Record<string, string>; summary?: string } | undefined,
+  evidence: Array<{ subjectId: string; payloadJson: string; status: string }>,
+): string[] {
+  if (!taskReport) return [];
+  const reportText = [
+    taskReport.summary ?? "",
+    ...Object.values(taskReport.artifacts ?? {}),
+  ].join("\n");
+  const claimedIds = extractArtifactIds(reportText);
+  if (claimedIds.length === 0) return [];
+
+  const supportedIds = new Set<string>();
+  for (const item of evidence) {
+    if (item.status !== "valid") continue;
+    if (/^art_[A-Za-z0-9_-]+$/.test(item.subjectId)) supportedIds.add(item.subjectId);
+    try {
+      const payload = JSON.parse(item.payloadJson) as Record<string, unknown>;
+      if (typeof payload.artifactId === "string") supportedIds.add(payload.artifactId);
+    } catch {
+      // Invalid historical payloads cannot prove an artifact claim.
+    }
+  }
+  return claimedIds.filter((artifactId) => !supportedIds.has(artifactId));
+}
+
+function isCompleteArtifact(content: import("@/shared/types").ArtifactContent): boolean {
+  switch (content.type) {
+    case "document":
+      return content.content.trim().length > 0;
+    case "web_app":
+      return Boolean(
+        content.entry &&
+        Object.keys(content.files).length > 0 &&
+        content.files[content.entry]?.trim()
+      );
+    case "image":
+      return content.url.trim().length > 0;
+    case "ppt":
+      return content.slides.length > 0;
+    default:
+      return false;
   }
 }

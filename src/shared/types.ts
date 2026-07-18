@@ -64,11 +64,16 @@ export type PartDelta =
   | { type: "code.append"; text: string }
   | { type: "thinking.append"; text: string };
 
+export interface ToolArgumentRepairMetadata {
+  applied: boolean;
+  kinds: string[];
+}
+
 export type MessagePart =
   | { type: "text"; content: string }
   | { type: "thinking"; content: string }
   | { type: "code"; language?: string; content: string }
-  | { type: "tool_use"; callId: string; toolName: string; args: unknown }
+  | { type: "tool_use"; callId: string; toolName: string; args: unknown; argumentRepair?: ToolArgumentRepairMetadata }
   | { type: "tool_result"; callId: string; result: unknown; isError?: boolean }
   | { type: "artifact_ref"; artifactId: string; title?: string; artifactType?: ArtifactType }
   | { type: "deploy_status"; deployment: DeployStatusRecord }
@@ -331,6 +336,13 @@ export interface AcceptanceCriterionSpec {
   validator: import("@/shared/evidence-types").CriterionValidator;
 }
 
+export type DispatchTaskIntent =
+  | "delivery"
+  | "diagnosis"
+  | "verification"
+  | "approval_probe"
+  | "negative_verifier_test";
+
 export interface DispatchPlanItem {
   id: string;
   agentId: string;
@@ -345,6 +357,14 @@ export interface DispatchPlanItem {
   targetPaths?: string[];
   requiredCommands?: Array<{ command: string; timeoutMs?: number }>;
   requiredEvidence?: string[];
+  /** Proposed by Conductor and deterministically reconciled by the platform. */
+  taskIntent?: DispatchTaskIntent;
+  /** System-selected contract profile; never trusted as an LLM bypass flag. */
+  contractProfile?: "standard" | "minimal";
+  /** Deterministic explanation for the selected contract profile. */
+  contractSelectionReason?: string;
+  /** Version of the deterministic contract-selection policy. */
+  contractSelectionVersion?: string;
 }
 
 export interface PendingDispatchPlan {
@@ -395,6 +415,7 @@ export type StreamEvent =
       callId: string;
       toolName: string;
       args: unknown;
+      argumentRepair?: ToolArgumentRepairMetadata;
     })
   | (BaseEvent & {
       type: "tool.result";

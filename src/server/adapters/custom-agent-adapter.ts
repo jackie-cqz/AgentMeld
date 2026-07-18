@@ -7,9 +7,30 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { getSettings, resolveApiKey } from "@/server/settings-service";
 import { getArtifact } from "@/server/repositories";
-import { recordTaskArtifact } from "@/server/dispatch-task-results";
+import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
+import { buildPromptLayout } from "@/server/prompt-layout/prompt-layout-builder";
 
-export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 16;
+export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 48;
+export const TASK_REPORT_FINALIZATION_ROUNDS = 1;
+
+export function shouldFinalizeTaskReport(input: AdapterInput, hasReport: boolean): boolean {
+  return input.toolNames.includes("report_task_result") && !hasReport;
+}
+
+type ToolArgumentFaultInterceptor = (input: {
+  runId: string;
+  toolName: string;
+  rawArguments: string;
+}) => string | null;
+
+let toolArgumentFaultInterceptor: ToolArgumentFaultInterceptor | null = null;
+
+export function setToolArgumentFaultInterceptorForTests(interceptor: ToolArgumentFaultInterceptor | null): void {
+  if (interceptor && process.env.AGENTMELD_BENCH_FAULT_INJECTION !== "1") {
+    throw new Error("Tool argument fault injection is only available to the benchmark runtime.");
+  }
+  toolArgumentFaultInterceptor = interceptor;
+}
 
 const PROVIDER_BASE_URLS: Record<string, string> = {
   openai: "https://api.openai.com/v1",
@@ -81,18 +102,50 @@ export const customAgentAdapter: AgentPlatformAdapter = {
     let totalOutputTokens = 0;
     let partIndex = 0;
     let deployToolSucceededInRun = false;
+    let reportToolSucceededInRun = false;
 
     let currentMessages = [...messages];
     let exhaustedToolRounds = false;
-    for (let round = 0; round < CUSTOM_AGENT_MAX_TOOL_ROUNDS; round++) {
+    let finalizationMode = false;
+    for (
+      let round = 0;
+      round < CUSTOM_AGENT_MAX_TOOL_ROUNDS + TASK_REPORT_FINALIZATION_ROUNDS;
+      round++
+    ) {
       if (signal.aborted) break;
 
+      const isFinalizationRound = finalizationMode || round >= CUSTOM_AGENT_MAX_TOOL_ROUNDS;
+      if (isFinalizationRound) {
+        if (!shouldFinalizeTaskReport(input, Boolean(getTaskReport(input.runId)))) {
+          break;
+        }
+        if (!finalizationMode) {
+          finalizationMode = true;
+        }
+        currentMessages = [
+          ...currentMessages,
+          {
+            role: "system",
+            content:
+              "工作轮次已经结束。不要再读取、修改、构建或部署任何内容。" +
+              "现在必须基于已有工具结果调用 report_task_result 一次，真实汇报完成状态、验收结果、产物、文件、命令和测试证据。" +
+              "不得输出普通文本，不得调用其他工具。"
+          }
+        ];
+      }
+
+      const roundTools = isFinalizationRound
+        ? buildChatCompletionTools({ ...input, toolNames: ["report_task_result"] })
+        : tools;
       let stream: Awaited<ReturnType<typeof client.chat.completions.create>>;
       try {
         stream = await client.chat.completions.create({
           model,
           messages: currentMessages,
-          tools: tools.length > 0 ? tools : undefined,
+          tools: roundTools.length > 0 ? roundTools : undefined,
+          tool_choice: isFinalizationRound
+            ? { type: "function", function: { name: "report_task_result" } }
+            : undefined,
           stream: true,
           stream_options: { include_usage: true },
           max_tokens: provider === "deepseek" ? 8192 : undefined
@@ -223,6 +276,10 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
       // If no tool calls, we're done
       if (!hasToolCalls || toolCalls.size === 0) {
+        if (isFinalizationRound) {
+          exhaustedToolRounds = true;
+          break;
+        }
         const ctx = buildToolContext(input, signal);
         const deployPath = findDeployableWorkspacePath(ctx.workspacePath);
         if (shouldAutoDeployWorkspace(textContent, input.toolNames, deployToolSucceededInRun, input.taskContract, deployPath)) {
@@ -244,7 +301,12 @@ export const customAgentAdapter: AgentPlatformAdapter = {
               args
             };
 
-            const result = await toolRegistry.execute("deploy_workspace", args, ctx);
+            const result = await toolRegistry.execute(
+              "deploy_workspace",
+              args,
+              ctx,
+              { callId, source: "system" },
+            );
             yield {
               type: "tool.result",
               conversationId,
@@ -280,18 +342,36 @@ export const customAgentAdapter: AgentPlatformAdapter = {
             }
           }
         }
+        if (shouldFinalizeTaskReport(input, Boolean(getTaskReport(input.runId)))) {
+          if (textContent) {
+            currentMessages = [
+              ...currentMessages,
+              { role: "assistant", content: textContent }
+            ];
+          }
+          finalizationMode = true;
+          continue;
+        }
         break;
       }
 
       // Execute tool calls
       const toolResults: Array<{ callId: string; name: string; result: unknown; isError: boolean }> = [];
+      const serializedToolArguments = new Map<string, string>();
       const ctx = buildToolContext(input, signal);
 
       for (const [, tc] of toolCalls) {
-        const parsedArgs = parseToolCallArguments(tc.args, finishReason, tc.name);
+        const injectedArguments = toolArgumentFaultInterceptor?.({
+          runId: input.runId,
+          toolName: tc.name,
+          rawArguments: tc.args,
+        });
+        const rawArguments = injectedArguments ?? tc.args;
+        const parsedArgs = parseToolCallArguments(rawArguments, finishReason, tc.name);
         const args = parsedArgs.ok
           ? parsedArgs.args
-          : { rawArguments: tc.args };
+          : { rawArguments };
+        serializedToolArguments.set(tc.id, parsedArgs.serialized);
 
         yield {
           type: "tool.call",
@@ -300,12 +380,27 @@ export const customAgentAdapter: AgentPlatformAdapter = {
           messageId: "",
           callId: tc.id,
           toolName: tc.name,
-          args
+          args,
+          argumentRepair: parsedArgs.ok ? parsedArgs.repair : undefined
         };
 
         const result = parsedArgs.ok
-          ? await toolRegistry.execute(tc.name, args, ctx)
-          : { ok: false as const, error: parsedArgs.error };
+          ? await toolRegistry.execute(
+              tc.name,
+              args,
+              ctx,
+              { callId: tc.id, source: "llm" },
+            )
+          : await toolRegistry.recordPreflightFailure(
+              tc.name,
+              args,
+              parsedArgs.error,
+              ctx,
+              { callId: tc.id, source: "llm" },
+            );
+        if (tc.name === "report_task_result" && result.ok) {
+          reportToolSucceededInRun = true;
+        }
 
         yield {
           type: "tool.result",
@@ -366,7 +461,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
           type: "function" as const,
           function: {
             name: tc.name,
-            arguments: parseToolCallArguments(tc.args, finishReason, tc.name).serialized
+            arguments: serializedToolArguments.get(tc.id) ?? "{}"
           }
         }))
       };
@@ -379,8 +474,12 @@ export const customAgentAdapter: AgentPlatformAdapter = {
 
       currentMessages = [...currentMessages, assistantMsg, ...toolMsgs];
       partIndex++;
-      if (round === CUSTOM_AGENT_MAX_TOOL_ROUNDS - 1) {
+      if (reportToolSucceededInRun || getTaskReport(input.runId)) {
+        break;
+      }
+      if (isFinalizationRound) {
         exhaustedToolRounds = true;
+        break;
       }
     }
 
@@ -622,7 +721,12 @@ function normalizeRelativePath(value: string): string {
 }
 
 type ParsedToolCallArguments =
-  | { ok: true; args: Record<string, unknown>; serialized: string }
+  | {
+      ok: true;
+      args: Record<string, unknown>;
+      serialized: string;
+      repair: { applied: boolean; kinds: string[] };
+    }
   | { ok: false; error: string; serialized: string };
 
 export function parseToolCallArguments(
@@ -630,9 +734,18 @@ export function parseToolCallArguments(
   finishReason: string | null = null,
   toolName?: string
 ): ParsedToolCallArguments {
-  let candidate = repairJson(stripJsonFence(rawArguments.trim()));
+  const repairKinds: string[] = [];
+  const trimmed = rawArguments.trim();
+  const stripped = stripJsonFence(trimmed);
+  if (stripped !== trimmed) repairKinds.push("json_fence_removed");
+  let candidate = repairJson(stripped);
+  if (candidate !== stripped) repairKinds.push("syntax_repaired");
+  const repair = () => ({
+    applied: repairKinds.length > 0,
+    kinds: [...new Set(repairKinds)],
+  });
   if (!candidate) {
-    return { ok: true, args: {}, serialized: "{}" };
+    return { ok: true, args: {}, serialized: "{}", repair: repair() };
   }
 
   for (let depth = 0; depth < 4; depth++) {
@@ -642,16 +755,19 @@ export function parseToolCallArguments(
     } catch (error) {
       const concatenated = parseConcatenatedJsonObjects(candidate);
       if (concatenated) {
+        repairKinds.push("concatenated_objects_resolved");
         parsed = concatenated[concatenated.length - 1];
       } else {
         const minimalReport = toolName === "report_task_result"
           ? parseMinimalTaskReport(candidate)
           : null;
         if (minimalReport) {
+          repairKinds.push("minimal_task_report_recovered");
           return {
             ok: true,
             args: minimalReport,
-            serialized: JSON.stringify(minimalReport)
+            serialized: JSON.stringify(minimalReport),
+            repair: repair(),
           };
         }
         const detail = error instanceof Error ? error.message : "Unknown JSON parse error";
@@ -667,7 +783,11 @@ export function parseToolCallArguments(
     }
 
     if (typeof parsed === "string") {
-      candidate = repairJson(stripJsonFence(parsed.trim()));
+      repairKinds.push("json_string_unwrapped");
+      const nestedStripped = stripJsonFence(parsed.trim());
+      const nestedRepaired = repairJson(nestedStripped);
+      if (nestedRepaired !== nestedStripped) repairKinds.push("syntax_repaired");
+      candidate = nestedRepaired;
       continue;
     }
 
@@ -681,15 +801,20 @@ export function parseToolCallArguments(
 
     const wrapped = unwrapToolArguments(parsed);
     if (wrapped !== parsed) {
+      repairKinds.push("arguments_wrapper_removed");
       if (typeof wrapped === "string") {
-        candidate = stripJsonFence(wrapped.trim());
+        const wrappedStripped = stripJsonFence(wrapped.trim());
+        const wrappedRepaired = repairJson(wrappedStripped);
+        if (wrappedRepaired !== wrappedStripped) repairKinds.push("syntax_repaired");
+        candidate = wrappedRepaired;
         continue;
       }
       if (isRecord(wrapped)) {
         return {
           ok: true,
           args: wrapped,
-          serialized: JSON.stringify(wrapped)
+          serialized: JSON.stringify(wrapped),
+          repair: repair(),
         };
       }
     }
@@ -697,7 +822,8 @@ export function parseToolCallArguments(
     return {
       ok: true,
       args: parsed,
-      serialized: JSON.stringify(parsed)
+      serialized: JSON.stringify(parsed),
+      repair: repair(),
     };
   }
 
@@ -1068,7 +1194,6 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
 
   // P0: When dynamic context XML is provided, use stable prefix + dynamic suffix layout
   if (input.contextXml) {
-    const { buildPromptLayout } = require("@/server/prompt-layout/prompt-layout-builder");
     const triggerText = input.triggerMessage.parts
       .filter((p) => p.type === "text")
       .map((p) => p.content)
@@ -1134,10 +1259,11 @@ function buildRuntimePlatformPrompt(workspacePath: string): string {
       `  <workspace_path>${escapePromptXml(workspacePath)}</workspace_path>`,
       "  <command_rules>",
       "    Use the real workspace_path above as the current project directory; do not use /workspace.",
-      "    Use PowerShell-compatible command separators. Prefer: cd \"<workspace_path>\"; pnpm build",
+      "    Use PowerShell-compatible command separators. Prefer: cd \"<workspace_path>\"; npm run build",
       "    Do not use POSIX-only syntax such as &&, cp, mv, rm -rf, sed, cat > file, grep, chmod, or /tmp paths.",
       "    Do not create directories or modify source files with shell commands. Use fs_mkdir for directories, fs_patch for focused edits, and fs_write for new files or intentional full replacement.",
       "    bash is only for verification commands and dependency install/update commands that may require user approval.",
+      "    AgentMeld-managed workspaces are nested under the host project. Never run pnpm install/add/remove/update/ci there because it can mutate the host node_modules. Use npm install or npm ci for generated projects.",
       "  </command_rules>",
       "</runtime_platform>",
     ].join("\n");
@@ -1151,8 +1277,9 @@ function buildRuntimePlatformPrompt(workspacePath: string): string {
     "  <command_rules>",
     "    Use the real workspace_path above as the current project directory.",
     "    POSIX command separators like && are allowed for verification commands.",
-    "    Do not create directories or modify source files with shell commands. Use fs_mkdir for directories, fs_patch for focused edits, and fs_write for new files or intentional full replacement.",
-    "    bash is only for verification commands and dependency install/update commands that may require user approval.",
+      "    Do not create directories or modify source files with shell commands. Use fs_mkdir for directories, fs_patch for focused edits, and fs_write for new files or intentional full replacement.",
+      "    bash is only for verification commands and dependency install/update commands that may require user approval.",
+      "    AgentMeld-managed workspaces may be nested under the host project. Never run pnpm install/add/remove/update/ci there; use npm install or npm ci for generated projects.",
     "  </command_rules>",
     "</runtime_platform>",
   ].join("\n");

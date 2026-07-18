@@ -500,12 +500,47 @@ export function persistOutputBinding(record: {
   producerTaskId: string;
   outputKey: string;
   artifactId: string;
+  actualProducerTaskId?: string;
   now: number;
 }) {
   getDatabase().prepare(`
-    INSERT OR REPLACE INTO conductor_output_bindings (conductor_run_id, plan_id, producer_task_id, output_key, artifact_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(record.conductorRunId, record.planId, record.producerTaskId, record.outputKey, record.artifactId, record.now);
+    INSERT OR REPLACE INTO conductor_output_bindings (
+      conductor_run_id, plan_id, producer_task_id, output_key, artifact_id,
+      created_at, superseded_at, replaced_by_task_id, actual_producer_task_id
+    )
+    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+  `).run(
+    record.conductorRunId,
+    record.planId,
+    record.producerTaskId,
+    record.outputKey,
+    record.artifactId,
+    record.now,
+    record.actualProducerTaskId ?? null,
+  );
+}
+
+export function supersedeOutputBinding(record: {
+  conductorRunId: string;
+  producerTaskId: string;
+  outputKey: string;
+  replacedByTaskId: string;
+  now: number;
+}) {
+  getDatabase().prepare(`
+    UPDATE conductor_output_bindings
+    SET superseded_at = ?, replaced_by_task_id = ?
+    WHERE conductor_run_id = ?
+      AND producer_task_id = ?
+      AND output_key = ?
+      AND superseded_at IS NULL
+  `).run(
+    record.now,
+    record.replacedByTaskId,
+    record.conductorRunId,
+    record.producerTaskId,
+    record.outputKey,
+  );
 }
 
 export function persistConductorConflict(record: {
@@ -531,7 +566,7 @@ export function listConductorPlans(conductorRunId: string): Array<Record<string,
 
 export function listOutputBindings(planId: string): Array<Record<string, unknown>> {
   return getDatabase().prepare(
-    "SELECT * FROM conductor_output_bindings WHERE plan_id = ?"
+    "SELECT * FROM conductor_output_bindings WHERE plan_id = ? AND superseded_at IS NULL"
   ).all(planId) as Array<Record<string, unknown>>;
 }
 

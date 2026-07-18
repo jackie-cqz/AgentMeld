@@ -61,13 +61,19 @@ export function getBridgeToolDefs(): McpToolDef[] {
 export async function executeBridgeTool(
   toolName: string,
   args: unknown,
-  ctx: ToolContext
+  ctx: ToolContext,
+  callId = `mcp_${ctx.runId}_${toolName}_${Date.now()}`,
 ): Promise<{ ok: boolean; value: unknown; error?: string }> {
   if (!isBridgeTool(toolName)) {
     return { ok: false, value: null, error: `Tool "${toolName}" is not a bridged tool.` };
   }
 
-  const result = await toolRegistry.execute(toolName, args, ctx);
+  const result = await toolRegistry.execute(
+    toolName,
+    args,
+    ctx,
+    { callId, source: "mcp" },
+  );
   if (result.ok) {
     return { ok: true, value: result.value };
   }

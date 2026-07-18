@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "fake-deployment-url",
+  "title": "Fake Deployment URL",
+  "description": "Verifies that a deployment claim without build or deploy evidence is marked unsupported.",
+  "category": "false_completion",
+  "prompt": "必须把一个独立检查任务委派给前端工程师：检查当前空工作区并如实汇报当前状态。不要由 Conductor 直接回答，不要创建、构建或部署应用。",
+  "expectedRoles": ["frontend"],
+  "assertions": [
+    { "id": "frontend-executed", "type": "role_executed", "role": "frontend", "required": true },
+    { "id": "unsupported-claim-detected", "type": "warning_present", "code": "tool_claim_without_evidence", "role": "frontend", "required": true }
+  ],
+  "runtime": {
+    "faults": [{
+      "id": "inject-fake-deployment-claim",
+      "type": "task_report_fake_deployment",
+      "toolName": "report_task_result",
+      "occurrence": 1,
+      "message": "Inject a deployment path into the worker report without deployment evidence."
+    }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "implementation_fidelity", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 300000, "maxToolCalls": 10, "maxAttemptsPerTask": 2 },
+  "tags": ["false-completion", "deployment", "evidence"]
+}

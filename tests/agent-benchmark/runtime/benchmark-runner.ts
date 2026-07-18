@@ -15,6 +15,12 @@ import {
 } from "./environment-manager";
 import { RunWaiter, type RunWaitResult } from "./run-waiter";
 import { TraceCollector, type BenchmarkTraceArchive } from "./trace-collector";
+import { collectRuntimeValidation } from "./runtime-validation-collector";
+import { buildJudgePacket } from "../judges/judge-packet-builder";
+import { runJudgeEnsemble } from "../judges/judge-ensemble";
+import { composeVerdict } from "../judges/verdict-composer";
+import type { JudgeExecution, JudgeMode } from "../judges/judge-types";
+import { FaultInjector } from "./fault-injector";
 import { UserSimulator, type UserSimulatorAction } from "./user-simulator";
 
 export interface BenchmarkTrialReport {
@@ -37,6 +43,10 @@ export interface BenchmarkTrialReport {
   tracePath: string;
   reportPath: string;
   result: E2ERunResult;
+  runtimeValidation: import("@/server/context-metrics/benchmark-types").BenchmarkRuntimeValidation | null;
+  judge: JudgeExecution | null;
+  verdict: import("../judges/judge-types").ComposedVerdict;
+  injectedFaults: import("@/server/context-metrics/benchmark-types").BenchmarkFaultRecord[];
 }
 
 export interface RunBenchmarkCaseOptions {
@@ -45,6 +55,12 @@ export interface RunBenchmarkCaseOptions {
   strategy?: string;
   signal?: AbortSignal;
   dependencies?: Partial<BenchmarkRunnerDependencies>;
+  judgeMode?: JudgeMode;
+  judgeModel?: string;
+  judgeImportPath?: string;
+  judgeRepeat?: number;
+  maxDurationMs?: number;
+  maxCostUsd?: number;
 }
 
 export interface BenchmarkRunnerDependencies {
@@ -71,6 +87,7 @@ export async function runBenchmarkCase(
   const traceCollector = options.dependencies?.traceCollector ?? new TraceCollector();
   const userSimulator = options.dependencies?.userSimulator
     ?? new UserSimulator(benchmarkCase.runtime?.userScript);
+  const faultInjector = new FaultInjector(benchmarkCase.runtime?.faults);
   const tracePath = path.join(environment.reportDir, "trace.json");
   const reportPath = path.join(environment.reportDir, "report.json");
 
@@ -80,6 +97,8 @@ export async function runBenchmarkCase(
   let conversation: BenchmarkConversationStart | null = null;
   let waitResult: RunWaitResult | null = null;
   let archive: BenchmarkTraceArchive = emptyTraceArchive();
+  let runtimeValidation: import("@/server/context-metrics/benchmark-types").BenchmarkRuntimeValidation | null = null;
+  let judge: JudgeExecution | null = null;
   let result = createErrorRunResult(
     benchmarkCase.id,
     "not_started",
@@ -88,12 +107,15 @@ export async function runBenchmarkCase(
     options.strategy,
   );
   const errors: string[] = [];
+  const previousStrategy = process.env.AGENTMELD_CONTEXT_STRATEGY;
   let finalReport: BenchmarkTrialReport | null = null;
   let reportWriteError: unknown;
 
   try {
+    if (options.strategy) process.env.AGENTMELD_CONTEXT_STRATEGY = options.strategy;
     environmentManager.activate(environment);
     activated = true;
+    faultInjector.start();
     traceCollector.start();
     collectorStarted = true;
     userSimulator.start();
@@ -101,24 +123,58 @@ export async function runBenchmarkCase(
 
     conversation = await conversationDriver.startCase(benchmarkCase);
     waitResult = await runWaiter.waitForEnd(conversation.conductorRunId, {
-      timeoutMs: benchmarkCase.limits.maxDurationMs,
+      timeoutMs: Math.min(benchmarkCase.limits.maxDurationMs, options.maxDurationMs ?? Number.POSITIVE_INFINITY),
       signal: options.signal,
+      shouldIgnoreRunEndEvent: (eventIndex) => faultInjector.shouldDropRunEndEvent(
+        conversation!.conductorRunId,
+        eventIndex,
+      ),
     });
     if (waitResult.error) errors.push(waitResult.error);
 
     archive = traceCollector.collect(conversation.conversationId, conversation.conductorRunId);
     if (archive.contextTrace && !waitResult.timedOut) {
+      runtimeValidation = await collectRuntimeValidation(benchmarkCase, archive.contextTrace, {
+        reportDir: environment.reportDir,
+        injectedFaults: faultInjector.getRecords(),
+      });
       result = evaluateBenchmarkTrace(benchmarkCase, archive.contextTrace, {
         startedAt,
         finishedAt: Date.now(),
         strategy: options.strategy,
+        runtimeValidation,
       });
+      const judgeMode = options.judgeMode ?? "off";
+      if (benchmarkCase.judge?.enabled && judgeMode !== "off") {
+        const packet = buildJudgePacket(benchmarkCase, archive.contextTrace, result, runtimeValidation);
+        judge = await runJudgeEnsemble(benchmarkCase, packet, {
+          mode: judgeMode,
+          reportDir: environment.reportDir,
+          model: options.judgeModel,
+          importPath: options.judgeImportPath,
+        }, options.judgeRepeat ?? 1);
+        result = {
+          ...result,
+          judge,
+          verdict: composeVerdict(result, judge, benchmarkCase.judge.requiredForPass ?? false),
+        };
+      } else {
+        result = {
+          ...result,
+          judge,
+          verdict: composeVerdict(result, judge, false),
+        };
+      }
       if (waitResult.status !== "complete") {
         result = {
           ...result,
           status: "error",
           error: waitResult.error ?? `Conductor run ended with status ${waitResult.status}.`,
         };
+      }
+      const budgetError = evaluateTrialBudget(benchmarkCase, result, options.maxCostUsd);
+      if (budgetError) {
+        result = { ...result, status: "budget_exceeded", error: budgetError };
       }
     } else {
       const traceError = archive.traceError ?? "Context trace was not available.";
@@ -171,6 +227,9 @@ export async function runBenchmarkCase(
         errors.push(`User simulator cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    try { faultInjector.stop(); } catch (error) {
+      errors.push(`Fault injector cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (collectorStarted) {
       try { traceCollector.stop(); } catch (error) {
         errors.push(`Trace collector cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -181,6 +240,8 @@ export async function runBenchmarkCase(
         errors.push(`Environment cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    if (previousStrategy === undefined) delete process.env.AGENTMELD_CONTEXT_STRATEGY;
+    else process.env.AGENTMELD_CONTEXT_STRATEGY = previousStrategy;
 
     finalReport = buildTrialReport({
       benchmarkCase,
@@ -195,6 +256,9 @@ export async function runBenchmarkCase(
       tracePath,
       reportPath,
       result,
+      runtimeValidation,
+      judge,
+      injectedFaults: faultInjector.getRecords(),
     });
     try {
       writeJson(reportPath, finalReport);
@@ -210,6 +274,25 @@ export async function runBenchmarkCase(
   return finalReport;
 }
 
+function evaluateTrialBudget(
+  benchmarkCase: AgentBenchmarkCase,
+  result: E2ERunResult,
+  maxCostUsd?: number,
+): string | null {
+  if (benchmarkCase.limits.maxModelCalls != null && result.metrics.modelRunCount > benchmarkCase.limits.maxModelCalls) {
+    return `Model call budget exceeded: ${result.metrics.modelRunCount}/${benchmarkCase.limits.maxModelCalls}.`;
+  }
+  if (benchmarkCase.limits.maxToolCalls != null && result.metrics.toolCallCount > benchmarkCase.limits.maxToolCalls) {
+    return `Tool call budget exceeded: ${result.metrics.toolCallCount}/${benchmarkCase.limits.maxToolCalls}.`;
+  }
+  if (benchmarkCase.limits.maxInputTokens != null && result.metrics.inputTokens > benchmarkCase.limits.maxInputTokens) {
+    return `Input token budget exceeded: ${result.metrics.inputTokens}/${benchmarkCase.limits.maxInputTokens}.`;
+  }
+  const estimatedCost = result.judge?.result?.estimatedCostUsd ?? 0;
+  if (maxCostUsd != null && estimatedCost > maxCostUsd) return `Judge cost budget exceeded: $${estimatedCost.toFixed(4)}/$${maxCostUsd.toFixed(4)}.`;
+  return null;
+}
+
 function buildTrialReport(input: {
   benchmarkCase: AgentBenchmarkCase;
   trialIndex: number;
@@ -223,6 +306,9 @@ function buildTrialReport(input: {
   tracePath: string;
   reportPath: string;
   result: E2ERunResult;
+  runtimeValidation: import("@/server/context-metrics/benchmark-types").BenchmarkRuntimeValidation | null;
+  judge: JudgeExecution | null;
+  injectedFaults: import("@/server/context-metrics/benchmark-types").BenchmarkFaultRecord[];
 }): BenchmarkTrialReport {
   const finishedAt = Date.now();
   return {
@@ -245,6 +331,10 @@ function buildTrialReport(input: {
     tracePath: path.resolve(input.tracePath),
     reportPath: path.resolve(input.reportPath),
     result: input.result,
+    runtimeValidation: input.runtimeValidation,
+    judge: input.judge,
+    verdict: composeVerdict(input.result, input.judge, input.benchmarkCase.judge?.requiredForPass ?? false),
+    injectedFaults: input.injectedFaults,
   };
 }
 

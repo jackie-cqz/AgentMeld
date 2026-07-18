@@ -19,14 +19,25 @@ export interface ContextQualityRunMetrics {
   contextOmittedItemCount: number;
   contextOmittedByBudgetCount: number;
   staleRejectedCount: number;
+  staleFactLeakageCount: number;
   unverifiedRejectedCount: number;
   unrelatedRejectedCount: number;
+  contextOmittedReasonCounts: Record<string, number>;
 
   evidenceCount: number;
   toolCallCount: number;
   failedToolCallCount: number;
   verifiedOutputBindingCount: number;
   rejectedOutputClaimCount: number;
+  unverifiedOutputPropagationCount: number;
+  approvalRequestCount: number;
+  jsonRepairCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  modelRunCount: number;
+  verifiedTaskCount: number;
+  rejectedTaskCount: number;
+  needsReviewTaskCount: number;
 
   artifactCreatedCount: number;
   webAppOutputCount: number;
@@ -57,6 +68,17 @@ export interface ContextQualityReport {
   runId: string;
   raw: ContextQualityRunMetrics;
   derived: ContextQualityDerivedRates;
+  sources: ContextQualityMetricSources;
+}
+
+export interface ContextQualityMetricSources {
+  runIds: string[];
+  taskAttemptIds: string[];
+  contextSnapshotIds: string[];
+  evidenceIds: string[];
+  outputBindingKeys: string[];
+  messageIds: string[];
+  approvalIds: string[];
 }
 
 export interface FixtureReportEntry {

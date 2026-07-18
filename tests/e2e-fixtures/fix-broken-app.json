@@ -4,7 +4,7 @@
   "title": "Fix Broken App",
   "description": "Debugging scenario testing diagnosis handoff, source repair, build evidence, bounded retries, and deployment.",
   "category": "recovery",
-  "prompt": "我这里有一个 React Todo App，但是 pnpm build 失败了。请帮我找出问题并修复，让应用能正常构建和部署。项目文件在 src/ 目录下。",
+  "prompt": "这是明确的多 Agent 协作任务，Conductor 必须调用 plan_tasks，不能自己直接诊断或修改。请先由 PM 读取现有源码并形成 outputKey=diagnosis 的诊断产物，再由前端工程师通过 dependsOn 和 inputs 读取 diagnosis 与现有源码，使用 fs_patch 对 React Todo App 做最小语法修复。只修复现有 JSX 闭合错误，不扩展功能、不重写组件。前端工程师必须运行 npm run build；第一次构建失败后根据真实错误重试，最终通过 deploy_workspace 部署 dist。项目文件已在当前 workspace。",
   "expectedRoles": ["pm", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
@@ -14,11 +14,42 @@
     { "id": "edge-diagnosis-frontend", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "diagnosis", "required": true },
     { "id": "frontend-read-diagnosis", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "diagnosis", "required": true },
     { "id": "frontend-read-files", "type": "tool_succeeded", "toolName": "fs_read", "role": "frontend", "required": true },
-    { "id": "frontend-write-fix", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-write-fix", "type": "tool_succeeded", "toolName": "fs_patch", "role": "frontend", "required": true },
     { "id": "frontend-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "build", "required": true },
     { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
-    { "id": "frontend-attempt-bound", "type": "retry_bound", "role": "frontend", "minAttempts": 1, "maxAttempts": 3, "required": true }
+    { "id": "frontend-build-retry-bound", "type": "tool_retry_bound", "role": "frontend", "toolName": "bash", "commandPattern": "build", "minCalls": 2, "maxCalls": 3, "requireFailureBeforeSuccess": true, "required": true }
   ],
+  "runtime": {
+    "workspaceFiles": [
+      {
+        "path": "package.json",
+        "content": "{\n  \"name\": \"broken-todo-app\",\n  \"private\": true,\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"@vitejs/plugin-react\": \"latest\",\n    \"vite\": \"latest\",\n    \"typescript\": \"latest\",\n    \"react\": \"latest\",\n    \"react-dom\": \"latest\"\n  },\n  \"devDependencies\": {}\n}\n"
+      },
+      {
+        "path": "index.html",
+        "content": "<!doctype html>\n<html lang=\"zh-CN\">\n  <head><meta charset=\"UTF-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /><title>Todo App</title></head>\n  <body><div id=\"root\"></div><script type=\"module\" src=\"/src/main.jsx\"></script></body>\n</html>\n"
+      },
+      {
+        "path": "src/main.jsx",
+        "content": "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App.jsx';\nimport './styles.css';\n\nReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);\n"
+      },
+      {
+        "path": "src/App.jsx",
+        "content": "import { useState } from 'react';\n\nexport default function App() {\n  const [items, setItems] = useState([{ id: 1, text: '修复构建', done: false }]);\n  return (\n    <main>\n      <h1>Todo App</h1>\n      <ul>{items.map((item) => <li key={item.id}>{item.text}</li>)}</ul>\n      <button type=\"button\" onClick={() => setItems([])}>清空列表</button\n    </main>\n  );\n}\n"
+      },
+      {
+        "path": "src/styles.css",
+        "content": ":root { font-family: Inter, system-ui, sans-serif; color: #172033; background: #f7f8fb; }\nbody { margin: 0; }\nmain { width: min(640px, calc(100% - 32px)); margin: 64px auto; padding: 24px; background: white; border: 1px solid #dce1eb; border-radius: 8px; }\nbutton { padding: 8px 14px; }\n"
+      }
+    ],
+    "faults": [{ "id": "first-build-fails", "type": "command_nonzero", "toolName": "bash", "commandPattern": "build", "occurrence": 1, "message": "Injected first-attempt build failure for recovery verification." }]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "collaboration-rubric-v1",
+    "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "implementation_fidelity", "final_summary_accuracy"]
+  },
   "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "debugging", "recovery"]
 }

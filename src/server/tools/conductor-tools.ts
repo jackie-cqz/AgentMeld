@@ -3,6 +3,7 @@ import { recordTaskReport } from "@/server/dispatch-task-results";
 import { getConversation } from "@/server/repositories";
 import type { ToolDef } from "@/server/tools/types";
 import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
+import type { DispatchTaskIntent } from "@/shared/types";
 
 // ---------------------------------------------------------------------------
 // plan_tasks
@@ -28,9 +29,18 @@ export const planTasksTool: ToolDef = {
           required: ["id", "agentId", "title", "prompt"],
           properties: {
             id: { type: "string", description: "Unique task id, e.g. 't1', 't2'." },
+            replacesTaskId: {
+              type: "string",
+              description: "Recovery plans only: original failed task id replaced by this task."
+            },
             agentId: { type: "string", description: "Agent ID to assign this task to." },
             title: { type: "string", description: "Short title for the task." },
             prompt: { type: "string", description: "Full instructions for the child agent." },
+            taskIntent: {
+              type: "string",
+              enum: ["delivery", "diagnosis", "verification", "approval_probe", "negative_verifier_test"],
+              description: "Task intent. The platform validates this and may override it when outputs or acceptance criteria require delivery."
+            },
             dependsOn: {
               type: "array",
               items: { type: "string" },
@@ -314,9 +324,13 @@ export const planArgsSchema = z.object({
     .array(
       z.object({
         id: z.string().min(1),
+        replacesTaskId: z.string().min(1).optional(),
         agentId: z.string().min(1),
         title: z.string().min(1).max(200),
         prompt: z.string().min(1).max(8000),
+        taskIntent: z
+          .enum(["delivery", "diagnosis", "verification", "approval_probe", "negative_verifier_test"])
+          .optional(),
         dependsOn: z.array(z.string()).optional(),
         inputs: z
           .array(
@@ -396,6 +410,8 @@ export const reportSchema = z.object({
 
 export interface ParsedTask {
   id: string;
+  /** Recovery plans only: original failed task replaced by this execution. */
+  replacesTaskId?: string;
   agentId: string;
   title: string;
   prompt: string;
@@ -414,6 +430,10 @@ export interface ParsedTask {
   }>;
   acceptanceCriteria: string[];
   maxAttempts: number;
+  taskIntent?: DispatchTaskIntent;
+  contractProfile?: "standard" | "minimal";
+  contractSelectionReason?: string;
+  contractSelectionVersion?: string;
   /** Paths the assigned agent is expected to create/modify (for evidence contract) */
   targetPaths?: string[];
   /** Commands the assigned agent is expected to run (for evidence contract) */
@@ -510,6 +530,7 @@ export function parsePlanArgs(args: unknown): ParsedPlan | string {
 
   const tasks: ParsedTask[] = parsed.data.tasks.map((t) => ({
     id: t.id,
+    replacesTaskId: t.replacesTaskId,
     agentId: t.agentId,
     title: t.title,
     prompt: t.prompt,
@@ -518,6 +539,7 @@ export function parsePlanArgs(args: unknown): ParsedPlan | string {
     expectedOutputs: (t.expectedOutputs ?? []).map((o) => ({ ...o, required: o.required ?? true })),
     acceptanceCriteria: t.acceptanceCriteria ?? [],
     maxAttempts: t.maxAttempts ?? 1,
+    taskIntent: t.taskIntent,
     targetPaths: t.targetPaths ?? [],
     requiredCommands: t.requiredCommands ?? [],
     requiredEvidence: t.requiredEvidence ?? []
@@ -616,7 +638,7 @@ export function validatePlan(
 }
 
 /** Topological sort returning parallel waves. */
-export function topologicalWaves(tasks: ParsedTask[]): ParsedTask[][] {
+export function topologicalWaves<T extends ParsedTask>(tasks: T[]): T[][] {
   const inDegree = new Map<string, number>();
   const dependents = new Map<string, string[]>();
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
@@ -631,12 +653,12 @@ export function topologicalWaves(tasks: ParsedTask[]): ParsedTask[][] {
     }
   }
 
-  const waves: ParsedTask[][] = [];
+  const waves: T[][] = [];
   let queue = tasks.filter((t) => inDegree.get(t.id) === 0);
 
   while (queue.length > 0) {
     waves.push(queue);
-    const next: ParsedTask[] = [];
+    const next: T[] = [];
     for (const t of queue) {
       for (const dep of dependents.get(t.id) ?? []) {
         const newDegree = (inDegree.get(dep) ?? 1) - 1;

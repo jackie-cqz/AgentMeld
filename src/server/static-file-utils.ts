@@ -57,8 +57,8 @@ export function getStaticResponseHeaders(
 
   if (path.extname(fileName).toLowerCase() === ".html") {
     const sandboxPolicy = options.allowSameOrigin
-      ? "sandbox allow-scripts allow-same-origin"
-      : "sandbox allow-scripts";
+      ? "sandbox allow-scripts allow-same-origin allow-forms"
+      : "sandbox allow-scripts allow-forms";
     headers["Content-Security-Policy"] =
       `${sandboxPolicy}; default-src 'self' data: blob: https:; script-src 'unsafe-inline' 'self' blob: https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https:;`;
   }
