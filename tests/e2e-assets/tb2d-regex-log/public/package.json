@@ -1,0 +1,8 @@
+{
+  "name": "agentmeld-tb2d-regex-log",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node verify-public.mjs"
+  }
+}

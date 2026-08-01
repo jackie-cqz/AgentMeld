@@ -1,0 +1,33 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-build-cython-extension",
+  "title": "TB2-Derived Cython Extension Compatibility Build",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "build-cython-ext",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/build-cython-ext",
+    "adaptation": "Uses a small synthetic Cython package instead of copying pyknotid, while preserving NumPy compatibility diagnosis, compilation, and clean-container verification."
+  },
+  "category": "recovery",
+  "prompt": "在固定 Linux 容器中修复工作区 Cython 扩展与 NumPy 2.3 的兼容问题，完成本地构建和安装，使扩展模块可导入并通过 smoke/core tests。不得降级 NumPy、替换为空壳或修改隐藏测试。PM 先形成 build-contract，实现工程师修复并构建，Reviewer 审查日志、模块和测试证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "build-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "build-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "build-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "build-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "build-review", "type": "document" }
+  ],
+  "plannedAssertions": ["container_verifier", "compiled_module", "dependency_version", "approval_resolved", "no_forbidden_mutation", "artifact_read"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-build-cython-extension/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/cython-numpy23@sha256:TBD", "network": "approval-required" },
+    "verifiers": [{ "id": "cython-clean-build", "command": "python .benchmark/hidden/verify_build.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 2400000, "maxModelCalls": 20, "maxToolCalls": 75, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["compile_diagnosis", "compatibility_patch", "environment_control", "test_interpretation", "minimal_change"] },
+  "tags": ["terminal-bench-2-derived", "cython", "numpy", "compilation", "container"]
+}

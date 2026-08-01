@@ -1,0 +1,6 @@
+[
+  { "name": "example_video.mp4", "visibility": "public", "frames": 90, "takeoff": 30, "land": 55, "start_x": 30, "speed": 4, "jump_height": 75 },
+  { "name": "jump_a.mp4", "visibility": "hidden", "frames": 100, "takeoff": 35, "land": 63, "start_x": 20, "speed": 3, "jump_height": 68 },
+  { "name": "jump_b.mp4", "visibility": "hidden", "frames": 84, "takeoff": 24, "land": 49, "start_x": 45, "speed": 5, "jump_height": 82 }
+]
+

@@ -52,7 +52,10 @@ const VERIFICATION_PATTERNS: RegExp[] = [
   /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
   /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
-  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i
+  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+-m\s+(?:unittest|pytest)\b/i,
+  /^pytest(?:\.exe)?\b/i,
+  /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+(?:--version|-V)\b/i
 ];
 
 function needsApproval(command: string): boolean {
@@ -88,7 +91,7 @@ function isDependencyCommandSegment(segment: string): boolean {
   return DEPENDENCY_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
 }
 
-function isVerificationOnlyCommand(command: string): boolean {
+export function isVerificationOnlyCommand(command: string): boolean {
   const segments = command
     .split(/\s*(?:;|&&|\|\|)\s*/)
     .map((segment) => segment.trim())
@@ -155,12 +158,12 @@ function getShell(platform: Platform): { cmd: string; args: string[] } {
 const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
   posix:
     "Run a verification shell command inside workspace. Dependency installation commands are allowed only after user approval. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
-    "Use bash for build/test/lint/typecheck/dependency-list verification and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Use bash for build/test/lint/typecheck/dependency-list verification, including Python unittest/pytest, and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output: stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, recursive deletion, sudo, fork bombs, curl | sh.",
   windows:
     "Run a verification PowerShell 5.1 command inside workspace. " +
-    "Use PowerShell only for build/test/lint/typecheck/dependency-list verification and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Use PowerShell only for build/test/lint/typecheck/dependency-list verification, including Python unittest/pytest, and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
     `Output is UTF-8, stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
     "Blocked: source mutation, Remove-Item/rmdir deletion, format, shutdown, iex(iwr ...), reg delete."
 };
@@ -224,9 +227,9 @@ export const bashTool: ToolDef = {
         category: "security_policy",
         error:
           "Command blocked by bash verification-only policy. " +
-          "bash is only for build/test/lint/typecheck/dependency-list commands or approved dependency installation. " +
+          "bash is only for build/test/lint/typecheck/dependency-list commands, including Python unittest/pytest, or approved dependency installation. " +
           "For directories call fs_mkdir, for inspection call fs_list/fs_read now, and for source changes call fs_patch for existing files or fs_write for new/full files. " +
-          "Do not use Get-ChildItem, mkdir, cat, Set-Content, echo redirection, sed, python scripts, or shell copy commands for source inspection or edits."
+          "Do not use Get-ChildItem, mkdir, cat, Set-Content, echo redirection, sed, arbitrary python scripts, or shell copy commands for source inspection or edits."
       };
     }
 

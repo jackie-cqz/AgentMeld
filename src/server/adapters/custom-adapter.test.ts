@@ -7,9 +7,13 @@ import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { getAdapter, clearRegistryForTests } from "@/server/adapters/registry";
 import {
+  advanceToolLoopGuard,
   buildChatCompletionTools,
+  createToolLoopGuardState,
   CUSTOM_AGENT_MAX_TOOL_ROUNDS,
   TASK_REPORT_FINALIZATION_ROUNDS,
+  TOOL_LOOP_NO_PROGRESS_FINALIZE_THRESHOLD,
+  TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD,
   findDeployableWorkspacePath,
   isDeployStatusRecord,
   mergeToolArgumentChunk,
@@ -129,6 +133,50 @@ describe("custom-agent-adapter", () => {
     expect(
       shouldFinalizeTaskReport(buildAdapterInput({ toolNames: ["fs_read"] }), false)
     ).toBe(false);
+  });
+
+  it("warns and then finalizes repeated no-progress edits on the same file", () => {
+    let state = createToolLoopGuardState();
+    const failedEdit = {
+      name: "fs_patch",
+      args: { path: "regex.txt" },
+      result: { code: "NO_OP_PATCH", reason: "No-op patch rejected" },
+      isError: true,
+    };
+
+    for (let count = 1; count <= TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD; count++) {
+      const update = advanceToolLoopGuard(state, [failedEdit]);
+      state = update.state;
+      expect(update.action).toBe(count === TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD ? "warn" : "none");
+    }
+
+    for (
+      let count = TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD + 1;
+      count <= TOOL_LOOP_NO_PROGRESS_FINALIZE_THRESHOLD;
+      count++
+    ) {
+      const update = advanceToolLoopGuard(state, [failedEdit]);
+      state = update.state;
+      expect(update.action).toBe(count === TOOL_LOOP_NO_PROGRESS_FINALIZE_THRESHOLD ? "finalize" : "none");
+    }
+  });
+
+  it("resets the no-progress guard after a successful edit", () => {
+    const failed = advanceToolLoopGuard(createToolLoopGuardState(), [{
+      name: "fs_write",
+      args: { path: "regex.txt" },
+      result: "NO_OP_WRITE",
+      isError: true,
+    }]);
+    const recovered = advanceToolLoopGuard(failed.state, [{
+      name: "fs_write",
+      args: { path: "regex.txt" },
+      result: { path: "regex.txt" },
+      isError: false,
+    }]);
+
+    expect(recovered.state).toEqual(createToolLoopGuardState());
+    expect(recovered.action).toBe("none");
   });
 
   it("parses standard tool arguments", () => {
@@ -414,6 +462,19 @@ describe("custom-agent-adapter", () => {
       ["deploy_workspace"],
       true
     )).toBe(false);
+  });
+
+  it("preserves regular-expression escapes and quantifier braces in file content", () => {
+    const parsed = parseToolCallArguments(JSON.stringify({
+      path: "regex.txt",
+      content: String.raw`([0-9]{4}-\d{2}-\d{2})`,
+    }), null, "fs_write");
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args.content).toBe(String.raw`([0-9]{4}-\d{2}-\d{2})`);
+      expect(parsed.repair.applied).toBe(false);
+    }
   });
 
   it("auto-deploys when a web_app task has a deployable workspace path", () => {

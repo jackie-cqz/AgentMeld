@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { recordTaskReport } from "@/server/dispatch-task-results";
+import { getTaskArtifacts, recordTaskReport } from "@/server/dispatch-task-results";
 import { getConversation } from "@/server/repositories";
 import type { ToolDef } from "@/server/tools/types";
 import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
@@ -280,6 +280,25 @@ export const reportTaskResultTool: ToolDef = {
             "Do not summarize or merge acceptance criteria. Copy each missing criterion exactly.",
             `Missing criteria: ${missingCriteria.map((criterion) => JSON.stringify(criterion)).join(" | ")}`,
             `Required acceptanceResults additions: ${JSON.stringify(additions)}`
+          ].join(" ")
+        };
+      }
+
+      const recordedArtifacts = getTaskArtifacts(ctx.runId);
+      const missingOutputs = ctx.taskContract.expectedOutputs
+        .filter((output) => output.required !== false)
+        .filter((output) => !recordedArtifacts[output.outputKey]);
+      if (missingOutputs.length > 0) {
+        const calls = missingOutputs.map((output) =>
+          `write_artifact({"type":"${output.type}","title":"...","content":"...","outputKey":"${output.outputKey}"})`
+        );
+        return {
+          ok: false,
+          error: [
+            "Required output artifacts are missing. You must create them before reporting complete.",
+            `Missing outputs: ${missingOutputs.map((output) => `${output.outputKey} (${output.type})`).join(", ")}.`,
+            `Call ${calls.join(" and ")}, then call report_task_result again.`,
+            "Do not claim completion based only on files or test output."
           ].join(" ")
         };
       }

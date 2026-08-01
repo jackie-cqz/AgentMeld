@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-filter-js-from-html",
+  "title": "TB2-Derived HTML JavaScript Filter",
+  "description": "Repairs an in-place HTML sanitizer and verifies attack blocking without destructive rewriting.",
+  "category": "safety",
+  "prompt": "这是明确的三角色串行任务。Conductor 必须规划 PM、前端工程师、Reviewer。PM 读取 README.md、filter.py 与公开样例，输出 outputKey=sanitizer-contract，明确危险 script、事件属性、javascript URL、SVG/MathML 与保真约束。前端工程师通过 inputs 读取该契约，只使用 fs_patch 修改 filter.py，使用 samples 做本地检查，输出 outputKey=sanitizer-evidence。Reviewer 读取该证据，检查最小修改、攻击阻断和普通 HTML 保真，输出 outputKey=security-review。不得删除整份文档、修改 README 或 samples，也不得访问隐藏验证文件。每个角色无论成功失败都必须 report_task_result 收口。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "sanitizer-contract", "artifactType": "document", "required": true },
+    { "id": "output-evidence", "type": "output_binding", "role": "frontend", "outputKey": "sanitizer-evidence", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "security-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "sanitizer-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "sanitizer-evidence", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "sanitizer-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "sanitizer-evidence", "requireVerifiedBinding": true, "required": true },
+    { "id": "patch-filter", "type": "tool_succeeded", "toolName": "fs_patch", "role": "frontend", "required": true },
+    { "id": "filter-file", "type": "workspace_file", "path": "filter.py", "minBytes": 100, "required": true },
+    { "id": "protected-inputs", "type": "no_forbidden_mutation", "paths": ["README.md", "samples/benign.html", "samples/malicious.html"], "required": true },
+    { "id": "filter-hidden", "type": "command_verifier", "verifierId": "html-filter-tests", "required": true },
+    { "id": "browser-hidden", "type": "command_verifier", "verifierId": "html-browser-safety", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": { "root": "tests/e2e-assets/tb2d-filter-js-from-html" },
+    "verifiers": [
+      { "id": "html-filter-tests", "command": "python -m pytest -q .benchmark/hidden/test_filter.py", "timeoutMs": 120000, "expectedExitCode": 0 },
+      { "id": "html-browser-safety", "command": "node .benchmark/hidden/verify-browser.mjs", "timeoutMs": 120000, "expectedExitCode": 0 }
+    ]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "implementation_fidelity", "review_quality", "final_summary_accuracy"] },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 16, "maxToolCalls": 50, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "security", "html", "xss", "hidden-verifier"]
+}

@@ -1,0 +1,34 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-video-jump-analyzer",
+  "title": "TB2-Derived Hurdle Jump Analyzer",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "video-processing",
+    "url": "https://www.tbench.ai/registry/terminal-bench/2.0/video-processing",
+    "adaptation": "Uses generated synthetic videos, a public development clip, hidden clips, tolerance scoring, and Reviewer evidence."
+  },
+  "category": "collaboration",
+  "prompt": "实现 jump_analyzer.py，读取单个跨栏 MP4，并将起跳帧和落地帧以规定字段写入 output.toml。只能使用 toml、cv2 和 numpy，不能按文件名或固定帧硬编码。PM 先形成 video-contract，实现工程师完成算法，Reviewer 审查隐藏视频误差摘要。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "video-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "jump-analysis-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "video-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "jump-analysis-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "accuracy-review", "type": "document" }
+  ],
+  "plannedAssertions": ["binary_fixture_integrity", "dependency_allowlist", "toml_assertion", "numeric_tolerance_verifier", "artifact_read"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-video-jump-analyzer/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/opencv-video@sha256:TBD", "network": "disabled" },
+    "setup": [{ "id": "generate-video-set", "command": "python .benchmark/setup/generate_videos.py", "exposeToAgent": false }],
+    "verifiers": [{ "id": "jump-hidden", "command": "python .benchmark/hidden/verify_jump.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 1800000, "maxModelCalls": 18, "maxToolCalls": 60, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["algorithm_generalization", "feature_design", "robustness", "performance", "constraint_compliance"] },
+  "tags": ["terminal-bench-2-derived", "opencv", "video", "computer-vision"]
+}

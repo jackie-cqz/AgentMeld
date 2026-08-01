@@ -1,0 +1,13 @@
+{
+  "user_ids": [1, 2, 3, 4, 5],
+  "required_columns": ["user_id", "name", "email", "created_date", "status"],
+  "selected_values": {
+    "1.name": "Ada Lee",
+    "1.email": "ada@a.example",
+    "2.name": "Ben Wu",
+    "3.email": "chen@b.example",
+    "4.email": "dana@b.example",
+    "5.name": "Eve Lin"
+  }
+}
+

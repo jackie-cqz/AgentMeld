@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-financial-document-processor",
+  "sourceTask": "financial-document-processor",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/financial-document-processor",
+  "licenseNote": "All document text, images, and PDFs are synthetic and generated locally.",
+  "public": ["public/README.md"],
+  "setup": ["setup/document-specs.json", "setup/generate_documents.py"],
+  "hidden": ["hidden/expected.json", "hidden/verify_documents.py"],
+  "generated": ["generated/public/documents/invoice_alpha.jpg", "generated/public/documents/invoice_beta.pdf", "generated/public/documents/meeting_notes.jpg", "generated/public/documents/security_policy.pdf"],
+  "requirements": ["Python 3.11+", "Pillow", "reportlab"],
+  "notes": "Generated documents include invoices, non-invoices, alternate tax labels, and conflicting Total/Amount Due values."
+}

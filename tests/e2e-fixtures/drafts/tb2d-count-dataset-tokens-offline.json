@@ -1,0 +1,33 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-count-dataset-tokens-offline",
+  "title": "TB2-Derived Offline Dataset Token Count",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "count-dataset-tokens",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/count-dataset-tokens",
+    "adaptation": "Freezes a synthetic OpenThoughts-like slice and tokenizer revision so correctness is reproducible without network access."
+  },
+  "category": "collaboration",
+  "prompt": "根据冻结的数据卡和本地数据切片，统计 domain=science 的记录在指定 tokenizer revision 下的 token 总数。实现可复用的 count_tokens.py，并将无逗号整数写入 answer.txt。不得联网查询答案。PM 先形成 count-contract，实现工程师执行统计，Reviewer 审查版本和复现证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "count-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "token-count-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "count-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "token-count-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "reproducibility-review", "type": "document" }
+  ],
+  "plannedAssertions": ["network_policy", "workspace_file", "command_verifier", "reproducibility_metadata", "artifact_read"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-count-dataset-tokens-offline/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/tokenizer-offline@sha256:TBD", "network": "disabled" },
+    "verifiers": [{ "id": "token-count-hidden", "command": "python .benchmark/hidden/verify_count.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 1200000, "maxModelCalls": 12, "maxToolCalls": 35, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["dataset_understanding", "version_pinning", "reproducibility", "anti_hardcoding", "evidence_grounding"] },
+  "tags": ["terminal-bench-2-derived", "datasets", "tokenization", "offline"]
+}

@@ -20,6 +20,12 @@ import { roleExecutedGrader } from "./role-grader";
 import { approvalResolvedGrader, faultInjectedGrader, toolRejectedGrader, warningPresentGrader } from "./safety-grader";
 import { toolSucceededGrader } from "./tool-grader";
 import { verificationStatusGrader } from "./verification-grader";
+import {
+  commandVerifierGrader,
+  noForbiddenMutationGrader,
+  structuredOutputGrader,
+  workspaceFileGrader,
+} from "./workspace-verifier-grader";
 
 export class BenchmarkGraderRegistry {
   private readonly graders = new Map<BenchmarkAssertion["type"], BenchmarkGrader>();
@@ -73,5 +79,9 @@ export function createDefaultBenchmarkGraderRegistry(): BenchmarkGraderRegistry 
   registry.register(retryBoundGrader);
   registry.register(toolRetryBoundGrader);
   registry.register(verificationStatusGrader);
+  registry.register(commandVerifierGrader);
+  registry.register(workspaceFileGrader);
+  registry.register(structuredOutputGrader);
+  registry.register(noForbiddenMutationGrader);
   return registry;
 }

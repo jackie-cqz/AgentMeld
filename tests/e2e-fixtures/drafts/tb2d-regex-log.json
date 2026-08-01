@@ -1,0 +1,33 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-regex-log",
+  "title": "TB2-Derived Log Regex",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "regex-log",
+    "url": "https://hub.harborframework.com/tasks/terminal-bench/regex-log/latest",
+    "adaptation": "Adds a requirements artifact, hidden edge-case corpus, runtime limits, and Reviewer evidence checks."
+  },
+  "category": "collaboration",
+  "prompt": "为当前工作区生成一个写入 regex.txt 的单一正则表达式：只处理至少包含一个合法 IPv4 的日志行，匹配该行最后一个合法 YYYY-MM-DD 日期，并排除无效日期、无效 IPv4 及与字母数字直接相邻的候选。PM 先形成 matching-contract，实现工程师完成表达式，Reviewer 根据测试证据审查。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "matching-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "regex-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "matching-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "regex-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "review-report", "type": "document" }
+  ],
+  "plannedAssertions": ["artifact_read", "workspace_file", "command_verifier", "verification_status"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-regex-log/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "workspace", "platform": "cross-platform", "network": "disabled" },
+    "verifiers": [{ "id": "regex-edge-cases", "command": "node .benchmark/hidden/verify-regex.mjs", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 480000, "maxModelCalls": 10, "maxToolCalls": 50, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality", "final_summary_accuracy"] },
+  "tags": ["terminal-bench-2-derived", "regex", "logs", "edge-cases"]
+}

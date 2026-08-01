@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-multi-source-data-merger",
+  "title": "TB2-Derived Multi-Source Data Merger",
+  "description": "Merges JSON, CSV, and Parquet records with deterministic schema and conflict resolution.",
+  "category": "context_handoff",
+  "prompt": "这是 PM -> 前端工程师 -> Reviewer 的数据工程任务。PM 读取 README.md 和三类公开输入，输出 outputKey=merge-contract，明确字段映射、A>B>C 非空优先级、日期 YYYY-MM-DD 和冲突报告结构。前端工程师读取契约，使用 fs_write/fs_patch 实现 merge_users.py，运行脚本生成 merged_users.parquet 与 conflicts.json，并输出 outputKey=merged-dataset。Reviewer 读取上游证据，审查 schema、冲突、行数与可重复性，输出 outputKey=data-review。不得修改 README 或 data 下的输入文件，不得读取隐藏 expected。每个角色必须 report_task_result。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "merge-contract", "artifactType": "document", "required": true },
+    { "id": "output-data", "type": "output_binding", "role": "frontend", "outputKey": "merged-dataset", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "data-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "merge-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "merged-dataset", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "merge-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "merged-dataset", "requireVerifiedBinding": true, "required": true },
+    { "id": "write-script", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "run-merge", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "python.*merge_users", "required": true },
+    { "id": "merged-file", "type": "workspace_file", "path": "merged_users.parquet", "minBytes": 100, "required": true },
+    { "id": "conflicts-file", "type": "structured_output", "path": "conflicts.json", "format": "json", "requiredKeys": ["total_conflicts", "conflicts"], "required": true },
+    { "id": "protected", "type": "no_forbidden_mutation", "paths": ["README.md", "data/source_a/users.json", "data/source_b/users.csv", "data/source_c/users.parquet"], "required": true },
+    { "id": "merge-hidden", "type": "command_verifier", "verifierId": "data-merge-hidden", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": {
+      "root": "tests/e2e-assets/tb2d-multi-source-data-merger",
+      "setupCommands": [{ "id": "materialize-parquet", "command": "python setup/generate_source_c.py", "timeoutMs": 120000 }],
+      "generatedPublicDir": "generated/public"
+    },
+    "verifiers": [{ "id": "data-merge-hidden", "command": "python .benchmark/hidden/verify_merge.py", "timeoutMs": 120000, "expectedExitCode": 0 }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality"] },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 14, "maxToolCalls": 45, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "data", "json", "csv", "parquet", "hidden-verifier"]
+}

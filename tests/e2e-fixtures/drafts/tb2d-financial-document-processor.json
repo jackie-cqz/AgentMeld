@@ -1,0 +1,34 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-financial-document-processor",
+  "title": "TB2-Derived Financial Document Processor",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "financial-document-processor",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/financial-document-processor",
+    "adaptation": "Uses generated synthetic invoices and non-invoices with hidden OCR variants and auditable role handoffs."
+  },
+  "category": "collaboration",
+  "prompt": "处理 documents 目录中的 JPG/PDF：分类为 invoice 或 other 并移动到对应目录；仅对发票抽取 total_amount 和 vat_amount，生成 invoices/summary.csv 及最终 total 行。PM 先形成 document-contract，实现工程师完成处理脚本，Reviewer 审查分类、金额和文件移动证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "document-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "invoice-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "document-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "invoice-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "document-review", "type": "document" }
+  ],
+  "plannedAssertions": ["binary_fixture_integrity", "directory_layout", "csv_assertion", "command_verifier", "artifact_read"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-financial-document-processor/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/ocr-docs@sha256:TBD", "network": "disabled" },
+    "setup": [{ "id": "generate-documents", "command": "python .benchmark/setup/generate_documents.py", "exposeToAgent": false }],
+    "verifiers": [{ "id": "invoice-hidden", "command": "python .benchmark/hidden/verify_documents.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 1500000, "maxModelCalls": 16, "maxToolCalls": 55, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["document_classification", "amount_extraction", "exception_handling", "auditability", "review_quality"] },
+  "tags": ["terminal-bench-2-derived", "ocr", "pdf", "financial"]
+}

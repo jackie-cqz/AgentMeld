@@ -5,6 +5,16 @@ import type { BenchmarkAssertion } from "@/server/context-metrics/benchmark-type
 export const benchmarkRoleSchema = z.enum(["conductor", "pm", "ui", "frontend", "reviewer"]);
 export const benchmarkArtifactTypeSchema = z.enum(["web_app", "document", "image", "ppt"]);
 
+const benchmarkWorkspacePathSchema = z.string()
+  .trim()
+  .min(1)
+  .refine((value) => {
+    const portable = value.replaceAll("\\", "/");
+    return !portable.startsWith("/")
+      && !/^[a-zA-Z]:\//.test(portable)
+      && !portable.split("/").some((segment) => segment === "..");
+  }, "Workspace path must be relative and may not traverse outside the workspace.");
+
 const assertionBase = {
   id: z.string().trim().min(1),
   required: z.boolean(),
@@ -137,6 +147,30 @@ export const benchmarkAssertionSchema = z
       role: benchmarkRoleSchema.optional(),
       expected: z.enum(["verified", "rejected", "needs_review"]),
       warningCode: z.string().trim().min(1).optional(),
+    }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("command_verifier"),
+      verifierId: z.string().trim().min(1),
+    }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("workspace_file"),
+      path: benchmarkWorkspacePathSchema,
+      minBytes: z.number().int().nonnegative().optional(),
+      contentPatterns: z.array(z.string().min(1)).optional(),
+    }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("structured_output"),
+      path: benchmarkWorkspacePathSchema,
+      format: z.enum(["json", "jsonl", "csv"]),
+      requiredKeys: z.array(z.string().trim().min(1)).optional(),
+    }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("no_forbidden_mutation"),
+      paths: z.array(benchmarkWorkspacePathSchema).min(1),
     }).strict(),
   ])
   .superRefine((assertion, ctx) => {

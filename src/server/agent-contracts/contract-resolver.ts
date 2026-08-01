@@ -41,14 +41,21 @@ function enrichTask(
 ): DispatchPlanItem {
   const decision = resolveTaskIntentDecision(task, contract);
   const taskIntent = decision.taskIntent;
+  const declaredOutputs = task.expectedOutputs ?? [];
+  const hasExplicitCustomContract =
+    taskIntent === "delivery" &&
+    declaredOutputs.length > 0 &&
+    !declaredOutputs.some((output) => output.id === contract.outputKey);
   const enriched: DispatchPlanItem = {
     ...task,
     taskIntent,
-    contractProfile: taskIntent === "delivery" ? "standard" : "minimal",
-    contractSelectionReason: decision.reason,
+    contractProfile: taskIntent === "delivery" && !hasExplicitCustomContract ? "standard" : "minimal",
+    contractSelectionReason: hasExplicitCustomContract
+      ? `explicit task outputs define a custom delivery contract: ${declaredOutputs.map((output) => output.id).join(", ")}`
+      : decision.reason,
     contractSelectionVersion: decision.version,
   };
-  if (taskIntent !== "delivery") {
+  if (taskIntent !== "delivery" || hasExplicitCustomContract) {
     if (taskIntent === "negative_verifier_test") {
       if (task.expectedOutputs) {
         enriched.expectedOutputs = task.expectedOutputs.filter(
@@ -330,7 +337,12 @@ export function applyRoleContracts(
     const agent = agentMap.get(task.agentId);
     const role = agent ? detectAgentRole(agent.capabilities, agent.name) : null;
     const contract = role ? getRoleContract(role) : null;
-    if (!contract || task.taskIntent !== "delivery" || contract.requiredInputs.length === 0) {
+    if (
+      !contract ||
+      task.taskIntent !== "delivery" ||
+      task.contractProfile !== "standard" ||
+      contract.requiredInputs.length === 0
+    ) {
       return task;
     }
 
@@ -403,6 +415,7 @@ export function buildContractGuidance(agents: Array<{ id: string; capabilities: 
     ...lines,
     "",
     "仅当任务需要该角色的标准交付物时设置 taskIntent=\"delivery\"。依赖审批、故障诊断、纯验证和受控负向 verifier 测试应分别使用 approval_probe、diagnosis、verification、negative_verifier_test；平台会根据 expectedOutputs 和验收条件复核，不能用 taskIntent 绕过 required output。",
+    "如果用户或任务已经明确指定了自定义 expectedOutputs/outputKey（例如 matching-contract、regex-evidence），必须原样保留这些专用契约，不要再追加该角色的标准 outputKey。",
     "任务之间的 inputs 必须使用上游任务的 outputKey。例如：前端任务应声明 inputs: [{ fromTaskId: \"t1\", outputId: \"prd\" }, { fromTaskId: \"t2\", outputId: \"style-guide\" }]",
   ].join("\n");
 }

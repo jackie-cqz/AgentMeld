@@ -1,0 +1,14 @@
+[
+  { "name": "single valid pair", "line": "2026-07-21 request from 192.168.1.10 completed", "expected": "2026-07-21" },
+  { "name": "last date wins", "line": "10.0.0.8 opened 2024-02-28 closed 2024-02-29", "expected": "2024-02-29" },
+  { "name": "invalid leap day", "line": "127.0.0.1 event 2023-02-29", "expected": null },
+  { "name": "valid leap century", "line": "200.1.1.1 event 2000-02-29", "expected": "2000-02-29" },
+  { "name": "invalid non-leap century", "line": "200.1.1.1 event 1900-02-29", "expected": null },
+  { "name": "invalid month", "line": "8.8.8.8 event 2025-13-01", "expected": null },
+  { "name": "invalid day", "line": "8.8.4.4 event 2025-04-31", "expected": null },
+  { "name": "invalid ipv4", "line": "999.1.1.1 event 2025-01-01", "expected": null },
+  { "name": "ipv4 leading overflow", "line": "256.255.255.255 event 2025-01-01", "expected": null },
+  { "name": "no ipv4", "line": "event 2025-01-01", "expected": null },
+  { "name": "date adjacent to letter", "line": "1.2.3.4 event x2025-01-01", "expected": null },
+  { "name": "ip adjacent to digit", "line": "912.2.3.4 event 2025-01-01", "expected": null }
+]

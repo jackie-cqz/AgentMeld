@@ -8,7 +8,7 @@ const CASES_DIR = path.join(__dirname, "..", "..", "e2e-fixtures");
 describe("benchmark case schema", () => {
   it("loads all migrated fixtures", () => {
     const cases = loadBenchmarkCases(CASES_DIR);
-    expect(cases).toHaveLength(14);
+    expect(cases).toHaveLength(24);
     expect(cases.every((benchmarkCase) => benchmarkCase.schemaVersion === 1)).toBe(true);
   });
 
@@ -121,6 +121,74 @@ describe("benchmark case schema", () => {
       ...base,
       runtime: { workspaceFiles: [{ path: "../outside.ts", content: "unsafe" }] },
     })).toThrow(/may not traverse outside/);
+  });
+
+  it("accepts hidden verifier contracts and rejects undeclared verifier ids", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      id: "hidden-verifier-case",
+      title: "Hidden verifier case",
+      description: "Runs trusted post-run verification against workspace output.",
+      category: "recovery" as const,
+      prompt: "Repair the starter project.",
+      expectedRoles: ["frontend"] as const,
+      limits: { maxDurationMs: 1000 },
+      tags: [],
+    };
+    const parsed = parseBenchmarkCase({
+      ...base,
+      assertions: [
+        { id: "hidden-tests", type: "command_verifier", verifierId: "hidden-tests", required: true },
+        { id: "output", type: "workspace_file", path: "src/result.ts", minBytes: 10, required: true },
+        { id: "report", type: "structured_output", path: "report.json", format: "json", requiredKeys: ["status"], required: true },
+        { id: "protected", type: "no_forbidden_mutation", paths: ["README.md"], required: true },
+      ],
+      runtime: {
+        assetBundle: { root: "tests/e2e-assets/example" },
+        verifiers: [{ id: "hidden-tests", command: "node .benchmark/hidden/verify.mjs" }],
+      },
+    });
+
+    expect(parsed.runtime?.verifiers?.[0].id).toBe("hidden-tests");
+    expect(parsed.assertions.map((assertion) => assertion.type)).toEqual([
+      "command_verifier", "workspace_file", "structured_output", "no_forbidden_mutation",
+    ]);
+
+    expect(() => parseBenchmarkCase({
+      ...base,
+      assertions: [{ id: "missing", type: "command_verifier", verifierId: "not-declared", required: true }],
+      runtime: { assetBundle: { root: "tests/e2e-assets/example" } },
+    })).toThrow(/references undeclared verifier/);
+  });
+
+  it("rejects unsafe asset roots and duplicate verifier ids", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      id: "invalid-verifier-case",
+      title: "Invalid verifier case",
+      description: "Rejects ambiguous or unsafe runtime configuration.",
+      category: "safety" as const,
+      prompt: "Check the workspace.",
+      expectedRoles: ["frontend"] as const,
+      assertions: [{ id: "frontend-ran", type: "role_executed" as const, role: "frontend" as const, required: true }],
+      limits: { maxDurationMs: 1000 },
+      tags: [],
+    };
+
+    expect(() => parseBenchmarkCase({
+      ...base,
+      runtime: { assetBundle: { root: "private/hidden-case" } },
+    })).toThrow(/must be under tests\/e2e-assets/);
+
+    expect(() => parseBenchmarkCase({
+      ...base,
+      runtime: {
+        verifiers: [
+          { id: "same", command: "node one.mjs" },
+          { id: "same", command: "node two.mjs" },
+        ],
+      },
+    })).toThrow(/Duplicate verifier id/);
   });
 
   it("accepts deterministic safety, approval, warning, and fault assertions", () => {

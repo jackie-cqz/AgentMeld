@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { AgentBenchmarkCase } from "@/server/context-metrics/benchmark-types";
+import type { AgentBenchmarkCase, BenchmarkRuntimeValidation } from "@/server/context-metrics/benchmark-types";
 import type { ContextTraceRunResponse } from "@/server/context-trace/context-trace-types";
 import type { E2ERunResult } from "../../e2e-runner/types";
 import { buildJudgeCacheKey, runCodexJudge } from "./codex-judge";
@@ -54,6 +54,50 @@ describe("Codex judge", () => {
     };
     expect(buildJudgeCacheKey(base)).not.toBe(buildJudgeCacheKey({ ...base, model: "judge-b" }));
     expect(buildJudgeCacheKey(base)).not.toBe(buildJudgeCacheKey({ ...base, rubricVersion: "rubric-v2" }));
+  });
+
+  it("does not expose hidden verifier commands or output to the semantic judge", () => {
+    const runtime: BenchmarkRuntimeValidation = {
+      collectedAt: 1,
+      artifacts: [],
+      builds: [],
+      deployments: [],
+      previews: [],
+      browsers: [],
+      toolRejections: [],
+      toolCalls: [],
+      injectedFaults: [],
+      approvals: [],
+      verifiers: [{
+        verifierId: "hidden",
+        command: "python .benchmark/hidden/secret_test.py",
+        status: "failed",
+        exitCode: 1,
+        expectedExitCode: 0,
+        timedOut: false,
+        durationMs: 10,
+        stdout: "EXPECTED_SECRET_ANSWER",
+        stderr: "hidden case name and expected value",
+        error: null,
+      }],
+    };
+    const deterministic = deterministicResult();
+    deterministic.assertionResults = [{
+      assertionId: "hidden",
+      type: "command_verifier",
+      required: true,
+      status: "failed",
+      score: 0,
+      maxScore: 1,
+      reason: "hidden case name and expected value",
+      references: [],
+    }];
+    const serialized = JSON.stringify(buildJudgePacket(benchmarkCase(), trace(), deterministic, runtime));
+
+    expect(serialized).not.toContain("secret_test.py");
+    expect(serialized).not.toContain("EXPECTED_SECRET_ANSWER");
+    expect(serialized).not.toContain("hidden case name");
+    expect(serialized).toContain("hidden verifier");
   });
 
   it("rejects a manual result produced with a stale prompt version", async () => {

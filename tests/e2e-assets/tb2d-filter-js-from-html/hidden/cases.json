@@ -1,0 +1,16 @@
+{
+  "malicious": [
+    "<img src=x onerror=alert(1)>",
+    "<a href=\"javascript:alert(1)\">x</a>",
+    "<svg onload=alert(1)></svg>",
+    "<ScRiPt src=\"https://example.invalid/x.js\"></sCrIpT>",
+    "<math><a href=\"javascript:alert(1)\">x</a></math>"
+  ],
+  "benign": [
+    "<h1 id=\"headline\">Hello</h1>",
+    "<table><tr><th>A</th><td>1</td></tr></table>",
+    "<a href=\"https://example.com\" title=\"safe\">safe</a>",
+    "<!-- retain this comment --><p data-id=\"7\">Text</p>"
+  ]
+}
+

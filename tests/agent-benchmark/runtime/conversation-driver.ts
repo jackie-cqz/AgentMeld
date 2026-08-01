@@ -9,6 +9,12 @@ import type {
   BenchmarkWorkspaceFile,
 } from "@/server/context-metrics/benchmark-types";
 import type { Agent, Conversation, Workspace } from "@/shared/types";
+import {
+  captureMutationBaselines,
+  prepareBenchmarkAssetBundle,
+  seedBenchmarkAssetBundle,
+  type BenchmarkMutationBaselines,
+} from "./benchmark-assets";
 
 const BUILTIN_ROLE_AGENT_IDS: Record<BenchmarkRole, string> = {
   conductor: "ag_mock_conductor",
@@ -25,6 +31,7 @@ export interface BenchmarkConversationStart {
   workspacePath: string;
   agentIds: string[];
   roleAgentIds: Partial<Record<BenchmarkRole, string>>;
+  mutationBaselines?: BenchmarkMutationBaselines;
 }
 
 interface ConversationDriverDependencies {
@@ -64,7 +71,10 @@ export class ConversationDriver {
     const workspace: Workspace | null = this.dependencies.getWorkspaceForConversation(conversation.id);
     if (!workspace) throw new Error(`Workspace was not created for conversation ${conversation.id}.`);
     const workspacePath = workspace.boundPath ?? workspace.rootPath;
+    prepareBenchmarkAssetBundle(benchmarkCase.runtime?.assetBundle);
+    seedBenchmarkAssetBundle(workspacePath, benchmarkCase.runtime?.assetBundle);
     seedBenchmarkWorkspace(workspacePath, benchmarkCase.runtime?.workspaceFiles ?? []);
+    const mutationBaselines = captureMutationBaselines(workspacePath, benchmarkCase);
 
     const response = await this.dependencies.sendMessage({
       conversationId: conversation.id,
@@ -81,6 +91,7 @@ export class ConversationDriver {
       workspacePath,
       agentIds,
       roleAgentIds,
+      mutationBaselines,
     };
   }
 }

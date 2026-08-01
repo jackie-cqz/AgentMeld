@@ -1,0 +1,9 @@
+{
+  "invoices": {
+    "invoice_alpha.jpg": { "total_amount": 120.0, "vat_amount": 20.0 },
+    "invoice_beta.pdf": { "total_amount": 83.05, "vat_amount": 7.55 }
+  },
+  "other": ["meeting_notes.jpg", "security_policy.pdf"],
+  "totals": { "total_amount": 203.05, "vat_amount": 27.55 }
+}
+

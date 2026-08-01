@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-build-cython-extension",
+  "sourceTask": "build-cython-ext",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/build-cython-ext",
+  "licenseNote": "Synthetic Cython package under the repository license; pyknotid source is not copied.",
+  "public": ["public/README.md", "public/pyproject.toml", "public/setup.py", "public/smoke.py", "public/agentmeld_faststats/__init__.py", "public/agentmeld_faststats/faststats.pyx", "public/tests/test_public.py"],
+  "setup": [],
+  "hidden": ["hidden/verify_build.py", "hidden/run_in_docker.mjs"],
+  "generated": ["public/build/", "public/agentmeld_faststats/faststats.*.so"],
+  "requirements": ["Linux container", "Python 3.11+", "NumPy 2.3.x", "Cython 3.x", "C compiler"],
+  "notes": "The starter compiles but uses the removed np.float alias at runtime; the clean-build verifier rejects pure-Python shims and NumPy downgrades."
+}

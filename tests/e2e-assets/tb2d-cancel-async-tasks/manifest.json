@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-cancel-async-tasks",
+  "sourceTask": "cancel-async-tasks",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/cancel-async-tasks",
+  "licenseNote": "Synthetic AgentMeld assets; no official solution or hidden test copied.",
+  "public": ["public/run.py", "public/test_public.py", "public/README.md"],
+  "setup": [],
+  "hidden": ["hidden/test_async_runner.py"],
+  "generated": [],
+  "requirements": ["Python 3.11+", "Python standard library unittest"],
+  "notes": "The starter intentionally lacks a concurrency bound and explicit cancellation cleanup."
+}

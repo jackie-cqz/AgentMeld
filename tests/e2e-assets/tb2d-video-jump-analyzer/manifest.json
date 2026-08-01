@@ -1,0 +1,14 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-video-jump-analyzer",
+  "sourceTask": "video-processing",
+  "sourceUrl": "https://www.tbench.ai/registry/terminal-bench/2.0/video-processing",
+  "licenseNote": "All MP4 frames are synthetic shapes generated locally; no athlete video is redistributed.",
+  "public": ["public/README.md"],
+  "setup": ["setup/video-specs.json", "setup/generate_videos.py"],
+  "hidden": ["hidden/verify_jump.py"],
+  "generated": ["generated/public/example_video.mp4", "generated/hidden/jump_a.mp4", "generated/hidden/jump_b.mp4", "generated/hidden/labels.json"],
+  "requirements": ["Python 3.11+", "opencv-python", "numpy", "toml"],
+  "notes": "Synthetic videos test temporal localization and anti-hardcoding; they are not replacements for eventual real-video validation."
+}
+

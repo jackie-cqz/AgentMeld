@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-financial-document-processor",
+  "title": "TB2-Derived Financial Document Processor",
+  "description": "Classifies synthetic JPG/PDF documents and produces an auditable invoice amount summary.",
+  "category": "context_handoff",
+  "prompt": "这是 PM -> 前端工程师 -> Reviewer 的文档处理任务。PM 读取 README.md 并检查 documents 目录，输出 outputKey=document-contract，明确发票分类、Total 优先于 Amount Due、VAT 缺失为 0、CSV 列和移动规则。前端工程师读取契约，使用 fs_write 创建 process_documents.py，可使用 Python 标准库、Pillow 和 pypdf/PDF 文本工具，运行脚本，将文件分别移动到 invoices/ 与 other/，生成 invoices/summary.csv，并输出 outputKey=invoice-summary。Reviewer 读取证据，核对分类、金额、总计和源目录为空，输出 outputKey=document-review。不得按文件名硬编码类别或金额。每个角色必须 report_task_result。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "document-contract", "artifactType": "document", "required": true },
+    { "id": "output-summary", "type": "output_binding", "role": "frontend", "outputKey": "invoice-summary", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "document-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "document-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "invoice-summary", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "document-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "invoice-summary", "requireVerifiedBinding": true, "required": true },
+    { "id": "write-processor", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "run-processor", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "python.*process_documents", "required": true },
+    { "id": "processor-script", "type": "workspace_file", "path": "process_documents.py", "minBytes": 100, "required": true },
+    { "id": "summary-csv", "type": "structured_output", "path": "invoices/summary.csv", "format": "csv", "requiredKeys": ["filename", "total_amount", "vat_amount"], "required": true },
+    { "id": "documents-hidden", "type": "command_verifier", "verifierId": "invoice-hidden", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": {
+      "root": "tests/e2e-assets/tb2d-financial-document-processor",
+      "setupCommands": [{ "id": "generate-documents", "command": "python setup/generate_documents.py", "timeoutMs": 120000 }],
+      "generatedPublicDir": "generated/public"
+    },
+    "verifiers": [{ "id": "invoice-hidden", "command": "python .benchmark/hidden/verify_documents.py", "timeoutMs": 120000, "expectedExitCode": 0 }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality"] },
+  "limits": { "maxDurationMs": 1500000, "maxModelCalls": 16, "maxToolCalls": 55, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "documents", "invoice", "pdf", "image", "hidden-verifier"]
+}

@@ -1,0 +1,33 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-cancel-async-tasks",
+  "title": "TB2-Derived Async Task Cancellation",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "cancel-async-tasks",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/cancel-async-tasks",
+    "adaptation": "Adds PM contract handoff, implementation evidence, Reviewer verification, and hidden cleanup tests."
+  },
+  "category": "recovery",
+  "prompt": "修复当前工作区中的 Python 异步任务执行器。它必须限制最大并发数，在正常路径保持结果映射，在取消或 KeyboardInterrupt 时取消未完成任务，并等待每个已启动任务的清理逻辑完成。请由 PM 先形成 task-contract，再由实现工程师修改代码并运行公开测试，最后由 Reviewer 审查真实测试证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "task-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "implementation-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "task-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "implementation-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "review-report", "type": "document" }
+  ],
+  "plannedAssertions": ["role_executed", "dag_edge", "artifact_read", "workspace_file", "command_verifier", "verification_status"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-cancel-async-tasks/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "workspace", "platform": "cross-platform", "network": "disabled" },
+    "verifiers": [{ "id": "async-hidden-tests", "command": "python -m unittest discover -s .benchmark/hidden -p test_async_runner.py -v", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 14, "maxToolCalls": 60, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality", "final_summary_accuracy"] },
+  "tags": ["terminal-bench-2-derived", "python", "asyncio", "recovery"]
+}

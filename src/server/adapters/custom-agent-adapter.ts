@@ -12,6 +12,64 @@ import { buildPromptLayout } from "@/server/prompt-layout/prompt-layout-builder"
 
 export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 48;
 export const TASK_REPORT_FINALIZATION_ROUNDS = 1;
+export const TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD = 3;
+export const TOOL_LOOP_NO_PROGRESS_FINALIZE_THRESHOLD = 6;
+
+export type ToolLoopGuardState = {
+  targetPath: string | null;
+  consecutiveFailures: number;
+  warned: boolean;
+};
+
+type ToolLoopGuardAction = "none" | "warn" | "finalize";
+
+type ToolLoopResult = {
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  isError: boolean;
+};
+
+export function createToolLoopGuardState(): ToolLoopGuardState {
+  return { targetPath: null, consecutiveFailures: 0, warned: false };
+}
+
+export function advanceToolLoopGuard(
+  state: ToolLoopGuardState,
+  results: ToolLoopResult[]
+): { state: ToolLoopGuardState; action: ToolLoopGuardAction } {
+  let next = { ...state };
+  let action: ToolLoopGuardAction = "none";
+
+  for (const result of results) {
+    if (result.name !== "fs_write" && result.name !== "fs_patch") continue;
+
+    const targetPath = typeof result.args.path === "string" ? result.args.path : null;
+    if (!result.isError) {
+      next = createToolLoopGuardState();
+      continue;
+    }
+    if (!isNoProgressEditFailure(result.result)) continue;
+
+    if (targetPath && targetPath === next.targetPath) {
+      next.consecutiveFailures++;
+    } else {
+      next = { targetPath, consecutiveFailures: 1, warned: false };
+    }
+
+    if (next.consecutiveFailures >= TOOL_LOOP_NO_PROGRESS_FINALIZE_THRESHOLD) {
+      action = "finalize";
+    } else if (
+      next.consecutiveFailures >= TOOL_LOOP_NO_PROGRESS_WARN_THRESHOLD &&
+      !next.warned
+    ) {
+      next.warned = true;
+      action = "warn";
+    }
+  }
+
+  return { state: next, action };
+}
 
 export function shouldFinalizeTaskReport(input: AdapterInput, hasReport: boolean): boolean {
   return input.toolNames.includes("report_task_result") && !hasReport;
@@ -107,6 +165,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
     let currentMessages = [...messages];
     let exhaustedToolRounds = false;
     let finalizationMode = false;
+    let toolLoopGuard = createToolLoopGuardState();
     for (
       let round = 0;
       round < CUSTOM_AGENT_MAX_TOOL_ROUNDS + TASK_REPORT_FINALIZATION_ROUNDS;
@@ -356,7 +415,13 @@ export const customAgentAdapter: AgentPlatformAdapter = {
       }
 
       // Execute tool calls
-      const toolResults: Array<{ callId: string; name: string; result: unknown; isError: boolean }> = [];
+      const toolResults: Array<{
+        callId: string;
+        name: string;
+        args: Record<string, unknown>;
+        result: unknown;
+        isError: boolean;
+      }> = [];
       const serializedToolArguments = new Map<string, string>();
       const ctx = buildToolContext(input, signal);
 
@@ -415,6 +480,7 @@ export const customAgentAdapter: AgentPlatformAdapter = {
         toolResults.push({
           callId: tc.id,
           name: tc.name,
+          args,
           result: result.ok ? result.value : result.error,
           isError: !result.ok
         });
@@ -473,6 +539,25 @@ export const customAgentAdapter: AgentPlatformAdapter = {
       }));
 
       currentMessages = [...currentMessages, assistantMsg, ...toolMsgs];
+      const guardUpdate = advanceToolLoopGuard(toolLoopGuard, toolResults);
+      toolLoopGuard = guardUpdate.state;
+      if (guardUpdate.action === "warn") {
+        currentMessages.push({
+          role: "system",
+          content:
+            "同一路径的文件修改已经连续多次没有产生变化。停止重复相同的 fs_write/fs_patch 参数。" +
+            "只允许先 fs_read 一次获取最新内容，再执行一次包含完整目标内容的 fs_write；随后立即运行规定的验证命令。" +
+            "如果仍不能修复，请调用 report_task_result 并真实报告 failed，不要继续试探性修改。"
+        });
+      } else if (guardUpdate.action === "finalize") {
+        currentMessages.push({
+          role: "system",
+          content:
+            "文件修改已连续多次无进展，运行时已停止继续编辑。不得再调用文件或命令工具；" +
+            "现在必须调用 report_task_result，并将状态真实报告为 failed，说明当前文件和最近错误。"
+        });
+        finalizationMode = true;
+      }
       partIndex++;
       if (reportToolSucceededInRun || getTaskReport(input.runId)) {
         break;
@@ -1247,6 +1332,13 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
   messages.push({ role: "user", content: triggerText });
 
   return messages;
+}
+
+function isNoProgressEditFailure(result: unknown): boolean {
+  const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
+  return /NO_OP_(?:WRITE|PATCH)|No-op (?:write|patch) rejected|oldText was not found|oldText matched \d+ locations/i.test(
+    text
+  );
 }
 
 function buildRuntimePlatformPrompt(workspacePath: string): string {

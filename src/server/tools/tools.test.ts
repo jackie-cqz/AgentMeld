@@ -8,6 +8,7 @@ import { eventBus } from "@/server/event-bus";
 import { createConversation } from "@/server/conversation-service";
 import { getArtifact } from "@/server/repositories";
 import { toolRegistry } from "@/server/tools/registry";
+import { isVerificationOnlyCommand } from "@/server/tools/bash";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
@@ -358,6 +359,19 @@ describe("fs_patch", () => {
 });
 
 describe("bash", () => {
+  it("allows Python test runners and version checks without allowing arbitrary scripts", () => {
+    expect(isVerificationOnlyCommand("python -m unittest -v test_public.py")).toBe(true);
+    expect(isVerificationOnlyCommand("python3.11 -m pytest -q tests")).toBe(true);
+    expect(isVerificationOnlyCommand("py -3.11 -m unittest discover -s tests -v")).toBe(true);
+    expect(isVerificationOnlyCommand("pytest -q")).toBe(true);
+    expect(isVerificationOnlyCommand("python --version")).toBe(true);
+    expect(isVerificationOnlyCommand("cd project; python -m unittest -v test_public.py 2>&1")).toBe(true);
+
+    expect(isVerificationOnlyCommand("python repair.py")).toBe(false);
+    expect(isVerificationOnlyCommand("python -c \"open('source.py', 'w').write('x')\"")).toBe(false);
+    expect(isVerificationOnlyCommand("node arbitrary-script.js")).toBe(false);
+  });
+
   it("rejects banned commands", async () => {
     const result = await toolRegistry.execute("bash", {
       command: process.platform === "win32"

@@ -1,0 +1,34 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-db-wal-recovery",
+  "title": "TB2-Derived SQLite WAL Recovery",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "db-wal-recovery",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/db-wal-recovery",
+    "adaptation": "Uses generated synthetic SQLite/WAL pairs, preserves originals, and validates recovery with hidden record sets."
+  },
+  "category": "recovery",
+  "prompt": "恢复工作区中 SQLite 数据库及其无法正常读取的 WAL 变更，将全部记录按 id 排序写入 recovered.json。原始 DB/WAL/SHM 必须保持不变。PM 先形成 recovery-contract，实现工程师在副本上完成恢复，Reviewer 审查记录完整性和原始证据保护。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "recovery-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "recovery-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "recovery-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "recovery-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "recovery-review", "type": "document" }
+  ],
+  "plannedAssertions": ["binary_fixture_integrity", "structured_output", "command_verifier", "no_forbidden_mutation", "artifact_read"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-db-wal-recovery/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/sqlite-recovery@sha256:TBD", "network": "disabled" },
+    "setup": [{ "id": "generate-wal-fixture", "command": "python .benchmark/setup/generate_fixture.py", "exposeToAgent": false }],
+    "verifiers": [{ "id": "wal-recovery-hidden", "command": "python .benchmark/hidden/verify_recovery.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 1200000, "maxModelCalls": 16, "maxToolCalls": 55, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["recovery_method", "evidence_preservation", "data_integrity", "reproducibility", "error_explanation"] },
+  "tags": ["terminal-bench-2-derived", "sqlite", "wal", "recovery"]
+}

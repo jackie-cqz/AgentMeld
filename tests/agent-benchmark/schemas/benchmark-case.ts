@@ -35,6 +35,27 @@ const benchmarkRuntimeSchema = z.object({
     path: benchmarkWorkspacePathSchema,
     content: z.string(),
   }).strict()).min(1).optional(),
+  assetBundle: z.object({
+    root: benchmarkWorkspacePathSchema.refine(
+      (value) => value.replaceAll("\\", "/").startsWith("tests/e2e-assets/"),
+      "Asset bundle root must be under tests/e2e-assets.",
+    ),
+    publicDir: benchmarkWorkspacePathSchema.optional(),
+    hiddenDir: benchmarkWorkspacePathSchema.optional(),
+    setupCommands: z.array(z.object({
+      id: z.string().trim().min(1),
+      command: z.string().trim().min(1),
+      timeoutMs: z.number().int().positive().optional(),
+    }).strict()).optional(),
+    generatedPublicDir: benchmarkWorkspacePathSchema.optional(),
+    generatedHiddenDir: benchmarkWorkspacePathSchema.optional(),
+  }).strict().optional(),
+  verifiers: z.array(z.object({
+    id: z.string().trim().min(1),
+    command: z.string().trim().min(1),
+    timeoutMs: z.number().int().positive().optional(),
+    expectedExitCode: z.number().int().optional(),
+  }).strict()).optional(),
   userScript: z.object({
     questions: z.array(z.object({
       match: z.string().trim().min(1).optional(),
@@ -124,6 +145,18 @@ export const benchmarkCaseSchema = z
   .superRefine((benchmarkCase, ctx) => {
     const ids = new Set<string>();
     const declaredBindings = new Set<string>();
+    const verifierIds = new Set<string>();
+    for (let index = 0; index < (benchmarkCase.runtime?.verifiers?.length ?? 0); index++) {
+      const verifier = benchmarkCase.runtime!.verifiers![index];
+      if (verifierIds.has(verifier.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["runtime", "verifiers", index, "id"],
+          message: `Duplicate verifier id: ${verifier.id}`,
+        });
+      }
+      verifierIds.add(verifier.id);
+    }
     for (const rawAssertion of benchmarkCase.assertions) {
       const assertion = rawAssertion as BenchmarkAssertion;
       if (assertion.type !== "output_binding" || assertion.requiredAbsent) continue;
@@ -141,6 +174,14 @@ export const benchmarkCaseSchema = z
         });
       }
       ids.add(assertion.id);
+
+      if (assertion.type === "command_verifier" && !verifierIds.has(assertion.verifierId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["assertions", index, "verifierId"],
+          message: `Assertion ${assertion.id} references undeclared verifier ${assertion.verifierId}.`,
+        });
+      }
 
       for (const role of referencedRoles(assertion)) {
         if (!benchmarkCase.expectedRoles.includes(role)) {
@@ -221,6 +262,11 @@ function referencedRoles(assertion: BenchmarkAssertion): BenchmarkRole[] {
     case "tool_retry_bound":
     case "verification_status":
       return assertion.role ? [assertion.role] : [];
+    case "command_verifier":
+    case "workspace_file":
+    case "structured_output":
+    case "no_forbidden_mutation":
+      return [];
     case "artifact_valid":
       return [assertion.role];
     case "browser_interaction":

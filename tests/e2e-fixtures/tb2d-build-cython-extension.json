@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-build-cython-extension",
+  "title": "TB2-Derived Cython Extension Compatibility Build",
+  "description": "Repairs a synthetic Cython extension for NumPy 2.3 and validates a clean compiled Linux build in Docker.",
+  "category": "recovery",
+  "prompt": "这是 PM -> 前端工程师 -> Reviewer 的 Linux 编译兼容任务。PM 读取 README.md、setup.py、pyproject.toml、pyx 和公开测试，输出 outputKey=build-contract，固定 NumPy 2.3.x、必须编译扩展、禁止纯 Python 空壳和禁止修改测试。前端工程师读取契约，使用 fs_patch 修复源码或构建配置；通过 Docker 的 python:3.11-bookworm 容器安装 numpy==2.3.1、Cython、setuptools、wheel 后在挂载工作区执行构建、smoke.py 和公开测试，输出 outputKey=build-evidence。Reviewer 读取构建证据，检查扩展后缀、版本与最小补丁，输出 outputKey=build-review。依赖安装如触发审批必须申请并等待批准。每个角色必须 report_task_result。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "build-contract", "artifactType": "document", "required": true },
+    { "id": "output-evidence", "type": "output_binding", "role": "frontend", "outputKey": "build-evidence", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "build-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "build-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "build-evidence", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "build-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "build-evidence", "requireVerifiedBinding": true, "required": true },
+    { "id": "patch-extension", "type": "tool_succeeded", "toolName": "fs_patch", "role": "frontend", "required": true },
+    { "id": "docker-build", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "docker.*python:3.11", "required": true },
+    { "id": "extension-source", "type": "workspace_file", "path": "agentmeld_faststats/faststats.pyx", "minBytes": 50, "required": true },
+    { "id": "protected", "type": "no_forbidden_mutation", "paths": ["README.md", "tests/test_public.py", "smoke.py"], "required": true },
+    { "id": "build-hidden", "type": "command_verifier", "verifierId": "cython-clean-build", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "userScript": { "approvals": [{ "type": "bash", "match": "docker", "decision": "approve", "maxMatches": 5 }], "onUnmatchedApproval": "approve" },
+    "assetBundle": { "root": "tests/e2e-assets/tb2d-build-cython-extension" },
+    "verifiers": [{ "id": "cython-clean-build", "command": "node .benchmark/hidden/run_in_docker.mjs", "timeoutMs": 600000, "expectedExitCode": 0 }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "implementation_fidelity", "review_quality", "final_summary_accuracy"] },
+  "limits": { "maxDurationMs": 2400000, "maxModelCalls": 20, "maxToolCalls": 75, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "cython", "numpy", "compilation", "container", "hidden-verifier"]
+}

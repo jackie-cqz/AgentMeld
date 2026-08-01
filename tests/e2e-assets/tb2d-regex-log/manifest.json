@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-regex-log",
+  "sourceTask": "regex-log",
+  "sourceUrl": "https://hub.harborframework.com/tasks/terminal-bench/regex-log/latest",
+  "licenseNote": "Synthetic log lines and verifier written for AgentMeld.",
+  "public": ["public/regex.txt", "public/samples.log", "public/README.md", "public/package.json", "public/verify-public.mjs"],
+  "setup": [],
+  "hidden": ["hidden/cases.json", "hidden/verify-regex.mjs"],
+  "generated": [],
+  "requirements": ["Node.js 20+ for public and hidden verifier execution"],
+  "notes": "Hidden cases cover valid IPv4, calendar validity, adjacency, and last-date selection."
+}

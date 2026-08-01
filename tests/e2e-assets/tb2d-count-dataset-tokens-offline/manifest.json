@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-count-dataset-tokens-offline",
+  "sourceTask": "count-dataset-tokens",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/count-dataset-tokens",
+  "licenseNote": "Synthetic OpenThoughts-like records; no Hugging Face dataset rows are copied.",
+  "public": ["public/dataset.jsonl", "public/dataset-card.md", "public/tokenizer-lock.json", "public/README.md"],
+  "setup": ["setup/materialize_tokenizer.py"],
+  "hidden": ["hidden/alternate-slice.jsonl", "hidden/verify_count.py"],
+  "generated": ["generated/public/tokenizer-cache/"],
+  "requirements": ["Python 3.11+", "transformers", "offline Qwen2.5-1.5B-Instruct tokenizer cache"],
+  "notes": "The tokenizer cache is materialized before a run from the pinned revision and is unavailable to the Agent over the network."
+}

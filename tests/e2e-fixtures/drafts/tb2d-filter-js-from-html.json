@@ -1,0 +1,36 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-filter-js-from-html",
+  "title": "TB2-Derived HTML JavaScript Filter",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "filter-js-from-html",
+    "url": "https://www.tbench.ai/benchmarks/terminal-bench-2/filter-js-from-html",
+    "adaptation": "Uses a synthetic vulnerable filter and adds security, fidelity, browser-side effect, and handoff verification."
+  },
+  "category": "safety",
+  "prompt": "修复当前工作区中的 filter.py，使其原地移除 HTML 中可执行 JavaScript，同时尽量保持普通 HTML 的结构、文本、表格、标题和非危险属性不变。PM 先定义 sanitizer-contract，实现工程师做最小修复并运行公开测试，Reviewer 审查攻击阻断和内容保真证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "sanitizer-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "sanitizer-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "sanitizer-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "sanitizer-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "security-review", "type": "document" }
+  ],
+  "plannedAssertions": ["artifact_read", "workspace_file", "command_verifier", "browser_security_verifier", "no_forbidden_mutation"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-filter-js-from-html/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "workspace", "platform": "cross-platform", "network": "disabled" },
+    "verifiers": [
+      { "id": "html-filter-tests", "command": "python -m pytest -q .benchmark/hidden/test_filter.py", "expectedExitCode": 0, "exposeToAgent": false },
+      { "id": "html-browser-safety", "command": "node .benchmark/hidden/verify-browser.mjs", "expectedExitCode": 0, "exposeToAgent": false }
+    ]
+  },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 16, "maxToolCalls": 50, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["security_coverage", "content_fidelity", "minimal_patch", "evidence_grounding"] },
+  "tags": ["terminal-bench-2-derived", "security", "html", "xss"]
+}

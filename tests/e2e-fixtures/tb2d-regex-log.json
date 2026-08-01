@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-regex-log",
+  "title": "TB2-Derived Log Regex",
+  "description": "Builds one log-matching regular expression and grades boundary behavior against a hidden edge-case corpus.",
+  "category": "collaboration",
+  "prompt": "这是一个明确的多 Agent 协作任务，Conductor 必须且只能规划 PM、前端工程师、Reviewer 三个串行任务。PM 先读取 README.md、samples.log 和现有 regex.txt，形成简洁的 outputKey=matching-contract；前端工程师通过 dependsOn 和 inputs 读取 matching-contract，只修改 regex.txt，运行 npm test 验证公开样例，并形成 outputKey=regex-evidence；Reviewer 读取 regex-evidence 和公开测试证据，形成 outputKey=review-report。表达式只处理至少包含一个合法 IPv4 的日志行，匹配该行最后一个合法 YYYY-MM-DD 日期，并排除无效日期、无效 IPv4 及与字母数字直接相邻的候选。为避免工具 JSON 转义错误，前端工程师应优先使用 [0-9] 的显式重复形式，不使用 \\d、\\b 或 {n} 量词；必须用一次包含完整表达式的 fs_write 覆盖 regex.txt，再运行 npm test，公开测试失败时最多修正两次。禁止使用 node -e、fs_patch 拼接表达式、重复无变化写入、修改 README.md/samples.log/package.json/verify-public.mjs、创建 Web App 或执行部署。无论成功或失败，每个 Agent 都必须调用 report_task_result 收口。平台会在所有 Agent 结束后使用不可见边界样例独立校验。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "matching-contract", "artifactType": "document", "required": true },
+    { "id": "output-regex", "type": "output_binding", "role": "frontend", "outputKey": "regex-evidence", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "review-report", "artifactType": "document", "required": true },
+    { "id": "edge-contract-regex", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "matching-contract", "required": true },
+    { "id": "edge-regex-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "regex-evidence", "required": true },
+    { "id": "frontend-read-contract", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "matching-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read-regex", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "regex-evidence", "requireVerifiedBinding": true, "required": true },
+    { "id": "frontend-write-regex", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "frontend-public-test", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "npm.*test", "required": true },
+    { "id": "regex-file", "type": "workspace_file", "path": "regex.txt", "minBytes": 8, "required": true },
+    { "id": "source-files-protected", "type": "no_forbidden_mutation", "paths": ["README.md", "samples.log", "package.json", "verify-public.mjs"], "required": true },
+    { "id": "hidden-regex-cases", "type": "command_verifier", "verifierId": "regex-edge-cases", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": { "root": "tests/e2e-assets/tb2d-regex-log" },
+    "verifiers": [
+      { "id": "regex-edge-cases", "command": "node .benchmark/hidden/verify-regex.mjs", "timeoutMs": 30000, "expectedExitCode": 0 }
+    ]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "tb2-derived-v1",
+    "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 480000, "maxModelCalls": 10, "maxToolCalls": 50, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "regex", "logs", "edge-cases", "hidden-verifier"]
+}

@@ -215,6 +215,7 @@ describe("report_task_result tool", () => {
       required: true,
       validator: { type: "artifact_exists", outputKey: "prd", artifactType: "document" }
     });
+    recordTaskArtifact(runId, "prd", "art_prd");
 
     const result = await toolRegistry.execute("report_task_result", {
       status: "complete",
@@ -264,6 +265,44 @@ describe("report_task_result tool", () => {
     expect(getTaskReport(runId)?.acceptanceResults).toEqual([
       { criterion: "Works", passed: true, evidence: "The check passed." }
     ]);
+    clearTaskResultsForRun(runId);
+  });
+
+  it("rejects complete reports until every required output artifact is recorded", async () => {
+    const runId = "run_missing_required_output";
+    clearTaskResultsForRun(runId);
+    const context = {
+      conversationId: "c",
+      workspacePath: "/tmp",
+      agentId: "a",
+      runId,
+      taskContract: {
+        acceptanceCriteria: ["Public tests pass"],
+        expectedOutputs: [{ outputKey: "regex-evidence", type: "document" as const, required: true }]
+      },
+      abortSignal: new AbortController().signal
+    };
+    const report = {
+      status: "complete",
+      summary: "Tests passed.",
+      acceptanceResults: [
+        { criterion: "Public tests pass", passed: true, evidence: "npm test exited 0." }
+      ]
+    };
+
+    const missing = await toolRegistry.execute("report_task_result", report, context);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.error).toContain("Required output artifacts are missing");
+      expect(missing.error).toContain("regex-evidence");
+      expect(missing.error).toContain("write_artifact");
+    }
+    expect(getTaskReport(runId)).toBeUndefined();
+
+    recordTaskArtifact(runId, "regex-evidence", "art_regex");
+    const complete = await toolRegistry.execute("report_task_result", report, context);
+    expect(complete.ok).toBe(true);
+    expect(getTaskReport(runId)?.status).toBe("complete");
     clearTaskResultsForRun(runId);
   });
 

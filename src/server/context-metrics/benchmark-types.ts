@@ -145,6 +145,30 @@ export interface VerificationStatusAssertion extends BenchmarkAssertionBase {
   warningCode?: string;
 }
 
+export interface CommandVerifierAssertion extends BenchmarkAssertionBase {
+  type: "command_verifier";
+  verifierId: string;
+}
+
+export interface WorkspaceFileAssertion extends BenchmarkAssertionBase {
+  type: "workspace_file";
+  path: string;
+  minBytes?: number;
+  contentPatterns?: string[];
+}
+
+export interface StructuredOutputAssertion extends BenchmarkAssertionBase {
+  type: "structured_output";
+  path: string;
+  format: "json" | "jsonl" | "csv";
+  requiredKeys?: string[];
+}
+
+export interface NoForbiddenMutationAssertion extends BenchmarkAssertionBase {
+  type: "no_forbidden_mutation";
+  paths: string[];
+}
+
 export type BenchmarkAssertion =
   | RoleExecutedAssertion
   | DagEdgeAssertion
@@ -162,7 +186,11 @@ export type BenchmarkAssertion =
   | BrowserInteractionAssertion
   | RetryBoundAssertion
   | ToolRetryBoundAssertion
-  | VerificationStatusAssertion;
+  | VerificationStatusAssertion
+  | CommandVerifierAssertion
+  | WorkspaceFileAssertion
+  | StructuredOutputAssertion
+  | NoForbiddenMutationAssertion;
 
 export interface BenchmarkCaseLimits {
   maxDurationMs: number;
@@ -200,9 +228,37 @@ export interface BenchmarkUserScript {
 export interface BenchmarkRuntimeConfig {
   fsWriteApprovalMode?: "auto" | "review";
   workspaceFiles?: BenchmarkWorkspaceFile[];
+  assetBundle?: BenchmarkAssetBundle;
+  verifiers?: BenchmarkCommandVerifier[];
   userScript?: BenchmarkUserScript;
   browserScripts?: BenchmarkBrowserScript[];
   faults?: BenchmarkFaultSpec[];
+}
+
+export interface BenchmarkAssetBundle {
+  /** Repository-relative root under tests/e2e-assets. */
+  root: string;
+  publicDir?: string;
+  hiddenDir?: string;
+  /** Trusted repository-side commands that materialize generated fixture assets before seeding. */
+  setupCommands?: BenchmarkAssetSetupCommand[];
+  /** Generated assets merged into the Agent-visible workspace after publicDir. */
+  generatedPublicDir?: string;
+  /** Generated assets merged into .benchmark/hidden only while verifiers run. */
+  generatedHiddenDir?: string;
+}
+
+export interface BenchmarkAssetSetupCommand {
+  id: string;
+  command: string;
+  timeoutMs?: number;
+}
+
+export interface BenchmarkCommandVerifier {
+  id: string;
+  command: string;
+  timeoutMs?: number;
+  expectedExitCode?: number;
 }
 
 export interface BenchmarkWorkspaceFile {
@@ -373,6 +429,50 @@ export interface BenchmarkRuntimeValidation {
   toolCalls?: BenchmarkToolCallValidation[];
   injectedFaults: BenchmarkFaultRecord[];
   approvals: BenchmarkApprovalValidation[];
+  verifiers?: BenchmarkVerifierValidation[];
+  workspaceFiles?: BenchmarkWorkspaceFileValidation[];
+  structuredOutputs?: BenchmarkStructuredOutputValidation[];
+  mutations?: BenchmarkMutationValidation[];
+}
+
+export interface BenchmarkVerifierValidation {
+  verifierId: string;
+  command: string;
+  status: "passed" | "failed" | "error";
+  exitCode: number | null;
+  expectedExitCode: number;
+  timedOut: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  error: string | null;
+}
+
+export interface BenchmarkWorkspaceFileValidation {
+  path: string;
+  exists: boolean;
+  isFile: boolean;
+  bytes: number;
+  sha256: string | null;
+  contentText: string | null;
+  error: string | null;
+}
+
+export interface BenchmarkStructuredOutputValidation {
+  path: string;
+  format: StructuredOutputAssertion["format"];
+  valid: boolean;
+  recordCount: number;
+  keys: string[];
+  errors: string[];
+}
+
+export interface BenchmarkMutationValidation {
+  path: string;
+  beforeSha256: string | null;
+  afterSha256: string | null;
+  unchanged: boolean;
+  error: string | null;
 }
 
 export interface AgentBenchmarkCase {

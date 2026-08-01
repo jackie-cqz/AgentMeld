@@ -1,0 +1,23 @@
+[
+  {
+    "filename": "invoice_alpha.jpg",
+    "kind": "image",
+    "lines": ["INVOICE", "Acme Labs", "Subtotal: 100.00", "VAT: 20.00", "Total: 120.00", "Amount Due: 125.00"]
+  },
+  {
+    "filename": "invoice_beta.pdf",
+    "kind": "pdf",
+    "lines": ["TAX INVOICE", "Northwind Studio", "Services: 75.50", "GST: 7.55", "Grand Total: 83.05"]
+  },
+  {
+    "filename": "meeting_notes.jpg",
+    "kind": "image",
+    "lines": ["TEAM MEETING NOTES", "Discuss product launch", "No payment requested"]
+  },
+  {
+    "filename": "security_policy.pdf",
+    "kind": "pdf",
+    "lines": ["SECURITY POLICY", "Review access every quarter", "Document owner: Operations"]
+  }
+]
+

@@ -192,12 +192,49 @@ describe("applyRoleContracts", () => {
     ]));
   });
 
-  it("does not overwrite existing outputs", () => {
+  it("preserves an explicit custom output contract without appending the role default", () => {
     const customPlan: DispatchPlanItem[] = [
       { id: "t1", agentId: "ag_pm", task: "write PRD", dependsOn: [], expectedOutputs: [{ id: "custom_prd", type: "document" as const }], inputs: [], acceptanceCriteria: [] },
     ];
     const result = applyRoleContracts(customPlan, agents);
-    expect(result.plan[0].expectedOutputs!.some((o) => o.id === "custom_prd")).toBe(true);
+    expect(result.plan[0].expectedOutputs).toEqual([
+      expect.objectContaining({ id: "custom_prd", type: "document" }),
+    ]);
+    expect(result.plan[0].contractProfile).toBe("minimal");
+    expect(result.plan[0].contractSelectionReason).toContain("custom delivery contract");
+    expect(result.plan[0].acceptanceCriteria).toEqual([]);
+  });
+
+  it("does not inject standard handoff inputs into a custom delivery chain", () => {
+    const plan: DispatchPlanItem[] = [
+      {
+        id: "t1",
+        agentId: "ag_pm",
+        task: "Define a regex matching contract",
+        dependsOn: [],
+        inputs: [],
+        expectedOutputs: [{ id: "matching-contract", type: "document", required: true }],
+        acceptanceCriteria: ["Contract is complete"],
+      },
+      {
+        id: "t2",
+        agentId: "ag_builder",
+        task: "Implement the regex from the matching contract",
+        dependsOn: ["t1"],
+        inputs: [{ fromTaskId: "t1", outputId: "matching-contract", required: true }],
+        expectedOutputs: [{ id: "regex-evidence", type: "document", required: true }],
+        acceptanceCriteria: ["Public tests pass"],
+      },
+    ];
+
+    const [pm, frontend] = applyRoleContracts(plan, agents).plan;
+    expect(pm.expectedOutputs?.map((output) => output.id)).toEqual(["matching-contract"]);
+    expect(frontend.expectedOutputs?.map((output) => output.id)).toEqual(["regex-evidence"]);
+    expect(frontend.inputs).toEqual([
+      expect.objectContaining({ fromTaskId: "t1", outputId: "matching-contract" }),
+    ]);
+    expect(frontend.inputs?.some((input) => input.outputId === "prd")).toBe(false);
+    expect(frontend.inputs?.some((input) => input.outputId === "style-guide")).toBe(false);
   });
 
   it("returns not enriched for unknown agents", () => {

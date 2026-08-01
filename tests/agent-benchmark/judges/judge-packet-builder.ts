@@ -53,7 +53,9 @@ export function buildJudgePacket(
       type: assertion.type,
       required: assertion.required,
       status: assertion.status,
-      reason: assertion.reason,
+      reason: assertion.type === "command_verifier"
+        ? `Hidden verifier ${assertion.status}; raw command output withheld.`
+        : assertion.reason,
       evidenceRefs: [evidenceRef],
     };
   });
@@ -89,7 +91,7 @@ export function buildJudgePacket(
     deterministicAssertions,
     tasks,
     artifacts,
-    runtime: sanitizeContent(runtimeValidation ?? null),
+    runtime: sanitizeContent(runtimeForJudge(runtimeValidation)),
     evidenceReferences,
     generatedAt: deterministicResult.finishedAt,
     finalSummary,
@@ -99,6 +101,22 @@ export function buildJudgePacket(
   };
   const packetHash = hashCanonical(body);
   return { ...body, packetHash };
+}
+
+export function runtimeForJudge(
+  runtimeValidation?: BenchmarkRuntimeValidation | null,
+): BenchmarkRuntimeValidation | null {
+  if (!runtimeValidation) return null;
+  return {
+    ...runtimeValidation,
+    verifiers: runtimeValidation.verifiers?.map((verifier) => ({
+      ...verifier,
+      command: "[hidden verifier]",
+      stdout: "",
+      stderr: "",
+      error: verifier.timedOut ? verifier.error : null,
+    })),
+  };
 }
 
 interface MessageRow {

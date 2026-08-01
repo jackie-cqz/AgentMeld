@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-cancel-async-tasks",
+  "title": "TB2-Derived Async Task Cancellation",
+  "description": "Repairs a Python asyncio runner and verifies concurrency and cancellation cleanup with tests hidden from every Agent.",
+  "category": "recovery",
+  "prompt": "这是一个明确的多 Agent 修复任务，Conductor 必须调用 plan_tasks。PM 先读取公开的 run.py、test_public.py 和 README.md，形成 outputKey=task-contract 的验收契约；前端工程师通过 dependsOn 和 inputs 读取 task-contract，使用 fs_patch 修复 run.py，并运行 python -m unittest -v test_public.py；Reviewer 读取 outputKey=implementation-evidence 及公开测试证据，形成 outputKey=review-report。目标：限制最大并发数，保持输入顺序对应的结果映射，在取消或 KeyboardInterrupt 时取消未完成任务，并等待所有已启动任务的 finally 清理完成。不要修改公开测试文件。平台会在所有 Agent 结束后独立运行不可见的隐藏校验，Agent 不得声称已读取隐藏测试。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "task-contract", "artifactType": "document", "required": true },
+    { "id": "output-implementation", "type": "output_binding", "role": "frontend", "outputKey": "implementation-evidence", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "review-report", "artifactType": "document", "required": true },
+    { "id": "edge-contract-implementation", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "task-contract", "required": true },
+    { "id": "edge-implementation-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "implementation-evidence", "required": true },
+    { "id": "frontend-read-contract", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "task-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read-evidence", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "implementation-evidence", "requireVerifiedBinding": true, "required": true },
+    { "id": "frontend-patch", "type": "tool_succeeded", "toolName": "fs_patch", "role": "frontend", "required": true },
+    { "id": "frontend-public-test", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "unittest.*test_public", "required": true },
+    { "id": "run-file", "type": "workspace_file", "path": "run.py", "minBytes": 200, "contentPatterns": ["max_concurrent", "cancel"], "required": true },
+    { "id": "public-test-protected", "type": "no_forbidden_mutation", "paths": ["test_public.py"], "required": true },
+    { "id": "hidden-async-tests", "type": "command_verifier", "verifierId": "async-hidden-tests", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": { "root": "tests/e2e-assets/tb2d-cancel-async-tasks" },
+    "verifiers": [
+      { "id": "async-hidden-tests", "command": "python -m unittest discover -s .benchmark/hidden -p test_async_runner.py -v", "timeoutMs": 120000, "expectedExitCode": 0 }
+    ]
+  },
+  "judge": {
+    "enabled": true,
+    "requiredForPass": false,
+    "rubricVersion": "tb2-derived-v1",
+    "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality", "final_summary_accuracy"]
+  },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 14, "maxToolCalls": 60, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "python", "asyncio", "recovery", "hidden-verifier"]
+}

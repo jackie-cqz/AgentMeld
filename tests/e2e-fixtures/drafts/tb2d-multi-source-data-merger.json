@@ -1,0 +1,34 @@
+{
+  "draftSchemaVersion": 1,
+  "status": "promoted",
+  "id": "tb2d-multi-source-data-merger",
+  "title": "TB2-Derived Multi-Source Data Merger",
+  "source": {
+    "dataset": "terminal-bench-2",
+    "taskId": "multi-source-data-merger",
+    "url": "https://www.tbench.ai/registry/terminal-bench-core/head/multi-source-data-merger",
+    "adaptation": "Uses synthetic JSON, CSV, and generated Parquet inputs with role contracts, hidden conflict cases, and reproducibility checks."
+  },
+  "category": "collaboration",
+  "prompt": "合并工作区中的 JSON、CSV 和 Parquet 用户数据。统一字段名，以 user_id 为键，并按 source_a > source_b > source_c 选择冲突值；生成 merged_users.parquet 和 conflicts.json。PM 先明确 merge-contract，实现工程师实现可重复执行的合并脚本，Reviewer 审查数据质量和冲突证据。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "plannedDag": [
+    { "from": "pm", "to": "frontend", "outputKey": "merge-contract" },
+    { "from": "frontend", "to": "reviewer", "outputKey": "merge-evidence" }
+  ],
+  "plannedOutputs": [
+    { "role": "pm", "outputKey": "merge-contract", "type": "document" },
+    { "role": "frontend", "outputKey": "merge-evidence", "type": "document" },
+    { "role": "reviewer", "outputKey": "data-review", "type": "document" }
+  ],
+  "plannedAssertions": ["structured_output", "parquet_schema", "command_verifier", "artifact_read", "workspace_file"],
+  "assets": { "manifest": "tests/e2e-assets/tb2d-multi-source-data-merger/manifest.json" },
+  "runtimeDraft": {
+    "environment": { "kind": "container", "image": "agentmeld/python-data@sha256:TBD", "network": "disabled" },
+    "setup": [{ "id": "materialize-parquet", "command": "python .benchmark/setup/generate_source_c.py", "exposeToAgent": false }],
+    "verifiers": [{ "id": "data-merge-hidden", "command": "python .benchmark/hidden/verify_merge.py", "expectedExitCode": 0, "exposeToAgent": false }]
+  },
+  "limits": { "maxDurationMs": 900000, "maxModelCalls": 14, "maxToolCalls": 45, "maxAttemptsPerTask": 2 },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "tb2-derived-v1", "dimensions": ["schema_mapping", "conflict_resolution", "data_integrity", "reproducibility", "evidence_grounding"] },
+  "tags": ["terminal-bench-2-derived", "data-processing", "etl", "parquet"]
+}

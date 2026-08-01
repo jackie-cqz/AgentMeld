@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-count-dataset-tokens-offline",
+  "title": "TB2-Derived Offline Dataset Token Count",
+  "description": "Counts a pinned tokenizer over filtered offline records and verifies the reusable script on a hidden slice.",
+  "category": "context_handoff",
+  "prompt": "这是 PM -> 前端工程师 -> Reviewer 的离线可复现任务。PM 读取 README.md、dataset-card.md、tokenizer-lock.json 和公开数据，输出 outputKey=count-contract，明确只统计 science、文本模板、固定 tokenizer 与 answer.txt 格式。前端工程师读取契约，使用 fs_write 创建 count_tokens.py，必须从本地 tokenizer-cache 加载且 local_files_only=True，运行 python count_tokens.py --input dataset.jsonl --output answer.txt，输出 outputKey=token-count-result。Reviewer 读取结果和版本证据，输出 outputKey=reproducibility-review。禁止网络请求、硬编码答案和修改输入、锁文件。每个角色必须 report_task_result。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "count-contract", "artifactType": "document", "required": true },
+    { "id": "output-result", "type": "output_binding", "role": "frontend", "outputKey": "token-count-result", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "reproducibility-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "count-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "token-count-result", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "count-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "token-count-result", "requireVerifiedBinding": true, "required": true },
+    { "id": "write-script", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "run-counter", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "python.*count_tokens", "required": true },
+    { "id": "counter-script", "type": "workspace_file", "path": "count_tokens.py", "minBytes": 100, "required": true },
+    { "id": "answer-file", "type": "workspace_file", "path": "answer.txt", "minBytes": 1, "required": true },
+    { "id": "protected", "type": "no_forbidden_mutation", "paths": ["README.md", "dataset.jsonl", "dataset-card.md", "tokenizer-lock.json"], "required": true },
+    { "id": "count-hidden", "type": "command_verifier", "verifierId": "token-count-hidden", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": {
+      "root": "tests/e2e-assets/tb2d-count-dataset-tokens-offline",
+      "setupCommands": [{ "id": "materialize-tokenizer", "command": "python setup/materialize_tokenizer.py", "timeoutMs": 300000 }],
+      "generatedPublicDir": "generated/public"
+    },
+    "verifiers": [{ "id": "token-count-hidden", "command": "python .benchmark/hidden/verify_count.py", "timeoutMs": 180000, "expectedExitCode": 0 }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "handoff_quality", "implementation_fidelity", "review_quality"] },
+  "limits": { "maxDurationMs": 1200000, "maxModelCalls": 12, "maxToolCalls": 35, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "tokens", "offline", "reproducibility", "hidden-verifier"]
+}

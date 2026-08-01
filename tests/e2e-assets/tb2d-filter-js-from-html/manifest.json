@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-filter-js-from-html",
+  "sourceTask": "filter-js-from-html",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/filter-js-from-html",
+  "licenseNote": "Synthetic HTML corpus and vulnerable starter; no official exploit corpus copied.",
+  "public": ["public/filter.py", "public/README.md", "public/samples/benign.html", "public/samples/malicious.html"],
+  "setup": [],
+  "hidden": ["hidden/cases.json", "hidden/test_filter.py", "hidden/verify-browser.mjs"],
+  "generated": [],
+  "requirements": ["Python 3.11+", "Node.js 20+", "Playwright Chromium"],
+  "notes": "The Python verifier checks structural safety and fidelity; the Playwright verifier checks that filtered attack samples do not execute dialogs."
+}

@@ -40,6 +40,10 @@ export function recordTaskArtifact(runId: string, outputKey: string, artifactId:
   store.set(runId, { ...existing, [outputKey]: artifactId });
 }
 
+export function getTaskArtifacts(runId: string): Record<string, string> {
+  return { ...(getArtifactStore().get(runId) ?? {}) };
+}
+
 export function recordTaskReport(runId: string, report: DispatchTaskReport): void {
   // Merge artifacts if report already exists (e.g., multiple write_artifact calls)
   const existing = getStore().get(runId);

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "tb2d-db-wal-recovery",
+  "title": "TB2-Derived SQLite WAL Recovery",
+  "description": "Recovers committed rows from a transformed SQLite WAL while preserving original binary evidence.",
+  "category": "recovery",
+  "prompt": "这是 PM -> 前端工程师 -> Reviewer 的数据恢复任务。PM 读取 README.md 并检查三个二进制输入的存在，输出 outputKey=recovery-contract，规定原文件只读、输出 schema、按 id 排序和可复现步骤。前端工程师读取契约，分析 inventory.db-wal 的可逆变换，使用 fs_write 创建 recover_wal.py，在副本上恢复所有提交记录并生成 recovered.json，输出 outputKey=recovered-data。Reviewer 读取恢复证据，检查记录数、排序、原始文件哈希保护和非硬编码过程，输出 outputKey=recovery-review。禁止覆盖 inventory.db、inventory.db-wal、inventory.db-shm，禁止硬编码最终 11 条记录。每个角色必须 report_task_result。",
+  "expectedRoles": ["pm", "frontend", "reviewer"],
+  "assertions": [
+    { "id": "role-pm", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
+    { "id": "role-frontend", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "role-reviewer", "type": "role_executed", "role": "reviewer", "mustComplete": true, "required": true },
+    { "id": "output-contract", "type": "output_binding", "role": "pm", "outputKey": "recovery-contract", "artifactType": "document", "required": true },
+    { "id": "output-data", "type": "output_binding", "role": "frontend", "outputKey": "recovered-data", "artifactType": "document", "required": true },
+    { "id": "output-review", "type": "output_binding", "role": "reviewer", "outputKey": "recovery-review", "artifactType": "document", "required": true },
+    { "id": "edge-contract", "type": "dag_edge", "fromRole": "pm", "toRole": "frontend", "outputKey": "recovery-contract", "required": true },
+    { "id": "edge-review", "type": "dag_edge", "fromRole": "frontend", "toRole": "reviewer", "outputKey": "recovered-data", "required": true },
+    { "id": "frontend-read", "type": "artifact_read", "producerRole": "pm", "consumerRole": "frontend", "outputKey": "recovery-contract", "requireVerifiedBinding": true, "required": true },
+    { "id": "reviewer-read", "type": "artifact_read", "producerRole": "frontend", "consumerRole": "reviewer", "outputKey": "recovered-data", "requireVerifiedBinding": true, "required": true },
+    { "id": "write-script", "type": "tool_succeeded", "toolName": "fs_write", "role": "frontend", "required": true },
+    { "id": "run-recovery", "type": "tool_succeeded", "toolName": "bash", "role": "frontend", "commandPattern": "python.*recover_wal", "required": true },
+    { "id": "recovery-script", "type": "workspace_file", "path": "recover_wal.py", "minBytes": 100, "required": true },
+    { "id": "recovered-json", "type": "structured_output", "path": "recovered.json", "format": "json", "requiredKeys": ["id", "name", "value"], "required": true },
+    { "id": "protected", "type": "no_forbidden_mutation", "paths": ["README.md", "inventory.db", "inventory.db-wal", "inventory.db-shm"], "required": true },
+    { "id": "recovery-hidden", "type": "command_verifier", "verifierId": "wal-recovery-hidden", "required": true },
+    { "id": "reviewer-verified", "type": "verification_status", "role": "reviewer", "expected": "verified", "required": true }
+  ],
+  "runtime": {
+    "assetBundle": {
+      "root": "tests/e2e-assets/tb2d-db-wal-recovery",
+      "setupCommands": [{ "id": "generate-wal-fixture", "command": "python setup/generate_fixture.py", "timeoutMs": 120000 }],
+      "generatedPublicDir": "generated/public/input",
+      "generatedHiddenDir": "generated/hidden"
+    },
+    "verifiers": [{ "id": "wal-recovery-hidden", "command": "python .benchmark/hidden/verify_recovery.py", "timeoutMs": 120000, "expectedExitCode": 0 }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1", "dimensions": ["requirement_coverage", "implementation_fidelity", "review_quality", "final_summary_accuracy"] },
+  "limits": { "maxDurationMs": 1200000, "maxModelCalls": 16, "maxToolCalls": 55, "maxAttemptsPerTask": 2 },
+  "tags": ["terminal-bench-2-derived", "sqlite", "wal", "binary", "recovery", "hidden-verifier"]
+}

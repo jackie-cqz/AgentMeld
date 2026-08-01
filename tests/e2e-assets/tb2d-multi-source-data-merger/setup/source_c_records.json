@@ -1,0 +1,6 @@
+[
+  { "userId": 2, "userName": "Benjamin Wu", "email": "ben@c.example", "joined": "2024-02-03", "status": "inactive" },
+  { "userId": 3, "userName": "Chen Yu", "email": "chen@c.example", "joined": "2024-03-04", "status": "active" },
+  { "userId": 5, "userName": "Eve Lin", "email": "eve@c.example", "joined": "2024-05-06", "status": "active" }
+]
+

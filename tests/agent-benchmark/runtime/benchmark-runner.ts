@@ -22,6 +22,7 @@ import { composeVerdict } from "../judges/verdict-composer";
 import type { JudgeExecution, JudgeMode } from "../judges/judge-types";
 import { FaultInjector } from "./fault-injector";
 import { UserSimulator, type UserSimulatorAction } from "./user-simulator";
+import { HiddenVerifierExecutor } from "./hidden-verifier";
 
 export interface BenchmarkTrialReport {
   schemaVersion: 1;
@@ -69,6 +70,7 @@ export interface BenchmarkRunnerDependencies {
   runWaiter: RunWaiter;
   traceCollector: TraceCollector;
   userSimulator: UserSimulator;
+  verifierExecutor: HiddenVerifierExecutor;
 }
 
 export async function runBenchmarkCase(
@@ -85,6 +87,7 @@ export async function runBenchmarkCase(
   const conversationDriver = options.dependencies?.conversationDriver ?? new ConversationDriver();
   const runWaiter = options.dependencies?.runWaiter ?? new RunWaiter();
   const traceCollector = options.dependencies?.traceCollector ?? new TraceCollector();
+  const verifierExecutor = options.dependencies?.verifierExecutor ?? new HiddenVerifierExecutor();
   const userSimulator = options.dependencies?.userSimulator
     ?? new UserSimulator(benchmarkCase.runtime?.userScript);
   const faultInjector = new FaultInjector(benchmarkCase.runtime?.faults);
@@ -134,10 +137,16 @@ export async function runBenchmarkCase(
 
     archive = traceCollector.collect(conversation.conversationId, conversation.conductorRunId);
     if (archive.contextTrace && !waitResult.timedOut) {
-      runtimeValidation = await collectRuntimeValidation(benchmarkCase, archive.contextTrace, {
+      const hiddenValidation = await verifierExecutor.run(
+        benchmarkCase,
+        conversation.workspacePath,
+        conversation.mutationBaselines,
+      );
+      const collectedValidation = await collectRuntimeValidation(benchmarkCase, archive.contextTrace, {
         reportDir: environment.reportDir,
         injectedFaults: faultInjector.getRecords(),
       });
+      runtimeValidation = { ...collectedValidation, ...hiddenValidation };
       result = evaluateBenchmarkTrace(benchmarkCase, archive.contextTrace, {
         startedAt,
         finishedAt: Date.now(),

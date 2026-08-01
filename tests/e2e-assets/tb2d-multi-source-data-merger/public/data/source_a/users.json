@@ -1,0 +1,6 @@
+[
+  { "user_id": 1, "full_name": "Ada Lee", "email": "ada@a.example", "registration_date": "2024-01-02", "status": "active" },
+  { "user_id": 2, "full_name": "Ben Wu", "email": "ben@a.example", "registration_date": "2024-02-03", "status": "active" },
+  { "user_id": 4, "full_name": "Dana Xu", "email": "", "registration_date": "2024-04-05", "status": "pending" }
+]
+

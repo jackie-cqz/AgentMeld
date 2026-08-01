@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-multi-source-data-merger",
+  "sourceTask": "multi-source-data-merger",
+  "sourceUrl": "https://www.tbench.ai/registry/terminal-bench-core/head/multi-source-data-merger",
+  "licenseNote": "All user records are synthetic.",
+  "public": ["public/data/source_a/users.json", "public/data/source_b/users.csv", "public/README.md"],
+  "setup": ["setup/source_c_records.json", "setup/generate_source_c.py"],
+  "hidden": ["hidden/expected.json", "hidden/verify_merge.py"],
+  "generated": ["generated/public/data/source_c/users.parquet"],
+  "requirements": ["Python 3.11+", "pandas", "pyarrow"],
+  "notes": "source_c Parquet is generated under generated/public before the Agent starts and then exposed as public input."
+}

@@ -1,0 +1,13 @@
+{
+  "assetSchemaVersion": 1,
+  "caseId": "tb2d-db-wal-recovery",
+  "sourceTask": "db-wal-recovery",
+  "sourceUrl": "https://www.tbench.ai/benchmarks/terminal-bench-2/db-wal-recovery",
+  "licenseNote": "SQLite records and WAL transformation are generated synthetic assets.",
+  "public": ["public/README.md"],
+  "setup": ["setup/generate_fixture.py"],
+  "hidden": ["hidden/expected.json", "hidden/verify_recovery.py"],
+  "generated": ["generated/public/input/inventory.db", "generated/public/input/inventory.db-wal", "generated/public/input/inventory.db-shm", "generated/hidden/fixture-hashes.json"],
+  "requirements": ["Python 3.11+ with sqlite3"],
+  "notes": "The setup recipe creates a base database with five rows and XOR-transforms a WAL containing later inserts and updates."
+}

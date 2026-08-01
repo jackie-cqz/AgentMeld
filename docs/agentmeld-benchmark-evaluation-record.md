@@ -704,3 +704,54 @@
 - 需要运行完整 14 条修复后回归，并记录 before/after 汇总。
 
 真实模型回归会产生 API 费用；所有最终统计必须引用新 `benchmarkRunId`，不能用本节之前的修复前 Trial 代替。
+
+## 10. Terminal-Bench 2 Derived T03-T10 首轮评估（2026-07-22）
+
+### 10.1 运行口径
+
+- 每条 Case 运行 1 次，使用 `manual-codex` 生成语义评审包；
+- 策略统一为 `evidence_aware_context_with_role_contracts`；
+- 确定性硬门包括角色执行、DAG、Artifact 交接、工具证据、工作区输出、隐藏 Verifier、修改保护和预算；
+- “功能通过”表示目标输出与隐藏 Verifier 通过；“严格通过”还要求预算和过程契约全部通过。
+
+### 10.2 结果总表
+
+| Case | Run ID | 功能结果 | 严格结果 | 定位 |
+|---|---|---:|---:|---|
+| T03 HTML Filter | `bench_1784713260559_iexh9w` | ✅ | ❌ | 功能正确，工具调用 69/50 |
+| T04 Vulnerability Repair | `bench_1784713866359_rncd12` | ❌ | ❌ | Agent 输出的 `report.jsonl` 不符合精确结构，隐藏安全测试失败 |
+| T05 Data Merger | `bench_1784714059146_85gerb` | ❌ | ❌ | 合并命令/冲突报告/隐藏数据验证失败，且 73/45 超预算 |
+| T06 Offline Token Count | `bench_1784714790833_41k84s` | ✅（复核） | ❌ | 原 Verifier 空行假阴性已修复；原工作区复核通过；37/35 超预算 |
+| T07 WAL Recovery | `bench_1784715137020_etmcfo` | ✅ | ❌ | 恢复内容和二进制哈希保护通过；77/55 超预算 |
+| T08 Financial Documents | `bench_1784715743762_h5l94y` | ❌ | ❌ | 文档处理和 Reviewer 收口失败，90/55 超预算 |
+| T09 Video Jump | `bench_1784716343649_v59m0m` | ❌ | ❌ | 公开命令及隐藏视频误差验证失败 |
+| T10 Cython Build | `bench_1784716920968_fhuawv` | ✅ | ❌ | Docker 隐藏构建通过，但缺少 Agent 自身 Docker 成功命令证据 |
+
+### 10.3 汇总
+
+- 严格端到端通过：`0/8 = 0%`；
+- 功能与隐藏验证通过：`4/8 = 50%`；
+- 上下文交接：8 条均完成计划，T03/T04/T05/T06/T07/T09/T10 的预期输出覆盖率为 100%，T08 为 66.7%；
+- 明确模型/实现失败：T04、T05、T08、T09；
+- 明确效率或过程证据失败：T03、T06、T07、T10；
+- 明确 Harness 假阴性：T06 隐藏 JSONL 读取未跳过空行，修复后对原 Trial 工作区复核通过。
+
+### 10.4 本轮 Harness 修复
+
+- 新增正式 T03-T10 Fixture，并将草案状态提升为 `promoted`；
+- Runner 支持受信任的 Fixture `setupCommands`；
+- 支持生成公开资产与生成隐藏资产分层覆盖，避免答案/标签泄漏；
+- 固定 Qwen2.5 tokenizer revision，并在 Trial 前物化离线缓存；
+- 修复 Windows 子进程缺失 `APPDATA/LOCALAPPDATA` 导致 Python 用户包不可见；
+- 修复 T06 JSONL 末尾空行导致的 Verifier 假阴性；
+- 将新 Case 的 Judge 维度改为已注册的 collaboration rubric；
+- T10 使用 Docker 固定 Python 3.11 + NumPy 2.3 的最终隐藏构建环境。
+
+### 10.5 下一轮回归重点
+
+1. 预算不变，优先减少无效 `fs_read/fs_patch/bash` 重试，不通过放宽预算制造通过率。
+2. T04 强化结构化报告字段的任务契约与写后校验。
+3. T05 约束“实现 -> 执行 -> 检查两个输出 -> 汇报”的最短闭环。
+4. T08 为二进制文档任务提供明确但不泄漏答案的可用解析依赖说明。
+5. T09 改进公开视频调试证据要求，使 Agent 在汇报前必须成功运行样例。
+6. T10 将 Docker 命令证据与隐藏 Docker 验证拆成两个明确门，验证 Agent 确实执行而非仅由 Harness 兜底。
