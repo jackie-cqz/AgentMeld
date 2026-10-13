@@ -23,12 +23,10 @@ export function compressCandidate(candidate: ContextCandidate, tier: "mandatory"
         compressionSummary: tier === "mandatory" ? "full" : "summary",
       };
     case "upstream_input": {
-      const inp = candidate.content as { artifactId?: string; title?: string; version?: number };
       return {
         candidate,
-        compressedContent: inp.artifactId
-          ? { artifactId: inp.artifactId, title: inp.title, version: inp.version }
-          : candidate.content,
+        // Upstream inputs already contain lightweight metadata, not artifact bodies.
+        compressedContent: candidate.content,
         compressionSummary: "artifact ref",
       };
     }
