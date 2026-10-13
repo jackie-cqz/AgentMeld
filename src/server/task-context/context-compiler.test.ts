@@ -2,7 +2,12 @@
 // P3: Context Compiler, Budget, Manifest, Renderer tests
 // ---------------------------------------------------------------------------
 
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
+import { resetDatabaseForTests } from "@/db/client";
 import { classifyCandidate, isForbidden } from "@/server/task-context/context-policy";
 import { computeBudget, allocateBudget, isMandatoryOverBudget } from "@/server/task-context/context-budget";
 import { buildContextManifest } from "@/server/task-context/context-manifest";
@@ -265,7 +270,26 @@ describe("context-renderer", () => {
 });
 
 describe("context-compiler", () => {
-  it("carries resolved upstream artifacts into the final envelope", async () => {
+  let tempDir: string;
+  const previousDataDir = process.env.AGENTMELD_DATA_DIR;
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-context-compiler-"));
+    process.env.AGENTMELD_DATA_DIR = tempDir;
+    resetDatabaseForTests();
+    resetBootstrapForTests();
+    ensureDatabase();
+  });
+
+  afterAll(() => {
+    resetDatabaseForTests();
+    resetBootstrapForTests();
+    if (previousDataDir === undefined) delete process.env.AGENTMELD_DATA_DIR;
+    else process.env.AGENTMELD_DATA_DIR = previousDataDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it.each([true, false])("carries upstream metadata into the envelope and prompt (required=%s)", async (required) => {
     const now = Date.now();
     const suffix = `${now}_${Math.random().toString(36).slice(2)}`;
     const conversationId = `conv_test_compile_${suffix}`;
@@ -285,7 +309,7 @@ describe("context-compiler", () => {
       type: "document",
       title: "番茄时钟 PRD",
       content: { type: "document", format: "markdown", content: "# PRD" },
-      version: 1,
+      version: 3,
       now,
     });
 
@@ -348,7 +372,7 @@ describe("context-compiler", () => {
       resolvedInputs: [{
         fromTaskId: "r1",
         outputId: "prd_doc",
-        required: true,
+        required,
         artifactId,
         missing: false,
       }],
@@ -356,7 +380,7 @@ describe("context-compiler", () => {
         id: artifactId,
         type: "document",
         title: "番茄时钟 PRD",
-        version: 1,
+        version: 3,
       }],
       activeFacts: [],
       modelProvider: "deepseek",
@@ -368,10 +392,15 @@ describe("context-compiler", () => {
         outputKey: "prd_doc",
         artifactId,
         artifactType: "document",
+        artifactVersion: 3,
         title: "番茄时钟 PRD",
       }),
     ]);
     expect(envelope.manifest.some((item) => item.category === "upstream_input" && item.included)).toBe(true);
+    const prompt = renderTaskContextPrompt(envelope);
+    expect(prompt).toContain(`artifactId="${artifactId}"`);
+    expect(prompt).toContain('version="3"');
+    expect(prompt).toContain('outputKey="prd_doc"');
   });
 });
 
@@ -428,10 +457,13 @@ describe("relevance-ranker", () => {
 
 describe("context-compressor", () => {
   it("compresses artifact refs", () => {
-    const c = makeCandidate({ category: "upstream_input", content: { artifactId: "art1", title: "PRD", version: 1 } });
+    const metadata = {
+      artifactId: "art1", title: "PRD", type: "document", version: 3,
+      producerTaskId: "t0", producerVerification: { status: "verified", passedCriterionCount: 2 },
+    };
+    const c = makeCandidate({ category: "upstream_input", content: metadata });
     const result = compressCandidate(c, "high");
-    const content = result.compressedContent as { artifactId: string };
-    expect(content.artifactId).toBe("art1");
+    expect(result.compressedContent).toEqual(metadata);
   });
 
   it("preserves workspace snapshot entries", () => {
