@@ -88,7 +88,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     candidates.push({
       id: `${estimateId}_fact_${fact.canonicalKey}`, category: "fact", sourceType: "fact_registry", sourceId: fact.canonicalKey,
       content: { canonicalKey: fact.canonicalKey, value: fact.value },
-      trustLevel: fact.trustLevel ?? "verified", required: false, taskIds: [input.task.id],
+      trustLevel: fact.trustLevel ?? "reported", required: false, taskIds: [input.task.id],
       namespaces: [fact.canonicalKey.split(".")[0] ?? ""], pathRefs: [], criterionIds: [],
       tokenEstimate: estimateToken(fact.value ?? fact.canonicalKey), createdAt: now,
     });
