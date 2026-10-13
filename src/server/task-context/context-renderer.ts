@@ -26,8 +26,6 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
   }
 
   // P3: Render from includedContextItems when available (packed results)
-  const factItems = includedContextItems.filter(c => c.category === "fact");
-  const inputItems = includedContextItems.filter(c => c.category === "upstream_input");
   const wsItems = includedContextItems.filter(c => c.category === "workspace");
   const msgItems = includedContextItems.filter(c => c.category === "recent_message");
 
@@ -104,10 +102,16 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
     for (const ws of wsItems) {
       const wp = ws.content as {
         path?: string;
+        refType?: string;
+        refId?: string;
+        readTool?: string;
         entries?: Array<{ path: string; type: "file" | "directory" }>;
         truncated?: boolean;
         note?: string;
       };
+      if (wp.refType === "file" && wp.refId) {
+        parts.push(`    <file_reference path="${escapeXml(wp.refId)}" readTool="${escapeXml(wp.readTool ?? "fs_read")}" />`);
+      }
       if (wp.path) parts.push(`    <target_path>${escapeXml(wp.path)}</target_path>`);
       if (Array.isArray(wp.entries)) {
         parts.push(`    <workspace_snapshot truncated="${wp.truncated ? "true" : "false"}">`);
