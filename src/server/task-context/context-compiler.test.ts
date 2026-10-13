@@ -8,6 +8,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
+import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
+import { resolveFacts } from "@/server/context-facts/fact-service";
 import { classifyCandidate, isForbidden } from "@/server/task-context/context-policy";
 import { computeBudget, allocateBudget, isMandatoryOverBudget } from "@/server/task-context/context-budget";
 import { buildContextManifest } from "@/server/task-context/context-manifest";
@@ -289,7 +291,12 @@ describe("context-compiler", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it.each([true, false])("carries upstream metadata into the envelope and prompt (required=%s)", async (required) => {
+  it.each([
+    { required: true, sourceType: "user_answer" as const, trustLevel: "authoritative" },
+    { required: false, sourceType: "evidence" as const, trustLevel: "verified" },
+    { required: false, sourceType: "agent_proposal" as const, trustLevel: "reported" },
+    { required: false, sourceType: "message" as const, trustLevel: "reported" },
+  ])("carries artifact metadata and $trustLevel facts from $sourceType into the prompt", async ({ required, sourceType, trustLevel }) => {
     const now = Date.now();
     const suffix = `${now}_${Math.random().toString(36).slice(2)}`;
     const conversationId = `conv_test_compile_${suffix}`;
@@ -312,6 +319,13 @@ describe("context-compiler", () => {
       version: 3,
       now,
     });
+
+    resolveFacts(conversationId, [{
+      definitionId: "builtin_ui_primary_color", value: "#22c55e", confidence: 1,
+    }], sourceType, "source_test");
+    const definitions = getFilteredDefinitionsForAgent({ conversationId, agentRole: "ui" });
+    const colorFact = definitions.find(def => def.canonicalKey === "ui.theme.primaryColor");
+    expect(colorFact?.trustLevel).toBe(trustLevel);
 
     const triggerMessage: Message = {
       id: "msg_test_compile",
@@ -382,7 +396,11 @@ describe("context-compiler", () => {
         title: "番茄时钟 PRD",
         version: 3,
       }],
-      activeFacts: [],
+      activeFacts: definitions.filter(def => def.currentValue !== null).map(def => ({
+        canonicalKey: def.canonicalKey, value: def.currentValue, valueType: def.valueType,
+        // Exercise the compatibility path where an older caller omits trust metadata.
+        description: def.description, trustLevel: sourceType === "message" ? undefined : def.trustLevel,
+      })),
       modelProvider: "deepseek",
     });
 
@@ -401,6 +419,9 @@ describe("context-compiler", () => {
     expect(prompt).toContain(`artifactId="${artifactId}"`);
     expect(prompt).toContain('version="3"');
     expect(prompt).toContain('outputKey="prd_doc"');
+    expect(envelope.includedContextItems.find(item => item.category === "fact")?.trustLevel).toBe(trustLevel);
+    expect(envelope.manifest.find(item => item.category === "fact")?.trustLevel).toBe(trustLevel);
+    expect(prompt).toContain(`<constraint key="ui.theme.primaryColor" trust="${trustLevel}">#22c55e</constraint>`);
   });
 });
 
