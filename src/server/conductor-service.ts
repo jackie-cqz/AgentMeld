@@ -221,6 +221,9 @@ export interface TaskResult {
   status: "complete" | "failed" | "blocked" | "skipped" | "aborted";
   summary: string;
   childRunId?: string;
+  /** Outcome of the evidence verification, persisted alongside the task result.
+   *  Absent for tasks that never ran (skipped/aborted before an attempt). */
+  verificationStatus?: "verified" | "rejected" | "not_started";
 }
 
 export interface RecoveryTask extends ParsedTask {
@@ -374,6 +377,7 @@ export async function executeConductorPlan(
               status: r.status,
               summary: r.summary,
               childRunId: r.childRunId ?? null,
+              verificationStatus: r.verificationStatus,
               attempt: 1,
               now: Date.now()
             });
@@ -494,6 +498,7 @@ export async function executeConductorPlan(
                   status: r.status,
                   summary: r.summary,
                   childRunId: r.childRunId ?? null,
+                  verificationStatus: r.verificationStatus,
                   attempt: 1,
                   now: Date.now()
                 });
@@ -590,6 +595,7 @@ function promoteRecoveryResult(input: {
     status: promotedResult.status,
     summary: promotedResult.summary,
     childRunId: promotedResult.childRunId ?? null,
+    verificationStatus: promotedResult.verificationStatus,
     attempt: 2,
     now: Date.now()
   });
@@ -647,6 +653,7 @@ async function resumeSkippedOriginalTasks(input: {
         status: result.status,
         summary: result.summary,
         childRunId: result.childRunId ?? null,
+        verificationStatus: result.verificationStatus,
         attempt: 1,
         now: Date.now()
       });
@@ -1174,7 +1181,8 @@ async function runChildTask(
       summary: finalEvaluation.status === "complete"
         ? report?.summary ?? `Task "${task.title}" completed.`
         : finalEvaluation.error ?? report?.summary ?? `Task "${task.title}" failed.`,
-      childRunId: finalRunId
+      childRunId: finalRunId,
+      verificationStatus
     };
   } finally {
     release?.();

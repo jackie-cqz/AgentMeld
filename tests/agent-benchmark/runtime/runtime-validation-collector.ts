@@ -547,13 +547,56 @@ async function probePreviews(deployments: BenchmarkDeploymentValidation[]): Prom
   }));
 }
 
+/**
+ * Launch a browser for the behavioural assertions.
+ *
+ * Playwright's bundled Chromium is a separate ~150MB download, and when it is
+ * missing `chromium.launch()` throws — which, because this call sits outside the
+ * try below, turned the whole trial into an error rather than a blocked check.
+ * Prefer the bundled browser, then fall back to an installed Chrome, so the five
+ * fixtures with browser scripts stay runnable without that download.
+ * `AGENTMELD_BROWSER_CHANNEL` overrides the choice (e.g. `chrome`, `msedge`).
+ */
+async function launchBrowser(): Promise<Awaited<ReturnType<typeof chromium.launch>>> {
+  const channel = process.env.AGENTMELD_BROWSER_CHANNEL?.trim();
+  if (channel) return chromium.launch({ headless: true, channel });
+
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (bundledError) {
+    try {
+      return await chromium.launch({ headless: true, channel: "chrome" });
+    } catch (channelError) {
+      // Keep both messages: the bundled-browser one is the actionable hint
+      // ("run npx playwright install chromium"), the channel one explains why the
+      // fallback could not rescue the run.
+      const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+      throw new Error(
+        `${describe(bundledError)} | fallback to channel "chrome" also failed: ${describe(channelError)}`
+      );
+    }
+  }
+}
+
 async function runBrowserScripts(
   scripts: BenchmarkBrowserScript[],
   deployments: BenchmarkDeploymentValidation[],
   reportDir: string,
 ): Promise<BenchmarkBrowserValidation[]> {
   if (scripts.length === 0) return [];
-  const browser = await chromium.launch({ headless: true });
+
+  let browser: Awaited<ReturnType<typeof chromium.launch>>;
+  try {
+    browser = await launchBrowser();
+  } catch (error) {
+    // No usable browser at all: report the assertion as blocked instead of
+    // letting the launch throw and turn the entire trial into an error.
+    const reason = `No browser available for the browser assertions (${
+      error instanceof Error ? error.message : String(error)
+    }). Install one with "npx playwright install chromium" or set AGENTMELD_BROWSER_CHANNEL.`;
+    return scripts.map((script) => blockedBrowserResult(script, reason));
+  }
+
   try {
     const results: BenchmarkBrowserValidation[] = [];
     for (const script of scripts) {

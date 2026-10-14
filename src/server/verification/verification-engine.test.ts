@@ -408,16 +408,16 @@ function seedEvidenceParents(input: {
 }
 
 describe("unsupported artifact claims", () => {
-  it("rejects an artifact id that appears only in the task report", () => {
+  it("rejects a structured artifact claim with no attempt evidence", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_benchmark_fake_123." },
+      { artifacts: { web_app: "art_benchmark_fake_123" } },
       [],
     )).toEqual(["art_benchmark_fake_123"]);
   });
 
-  it("accepts artifact ids backed by valid attempt evidence", () => {
+  it("accepts structured artifact ids backed by valid attempt evidence", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_real_123." },
+      { artifacts: { web_app: "art_real_123" } },
       [{
         subjectId: "web_app",
         payloadJson: JSON.stringify({ artifactId: "art_real_123" }),
@@ -428,7 +428,7 @@ describe("unsupported artifact claims", () => {
 
   it("preserves a legal trailing hyphen when matching an evidenced artifact id", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_real_trailing_123-." },
+      { artifacts: { web_app: "art_real_trailing_123-" } },
       [{
         subjectId: "web_app",
         payloadJson: JSON.stringify({ artifactId: "art_real_trailing_123-" }),
@@ -453,6 +453,41 @@ describe("unsupported artifact claims", () => {
         status: "invalid",
       }],
     )).toEqual(["art_invalid_123"]);
+  });
+
+  // A task that really produced artifacts may mention ids in its narrative. A
+  // typo there, or a passing reference to another conversation's artifact, used
+  // to fail the whole attempt (observed live: an agent wrote its own artifact id
+  // one character short). Bindings come from evidence, never from prose.
+  it("ignores prose artifact ids once the task recorded real artifacts", () => {
+    const recorded = { web_app: "art_real_123" };
+    const evidence = [{
+      subjectId: "web_app",
+      payloadJson: JSON.stringify({ artifactId: "art_real_123" }),
+      status: "valid" as const,
+    }];
+
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: recorded, summary: "Produced the report as art_W2DRQxZRBqg (one character off)." },
+      evidence,
+    )).toEqual([]);
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: recorded, summary: "Based on art_OTHER_CONVERSATION_999." },
+      evidence,
+    )).toEqual([]);
+  });
+
+  // The false-completion shape: nothing was produced, yet the report narrates an
+  // artifact id. This is what tests/e2e-fixtures/fake-artifact-id.json exercises.
+  it("treats a prose artifact id as a claim when the task recorded no artifacts", () => {
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Created art_benchmark_fake_123." },
+      [],
+    )).toEqual(["art_benchmark_fake_123"]);
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: {}, summary: "Created art_benchmark_fake_123." },
+      [],
+    )).toEqual(["art_benchmark_fake_123"]);
   });
 });
 

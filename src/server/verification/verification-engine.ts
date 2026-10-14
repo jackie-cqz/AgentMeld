@@ -226,11 +226,28 @@ export function findUnsupportedArtifactClaims(
   evidence: Array<{ subjectId: string; payloadJson: string; status: string }>,
 ): string[] {
   if (!taskReport) return [];
-  const reportText = [
-    taskReport.summary ?? "",
-    ...Object.values(taskReport.artifacts ?? {}),
-  ].join("\n");
-  const claimedIds = extractArtifactIds(reportText);
+
+  // `artifacts` holds the ids the PLATFORM recorded from successful
+  // write_artifact calls, so scanning it is a platform-record ↔ evidence-ledger
+  // consistency check. The report's free-text summary is only treated as a claim
+  // when the task recorded NO artifacts at all — that is the false-completion
+  // shape (an agent narrating artifacts it never produced).
+  //
+  // Scanning the summary unconditionally failed entire attempts over a typo in
+  // prose, or over a legitimate mention of another conversation's artifact: a
+  // live run lost its recovery task because the agent wrote its own review_report
+  // id one character short, even though that artifact really existed. Output
+  // bindings come from `artifact_created` evidence and never from self-report, so
+  // narrative text cannot influence the pipeline.
+  //
+  // Observability is unaffected: context-trace-service still reports artifact ids
+  // mentioned in agent messages as a `guessed_artifact_id` warning.
+  const recordedArtifactIds = Object.values(taskReport.artifacts ?? {});
+  const claimedIds = extractArtifactIds(
+    recordedArtifactIds.length > 0
+      ? recordedArtifactIds.join("\n")
+      : taskReport.summary ?? ""
+  );
   if (claimedIds.length === 0) return [];
 
   const supportedIds = new Set<string>();

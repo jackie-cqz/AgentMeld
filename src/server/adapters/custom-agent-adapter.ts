@@ -6,6 +6,7 @@ import type { AgentPlatformAdapter, AdapterInput } from "@/server/adapters/types
 import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext } from "@/server/tools/types";
 import { getSettings, resolveApiKey } from "@/server/settings-service";
+import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import { getArtifact } from "@/server/repositories";
 import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 import { buildPromptLayout } from "@/server/prompt-layout/prompt-layout-builder";
@@ -90,12 +91,6 @@ export function setToolArgumentFaultInterceptorForTests(interceptor: ToolArgumen
   toolArgumentFaultInterceptor = interceptor;
 }
 
-const PROVIDER_BASE_URLS: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
-  deepseek: "https://api.deepseek.com/v1",
-  "volcano-ark": "https://ark.cn-beijing.volces.com/api/v3"
-};
-
 function buildClient(agent: AdapterInput["agent"]): OpenAI {
   const provider = agent.modelProvider ?? "openai";
   const settings = getSettings();
@@ -108,7 +103,10 @@ function buildClient(agent: AdapterInput["agent"]): OpenAI {
     );
   }
 
-  const baseURL = agent.apiBaseUrl || PROVIDER_BASE_URLS[provider];
+  // Resolved through the shared helper so an agent without its own apiBaseUrl
+  // still honours <PROVIDER>_BASE_URL — otherwise a data-directory reset silently
+  // sent the configured key to the provider's public endpoint.
+  const baseURL = resolveProviderBaseUrl(provider, agent.apiBaseUrl);
 
   return new OpenAI({
     apiKey,
@@ -210,7 +208,9 @@ export const customAgentAdapter: AgentPlatformAdapter = {
           max_tokens: provider === "deepseek" ? 8192 : undefined
         });
       } catch (err: unknown) {
-        const errorText = formatApiError(err, model);
+        const errorText = formatApiError(
+          err, model, provider, resolveProviderBaseUrl(provider, input.agent.apiBaseUrl)
+        );
         if (round === 0) {
           // First round error — show directly as message part
           yield { type: "part.start", conversationId, timestamp: Date.now(), messageId: "", partIndex, part: { type: "text", content: "" } };
@@ -1402,26 +1402,33 @@ function extractToolGuidance(systemPrompt: string): string {
   return endIdx > idx ? systemPrompt.slice(idx, endIdx).trim() : systemPrompt.slice(idx).trim();
 }
 
-function formatApiError(err: unknown, model: string): string {
+function formatApiError(err: unknown, model: string, provider: string, baseUrl?: string): string {
+  // Naming the provider and the endpoint is the whole point: a key issued by one
+  // service and a request sent to another produces a bare 401 that reads like
+  // "your key is wrong", which is what made a data-directory reset so confusing.
+  // Credentials embedded in the URL are redacted — this text ends up in the
+  // conversation transcript.
+  const safeBaseUrl = baseUrl?.replace(/\/\/[^/@]*@/, "//***@");
+  const context = safeBaseUrl ? `（provider "${provider}"，endpoint ${safeBaseUrl}）` : `（provider "${provider}"）`;
   if (err instanceof Error) {
     const msg = err.message;
     // OpenAI SDK wraps HTTP errors with status code in message
     if (msg.includes("401")) {
-      return `⚠️ API Key 无效（401）。请在 Settings → DeepSeek API Key 中检查 Key 是否正确，或确认 Key 是否已过期。`;
+      return `⚠️ API Key 无效（401）${context}。请确认该 provider 的 Key 与实际调用的 endpoint 是同一家服务，并检查 Key 是否已过期。`;
     }
     if (msg.includes("403")) {
-      return `⚠️ 访问被拒绝（403）。API Key 可能没有权限访问模型 "${model}"，或账户余额不足。请检查 DeepSeek 控制台。`;
+      return `⚠️ 访问被拒绝（403）${context}。API Key 可能没有权限访问模型 "${model}"，或账户余额不足。`;
     }
     if (msg.includes("429")) {
-      return `⚠️ API 请求频率过高（429）。DeepSeek 限流，请稍后重试。`;
+      return `⚠️ API 请求频率过高（429）${context}。请稍后重试，或检查该 provider 的限流额度。`;
     }
     if (msg.includes("500") || msg.includes("502") || msg.includes("503")) {
-      return `⚠️ DeepSeek 服务端错误（5xx）。服务器暂时不可用，请稍后重试。`;
+      return `⚠️ 服务端错误（5xx）${context}。服务器暂时不可用，请稍后重试。`;
     }
     if (msg.includes("timeout") || msg.includes("ETIMEDOUT") || msg.includes("ECONNREFUSED")) {
-      return `⚠️ 连接 DeepSeek API 超时。请检查网络连接，或确认 API Base URL 配置正确。`;
+      return `⚠️ 连接超时或无法建立连接${context}。请检查网络，或确认该 endpoint 可达。`;
     }
-    return `⚠️ API 调用失败：${msg.slice(0, 200)}`;
+    return `⚠️ API 调用失败${context}：${msg.slice(0, 200)}`;
   }
-  return `⚠️ API 调用失败：未知错误。`;
+  return `⚠️ API 调用失败${context}：未知错误。`;
 }
