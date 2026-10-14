@@ -136,6 +136,11 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
  * leave a cancel button reachable through a stale entry.
  */
 export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Promise<void> {
+  // Updating a card is outbound, so the pause switch applies to it like
+  // anything else. A card left unsettled while paused is the correct outcome:
+  // the room is meant to stop changing.
+  if (isChannelProjectionPaused()) return;
+
   const card = getRunCards().get(run.id);
   if (!card) return;
   getRunCards().delete(run.id);

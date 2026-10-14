@@ -652,7 +652,10 @@ async function settlePostedCard(
   pendingId: string,
   state: { answered?: Record<string, string>; cancelled?: boolean }
 ): Promise<void> {
+  // The buffer is always cleared, paused or not: it is local state, and holding
+  // it would leak. Only the outbound half is subject to the pause.
   getAnswerBuffer().delete(pendingId);
+  if (isChannelProjectionPaused()) return;
 
   const card = getPostedCards().get(pendingId);
   if (!card) return;
@@ -677,6 +680,8 @@ async function settlePostedApproval(
   pendingId: string,
   decision: "approve" | "reject"
 ): Promise<void> {
+  if (isChannelProjectionPaused()) return;
+
   const card = getPostedApprovals().get(pendingId);
   if (!card) return;
   getPostedApprovals().delete(pendingId);

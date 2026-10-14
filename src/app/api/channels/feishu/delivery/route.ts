@@ -2,6 +2,10 @@ import { ok } from "@/server/api-utils";
 import { getDeliveryHealth } from "@/server/channels/feishu/delivery";
 
 export const dynamic = "force-dynamic";
+// The record lives on `globalThis`, so this route has to be evaluated in the
+// same Node realm as `instrumentation.ts`. In an edge realm it would answer an
+// empty list, which reads as "nothing has failed".
+export const runtime = "nodejs";
 
 /**
  * Whether anything the channel sent actually went out.

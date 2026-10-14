@@ -74,15 +74,19 @@ describe("delivery health", () => {
     expect(getDeliveryHealth()[0].lastError).toBeNull();
   });
 
-  it("keeps one row per conversation and agent", async () => {
+  it("keeps one row per conversation AND agent", async () => {
+    // Two agents in ONE conversation, which is what the key is for. The first
+    // version of this test used one agent throughout, so dropping the agent
+    // from the key left it passing.
     const ok = channelWith(async () => ({ messageId: "om_1" }));
     await deliverSend(ok as never, "conv_1", "ag_pm", "oc_1", { text: "a" });
     await deliverSend(ok as never, "conv_1", "ag_pm", "oc_1", { text: "b" });
-    await deliverSend(ok as never, "conv_2", "ag_pm", "oc_2", { text: "c" });
+    await deliverSend(ok as never, "conv_1", "ag_dev", "oc_1", { text: "c" });
 
     const rows = getDeliveryHealth();
     expect(rows).toHaveLength(2);
-    expect(rows.find((r) => r.conversationId === "conv_1")?.sent).toBe(2);
+    expect(rows.find((r) => r.agentId === "ag_pm")?.sent).toBe(2);
+    expect(rows.find((r) => r.agentId === "ag_dev")?.sent).toBe(1);
   });
 
   it("truncates an error, because this is returned over an API", async () => {

@@ -30,6 +30,11 @@ declare global {
   var __agentMeldChannelDelivery: Map<string, DeliveryHealth> | undefined;
 }
 
+function truncateToCodePoints(text: string, maxPoints: number): string {
+  const points = [...text];
+  return points.length > maxPoints ? points.slice(0, maxPoints).join("") : text;
+}
+
 function getRegistry(): Map<string, DeliveryHealth> {
   globalThis.__agentMeldChannelDelivery ??= new Map<string, DeliveryHealth>();
   return globalThis.__agentMeldChannelDelivery;
@@ -70,7 +75,14 @@ async function attempt<T>(
     entry.lastFailureAt = Date.now();
     // Truncated: an error string can carry a URL or a token, and this is
     // returned over an API.
-    entry.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+    // Cut by code point, so the cut cannot leave half a surrogate pair — the
+    // response would carry U+FFFD and the stored string would not match what
+    // the error actually said. Bounded only to keep the payload small; this is
+    // NOT a redaction, and a secret in the first 300 characters is still here.
+    entry.lastError = truncateToCodePoints(
+      error instanceof Error ? error.message : String(error),
+      300
+    );
     throw error;
   }
 }

@@ -3,7 +3,7 @@ import { getChannelConversationByConversationId, getMessage, getRun } from "@/se
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import type { SendResult } from "@larksuite/channel";
 import type { AgentRun, Message, MessagePart } from "@/shared/types";
-import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
+import { deliverSend } from "@/server/channels/feishu/delivery";
 
 /**
  * Outbound projection: what an agent produced in a conversation also appears in

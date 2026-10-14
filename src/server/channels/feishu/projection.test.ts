@@ -587,6 +587,23 @@ describe("startChannelProjection", () => {
     expect((sent[0].input as { text: string }).text).toContain("没能完成");
   });
 
+  it("files a real send under the message's own conversation and agent", async () => {
+    // The wiring had NO test at all: making the wrapper a pass-through, or
+    // recording the platform chat id where the conversation id belongs, left
+    // the whole suite green. The key is the thing every number in that API is
+    // grouped by, so it is asserted here against a real projection.
+    const { clearDeliveryHealthForTests, getDeliveryHealth } = await import(
+      "@/server/channels/feishu/delivery"
+    );
+    clearDeliveryHealthForTests();
+
+    await projectMessage(agentMessage());
+
+    const [entry] = getDeliveryHealth();
+    expect(entry).toMatchObject({ conversationId: "conv_1", agentId: "ag_pm", sent: 1, failed: 0 });
+    clearDeliveryHealthForTests();
+  });
+
   it("records a failure of the failure announcement too", async () => {
     // The completeness claim, pinned where it actually broke: wrapping the
     // OTHER `channel.send` in this file missed this one, so the health record

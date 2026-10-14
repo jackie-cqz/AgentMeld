@@ -10,7 +10,7 @@ import {
 import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/workspace-utils";
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
-import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
+import { deliverSend } from "@/server/channels/feishu/delivery";
 
 /**
  * Deliver an artifact into the room as a file.
