@@ -17,8 +17,6 @@ import type { DispatchPlanItem, PendingWrite, PendingBashCommand, PendingDispatc
 
 export function PendingApprovalPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
-  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
-  const rightPanelWidth = useAppStore((s) => s.artifactPanelWidth);
   const agents = useAppStore((s) => s.agents);
   const writes = useAppStore(useShallow((s) => selectConversationPendingWrites(s, s.activeConversationId)));
   const bashes = useAppStore(useShallow((s) => selectConversationPendingBashCommands(s, s.activeConversationId)));
@@ -32,8 +30,7 @@ export function PendingApprovalPanel() {
 
   return (
     <div
-      className="max-h-[52vh] shrink-0 overflow-y-auto border-t border-slate-200 bg-white px-4 py-3 transition-[margin]"
-      style={rightPanelOpen ? { marginRight: rightPanelWidth + 32 } : undefined}
+      className="ui-pending max-h-[48vh] shrink-0 overflow-y-auto border-t border-[var(--ui-line)] bg-[var(--ui-subtle)] px-4 py-3"
     >
       <div className={`mx-auto space-y-2 ${useWideDecisionSurface ? "max-w-[1100px]" : "max-w-3xl"}`}>
         {plans.map((plan) => (
@@ -62,6 +59,7 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const handleResolve = async (approved: boolean) => {
+    if (resolving) return;
     setResolving(true);
     setError(null);
     try {
@@ -78,7 +76,7 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
   };
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-white p-3 shadow-sm">
+    <div className="ui-decision flex items-start gap-3 p-4">
       <FileText className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">文件写入审批</div>
@@ -92,7 +90,7 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
           onClick={() => openDiff(write.conversationId, write.id)}
         >
           <FileText className="h-3.5 w-3.5" />
-          在中央 Diff Tab 查看
+          查看修改差异
         </button>
         {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
       </div>
@@ -122,6 +120,7 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const handleResolve = async (approved: boolean) => {
+    if (resolving) return;
     setResolving(true);
     setError(null);
     try {
@@ -138,12 +137,12 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
   };
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-amber-200 bg-white p-3 shadow-sm">
+    <div className="ui-decision flex items-start gap-3 p-4">
       <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">命令执行审批</div>
-        <div className="mt-1 text-xs text-stone-600 font-mono truncate">{bash.command}</div>
-        <div className="mt-1 text-xs text-stone-500">
+        <pre className="ui-code mt-2">{bash.command}</pre>
+        <div className="mt-2 break-all text-xs text-stone-500">
           cwd: {bash.cwd} · Agent: {bash.agentId}
         </div>
         {bash.reason ? (
@@ -184,6 +183,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
   const [error, setError] = useState<string | null>(null);
 
   const handleResolve = async (action: "approve" | "reject" | "revise") => {
+    if (resolving) return;
     if (action === "revise" && !feedback.trim()) {
       setRevising(true);
       return;
@@ -219,7 +219,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
   };
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-blue-300 bg-white p-3 shadow-sm">
+    <div className="ui-decision flex items-start gap-3 p-4">
       <Network className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">编排计划待审批</div>
@@ -232,7 +232,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
             const agent = agents[item.agentId];
             return (
               <div key={item.id} className="rounded-md border border-stone-100 bg-stone-50 px-2 py-1.5 text-xs">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 break-words">
                   <span className="font-mono text-stone-400">{item.id}</span>
                   <span>{item.task.slice(0, 80)}</span>
                   <span className="shrink-0 text-stone-400">→</span>

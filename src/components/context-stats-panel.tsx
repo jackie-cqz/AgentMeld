@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { Popover } from "@/components/ui/popover";
 import { Loader2, Zap, Brain, FileText, ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
@@ -29,18 +30,10 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
   const [compacting, setCompacting] = useState(false);
   const [compactResult, setCompactResult] = useState<string | null>(null);
   const [budgetPreview, setBudgetPreview] = useState<ContextBudgetPreview | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  // Close on click outside
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
+  const [anchor] = useState(() => {
+    const bounds = typeof document !== "undefined" ? document.activeElement?.getBoundingClientRect() : null;
+    return { x: bounds?.left ?? 12, y: bounds?.bottom ?? 12 };
+  });
 
   useEffect(() => {
     fetch(`/api/conversations/${conversationId}/compact`, { cache: "no-store" })
@@ -89,11 +82,11 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
   };
 
   return (
-    <div ref={panelRef} className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-slate-200 bg-white shadow-xl">
+    <Popover x={anchor.x} y={anchor.y + 8} onClose={onClose} label="上下文统计">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <h3 className="text-sm font-semibold text-slate-800">上下文统计</h3>
-        <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+        <button onClick={onClose} aria-label="关闭上下文统计" className="ui-icon-button">
           <ChevronDown className="h-4 w-4" />
         </button>
       </div>
@@ -204,7 +197,7 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
           将早期消息压缩为 AI 摘要，保留关键决策和产物引用，降低后续对话 token 消耗。
         </p>
       </div>
-    </div>
+    </Popover>
   );
 }
 

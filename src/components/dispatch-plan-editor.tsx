@@ -23,7 +23,7 @@ export function DispatchPlanEditor({
   return (
     <div className="space-y-3">
       {plan.map((task, index) => (
-        <section key={`${task.id}-${index}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+        <section key={`${task.id}-${index}`} className="ui-form border-b border-[var(--ui-line)] pb-4">
           <div className="grid gap-2 md:grid-cols-[120px_minmax(0,1fr)_150px_80px]">
             <Field label="Task ID">
               <input value={task.id} onChange={(event) => patchTask(index, { id: event.target.value.trim() })} className="h-8 w-full rounded border border-slate-200 bg-white px-2 font-mono text-xs" />

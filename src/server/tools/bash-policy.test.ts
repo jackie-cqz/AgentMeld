@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 import {
   findVerificationScriptRuns,
   isDependencyOnlyCommand,
@@ -148,9 +149,9 @@ describe("verification script extraction", () => {
     expect(findVerificationScriptRuns("yarn run lint", base)).toEqual([{ name: "lint", cwd: base }]);
     // `cd` segments are tracked in order, so the caller reads the right package.json.
     expect(findVerificationScriptRuns("cd app && npm run build", base))
-      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "app") }]);
     expect(findVerificationScriptRuns("cd app; cd sub; pnpm test", base))
-      .toEqual([{ name: "test", cwd: "/ws/app/sub" }]);
+      .toEqual([{ name: "test", cwd: path.resolve(base, "app", "sub") }]);
   });
 
   it("reports suffixed names, leaving the declaration check to the caller", () => {
@@ -198,24 +199,24 @@ describe("verification script extraction", () => {
     // `cd -P app` and `cd -- app` both land in app; treating the option as the
     // path made the caller check the parent's package.json instead.
     expect(findVerificationScriptRuns("cd -P app && npm run build", base))
-      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "app") }]);
     expect(findVerificationScriptRuns("cd -- app && npm run build", base))
-      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "app") }]);
   });
 
   it("follows an explicit project directory flag", () => {
     expect(findVerificationScriptRuns("npm run build -w web", base))
-      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "web") }]);
     expect(findVerificationScriptRuns("npm run build --workspace web", base))
-      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "web") }]);
     expect(findVerificationScriptRuns("npm run build --prefix web", base))
-      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+      .toEqual([{ name: "build", cwd: path.resolve(base, "web") }]);
   });
 
   it("still reports an absolute target outside the workspace", () => {
     // Reported with its real directory; the caller refuses it rather than reading
     // a package.json from outside the sandbox.
     expect(findVerificationScriptRuns("cd /etc && npm run build", base))
-      .toEqual([{ name: "build", cwd: "/etc" }]);
+      .toEqual([{ name: "build", cwd: path.resolve("/etc") }]);
   });
 });

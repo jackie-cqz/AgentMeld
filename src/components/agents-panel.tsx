@@ -6,6 +6,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList } from "@/stores/selectors";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
+import { Modal } from "@/components/ui/modal";
+import { Feedback } from "@/components/ui/controls";
 import { requestJson } from "@/lib/request-json";
 import { getAgentAvatarStyle } from "@/shared/agent-avatar";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
@@ -15,6 +17,9 @@ export function AgentsPanel() {
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [viewingAgent, setViewingAgent] = useState<Agent | null>(null);
+  const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleCreate = async (payload: {
@@ -50,14 +55,18 @@ export function AgentsPanel() {
     setEditingAgent(null);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`确定删除 Agent "${name}" 吗？`)) return;
+  const handleDelete = async (id: string) => {
+    if (deleting) return;
+    setDeleting(true);
     setError(null);
     try {
       await requestJson(`/api/agents/${id}`, { method: "DELETE" });
       await loadBootstrap();
+      setDeletingAgent(null);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "删除 Agent 失败。");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -80,14 +89,16 @@ export function AgentsPanel() {
             key={agent.id}
             className="flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
           >
-            <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-lg ${getAgentAvatarStyle(agent).solid}`}>
+            <button type="button" aria-label={`查看 ${agent.name} 的详情`} onClick={() => setViewingAgent(agent)} className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${getAgentAvatarStyle(agent).solid}`}>
               {agent.avatar}
-            </div>
+            </button>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-stone-900 truncate">{agent.name}</span>
+                <span title={agent.name} className="text-sm font-medium text-stone-900 truncate">{agent.name}</span>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
                 {agent.isConductor ? (
-                  <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">Cond</span>
+                  <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700">Conductor</span>
                 ) : null}
                 {agent.isBuiltin ? (
                   <span className="shrink-0 rounded bg-stone-200 px-1.5 py-0.5 text-[10px] text-stone-500">内置</span>
@@ -107,7 +118,7 @@ export function AgentsPanel() {
             </button>
             {!agent.isBuiltin ? (
               <button
-                onClick={() => handleDelete(agent.id, agent.name)}
+                onClick={() => { setError(null); setDeletingAgent(agent); }}
                 className="grid h-7 w-7 shrink-0 place-items-center rounded text-stone-400 hover:bg-red-50 hover:text-red-600"
                 title="删除"
               >
@@ -127,6 +138,18 @@ export function AgentsPanel() {
         onClose={() => setShowCreate(false)}
         onCreate={handleCreate}
       />
+      {viewingAgent ? <Modal open onClose={() => setViewingAgent(null)} title={viewingAgent.name} size="small"
+        footer={<button className="ui-button ui-button--primary" onClick={() => { setEditingAgent(viewingAgent); setViewingAgent(null); }}><Pencil size={15} />编辑配置</button>}>
+        <p className="text-sm leading-6">{viewingAgent.description || "未填写 Agent 描述"}</p>
+        <div className="my-4 flex flex-wrap gap-2">{viewingAgent.capabilities.map(tag => <span key={tag} className="rounded bg-[var(--ui-subtle)] px-2 py-1 text-xs">{tag}</span>)}</div>
+        <p className="ui-muted">{viewingAgent.adapterName} · {viewingAgent.modelId || "未配置模型"}</p>
+        <p className="ui-muted">已授权 {viewingAgent.toolNames.length} 个工具</p>
+      </Modal> : null}
+      {deletingAgent ? <Modal open onClose={() => setDeletingAgent(null)} title="删除 Agent？" size="small" busy={deleting}
+        footer={<>{error ? <Feedback>{error}</Feedback> : null}<button className="ui-button" disabled={deleting} onClick={() => setDeletingAgent(null)}>取消</button>
+          <button className="ui-button ui-button--danger" disabled={deleting} onClick={() => void handleDelete(deletingAgent.id)}>{deleting ? "删除中..." : "删除 Agent"}</button></>}>
+        <p className="ui-muted">将删除「{deletingAgent.name}」。此操作无法撤销。</p>
+      </Modal> : null}
       {editingAgent ? (
         <CreateAgentDialog
           key={editingAgent.id}

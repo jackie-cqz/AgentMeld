@@ -13,6 +13,8 @@ import {
   Wrench
 } from "lucide-react";
 import type { AdapterName, ModelProvider } from "@/shared/types";
+import { Modal, useUnsavedChanges } from "@/components/ui/modal";
+import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
 import {
   DEFAULT_CUSTOM_PROMPT,
   TOOL_PRESETS,
@@ -21,7 +23,7 @@ import {
 
 const TOOL_GROUPS = [
   { label: "只读", tone: "safe", tools: ["fs_list", "fs_read", "read_artifact", "read_attachment"] as const },
-  { label: "文件写入", tone: "danger", tools: ["fs_write", "fs_patch"] as const },
+  { label: "文件写入", tone: "danger", tools: ["fs_mkdir", "fs_write", "fs_patch"] as const },
   { label: "命令执行", tone: "danger", tools: ["bash"] as const },
   { label: "Artifact", tone: "safe", tools: ["write_artifact"] as const },
   { label: "部署", tone: "danger", tools: ["deploy_artifact", "deploy_workspace"] as const },
@@ -31,6 +33,7 @@ const TOOL_GROUPS = [
 const TOOL_META: Record<string, { label: string; description: string }> = {
   fs_list: { label: "列出文件", description: "查看工作区目录结构" },
   fs_read: { label: "读取文件", description: "读取工作区文本内容" },
+  fs_mkdir: { label: "创建目录", description: "在当前工作区创建目录" },
   fs_write: { label: "写入文件", description: "创建或完整覆盖工作区文件，需要谨慎授权" },
   fs_patch: { label: "文件修改", description: "精确替换已有文件中的局部内容，需要谨慎授权" },
   bash: { label: "执行命令", description: "可运行构建与测试命令，属于高风险权限" },
@@ -101,8 +104,6 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [error, setError] = useState<string | null>(null);
   const [draftBasis, setDraftBasis] = useState<string | null>(null);
   const [editTab, setEditTab] = useState<AgentEditTab>("basic");
-
-  if (!open) return null;
 
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
@@ -188,6 +189,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   };
 
   const handleSubmit = async () => {
+    if (submitting) return;
     if (!name.trim()) return;
     setError(null);
     if (!description.trim()) {
@@ -198,19 +200,23 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     // Config validation
     if (!isSdk && !modelId?.trim()) {
       setError("Custom 适配器必须指定 Model ID。");
+      setEditTab("model");
       return;
     }
     if (!isSdk && !modelProvider) {
       setError("Custom 适配器必须指定 Provider。");
+      setEditTab("model");
       return;
     }
     if (!isSdk && modelProvider === "openai-compatible") {
       if (!apiKey.trim()) {
         setError("OpenAI-Compatible 必须提供 API Key。");
+        setEditTab("model");
         return;
       }
       if (!apiBaseUrl.trim()) {
         setError("OpenAI-Compatible 必须提供 API Base URL。");
+        setEditTab("model");
         return;
       }
     }
@@ -228,7 +234,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         systemPrompt: systemPrompt.trim() || undefined,
         toolNames: isSdk ? [] : toolNames
       });
-      handleClose();
+      resetCreateForm();
+      onClose();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "保存 Agent 失败。");
     } finally {
@@ -236,21 +243,25 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   };
 
+  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? "deepseek", initial?.modelId ?? "deepseek-chat", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT, initial?.toolNames ?? [...TOOL_PRESETS["all-purpose"].tools]]);
+  const dirty = Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt, toolNames]) !== original;
+  const discard = useUnsavedChanges(dirty, handleClose, submitting);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 px-4">
-      <div className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-2xl ${isDetailed ? "max-w-lg" : "max-w-md"}`}>
-        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4">
+    <><Modal open={open} onClose={discard.requestClose} title={isEdit ? "编辑 Agent" : isChoice ? "新建 Agent" : isQuick ? "快速创建" : "详细配置"}
+      description={isEdit ? initial?.name : "身份、模型与协作权限"} size={isDetailed ? "wide" : "medium"} busy={submitting}
+      navigation={isDetailed ? <EditTabBar activeTab={editTab} onChange={setEditTab} /> : undefined}
+      footer={<>{error ? <Feedback>{error}</Feedback> : null}
+        {!isEdit && !isChoice ? <button disabled={submitting} className="ui-button ui-button--quiet mr-auto" onClick={() => { setError(null); setCreateStage("choice"); }}><ArrowLeft size={15} />返回</button> : null}
+        <button className="ui-button ui-button--quiet" onClick={discard.requestClose} disabled={submitting}>取消</button>
+        {isDetailed ? <button className="ui-button ui-button--primary" onClick={() => void handleSubmit()} disabled={!name.trim() || !description.trim() || submitting}>{submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}</button> : null}</>}>
+        <div className="ui-form ui-agent-form">
           {isChoice ? (
             <>
-              <h2 className="text-lg font-semibold text-stone-950">新建 Agent</h2>
-              <p className="mt-2 text-sm leading-6 text-stone-500">
-                选择创建方式。你可以先描述需求生成草稿，也可以直接配置全部信息。
-              </p>
-              <div className="mt-5 grid gap-3">
+              <div className="ui-choice">
                 <button
                   type="button"
                   onClick={() => setCreateStage("quick")}
-                  className="group flex min-h-28 w-full items-center gap-4 rounded-lg border border-blue-200 bg-blue-50/60 p-4 text-left transition hover:border-[#4264ff] hover:bg-blue-50"
+                  className="group"
                 >
                   <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[#4264ff] text-white">
                     <Sparkles className="h-5 w-5" />
@@ -270,7 +281,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                     setEditTab("basic");
                     setCreateStage("detailed");
                   }}
-                  className="group flex min-h-28 w-full items-center gap-4 rounded-lg border border-stone-200 bg-white p-4 text-left transition hover:border-stone-400 hover:bg-stone-50"
+                  className="group"
                 >
                   <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-stone-100 text-stone-700">
                     <SlidersHorizontal className="h-5 w-5" />
@@ -285,34 +296,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                 </button>
               </div>
             </>
-          ) : (
-            <>
-              {!isEdit ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    setCreateStage("choice");
-                  }}
-                  className="mb-3 flex items-center gap-1 text-xs font-medium text-stone-500 hover:text-stone-900"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  返回创建方式
-                </button>
-              ) : null}
-              <h2 className="text-lg font-semibold text-stone-950">
-                {isEdit ? "编辑 Agent" : isQuick ? "快速创建" : "详细配置"}
-              </h2>
-              <p className="mt-2 text-sm leading-6 text-stone-500">
-                {isEdit
-                  ? "修改这个 Agent 的配置。保存后立即生效，已有的会话也会用新配置回复。"
-                  : isQuick
-                    ? "先描述你希望 Agent 承担的工作，系统会生成一份可以继续修改的详细配置。"
-                    : "详细设置 Agent 的身份、模型、工具权限和系统提示词。"}
-              </p>
-              {isDetailed ? <EditTabBar activeTab={editTab} onChange={setEditTab} /> : null}
-            </>
-          )}
+          ) : null}
 
         {/* Quick create: conversational draft */}
         {isQuick ? (
@@ -326,7 +310,6 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               value={quickDesc}
               onChange={(e) => setQuickDesc(e.target.value)}
             />
-            <p className="mt-1 text-xs text-slate-400">AI 会根据描述自动推荐名称、工具和系统提示词。</p>
             <button
               onClick={handleGenerateDraft}
               disabled={!quickDesc.trim()}
@@ -346,6 +329,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         <input
           className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
           placeholder="例如：代码审查助手"
+          aria-label="名称"
+          data-autofocus
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
@@ -356,6 +341,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         <textarea
           className="mt-1 min-h-24 w-full resize-y rounded-md border border-stone-300 px-3 py-2 text-sm leading-6 outline-none focus:border-stone-500"
           placeholder="说明这个 Agent 的职责、适合处理的问题，以及协作时的默认行为。"
+          aria-label="Agent 描述"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           maxLength={500}
@@ -369,6 +355,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         <input
           className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
           placeholder="例如：前端, 视觉, 代码审查"
+          aria-label="能力标签"
           value={capabilitiesInput}
           onChange={(e) => setCapabilitiesInput(e.target.value)}
         />
@@ -448,6 +435,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             <input
               className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
               placeholder="deepseek-chat"
+              aria-label="Model ID"
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
             />
@@ -487,24 +475,23 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {isDetailed ? (
-        <section className={editTab === "tools" ? "" : "hidden"}>
-        <div className="mt-4 rounded-lg border border-slate-200 bg-white">
-          <div className="border-b border-slate-100 px-3 py-2">
-            <div className="text-sm font-medium text-stone-800">系统提示词</div>
-            <p className="mt-0.5 text-xs text-stone-500">定义 Agent 的角色、边界、输出风格和协作规则。</p>
-          </div>
+        <section className={editTab === "tools" ? "agent-tools-layout" : "hidden"}>
+        <div className="ui-prompt-panel">
+          <SectionHeading title="系统提示词" detail="角色、边界与协作规则" />
           <textarea
             className="min-h-40 w-full resize-y rounded-b-lg border-0 px-3 py-3 font-mono text-xs leading-6 outline-none"
             placeholder="留空使用默认提示词..."
+            aria-label="系统提示词"
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
           />
         </div>
 
+        <div className="ui-tool-permissions">
         {/* Tools (Custom only) */}
         {!isSdk ? (
           <>
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium text-stone-800">工具权限</div>
@@ -515,26 +502,15 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                 </span>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {(Object.entries(TOOL_PRESETS) as [ToolPresetName, { label: string; tools: string[] }][]).map(
-                  ([key, preset]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className="rounded-md border border-stone-200 bg-white px-3 py-2 text-left text-xs text-stone-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-                      onClick={() => handlePreset(key)}
-                    >
-                      <span className="block font-medium">{preset.label}</span>
-                      <span className="mt-1 block text-[10px] text-stone-400">{preset.tools.length} 个工具</span>
-                    </button>
-                  )
-                )}
-              </div>
+              <select aria-label="工具权限预设" className="mt-3" value="" onChange={event => handlePreset(event.target.value as ToolPresetName)}>
+                <option value="" disabled>选择权限预设</option>
+                {Object.entries(TOOL_PRESETS).map(([key, preset]) => <option key={key} value={key}>{preset.label} · {preset.tools.length} 个工具</option>)}
+              </select>
             </div>
 
             <div className="mt-3 space-y-3">
               {TOOL_GROUPS.map((group) => (
-                <div key={group.label} className="rounded-lg border border-slate-200 bg-white p-3">
+                <div key={group.label} className="ui-tool-group">
                   <div className="mb-2 flex items-center justify-between">
                     <div className={`text-xs font-semibold ${group.tone === "danger" ? "text-red-600" : "text-slate-600"}`}>{group.label}</div>
                     {group.tone === "danger" ? (
@@ -547,11 +523,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                     {group.tools.map((tool) => (
                       <label
                         key={tool}
-                        className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs transition ${
-                          toolNames.includes(tool)
-                            ? "border-[#4264ff] bg-[#eff5ff] text-[#2546d8]"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                        }`}
+                        className="ui-tool-option"
                       >
                         <input
                           type="checkbox"
@@ -575,41 +547,13 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             SDK 适配器使用内置工具集，无需手动配置。
           </p>
         )}
+        </div>
         </section>
         ) : null}
 
         </div>
 
-        {/* Actions */}
-        <div className="shrink-0 border-t border-stone-200 bg-white px-6 py-4">
-        {error ? (
-          <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </div>
-        ) : null}
-        <div className="flex justify-end gap-3">
-          <button
-            type="button"
-            className="h-9 rounded-md px-4 text-sm text-stone-600 hover:bg-stone-100"
-            onClick={handleClose}
-            disabled={submitting}
-          >
-            取消
-          </button>
-          {isDetailed ? (
-            <button
-              type="button"
-              className="h-9 rounded-md bg-stone-950 px-4 text-sm font-medium text-white disabled:opacity-50"
-              onClick={handleSubmit}
-              disabled={!name.trim() || !description.trim() || submitting}
-            >
-              {submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}
-            </button>
-          ) : null}
-        </div>
-        </div>
-      </div>
-    </div>
+    </Modal>{discard.confirmation}</>
   );
 }
 
@@ -620,25 +564,7 @@ function EditTabBar({ activeTab, onChange }: { activeTab: AgentEditTab; onChange
     { id: "tools" as const, label: "工具与提示词", icon: <Wrench className="h-4 w-4" /> }
   ];
 
-  return (
-    <div className="mt-4 flex w-full gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onChange(tab.id)}
-          className={`flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-medium transition ${
-            activeTab === tab.id
-              ? "bg-white text-[#2546d8] shadow-sm ring-1 ring-[#4264ff]"
-              : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
-          }`}
-        >
-          {tab.icon}
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <Tabs value={activeTab} onChange={onChange} label="Agent 配置" items={tabs.map(tab => ({ value: tab.id, label: tab.label, icon: tab.icon }))} />;
 }
 
 function parseCapabilities(input: string) {

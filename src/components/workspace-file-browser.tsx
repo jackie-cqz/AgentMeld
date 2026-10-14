@@ -124,8 +124,7 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
 
   return (
     <aside
-      className={`relative flex h-screen shrink-0 flex-col border-l ${bg}`}
-      style={{ width: panelWidth, minWidth: MIN_W, maxWidth: MAX_W }}
+      className={`ui-workspace-panel relative flex h-full shrink-0 flex-col border-l ${bg}`}
     >
       <div
         role="separator"

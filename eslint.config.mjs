@@ -7,6 +7,7 @@ export default tseslint.config(
   {
     ignores: [
       ".next/**",
+      ".tmp-*/**",
       "node_modules/**",
       "release/**",
       "dist/**",

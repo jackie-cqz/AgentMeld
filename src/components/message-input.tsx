@@ -9,7 +9,6 @@ import { selectConversationPendingDispatchPlans } from "@/stores/selectors";
 import type { Agent, Attachment, Conversation } from "@/shared/types";
 
 const EMPTY_ATTACHMENTS: Attachment[] = [];
-const RIGHT_PANEL_GAP = 32;
 
 interface MessageInputProps {
   conversationId: string;
@@ -21,8 +20,6 @@ interface MessageInputProps {
 export function MessageInput({
   conversationId,
   agents,
-  rightPanelOpen = false,
-  rightPanelWidth = 0
 }: MessageInputProps) {
   const draft = useAppStore((state) => state.composerDraftByConversation[conversationId] ?? "");
   const setDraft = useAppStore((state) => state.setComposerDraft);
@@ -116,12 +113,11 @@ export function MessageInput({
       current.includes(agentId) ? current.filter((id) => id !== agentId) : [...current, agentId]
     );
   };
-  const inputStyle = rightPanelOpen ? { marginRight: rightPanelWidth + RIGHT_PANEL_GAP } : undefined;
 
   return (
     <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-[0_10px_34px_rgba(15,23,42,0.08)]" style={inputStyle}>
-        <div className="mb-2 flex flex-wrap gap-2 px-2 pt-1">
+      <div className="rounded-lg border border-[var(--ui-line)] bg-[var(--ui-surface)] p-2">
+        <div className="ui-agent-mentions mb-2 flex flex-wrap gap-2 px-2 pt-1">
           {agents.map((agent) => (
             <button
               key={agent.id}
@@ -192,7 +188,7 @@ export function MessageInput({
           </button>
         ) : null}
 
-        <div className="flex items-end gap-2">
+        <div className="ui-composer-row flex items-end gap-2">
           <textarea
             className="max-h-36 min-h-12 flex-1 resize-none bg-transparent px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
             placeholder={
@@ -215,7 +211,7 @@ export function MessageInput({
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={() => { composingRef.current = false; }}
           />
-          <div className="flex items-center gap-1">
+          <div className="ui-composer-actions flex items-center gap-1">
             {!isReviseMode ? (
               <>
                 <input ref={fileInputRef} type="file" multiple hidden onChange={(event) => void uploadFiles(event.target.files)} />

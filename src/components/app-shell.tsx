@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { ArtifactPanel } from "@/components/artifact-panel";
 import { ChatPanel } from "@/components/chat-panel";
 import { GlobalSearch } from "@/components/global-search";
@@ -24,6 +24,8 @@ function ShellContent() {
   const rightPanelMode = useAppStore((state) => state.rightPanelMode);
   const activeConversationId = useAppStore((state) => state.activeConversationId);
   const darkMode = useAppStore((state) => state.darkMode);
+  const panelWidth = useAppStore((state) => state.artifactPanelWidth);
+  const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
 
   // Toggle dark class on <html> for Tailwind dark: variants + component conditional styles
   useEffect(() => {
@@ -37,7 +39,7 @@ function ShellContent() {
     }
   }, []);
 
-  if (isBootstrapping) {
+  if (isBootstrapping && !activeConversationId) {
     return (
       <main className={`grid min-h-screen place-items-center ${darkMode ? "bg-slate-900" : "bg-[#f7f6f2]"}`}>
         <div className={`rounded-md border px-5 py-4 text-sm shadow-sm ${darkMode ? "border-slate-700 bg-slate-800 text-slate-300" : "border-stone-200 bg-white text-stone-600"}`}>
@@ -48,11 +50,11 @@ function ShellContent() {
   }
 
   return (
-    <main className={`relative flex h-screen overflow-hidden ${darkMode ? "bg-slate-900 text-slate-100" : "bg-[#f7f8fb] text-slate-950"}`}>
+    <main className="ui-shell relative flex h-dvh overflow-hidden bg-[var(--background)] text-[var(--foreground)]" style={{ "--panel-width": `${panelWidth}px`, "--sidebar-width": sidebarCollapsed ? "56px" : "280px" } as CSSProperties}>
       <Sidebar />
       <ChatPanel />
       {rightPanelOpen ? (
-        <div className="absolute inset-y-0 right-0 z-30">
+        <div className="ui-right-pane">
           {rightPanelMode === "files" && activeConversationId ? (
             <WorkspaceFileBrowser
               key={activeConversationId}

@@ -1,0 +1,113 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { chromium } from 'playwright';
+
+const baseUrl = process.env.UI_BASE_URL || 'http://127.0.0.1:3018';
+const browser = await chromium.connectOverCDP(process.env.UI_CDP_URL || 'http://127.0.0.1:9223');
+const output = '.tmp-ui-artifacts/workflows';
+await fs.mkdir(output, { recursive: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors = [];
+const requests = [];
+page.on('pageerror', error => errors.push(error.message));
+page.on('request', request => { if (request.method() !== 'GET') requests.push({ url: request.url(), method: request.method() }); });
+try {
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  await page.locator('.ui-shell').waitFor();
+  await page.getByTitle('Agents', { exact: true }).click();
+  await page.getByTitle('新建 Agent', { exact: true }).click();
+  await page.getByRole('button', { name: /详细配置/ }).click();
+  const name = `UI Regression ${Date.now()}`;
+  await page.getByLabel('名称', { exact: true }).fill(name);
+  await page.getByLabel('Agent 描述', { exact: true }).fill('用于隔离环境中的前端回归验证');
+  await page.getByLabel('能力标签', { exact: true }).fill('review, ui');
+  await page.getByRole('tab', { name: '工具与提示词', exact: true }).click();
+  await page.getByLabel('工具权限预设').selectOption('review');
+  await page.getByRole('button', { name: '创建 Agent', exact: true }).click();
+  await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: `查看 ${name} 的详情`, exact: true }).click();
+  await page.getByRole('button', { name: '编辑配置', exact: true }).click();
+  await page.getByLabel('Agent 描述', { exact: true }).fill('更新后的职责描述');
+  await page.getByRole('button', { name: '保存修改', exact: true }).click();
+  await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  const payload = await (await page.request.get(`${baseUrl}/api/bootstrap`)).json();
+  const createdAgent = payload.agents.find(agent => agent.name === name);
+  assert.equal(createdAgent.description, '更新后的职责描述');
+  assert(createdAgent.toolNames.includes('fs_read'));
+  assert(!createdAgent.toolNames.includes('bash'));
+
+  await page.getByTitle('对话', { exact: true }).click();
+  await page.getByRole('button', { name: /新建对话/ }).click();
+  const conversationName = `UI Workflow ${Date.now()}`;
+  await page.getByLabel('会话标题').fill(conversationName);
+  await page.getByRole('button', { name: '创建对话', exact: true }).click();
+  await page.getByRole('heading', { name: conversationName, exact: true }).waitFor();
+  await page.getByTitle('管理会话 Agent', { exact: true }).click();
+  await page.getByRole('checkbox', { name: new RegExp(name) }).check();
+  await page.getByRole('button', { name: '保存成员', exact: true }).click();
+  await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  const afterTeam = await (await page.request.get(`${baseUrl}/api/bootstrap`)).json();
+  const conversation = afterTeam.conversations.find(item => item.title === conversationName);
+  assert(conversation.agentIds.includes(createdAgent.id));
+
+  await page.getByTitle('会话文件', { exact: true }).click();
+  await page.locator('dialog input[type=file]').setInputFiles({ name: 'ui-acceptance.txt', mimeType: 'text/plain', buffer: Buffer.from('Acceptance evidence for the UI regression.') });
+  await page.getByText('ui-acceptance.txt', { exact: true }).waitFor();
+  await page.getByTitle('插入消息', { exact: true }).click();
+  await page.getByText('ui-acceptance.txt', { exact: true }).waitFor();
+  await page.screenshot({ path: `${output}/attachment-selected.png` });
+  await page.getByTitle('会话文件', { exact: true }).click();
+  await page.getByTitle('删除', { exact: true }).click();
+  await page.getByRole('button', { name: '删除文件', exact: true }).click();
+  await page.getByText('还没有上传文件', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '完成', exact: true }).click();
+
+  await page.route('**/api/settings/test-connection', route => route.fulfill({ json: { ok: true, latencyMs: 42 } }));
+  await page.getByTitle('设置', { exact: true }).click();
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.getByText('连接成功，42 ms', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.locator('dialog[open]').waitFor({ state: 'detached' });
+
+  // External Feishu creation is mocked; assert UI lifecycle and exact requests.
+  const botAgent = afterTeam.agents.find(agent => agent.isConductor);
+  let bound = true;
+  const binding = { id: 'ui_binding', agentId: botAgent.id, channel: 'feishu', appId: 'ui_app', createdAt: Date.now(), updatedAt: Date.now() };
+  const session = { id: 'ui_session', agentId: botAgent.id, status: 'awaiting_scan', expiresAt: Date.now() + 600000, qrUrl: 'https://example.com/test-only-launcher' };
+  await page.route('**/api/channels/feishu/bindings', route => route.fulfill({ json: route.request().method() === 'GET' ? { data: { bindings: bound ? [binding] : [], sessions: [] } } : { data: { session } } }));
+  await page.route('**/api/channels/feishu/bindings/ui_binding', route => { bound = false; return route.fulfill({ json: { success: true } }); });
+  await page.route('**/api/channels/feishu/bindings/sessions/ui_session/cancel', route => route.fulfill({ json: { data: { session: { ...session, status: 'cancelled' } } } }));
+  await page.getByTitle('设置', { exact: true }).click();
+  await page.getByRole('button', { name: '渠道绑定', exact: true }).click();
+  await page.getByRole('button', { name: `解绑 ${botAgent.name} 的飞书应用`, exact: true }).click();
+  await page.getByRole('button', { name: '确认解绑', exact: true }).click();
+  await page.getByRole('button', { name: `绑定 ${botAgent.name} 到飞书`, exact: true }).click();
+  await page.getByRole('heading', { name: `绑定飞书 · ${botAgent.name}`, exact: true }).waitFor();
+  await page.screenshot({ path: `${output}/feishu-nested-dialog.png` });
+  const dialogs = await page.locator('dialog[open]').count();
+  assert.equal(dialogs, 2);
+  await page.getByRole('button', { name: '取消绑定', exact: true }).click();
+  await page.getByRole('heading', { name: `绑定飞书 · ${botAgent.name}`, exact: true }).waitFor({ state: 'detached' });
+  assert.equal(await page.locator('dialog[open]').count(), 1);
+  await page.keyboard.press('Escape');
+
+  const response = await page.request.post(`${baseUrl}/api/artifacts`, { data: { conversationId: conversation.id, type: 'document', title: 'UI 验收记录', content: { type: 'document', format: 'markdown', content: '# 验收\n\n版本一' } } });
+  assert(response.ok(), await response.text());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: new RegExp(conversationName) }).first().click();
+  if (!await page.locator('.ui-right-pane').isVisible()) await page.getByTitle('Artifact Workspace', { exact: true }).click();
+  await page.locator('.ui-right-pane').getByRole('button', { name: '编辑', exact: true }).click();
+  await page.getByLabel('文档内容').fill('# 验收\n\n版本二：布局和交互已验证');
+  await page.getByRole('button', { name: '保存为 v2', exact: true }).click();
+  await page.getByRole('button', { name: '无未保存修改', exact: true }).waitFor();
+  await page.getByTitle('版本历史', { exact: true }).click();
+  await page.getByRole('tab', { name: '对比', exact: true }).click();
+  await page.locator('dialog[open]').getByText('版本二：布局和交互已验证', { exact: false }).waitFor();
+  await page.screenshot({ path: `${output}/saved-version-compare.png` });
+  assert.deepEqual(errors, [], 'Runtime errors');
+  await fs.writeFile(`${output}/results.json`, JSON.stringify({ result: 'passed', requests, externalFeishu: 'mocked', modelConnection: 'mocked', checkedAt: new Date().toISOString() }, null, 2));
+  console.log('Passed Agent CRUD, conversation creation, team save, upload/selection/deletion, settings and version persistence; mocked external connection and Feishu lifecycle.');
+} catch (error) {
+  await page.screenshot({ path: `${output}/failure.png` });
+  throw error;
+} finally { await page.close(); await browser.close(); }

@@ -28,9 +28,9 @@ import {
 } from "@/stores/selectors";
 import type { Agent, Message } from "@/shared/types";
 import type { AdapterName, ModelProvider } from "@/shared/types";
+import { Popover } from "@/components/ui/popover";
 
 const WIDE_CONVERSATION_WIDTH = 1480;
-const RIGHT_PANEL_GAP = 32;
 
 export function ChatPanel() {
   const agents = useAppStore((state) => state.agents);
@@ -44,7 +44,6 @@ export function ChatPanel() {
   const connectionStatus = useAppStore((state) => state.connectionStatus);
   const rightPanelOpen = useAppStore((state) => state.rightPanelOpen);
   const rightPanelMode = useAppStore((state) => state.rightPanelMode);
-  const rightPanelWidth = useAppStore((state) => state.artifactPanelWidth);
   const activeTab = useAppStore((state) =>
     state.activeConversationId ? state.activeTabByConversation[state.activeConversationId] ?? "chat" : "chat"
   );
@@ -128,9 +127,6 @@ export function ChatPanel() {
         maxWidth: WIDE_CONVERSATION_WIDTH
       }
     : undefined;
-  const headerContentStyle = rightPanelOpen
-    ? { marginRight: rightPanelWidth + RIGHT_PANEL_GAP }
-    : undefined;
 
   const activeAgents = useMemo(
     () => conversation?.agentIds.map((id) => agents[id]).filter((agent): agent is Agent => Boolean(agent)) ?? [],
@@ -190,9 +186,9 @@ export function ChatPanel() {
   }
 
   return (
-    <main className={`flex min-w-0 flex-1 flex-col ${darkMode ? "bg-[#0b1020]" : "bg-white"}`}>
+    <main className="ui-chat flex min-w-0 flex-1 flex-col bg-[var(--ui-surface)]">
       <header className={`flex h-[72px] shrink-0 items-center border-b px-4 ${darkMode ? "border-slate-700 bg-[#111827]" : "border-slate-200 bg-white"}`}>
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-4" style={headerContentStyle}>
+        <div className="ui-chat-header flex min-w-0 flex-1 items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex shrink-0 -space-x-2">
               {activeAgents.slice(0, 3).map((agent) => (
@@ -276,7 +272,6 @@ export function ChatPanel() {
             <div
               ref={scrollerRef}
               className="h-full overflow-y-auto py-6 pl-4 pr-12"
-              style={rightPanelOpen ? { width: `calc(100% - ${rightPanelWidth}px)` } : undefined}
               onScroll={(event) => {
                 const scroller = event.currentTarget;
                 stickToBottomRef.current =
@@ -307,7 +302,7 @@ export function ChatPanel() {
             <ConversationTimeline
               messages={visibleMessages}
               scrollerRef={scrollerRef}
-              rightOffset={rightPanelOpen ? rightPanelWidth : 0}
+              rightOffset={0}
             />
           </>
         ) : activeTab.startsWith("file:") ? (
@@ -324,8 +319,6 @@ export function ChatPanel() {
             key={conversation.id}
             conversationId={conversation.id}
             agents={activeAgents}
-            rightPanelOpen={rightPanelOpen}
-            rightPanelWidth={rightPanelWidth}
           />
         </>
       ) : null}
@@ -612,11 +605,9 @@ function AgentProfileCard({
   const hiddenToolCount = Math.max(agent.toolNames.length - tools.length, 0);
 
   return (
-    <div className="fixed inset-0 z-50" onMouseDown={onClose}>
+    <Popover x={x} y={y} label={`${agent.name} 信息`} onClose={onClose}>
       <section
-        className="absolute w-[min(380px,calc(100vw-24px))] rounded-xl border border-slate-200 bg-white p-4 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
-        style={{ left: x, top: y }}
-        onMouseDown={(event) => event.stopPropagation()}
+        className="relative p-5"
       >
         <button
           type="button"
@@ -690,7 +681,7 @@ function AgentProfileCard({
           编辑配置
         </button>
       </section>
-    </div>
+    </Popover>
   );
 }
 

@@ -3,6 +3,8 @@
 import { ChevronDown, Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
 import {
   useMemo,
+  useLayoutEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -15,6 +17,9 @@ import { PptPreview } from "@/components/ppt-preview";
 import { useAppStore } from "@/stores/app-store";
 import { selectConversationArtifacts, selectSelectedArtifact } from "@/stores/selectors";
 import type { Artifact, ArtifactContent } from "@/shared/types";
+import { Modal } from "@/components/ui/modal";
+import { Tabs, Feedback } from "@/components/ui/controls";
+import { registerWorkspaceGuard, requestWorkspaceNavigation } from "@/lib/workspace-navigation";
 
 const MIN_PANEL_WIDTH = 380;
 const MAX_PANEL_WIDTH = 960;
@@ -70,8 +75,7 @@ export function ArtifactPanel() {
 
   return (
     <aside
-      className="relative flex h-screen shrink-0 flex-col border-l border-slate-200 bg-white"
-      style={{ width: panelWidth, minWidth: MIN_PANEL_WIDTH, maxWidth: MAX_PANEL_WIDTH }}
+      className="ui-panel ui-workspace-panel relative flex h-full shrink-0 flex-col border-l"
     >
       <div
         aria-label="调整 Artifact Workspace 宽度"
@@ -103,7 +107,6 @@ export function ArtifactPanel() {
           <ToolbarButton
             title="关闭预览"
             onClick={() => {
-              setActiveArtifact(null);
               setRightPanelOpen(false);
             }}
           >
@@ -145,7 +148,7 @@ export function ArtifactPanel() {
               effectiveMode === "preview" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
             }`}
             type="button"
-            onClick={() => setMode("preview")}
+            onClick={() => requestWorkspaceNavigation(() => setMode("preview"))}
           >
             <Eye className="h-4 w-4 shrink-0" />预览
           </button>
@@ -154,7 +157,7 @@ export function ArtifactPanel() {
               effectiveMode === "source" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500 hover:text-slate-900"
             }`}
             type="button"
-            onClick={() => setMode("source")}
+            onClick={() => requestWorkspaceNavigation(() => setMode("source"))}
           >
             <Code2 className="h-4 w-4 shrink-0" />源码
           </button>
@@ -173,7 +176,7 @@ export function ArtifactPanel() {
         <VersionHistoryButton artifact={selectedArtifact} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[#f4f6fb]">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--ui-subtle)]">
         {selectedArtifact ? (
           <ArtifactPreview artifact={selectedArtifact} mode={effectiveMode} />
         ) : (
@@ -225,12 +228,24 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null);
+  const guardCleanup = useRef<(() => void) | null>(null);
   const isDirty =
     title !== artifact.title ||
     (artifact.content.type === "document" && documentContent !== artifact.content.content) ||
     (artifact.content.type === "web_app" && JSON.stringify(files) !== JSON.stringify(artifact.content.files));
 
+  useLayoutEffect(() => {
+    if (!isDirty && !saving) return;
+    const cleanup = registerWorkspaceGuard(navigate => { if (!saving) setPendingNavigation(() => navigate); });
+    guardCleanup.current = cleanup;
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => { cleanup(); guardCleanup.current = null; window.removeEventListener("beforeunload", beforeUnload); };
+  }, [isDirty, saving]);
+
   const handleSave = async () => {
+    if (saving || !isDirty) return;
     setSaving(true);
     setError(null);
     const content: ArtifactContent = artifact.content.type === "document"
@@ -246,6 +261,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
       });
       const data = await response.json() as { artifact?: Artifact; error?: string };
       if (!response.ok || !data.artifact) throw new Error(data.error ?? "保存新版本失败。");
+      guardCleanup.current?.();
       applyEvent({
         type: "artifact.create",
         conversationId: data.artifact.conversationId,
@@ -261,8 +277,13 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
   };
 
   return (
-    <div className="flex min-h-full flex-col gap-3 p-4">
-      <div className="flex items-center gap-2">
+    <div className="ui-form flex min-h-full flex-col gap-3 p-4">
+      <Modal open={pendingNavigation !== null} onClose={() => setPendingNavigation(null)} title="放弃产物修改？" size="small"
+        footer={<><button className="ui-button" onClick={() => setPendingNavigation(null)}>继续编辑</button>
+          <button className="ui-button ui-button--danger" onClick={() => { const navigate = pendingNavigation; setPendingNavigation(null); guardCleanup.current?.(); navigate?.(); }}>放弃修改</button></>}>
+        <p className="ui-muted">「{artifact.title}」有未保存修改。离开编辑器后，这些修改将不会保留。</p>
+      </Modal>
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 bg-[var(--ui-surface)] py-2">
         <input
           className="h-9 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium outline-none focus:border-blue-400"
           value={title}
@@ -283,6 +304,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
       {artifact.content.type === "document" ? (
         <textarea
           className="min-h-[520px] flex-1 resize-y rounded-md border border-slate-200 bg-white p-4 font-mono text-sm leading-6 outline-none focus:border-blue-400"
+          aria-label="文档内容"
           value={documentContent}
           onChange={(event) => setDocumentContent(event.target.value)}
         />
@@ -313,7 +335,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
           />
         </div>
       ) : null}
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <Feedback>{error}</Feedback> : null}
     </div>
   );
 }
@@ -502,37 +524,17 @@ function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {
         版本
       </button>
       {open ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/20" onClick={() => setOpen(false)}>
-          <div className="w-[min(760px,calc(100vw-32px))] rounded-lg border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">版本历史</h3>
-              <button type="button" title="关闭" onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
-            </div>
-            <div className="mb-3 flex border-b border-slate-200">
-              <button
-                type="button"
-                onClick={() => setTab("versions")}
-                className={`border-b-2 px-3 py-2 text-sm ${tab === "versions" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}
-              >
-                版本
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("compare")}
-                disabled={versions.length < 2}
-                className={`border-b-2 px-3 py-2 text-sm disabled:opacity-40 ${tab === "compare" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`}
-              >
-                对比
-              </button>
-            </div>
+        <Modal open onClose={() => setOpen(false)} title="版本历史" description={artifact?.title} size="wide"
+          navigation={<Tabs value={tab} onChange={setTab} label="产物版本" items={[{ value: "versions", label: "版本" }, { value: "compare", label: "对比", disabled: versions.length < 2 }]} />}
+          footer={<button className="ui-button" onClick={() => setOpen(false)}>完成</button>}>
             {loading ? (
               <p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />加载版本...</p>
             ) : error ? (
-              <p className="text-sm text-red-600">{error}</p>
+              <Feedback>{error}</Feedback>
             ) : tab === "compare" && artifact ? (
               <ArtifactVersionCompare versions={versions} currentId={artifact.id} />
             ) : (
-              <div className="max-h-[55vh] space-y-2 overflow-y-auto">
+              <div className="space-y-2">
                 {versions.map((v) => (
                   <button
                     key={v.id}
@@ -555,8 +557,7 @@ function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {
                 {versions.length === 0 ? <p className="text-sm text-slate-500">没有可用版本。</p> : null}
               </div>
             )}
-          </div>
-        </div>
+        </Modal>
       ) : null}
     </>
   );
