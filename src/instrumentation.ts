@@ -38,6 +38,13 @@ export async function register(): Promise<void> {
   // and they are the noisiest thing the channel does.
   startChannelProgress();
 
+  const { startChannelArtifactDelivery } = await import(
+    "@/server/channels/feishu/artifact-delivery"
+  );
+  // Artifacts are delivered as files, which needs no URL and therefore does not
+  // run into the local-first problem §7.3 recorded as unsolvable.
+  startChannelArtifactDelivery();
+
   // Deliberately not awaited. A slow or unreachable platform must never delay
   // or fail server startup; each app's outcome is reported through a
   // `channel.connection` event, which the settings panel renders.

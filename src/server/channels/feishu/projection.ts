@@ -112,7 +112,7 @@ export function withinSendBudget(conversationId: string, now: number): boolean {
   return recent.length < MAX_SENDS_PER_WINDOW;
 }
 
-function recordSend(conversationId: string, now: number): void {
+export function recordSend(conversationId: string, now: number): void {
   const log = getSendLog();
   log.set(conversationId, [...(log.get(conversationId) ?? []), now]);
 }
