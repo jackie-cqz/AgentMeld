@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isDependencyOnlyCommand, isVerificationOnlyCommand, needsApproval } from "@/server/tools/bash";
+import {
+  findVerificationScriptRuns,
+  isDependencyOnlyCommand,
+  isVerificationOnlyCommand,
+  needsApproval
+} from "@/server/tools/bash";
 
 describe("bash verification-only policy", () => {
   it("accepts verification commands", () => {
@@ -131,5 +136,50 @@ describe("bash approval policy", () => {
       expect(isVerificationOnlyCommand(command), command).toBe(true);
       expect(needsApproval(command), `${command} must not require approval`).toBe(false);
     }
+  });
+});
+
+describe("verification script extraction", () => {
+  const base = "/ws";
+
+  it("reports a script with the directory it will run in", () => {
+    expect(findVerificationScriptRuns("npm run build", base)).toEqual([{ name: "build", cwd: base }]);
+    expect(findVerificationScriptRuns("pnpm test", base)).toEqual([{ name: "test", cwd: base }]);
+    expect(findVerificationScriptRuns("yarn run lint", base)).toEqual([{ name: "lint", cwd: base }]);
+    // `cd` segments are tracked in order, so the caller reads the right package.json.
+    expect(findVerificationScriptRuns("cd app && npm run build", base))
+      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+    expect(findVerificationScriptRuns("cd app; cd sub; pnpm test", base))
+      .toEqual([{ name: "test", cwd: "/ws/app/sub" }]);
+  });
+
+  it("reports suffixed names, leaving the declaration check to the caller", () => {
+    // `build:prod` and `build-evil` are structurally the same to a regex; only the
+    // workspace's package.json can tell a declared script from an invented one.
+    expect(findVerificationScriptRuns("npm run build:prod", base))
+      .toEqual([{ name: "build:prod", cwd: base }]);
+    expect(findVerificationScriptRuns("npm run build-evil", base))
+      .toEqual([{ name: "build-evil", cwd: base }]);
+  });
+
+  it("ignores commands that are not project scripts", () => {
+    // The extraction is per segment and only consulted after the whole command
+    // has passed the verification gate, so a piped `npm run build | tee …` is
+    // rejected by that gate rather than here.
+    for (const command of ["npm ls", "npm install lodash", "npm run deploy"]) {
+      expect(findVerificationScriptRuns(command, base), command).toEqual([]);
+    }
+  });
+
+  it("leaves the directory unresolved rather than guessing", () => {
+    // A shell variable cannot be resolved here, so the base directory is kept —
+    // the caller then reads the wrong (but existing) package.json rather than a
+    // path the agent chose indirectly.
+    expect(findVerificationScriptRuns("cd $DIR && npm run build", base))
+      .toEqual([{ name: "build", cwd: base }]);
+    // An absolute target outside the workspace is reported but the caller skips
+    // it, so package.json is never read from outside the sandbox.
+    expect(findVerificationScriptRuns("cd /etc && npm run build", base))
+      .toEqual([{ name: "build", cwd: "/etc" }]);
   });
 });

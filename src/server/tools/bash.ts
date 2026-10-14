@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { currentPlatform, type Platform } from "@/server/platform";
@@ -8,7 +9,8 @@ import { findBannedPattern } from "@/server/security";
 import {
   assertPathWithinWorkspace,
   BASH_OUTPUT_CHARS,
-  BASH_TIMEOUT_MS
+  BASH_TIMEOUT_MS,
+  isPathWithin
 } from "@/server/workspace-utils";
 import type { ToolDef } from "@/server/tools/types";
 
@@ -143,6 +145,68 @@ export function isDependencyOnlyCommand(command: string): boolean {
     sawDependencyCommand = true;
   }
   return sawDependencyCommand;
+}
+
+/** Script names in the verification family: `build`, `test:unit`, `lint-fix`, … */
+const VERIFICATION_SCRIPT_NAME = /^(?:build|test|lint|typecheck|check)(?:[:_-][A-Za-z0-9:_-]+)?$/i;
+
+const DIRECTORY_CHANGE = /^(?:cd|Set-Location|Push-Location)\s+(.+)$/i;
+
+/**
+ * The npm/pnpm/yarn/bun scripts a command asks to run, each with the directory it
+ * will run in — `cd` segments are tracked in order, so `cd app && npm run build`
+ * resolves against `app/package.json`.
+ *
+ * Only names in the verification family are reported (`npm ls` is a builtin, not
+ * a script). Whether each name is actually declared is decided by the caller,
+ * which has the workspace to read from.
+ */
+export function findVerificationScriptRuns(
+  command: string,
+  baseCwd: string
+): Array<{ name: string; cwd: string }> {
+  const runs: Array<{ name: string; cwd: string }> = [];
+  let cwd = baseCwd;
+
+  for (const segment of splitCommandSegments(command)) {
+    const cleaned = stripOutputFilter(segment);
+
+    const directoryChange = cleaned.match(DIRECTORY_CHANGE);
+    if (directoryChange) {
+      const target = directoryChange[1].trim().replace(/^["']|["']$/g, "");
+      // Flags and shell variables cannot be resolved here. Leave cwd alone so a
+      // later lookup simply misses rather than pointing at a guessed directory.
+      if (target && !target.startsWith("-") && !target.includes("$")) {
+        cwd = path.resolve(cwd, target);
+      }
+      continue;
+    }
+
+    if (!isVerificationSegment(cleaned)) continue;
+    const script = cleaned.match(/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([A-Za-z0-9:_-]+)/i);
+    if (!script) continue;
+    if (!VERIFICATION_SCRIPT_NAME.test(script[1])) continue;
+    runs.push({ name: script[1], cwd });
+  }
+
+  return runs;
+}
+
+/**
+ * Declared script names for a directory, or null when there is no usable
+ * package.json — nothing to enforce against, so callers leave the command alone.
+ */
+function readDeclaredScripts(directory: string): Set<string> | null {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(directory, "package.json"), "utf-8")
+    ) as { scripts?: Record<string, unknown> };
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.scripts || typeof parsed.scripts !== "object") return null;
+    return new Set(Object.keys(parsed.scripts));
+  } catch {
+    return null;
+  }
 }
 
 function containsPnpmDependencyMutation(command: string): boolean {
@@ -283,7 +347,32 @@ export const bashTool: ToolDef = {
       };
     }
 
-    // 3. Approval check for dangerous-but-not-banned commands
+    // 3. `npm run <script>` executes whatever the project declares, so only run
+    // scripts that are actually declared in the package.json of the directory the
+    // command runs in. The verification patterns match by name prefix, which on
+    // its own also accepted names no project declares (`npm run build-evil`) —
+    // and a script nobody declared is not a verification command. Scripts a
+    // project genuinely declares (`build`, `test:unit`, …) are unaffected, and a
+    // directory without a usable package.json is left alone as before.
+    for (const scriptRun of findVerificationScriptRuns(command, cwd)) {
+      // Never read a package.json outside the workspace: `cd` inside the command
+      // moves the shell, and the sandbox only fixes the initial directory.
+      if (!isPathWithin(scriptRun.cwd, cwd)) continue;
+      const declared = readDeclaredScripts(scriptRun.cwd);
+      if (declared && !declared.has(scriptRun.name)) {
+        return {
+          ok: false,
+          code: "BASH_UNDECLARED_SCRIPT",
+          category: "security_policy",
+          error:
+            `Script "${scriptRun.name}" is not declared in ${path.join(scriptRun.cwd, "package.json")}. ` +
+            `bash only runs build/test/lint/typecheck/check scripts the workspace declares. ` +
+            `Declare it with fs_write/fs_patch first, or run a script that is declared.`,
+        };
+      }
+    }
+
+    // 4. Approval check for dangerous-but-not-banned commands
     if (needsApproval(command)) {
       const approved = await registerPendingBash(
         ctx.conversationId, ctx.agentId, ctx.runId, command, cwd,
@@ -299,7 +388,7 @@ export const bashTool: ToolDef = {
       }
     }
 
-    // 4. Execute
+    // 5. Execute
     const shell = getShell(platform);
 
     let shellCommand: string;

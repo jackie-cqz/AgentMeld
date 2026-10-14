@@ -434,6 +434,68 @@ describe("bash", () => {
     expect(getAllPendingBashCommands()).toHaveLength(0);
   }, 10000);
 
+  it("rejects a run-script the workspace does not declare", async () => {
+    // Regression: the allowlist matched script names by prefix, so every
+    // `npm run build-…` counted as verification. A name no project declares is
+    // not a verification command, and running it is arbitrary code execution.
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build-evil" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("is not declared");
+      expect(result.error).toContain("build-evil");
+    }
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  }, 10000);
+
+  it("still accepts scripts the project declares, including suffixed names", async () => {
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { "build:prod": "node -e \"console.log('prod-ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build:prod" }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.value as { output: string }).output).toContain("prod-ok");
+    }
+  }, 10000);
+
+  it("resolves the declared scripts of the directory the command changes into", async () => {
+    fs.mkdirSync(path.join(workspacePath, "app"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspacePath, "app", "package.json"),
+      JSON.stringify({ scripts: { test: "node -e \"console.log('app-test-ok')\"" } })
+    );
+
+    const declared = await toolRegistry.execute("bash", { command: "cd app && npm run test" }, ctx());
+    expect(declared.ok).toBe(true);
+
+    // The root declares nothing, so an undeclared name reached through `cd` is
+    // still rejected instead of silently allowed.
+    const undeclared = await toolRegistry.execute("bash", { command: "cd app && npm run build-evil" }, ctx());
+    expect(undeclared.ok).toBe(false);
+    if (!undeclared.ok) expect(undeclared.error).toContain("is not declared");
+  }, 20000);
+
+  it("does not claim a script is undeclared when there is no package.json", async () => {
+    // Nothing to enforce against, so the command must run and let npm's own
+    // ENOENT be the feedback — not a policy error naming an undeclared script.
+    const result = await toolRegistry.execute("bash", { command: "npm run build" }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as { exitCode: number };
+      expect(value.exitCode).not.toBe(0);
+    }
+  }, 20000);
+
   it("rejects shell inspection commands because fs_list/fs_read must be used", async () => {
     const cmd = process.platform === "win32" ? "Get-ChildItem" : "ls";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
