@@ -375,6 +375,15 @@ async function handleQuestionAnswer(
   // Keyed by the question's INDEX, not its text: two questions with identical
   // text collapse into one key and the count can never reach the number of
   // questions, so the run waits forever for an answer it already has.
+  //
+  // On races, which F2 asks to handle: a second PERSON cannot overwrite a first
+  // person's answer, because only the account that bound the app may answer at
+  // all — `isAuthorisedOperator` above refuses everyone else, and a test pins
+  // that. So the only reachable repeat is the owner clicking again, from the
+  // same device or another, and for one person the last answer is the one they
+  // meant. Writing a first-wins rule for the other case would be a branch
+  // nothing can reach; if the owner check is ever loosened, this is the
+  // invariant that has to be decided then.
   const answers = { ...(buffer.get(question.id) ?? {}), [String(value.questionIndex)]: value.answer };
   buffer.set(question.id, answers);
 

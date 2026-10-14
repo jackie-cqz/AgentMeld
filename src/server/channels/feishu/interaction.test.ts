@@ -333,6 +333,33 @@ describe("handleCardAction", () => {
     await expect(pending).resolves.toEqual({ "继续吗？": "否" });
   });
 
+  it("takes the owner's latest answer when they click from two devices", async () => {
+    // F2's "multi-client race", in the only form it can take: one person is
+    // authorised, so the repeat is theirs. Last answer wins, and the card the
+    // second device returns is the truth rather than that device's own guess.
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", [
+      { question: "用哪个框架？", header: "一", options: [{ label: "Vue" }, { label: "React" }] },
+      { question: "部署到哪？", header: "二", options: [{ label: "预览" }] }
+    ]);
+    const pendingId = latestKey();
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "甲" })
+    );
+    const second = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "React" }, { openId: "ou_user", name: "甲" })
+    );
+
+    // The card the second click returns shows React, because React is now the
+    // answer — not the device's own earlier choice.
+    expect(JSON.stringify(second)).toContain("React");
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }, { openId: "ou_user", name: "甲" })
+    );
+    await expect(pending).resolves.toEqual({ "用哪个框架？": "React", "部署到哪？": "预览" });
+  });
+
   it("says so, rather than failing silently, when the question is already gone", async () => {
     // A card left in the room after the run moved on: the click must land as a
     // visible message, not as nothing happening.
