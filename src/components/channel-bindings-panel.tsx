@@ -122,7 +122,12 @@ export function describeConnection(
   if (!info) return null;
   switch (info.status) {
     case "connected":
-      return { tone: "ok", text: info.botName ? `已连接 · ${info.botName}` : "已连接" };
+      // A reason can be present while connected: a `bot_loop` guard trip is
+      // reported against the current status. Dropping it here is what made the
+      // guard look silent even after it had fired.
+      return info.lastError
+        ? { tone: "warn", text: `已连接，但最近有事件被拒：${info.lastError}` }
+        : { tone: "ok", text: info.botName ? `已连接 · ${info.botName}` : "已连接" };
     case "reconnected":
       return { tone: "ok", text: "已重连" };
     case "reconnecting":

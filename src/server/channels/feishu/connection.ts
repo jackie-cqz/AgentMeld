@@ -46,19 +46,41 @@ const CHANNEL_POLICY: PolicyConfig = {
   }
 };
 
+/** How long a failed app is left alone before another attempt. */
+const RETRY_COOLDOWN_MS = 30_000;
+
+/**
+ * A per-app ceiling on connecting. The SDK applies its own timeout to the
+ * WebSocket handshake but NOT to the HTTP calls `connect()` makes first, so an
+ * app whose host never answers would otherwise hold the whole start open
+ * forever — and with it every later app, because `__agentMeldFeishuStarting`
+ * would never clear.
+ */
+const CONNECT_TIMEOUT_MS = 20_000;
+
 interface ConnectionEntry {
   binding: ChannelBinding;
-  channel: LarkChannel;
+  /** `null` on a failed attempt: the entry exists to REPORT the failure. */
+  channel: LarkChannel | null;
   status: ChannelConnectionStatus;
   botOpenId: string | null;
   botName: string | null;
   lastError: string | null;
   connectedAt: number | null;
+  /** When this app was last attempted, so a failure is not retried in a loop. */
+  lastAttemptAt: number;
 }
 
 declare global {
   var __agentMeldFeishuConnections: Map<string, ConnectionEntry> | undefined;
   var __agentMeldFeishuStarting: Promise<ChannelConnectionInfo[]> | undefined;
+  /**
+   * Bumped by every `stop`. A start that began before a stop must not register
+   * its connection afterwards — otherwise stopping during a connect would leave
+   * a live connection nothing holds a reference to, which is worse than either
+   * outcome on its own.
+   */
+  var __agentMeldFeishuStopEpoch: number | undefined;
 }
 
 /**
@@ -70,6 +92,11 @@ declare global {
 function getRegistry(): Map<string, ConnectionEntry> {
   globalThis.__agentMeldFeishuConnections ??= new Map<string, ConnectionEntry>();
   return globalThis.__agentMeldFeishuConnections;
+}
+
+function getStopEpoch(): number {
+  globalThis.__agentMeldFeishuStopEpoch ??= 0;
+  return globalThis.__agentMeldFeishuStopEpoch;
 }
 
 function publishConnection(
@@ -105,8 +132,8 @@ function toInbound(agentId: string, message: NormalizedMessage): ChannelInboundM
   };
 }
 
-function wireHandlers(entry: ConnectionEntry): void {
-  const { binding, channel } = entry;
+function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
+  const { binding } = entry;
 
   channel.on("message", (message: NormalizedMessage) => {
     // Publish only. This module must never produce an outbound message in
@@ -165,11 +192,14 @@ async function connectOne(binding: ChannelBinding, appSecret: string): Promise<C
     botOpenId: null,
     botName: null,
     lastError: null,
-    connectedAt: null
+    connectedAt: null,
+    // Stamped by the caller once the attempt is over, so a failure and a
+    // success are cooled down the same way.
+    lastAttemptAt: 0
   };
 
-  wireHandlers(entry);
-  await channel.connect();
+  wireHandlers(entry, channel);
+  await connectWithTimeout(entry, channel);
   entry.connectedAt = Date.now();
 
   try {
@@ -187,6 +217,41 @@ async function connectOne(binding: ChannelBinding, appSecret: string): Promise<C
 }
 
 /**
+ * `connect()` with a ceiling.
+ *
+ * If the attempt finishes after we have given up on it, the channel is
+ * disconnected rather than registered: a live connection nobody tracks would
+ * receive events and split them away from a future attempt, which is exactly
+ * the hazard the app-keyed registry exists to prevent.
+ */
+async function connectWithTimeout(entry: ConnectionEntry, channel: LarkChannel): Promise<void> {
+  const attempt = channel.connect();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    await Promise.race([
+      attempt,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`connect timed out after ${CONNECT_TIMEOUT_MS}ms`)),
+          CONNECT_TIMEOUT_MS
+        );
+      })
+    ]);
+  } catch (error) {
+    void attempt
+      .then(() => channel.disconnect())
+      .catch(() => {
+        // The attempt failed too; nothing to close.
+      });
+    entry.channel = null;
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Connect every bound agent's app. Idempotent: an app that already has a live
  * connection is left alone, and concurrent calls share one run.
  *
@@ -201,40 +266,55 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
   const run = (async () => {
     ensureDatabase();
     const registry = getRegistry();
-    const bindings = listFeishuBindings();
+    const epochAtStart = getStopEpoch();
+    const now = Date.now();
 
-    for (const binding of bindings) {
-      if (registry.has(binding.appId)) continue;
+    for (const binding of listFeishuBindings()) {
+      const existing = registry.get(binding.appId);
+      // A live entry is left alone. A FAILED entry is retried, but not sooner
+      // than the cooldown: otherwise every page load that reads the status
+      // endpoint would launch another attempt against an app that is known bad.
+      if (existing) {
+        if (existing.status !== "error") continue;
+        if (now - existing.lastAttemptAt < RETRY_COOLDOWN_MS) continue;
+      }
+
+      const fail = (reason: string) => {
+        const entry: ConnectionEntry = {
+          binding,
+          channel: null,
+          status: "error",
+          botOpenId: null,
+          botName: null,
+          lastError: reason,
+          connectedAt: null,
+          lastAttemptAt: Date.now()
+        };
+        // Recorded, not just announced: the failure has to be readable from the
+        // status endpoint afterwards. A startup failure used to exist only as an
+        // event, which no client was subscribed to yet.
+        registry.set(binding.appId, entry);
+        publishConnection(binding, "error", reason);
+      };
 
       const secret = getChannelBindingSecret(binding.id);
       if (!secret) {
-        // A binding without a secret cannot connect. Report it instead of
-        // failing silently; the row should not exist in this state.
-        eventBus.publish({
-          type: "channel.connection",
-          conversationId: "",
-          timestamp: Date.now(),
-          agentId: binding.agentId,
-          appId: binding.appId,
-          status: "error",
-          reason: "missing app secret"
-        });
+        fail("missing app secret");
         continue;
       }
 
       try {
-        registry.set(binding.appId, await connectOne(binding, secret));
+        const entry = await connectOne(binding, secret);
+        entry.lastAttemptAt = Date.now();
+        if (epochAtStart !== getStopEpoch()) {
+          // A stop happened while this was connecting. Closing it is the whole
+          // point of the epoch; registering it would make stop a lie.
+          await entry.channel?.disconnect().catch(() => {});
+          continue;
+        }
+        registry.set(binding.appId, entry);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        eventBus.publish({
-          type: "channel.connection",
-          conversationId: "",
-          timestamp: Date.now(),
-          agentId: binding.agentId,
-          appId: binding.appId,
-          status: "error",
-          reason: message
-        });
+        fail(error instanceof Error ? error.message : String(error));
       }
     }
 
@@ -249,15 +329,21 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
   }
 }
 
-/** Close every connection. Safe to call when nothing is connected. */
+/**
+ * Close every connection. Safe to call when nothing is connected.
+ *
+ * The epoch is bumped FIRST: an attempt already in flight checks it before
+ * registering, so a stop cannot be undone by a connect that lands afterwards.
+ */
 export async function stopFeishuChannels(): Promise<void> {
+  globalThis.__agentMeldFeishuStopEpoch = getStopEpoch() + 1;
   const registry = getRegistry();
   const entries = [...registry.values()];
   registry.clear();
   await Promise.all(
     entries.map(async (entry) => {
       try {
-        await entry.channel.disconnect();
+        await entry.channel?.disconnect();
       } catch {
         // Shutting down: a failed disconnect is not actionable.
       }
@@ -273,7 +359,7 @@ export async function stopFeishuChannels(): Promise<void> {
  */
 export function getFeishuChannelForAgent(agentId: string): LarkChannel | null {
   for (const entry of getRegistry().values()) {
-    if (entry.binding.agentId === agentId) return entry.channel;
+    if (entry.binding.agentId === agentId && entry.channel) return entry.channel;
   }
   return null;
 }
@@ -293,4 +379,5 @@ export function listFeishuConnections(): ChannelConnectionInfo[] {
 export function resetFeishuConnectionsForTests(): void {
   globalThis.__agentMeldFeishuConnections = undefined;
   globalThis.__agentMeldFeishuStarting = undefined;
+  globalThis.__agentMeldFeishuStopEpoch = undefined;
 }

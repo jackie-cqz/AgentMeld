@@ -989,6 +989,64 @@ describe("channel binding actions", () => {
     expect(useAppStore.getState().channelConnections["ag_1"]?.botName).toBe("PM 小灰");
   });
 
+  it("merges health into what the stream already wrote instead of replacing it", async () => {
+    // The read and the event stream race. A wholesale assignment dropped rows
+    // the stream had just written — including the `error` rows that are the
+    // entire reason for looking.
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 20,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "error",
+      reason: "connect refused"
+    });
+    globalThis.fetch = (async () => json(200, { data: { connections: [] } })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelConnections();
+
+    const survived = useAppStore.getState().channelConnections["ag_1"];
+    expect(survived?.status).toBe("error");
+    expect(survived?.lastError).toBe("connect refused");
+  });
+
+  it("does not let a stale success snapshot erase a fresher error", async () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 21,
+      agentId: "ag_2",
+      appId: "cli_2",
+      status: "error",
+      reason: "rejected:bot_loop"
+    });
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          connections: [
+            {
+              agentId: "ag_2",
+              appId: "cli_2",
+              status: "connected",
+              botOpenId: null,
+              botName: null,
+              lastError: null,
+              connectedAt: 1
+            }
+          ]
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelConnections();
+
+    // The reason we have not shown yet is not thrown away by a snapshot that
+    // predates it.
+    expect(useAppStore.getState().channelConnections["ag_2"]?.lastError).toBe(
+      "rejected:bot_loop"
+    );
+  });
+
   it("does not let a failed health read erase a real error", async () => {
     // Connection health is diagnostic. Losing the message the user has to act
     // on because a status probe failed would be the wrong trade.

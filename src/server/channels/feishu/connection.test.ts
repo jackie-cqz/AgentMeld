@@ -40,7 +40,9 @@ interface FakeChannel {
 }
 
 let created: FakeChannel[] = [];
-let connectBehavior: (appId: string) => "ok" | "fail";
+let connectBehavior: (appId: string) => "ok" | "fail" | "hang" | "deferred";
+/** Resolvers for channels created while `connectBehavior` returns "deferred". */
+let pendingConnects: Array<() => void> = [];
 
 function makeChannel(options: Record<string, unknown>): FakeChannel {
   const handlers = new Map<string, Handler[]>();
@@ -48,8 +50,16 @@ function makeChannel(options: Record<string, unknown>): FakeChannel {
     options,
     handlers,
     connect: vi.fn(async () => {
-      if (connectBehavior(String(options.appId)) === "fail") {
-        throw new Error("connect refused");
+      const behavior = connectBehavior(String(options.appId));
+      if (behavior === "fail") throw new Error("connect refused");
+      if (behavior === "hang") {
+        // Never settles: the case the per-app timeout exists for.
+        await new Promise<never>(() => {});
+      }
+      if (behavior === "deferred") {
+        // Resolves only when the test says so, which is how a stop can land
+        // while a connect is still in flight.
+        await new Promise<void>((resolve) => pendingConnects.push(resolve));
       }
     }),
     disconnect: vi.fn(async () => {}),
@@ -98,6 +108,7 @@ describe("feishu connection layer", () => {
     teardown = setupTestDatabase("agentmeld-feishu-connection-");
     created = [];
     connectBehavior = () => "ok";
+    pendingConnects = [];
     createLarkChannelMock.mockReset();
     createLarkChannelMock.mockImplementation((options: Record<string, unknown>) =>
       makeChannel(options)
@@ -248,7 +259,10 @@ describe("feishu connection layer", () => {
       stop();
     }
 
-    expect(infos?.map((info) => info.appId)).toEqual(["cli_ok"]);
+    // Both are reported now. An earlier revision listed only the ones that
+    // worked, which made a failure indistinguishable from "not asked yet".
+    expect(infos?.map((info) => info.appId).sort()).toEqual(["cli_bad", "cli_ok"]);
+    expect(infos?.find((info) => info.appId === "cli_bad")?.status).toBe("error");
     const failure = events.find(
       (event) => event.type === "channel.connection" && event.status === "error"
     );
@@ -277,6 +291,87 @@ describe("feishu connection layer", () => {
 
     expect(created[0].disconnect).toHaveBeenCalledTimes(1);
     expect(listFeishuConnections()).toHaveLength(0);
+  });
+
+  it("keeps a failed app in the status list instead of letting it read as unknown", async () => {
+    // A failure that existed only as an event was invisible to any client that
+    // was not already subscribed when it happened — and a startup failure
+    // happens before anyone is. "Could not connect" and "we have not asked yet"
+    // must not look the same.
+    seedBinding("ag_reviewer", "cli_bad");
+    connectBehavior = () => "fail";
+
+    const infos = await startFeishuChannels();
+
+    const failed = infos.find((info) => info.appId === "cli_bad");
+    expect(failed?.status).toBe("error");
+    expect(failed?.lastError).toBe("connect refused");
+    // And it is not handed out as a usable channel.
+    expect(getFeishuChannelForAgent("ag_reviewer")).toBeNull();
+  });
+
+  it("does not retry a failed app on every read, but does retry it later", async () => {
+    // The status route nudges a reconnect, so without a cooldown every page
+    // load would launch another attempt at an app known to be bad.
+    seedBinding("ag_reviewer", "cli_bad");
+    connectBehavior = () => "fail";
+    await startFeishuChannels();
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+    await startFeishuChannels();
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+    // Past the cooldown it is worth another try.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up on an app that never answers, so the others still connect", async () => {
+    // The SDK times out the WebSocket handshake but not the HTTP calls that
+    // come first, so a black-hole host would otherwise hold the whole start
+    // open — and every later app with it.
+    seedBinding("ag_reviewer", "cli_hang");
+    seedBinding("ag_mock_builder", "cli_ok", "cb_builder");
+    connectBehavior = (appId) => (appId === "cli_hang" ? "hang" : "ok");
+
+    vi.useFakeTimers();
+    let infos: Awaited<ReturnType<typeof startFeishuChannels>>;
+    try {
+      const run = startFeishuChannels();
+      await vi.advanceTimersByTimeAsync(25_000);
+      infos = await run;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const hung = infos.find((info) => info.appId === "cli_hang");
+    expect(hung?.status).toBe("error");
+    expect(hung?.lastError).toContain("timed out");
+    // The healthy app was reached despite the hung one coming first.
+    expect(infos.find((info) => info.appId === "cli_ok")?.status).toBe("connected");
+  });
+
+  it("does not let a connect that lands after a stop leave a live connection", async () => {
+    // stop() clears the registry, so a connect finishing afterwards would
+    // register a connection nothing would ever close — and it would quietly
+    // split that app's events.
+    seedBinding("ag_pm", "cli_slow");
+    connectBehavior = () => "deferred";
+
+    const run = startFeishuChannels();
+    await Promise.resolve();
+    const stop = stopFeishuChannels();
+    pendingConnects.forEach((resolve) => resolve());
+    await Promise.all([run, stop]);
+
+    expect(listFeishuConnections()).toHaveLength(0);
+    expect(created[0].disconnect).toHaveBeenCalled();
   });
 
   it("allows reconnecting after a stop", async () => {

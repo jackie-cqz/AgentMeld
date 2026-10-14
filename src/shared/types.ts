@@ -41,11 +41,14 @@ export type ChannelConnectionStatus =
  * A normalized inbound message from a channel, before routing.
  *
  * A trimmed, serializable view of the SDK's `NormalizedMessage`: enough to
- * deduplicate, map to a conversation and dispatch, without carrying the raw
- * platform payload (which holds tenant keys and full user ids) into the event
- * stream. `senderType` is a plain string on purpose — the platform can send
- * values beyond `user`/`bot`, and an absent value means "unknown", never
- * "not a bot".
+ * deduplicate, map to a conversation and dispatch. The raw platform payload is
+ * dropped — it carries tenant keys, app tickets and attachment descriptors that
+ * nothing downstream needs. Identity fields that routing genuinely requires ARE
+ * kept (`senderId`, which is the sender's open id), so this is not anonymous;
+ * it is the minimum rather than the whole envelope.
+ *
+ * `senderType` is a plain string on purpose — the platform can send values
+ * beyond `user`/`bot`, and an absent value means "unknown", never "not a bot".
  */
 export interface ChannelInboundMessage {
   channel: "feishu";

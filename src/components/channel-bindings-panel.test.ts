@@ -222,6 +222,18 @@ describe("describeConnection", () => {
     });
   });
 
+  it("surfaces a rejection even while the connection is up", () => {
+    // A bot_loop guard trip is reported against the CURRENT status, so ignoring
+    // lastError on "connected" made the guard look silent after it had fired.
+    const described = describeConnection({
+      ...base,
+      status: "connected",
+      lastError: "rejected:bot_loop"
+    });
+    expect(described?.tone).toBe("warn");
+    expect(described?.text).toContain("rejected:bot_loop");
+  });
+
   it("treats a disconnect as muted rather than alarming", () => {
     expect(describeConnection({ ...base, status: "disconnected" })?.tone).toBe("muted");
   });

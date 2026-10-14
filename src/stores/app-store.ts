@@ -505,9 +505,21 @@ export const useAppStore = create<AppState>()(
           { cache: "no-store" }
         );
         set((state) => {
-          state.channelConnections = Object.fromEntries(
-            payload.data.connections.map((connection) => [connection.agentId, connection])
-          );
+          // Merge, not replace. This response and the event stream race, and a
+          // wholesale assignment dropped entries the stream had just written —
+          // including the `error` rows that are the whole reason to look here.
+          // A read that makes a failure invisible is worse than no read.
+          for (const connection of payload.data.connections) {
+            const previous = state.channelConnections[connection.agentId];
+            // A row the stream already holds is at least as fresh as this
+            // snapshot; keep whichever reports a problem rather than letting a
+            // later "connected" silently erase a reason we have not shown yet.
+            if (previous && previous.lastError && !connection.lastError) {
+              state.channelConnections[connection.agentId] = { ...connection, lastError: previous.lastError };
+              continue;
+            }
+            state.channelConnections[connection.agentId] = connection;
+          }
         });
       } catch (error) {
         // Connection health is diagnostic: a failure to read it must not
