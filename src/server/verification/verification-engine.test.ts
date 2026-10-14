@@ -408,16 +408,16 @@ function seedEvidenceParents(input: {
 }
 
 describe("unsupported artifact claims", () => {
-  it("rejects an artifact id that appears only in the task report", () => {
+  it("rejects a structured artifact claim with no attempt evidence", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_benchmark_fake_123." },
+      { artifacts: { web_app: "art_benchmark_fake_123" } },
       [],
     )).toEqual(["art_benchmark_fake_123"]);
   });
 
-  it("accepts artifact ids backed by valid attempt evidence", () => {
+  it("accepts structured artifact ids backed by valid attempt evidence", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_real_123." },
+      { artifacts: { web_app: "art_real_123" } },
       [{
         subjectId: "web_app",
         payloadJson: JSON.stringify({ artifactId: "art_real_123" }),
@@ -428,7 +428,7 @@ describe("unsupported artifact claims", () => {
 
   it("preserves a legal trailing hyphen when matching an evidenced artifact id", () => {
     expect(findUnsupportedArtifactClaims(
-      { summary: "Created art_real_trailing_123-." },
+      { artifacts: { web_app: "art_real_trailing_123-" } },
       [{
         subjectId: "web_app",
         payloadJson: JSON.stringify({ artifactId: "art_real_trailing_123-" }),
@@ -453,6 +453,27 @@ describe("unsupported artifact claims", () => {
         status: "invalid",
       }],
     )).toEqual(["art_invalid_123"]);
+  });
+
+  // The report's free-text summary is narrative, not a claim. Scanning it used to
+  // fail whole attempts over a typo in prose (observed live: an agent wrote its
+  // own artifact id one character short) or over a passing reference to another
+  // conversation's artifact. Bindings come from evidence, never from prose, so
+  // these must not be treated as claims. context-trace-service still surfaces
+  // such mentions as a `guessed_artifact_id` warning.
+  it("ignores artifact ids that appear only in the free-text summary", () => {
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Created art_benchmark_fake_123." },
+      [],
+    )).toEqual([]);
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Produced the report as art_W2DRQxZRBqg (one character off)." },
+      [],
+    )).toEqual([]);
+    expect(findUnsupportedArtifactClaims(
+      { summary: "Based on art_OTHER_CONVERSATION_999." },
+      [],
+    )).toEqual([]);
   });
 });
 

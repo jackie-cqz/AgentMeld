@@ -222,15 +222,25 @@ function parseArtifactPayload(payloadJson: string): { outputKey?: string; artifa
 }
 
 export function findUnsupportedArtifactClaims(
+  // `summary` is accepted (callers pass the real report) but deliberately NOT
+  // scanned — see the note below.
   taskReport: { artifacts?: Record<string, string>; summary?: string } | undefined,
   evidence: Array<{ subjectId: string; payloadJson: string; status: string }>,
 ): string[] {
   if (!taskReport) return [];
-  const reportText = [
-    taskReport.summary ?? "",
-    ...Object.values(taskReport.artifacts ?? {}),
-  ].join("\n");
-  const claimedIds = extractArtifactIds(reportText);
+  // Only the structured artifact map counts as a claim.
+  //
+  // The report's free-text summary used to be scanned as well, which failed an
+  // entire task attempt over a typo in prose — or over a legitimate mention of an
+  // artifact belonging to another conversation. That is disproportionate: output
+  // bindings are built from `artifact_created` evidence and never from
+  // self-report, so an id written in narrative text cannot influence the
+  // pipeline. A live run failed its recovery task for exactly this reason (the
+  // agent wrote its own review_report id one character short).
+  //
+  // Observability is not lost: context-trace-service still reports artifact ids
+  // mentioned in agent messages as a `guessed_artifact_id` warning.
+  const claimedIds = extractArtifactIds(Object.values(taskReport.artifacts ?? {}).join("\n"));
   if (claimedIds.length === 0) return [];
 
   const supportedIds = new Set<string>();
