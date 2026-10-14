@@ -794,6 +794,57 @@ describe("approval cards", () => {
     expect(response).toMatchObject({ toast: { type: "info" } });
   });
 
+  it("announces the decision the way the web routes do", async () => {
+    // The web UI clears a pending when it sees the resolved event. The resolve
+    // ROUTES publish it; the functions underneath do not — so a decision taken
+    // in the room left the web showing a pending that was already settled.
+    const pending = registerPendingBash("conv_1", AGENT, "run_1", "ls", "/tmp", "看看");
+    const id = [...((globalThis as unknown as { __agentMeldPendingBash: Map<string, unknown> })
+      .__agentMeldPendingBash.keys())][0];
+    void pending;
+
+    const seen: string[] = [];
+    const unsub = eventBus.subscribe((entry) => seen.push(entry.event.type));
+
+    await handleCardAction(
+      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" })
+    );
+    unsub();
+
+    expect(seen).toContain("bash_command.resolved");
+  });
+
+  it("settles the room's approval card when the decision is taken on the web", async () => {
+    // The same defect the question card had, on the approval path: a card
+    // approved from the web stayed live in the room.
+    const pending = registerPendingBash("conv_1", AGENT, "run_1", "ls", "/tmp", "看看");
+    void pending;
+    const id = [...((globalThis as unknown as { __agentMeldPendingBash: Map<string, unknown> })
+      .__agentMeldPendingBash.keys())][0];
+
+    // The settle path lives in the subscription, so it has to be running.
+    startChannelInteractions();
+    const posted = await projectPendingApproval("bash", {
+      id, conversationId: "conv_1", agentId: AGENT, runId: "run_1",
+      command: "ls", cwd: "/tmp", reason: "看看", createdAt: 1
+    });
+    expect(posted.status).toBe("posted");
+    updated.length = 0;
+
+    eventBus.publish({
+      type: "bash_command.resolved", conversationId: "conv_1", timestamp: 2,
+      pendingId: id, approved: true
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(updated).toHaveLength(1);
+    const raw = JSON.stringify(updated[0].card);
+    expect(raw).toContain("已批准");
+    // And no buttons are left to press.
+    expect((updated[0].card as { elements: Array<Record<string, unknown>> }).elements
+      .some((element) => element.tag === "action")).toBe(false);
+  });
+
   it("puts an approval in the room, and skips one whose conversation is not on a channel", async () => {
     const posted = await projectPendingApproval("bash", bashItem);
     expect(posted.status).toBe("posted");

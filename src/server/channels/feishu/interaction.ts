@@ -286,15 +286,30 @@ interface PostedCard {
   question: PendingQuestion;
 }
 
+/** An approval card this bot put in a room, kept so it can be settled later. */
+interface PostedApproval {
+  chatId: string;
+  messageId: string;
+  agentId: string;
+  kind: ApprovalKind;
+  item: PendingDispatchPlan | PendingBashCommand | PendingWrite;
+}
+
 declare global {
   var __agentMeldChannelAnswers: Map<string, Record<string, string>> | undefined;
   var __agentMeldChannelCards: Map<string, PostedCard> | undefined;
+  var __agentMeldChannelApprovalCards: Map<string, PostedApproval> | undefined;
   var __agentMeldChannelInteractionStop: (() => void) | undefined;
 }
 
 function getPostedCards(): Map<string, PostedCard> {
   globalThis.__agentMeldChannelCards ??= new Map<string, PostedCard>();
   return globalThis.__agentMeldChannelCards;
+}
+
+function getPostedApprovals(): Map<string, PostedApproval> {
+  globalThis.__agentMeldChannelApprovalCards ??= new Map<string, PostedApproval>();
+  return globalThis.__agentMeldChannelApprovalCards;
 }
 
 function getAnswerBuffer(): Map<string, Record<string, string>> {
@@ -395,6 +410,35 @@ async function handleQuestionAnswer(
   };
 }
 
+/**
+ * Announce a decision the way the resolve routes do.
+ *
+ * Deliberately the same three events: a decision is a decision wherever it was
+ * taken, and anything watching for one must not have to know which door it came
+ * through.
+ */
+function publishApprovalResolved(
+  kind: ApprovalKind,
+  item: PendingDispatchPlan | PendingBashCommand | PendingWrite,
+  approved: boolean
+): void {
+  const base = { conversationId: item.conversationId, timestamp: Date.now(), pendingId: item.id };
+  if (kind === "plan") {
+    eventBus.publish({
+      type: "dispatch.plan.resolved",
+      ...base,
+      runId: (item as PendingDispatchPlan).runId,
+      approved
+    });
+    return;
+  }
+  if (kind === "bash") {
+    eventBus.publish({ type: "bash_command.resolved", ...base, approved });
+    return;
+  }
+  eventBus.publish({ type: "fs_write.resolved", ...base, applied: approved });
+}
+
 async function handleCancelRun(
   value: Extract<CardActionValue, { kind: "cancel_run" }>,
   event: CardActionEvent
@@ -469,6 +513,13 @@ async function handleApprovalDecision(
   const resolvedBy = event.operator?.openId ?? null;
   const decided = decideApproval(value.pendingType, value.pendingId, value.decision, resolvedBy);
   if (!decided) return { toast: { type: "info", content: "这条已经处理过了。" } };
+
+  // The web UI clears a pending when it sees the resolved event — the resolve
+  // routes publish it, the underlying functions do not, and a decision taken in
+  // the room used to leave the web showing a pending that was already settled.
+  publishApprovalResolved(value.pendingType, item, value.decision === "approve");
+
+  getPostedApprovals().delete(value.pendingId);
 
   return {
     card: {
@@ -548,6 +599,17 @@ export async function projectPendingApproval(
   const sent = await channel.send(channelConversation.chatId, {
     card: buildApprovalCard(kind, item)
   });
+  // Registered so the card can be settled when the decision is taken somewhere
+  // else — on the web. Without it the room keeps a card whose buttons only say
+  // "already handled" once pressed, which is the same defect the question card
+  // had.
+  getPostedApprovals().set(item.id, {
+    chatId: channelConversation.chatId,
+    messageId: sent.messageId,
+    agentId,
+    kind,
+    item
+  });
   console.info(`[feishu] asked for ${kind} approval in ${channelConversation.chatId} (${sent.messageId})`);
   return { status: "posted", chatId: channelConversation.chatId };
 }
@@ -589,6 +651,20 @@ async function settlePostedCard(
   );
 }
 
+/** Settle the room's approval card once the decision has been taken anywhere. */
+async function settlePostedApproval(
+  pendingId: string,
+  decision: "approve" | "reject"
+): Promise<void> {
+  const card = getPostedApprovals().get(pendingId);
+  if (!card) return;
+  getPostedApprovals().delete(pendingId);
+
+  const channel = getFeishuChannelForAgent(card.agentId);
+  if (!channel) return;
+  await channel.updateCard(card.messageId, buildApprovalCard(card.kind, card.item, { decision }));
+}
+
 export function startChannelInteractions(): () => void {
   if (globalThis.__agentMeldChannelInteractionStop) return globalThis.__agentMeldChannelInteractionStop;
 
@@ -619,6 +695,14 @@ export function startChannelInteractions(): () => void {
     }
     if (event.type === "ask_user.cancelled") {
       post(settlePostedCard(event.pendingId, { cancelled: true }), "a cancelled question");
+      return;
+    }
+    if (event.type === "dispatch.plan.resolved" || event.type === "bash_command.resolved") {
+      post(settlePostedApproval(event.pendingId, event.approved ? "approve" : "reject"), "a decision");
+      return;
+    }
+    if (event.type === "fs_write.resolved") {
+      post(settlePostedApproval(event.pendingId, event.applied ? "approve" : "reject"), "a decision");
     }
   });
 
@@ -631,4 +715,5 @@ export function stopChannelInteractionsForTests(): void {
   globalThis.__agentMeldChannelInteractionStop = undefined;
   globalThis.__agentMeldChannelAnswers = undefined;
   globalThis.__agentMeldChannelCards = undefined;
+  globalThis.__agentMeldChannelApprovalCards = undefined;
 }
