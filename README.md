@@ -55,7 +55,7 @@ AgentMeld is built for local, inspectable workflows such as:
 
 ### Tools And Safety
 
-- Built-in tools for file listing, file reading, full-file writes, focused patches, shell verification, artifacts, deployments, user questions, attachments, evidence reads, context fact updates, task planning, and task reporting.
+- Built-in tools for file listing and directory creation, file reading, full-file writes, focused patches, shell verification, artifacts, deployments, user questions, attachments, evidence reads, context fact updates, task planning, and task reporting.
 - `fs_patch` is preferred for local source edits; `fs_write` is reserved for new files or intentional full replacement.
 - Shell commands are restricted to verification and approved dependency installation. Source edits through shell redirection, PowerShell writes, `sed`, and destructive cleanup are blocked.
 - Workspace paths are sandboxed and validated.
@@ -188,6 +188,8 @@ pnpm agent:bench:full   # Run the full benchmark suite
 ```
 
 The repository also contains early evaluation and fixture scripts. The scripts that run app code (`db:seed`, `e2e:*`, `quality:gates`, `agent:bench*`) load `.env.local` first and then `.env` via `scripts/load-env.mjs`; the benchmark/evaluation ones also expect a running app plus provider credentials. The current release is positioned around runtime observability rather than a complete benchmark platform.
+
+Those same scripts call `ensureDatabase()`, which runs the startup recovery pass (`src/db/bootstrap.ts`). That pass force-fails every run still marked `running` in the database it opens — correct at process start, where nothing can legitimately be in flight, but not from a second process. Any of these commands, or a local driving script, started next to a live dev server therefore kills the task that server is executing and marks its attempts failed, with no error on either side. Stop the server first, or point the script at a different `AGENTMELD_DATA_DIR`.
 
 ## Local Data
 
