@@ -75,4 +75,21 @@ describe("packed context rendering", () => {
     expect(prompt).not.toContain("<required_commands>");
     expect(prompt).not.toContain("<required_evidence>");
   });
+
+  // Regression: check ⑤ only judges human-reviewed criteria, but the renderer
+  // emitted the raw list — so the agent saw auto-verified contract criteria,
+  // reported them as results, and check ④ failed the task for a criterion it was
+  // never supposed to answer.
+  it("renders only the criteria the report is judged on", () => {
+    const prompt = renderTaskContextPrompt(envelope([], {
+      acceptanceCriteria: [
+        '{"id":"contract-artifact-web_app","description":"web_app 产物已创建","required":true,"validator":{"type":"artifact_exists","outputKey":"web_app"}}',
+        "倒计时以 MM:SS 显示"
+      ],
+    }));
+
+    expect(prompt).toContain("<criterion>倒计时以 MM:SS 显示</criterion>");
+    expect(prompt).not.toContain("contract-artifact-web_app");
+    expect(prompt).not.toContain("validator");
+  });
 });

@@ -3,6 +3,7 @@
 // Replaces child-prompt-builder's buildChildTaskPrompt for compiled contexts.
 // ---------------------------------------------------------------------------
 
+import { humanReviewedCriteria } from "@/server/acceptance-criteria";
 import type { TaskContextEnvelope } from "@/shared/task-context-types";
 
 function escapeXml(str: string): string {
@@ -155,37 +156,49 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
   // This block used to hold only comments, which made group tasks fail on
   // "缺少必需证据说明" / "验收标准漏报" / "缺少成功命令证据" no matter what the
   // agent did (issue #11).
+  //
+  // The arrays are read defensively (`?? []`): they are required by the envelope
+  // type, so every producer is checked at compile time, but an envelope parsed
+  // from stored JSON is not.
+  const targetPaths = requirements.targetPaths ?? [];
+  const requiredCommands = requirements.requiredCommands ?? [];
+  const requiredEvidence = requirements.requiredEvidence ?? [];
+  // Only the criteria the report is actually judged on — the evaluator filters
+  // auto-verified contract criteria out of check ⑤, and rendering those made the
+  // agent report them as results, which then failed check ④.
+  const reviewedCriteria = humanReviewedCriteria(requirements.acceptanceCriteria ?? []);
+
   parts.push(`  <evidence_contract>`);
   parts.push(`    <!-- All tool calls during this task are recorded automatically. -->`);
   parts.push(`    <!-- The Runtime independently verifies evidence — your report is a claim, not a verdict. -->`);
-  if (requirements.targetPaths.length > 0) {
+  if (targetPaths.length > 0) {
     parts.push(`    <target_paths>`);
     parts.push(`      <!-- Create or modify exactly these paths; the run looks for file evidence for each. -->`);
-    for (const targetPath of requirements.targetPaths) {
+    for (const targetPath of targetPaths) {
       parts.push(`      <path>${escapeXml(targetPath)}</path>`);
     }
     parts.push(`    </target_paths>`);
   }
-  if (requirements.requiredCommands.length > 0) {
+  if (requiredCommands.length > 0) {
     parts.push(`    <required_commands>`);
     parts.push(`      <!-- Run these commands and let them succeed — the run is checked against command evidence, and an equivalent command does not count. -->`);
-    for (const required of requirements.requiredCommands) {
+    for (const required of requiredCommands) {
       parts.push(`      <command>${escapeXml(required.command)}</command>`);
     }
     parts.push(`    </required_commands>`);
   }
-  if (requirements.requiredEvidence.length > 0) {
+  if (requiredEvidence.length > 0) {
     parts.push(`    <required_evidence>`);
     parts.push(`      <!-- Address each of these in your report (summary, files, commands, tests). -->`);
-    for (const item of requirements.requiredEvidence) {
+    for (const item of requiredEvidence) {
       parts.push(`      <item>${escapeXml(item)}</item>`);
     }
     parts.push(`    </required_evidence>`);
   }
-  if (requirements.acceptanceCriteria.length > 0) {
+  if (reviewedCriteria.length > 0) {
     parts.push(`    <acceptance_criteria>`);
-    parts.push(`      <!-- Return every criterion verbatim in report_task_result.acceptanceResults, with passed and evidence. -->`);
-    for (const criterion of requirements.acceptanceCriteria) {
+    parts.push(`      <!-- Return every criterion in report_task_result.acceptanceResults, with passed and evidence. -->`);
+    for (const criterion of reviewedCriteria) {
       parts.push(`      <criterion>${escapeXml(criterion)}</criterion>`);
     }
     parts.push(`    </acceptance_criteria>`);
