@@ -84,6 +84,21 @@ export interface ChannelConnectionInfo {
 }
 
 /**
+ * An external chat mapped to one AgentMeld conversation.
+ *
+ * One chat, one conversation, and one conversation, one chat — the inbound path
+ * has no way to resolve an ambiguity, so neither direction may hold two.
+ */
+export interface ChannelConversation {
+  id: string;
+  channel: "feishu";
+  chatId: string;
+  conversationId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
  * A stored channel binding: one agent speaking through one external app
  * identity. Deliberately does NOT carry the app secret — that value never
  * leaves the server, and only `getChannelBindingSecret` in repositories.ts can

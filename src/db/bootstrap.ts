@@ -394,6 +394,39 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL,
       UNIQUE(agent_id, channel)
     );
+
+    CREATE TABLE IF NOT EXISTS channel_conversations (
+      id TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(channel, chat_id),
+      UNIQUE(conversation_id)
+    );
+
+    -- Membership is observed, not asserted: no granted scope can list a chat's
+    -- bots, so a row exists only because that agent's bot received an event here.
+    CREATE TABLE IF NOT EXISTS channel_conversation_members (
+      channel_conversation_id TEXT NOT NULL REFERENCES channel_conversations(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      first_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (channel_conversation_id, agent_id)
+    );
+
+    -- The UNIQUE index is the deduplication: inserting is an atomic claim.
+    CREATE TABLE IF NOT EXISTS channel_inbound_messages (
+      id TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      external_message_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      message_id TEXT,
+      agent_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(channel, external_message_id)
+    );
   `);
 
   migrateLegacyTables();
@@ -576,6 +609,7 @@ function migrateLegacyConductorTable(legacySuffix: string, tableName: string, se
 function createIndexes() {
   const db = getDatabase();
   db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_channel_inbound_conversation ON channel_inbound_messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
     CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_artifacts_conv ON artifacts(conversation_id);

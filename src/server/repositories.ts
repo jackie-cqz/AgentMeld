@@ -13,8 +13,9 @@ import {
   mapConversation,
   mapMessage,
   mapRun,
-  mapWorkspace
-} from "@/db/rows";
+  mapWorkspace,
+  mapChannelConversation,
+  type ChannelConversationRow} from "@/db/rows";
 import type {
   Agent,
   AgentRun,
@@ -23,6 +24,7 @@ import type {
   ArtifactContent,
   ArtifactType,
   ChannelBinding,
+  ChannelConversation,
   Conversation,
   ConversationMode,
   FsWriteApprovalMode,
@@ -763,4 +765,125 @@ export function getChannelBindingSecret(id: string): string | undefined {
     .prepare("SELECT app_secret FROM channel_bindings WHERE id = ?")
     .get(id) as { app_secret: string } | undefined;
   return row?.app_secret;
+}
+
+// ---------------------------------------------------------------------------
+// Channel conversations (external chat <-> AgentMeld conversation)
+// ---------------------------------------------------------------------------
+
+export function getChannelConversationByChat(
+  channel: string,
+  chatId: string
+): ChannelConversation | null {
+  const row = getDatabase()
+    .prepare("SELECT * FROM channel_conversations WHERE channel = ? AND chat_id = ?")
+    .get(channel, chatId) as ChannelConversationRow | undefined;
+  return row ? mapChannelConversation(row) : null;
+}
+
+export function createChannelConversation(input: {
+  id: string;
+  channel: string;
+  chatId: string;
+  conversationId: string;
+  now: number;
+}): ChannelConversation {
+  getDatabase()
+    .prepare(`
+      INSERT INTO channel_conversations (id, channel, chat_id, conversation_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .run(input.id, input.channel, input.chatId, input.conversationId, input.now, input.now);
+  return {
+    id: input.id,
+    channel: input.channel as ChannelConversation["channel"],
+    chatId: input.chatId,
+    conversationId: input.conversationId,
+    createdAt: input.now,
+    updatedAt: input.now
+  };
+}
+
+export function listChannelConversationMembers(channelConversationId: string): string[] {
+  const rows = getDatabase()
+    .prepare(
+      "SELECT agent_id FROM channel_conversation_members WHERE channel_conversation_id = ? ORDER BY first_seen_at ASC"
+    )
+    .all(channelConversationId) as Array<{ agent_id: string }>;
+  return rows.map((row) => row.agent_id);
+}
+
+/**
+ * Record that an agent's bot has been seen in a chat. Idempotent — membership is
+ * evidence, and seeing the same bot twice is not new evidence.
+ */
+export function addChannelConversationMember(input: {
+  channelConversationId: string;
+  agentId: string;
+  now: number;
+}): void {
+  getDatabase()
+    .prepare(`
+      INSERT OR IGNORE INTO channel_conversation_members (channel_conversation_id, agent_id, first_seen_at)
+      VALUES (?, ?, ?)
+    `)
+    .run(input.channelConversationId, input.agentId, input.now);
+}
+
+/**
+ * Claim an external message for processing. Returns false when it was already
+ * claimed.
+ *
+ * The insert is the deduplication: the unique index on
+ * `(channel, external_message_id)` makes "have I seen this?" and "mark it seen"
+ * one atomic step, so two concurrent deliveries cannot both win and a redelivery
+ * after a restart cannot win either. Reading first and writing after would race.
+ */
+export function claimChannelInboundMessage(input: {
+  id: string;
+  channel: string;
+  chatId: string;
+  externalMessageId: string;
+  conversationId: string;
+  agentId: string;
+  now: number;
+}): boolean {
+  const result = getDatabase()
+    .prepare(`
+      INSERT INTO channel_inbound_messages (
+        id, channel, chat_id, external_message_id, conversation_id, message_id, agent_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+      ON CONFLICT(channel, external_message_id) DO NOTHING
+    `)
+    .run(
+      input.id,
+      input.channel,
+      input.chatId,
+      input.externalMessageId,
+      input.conversationId,
+      input.agentId,
+      input.now
+    ) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/** Point a claimed inbound row at the local message it became. */
+export function setChannelInboundMessageId(id: string, messageId: string): void {
+  getDatabase()
+    .prepare("UPDATE channel_inbound_messages SET message_id = ? WHERE id = ?")
+    .run(messageId, id);
+}
+
+export function getChannelInboundMessage(
+  channel: string,
+  externalMessageId: string
+): { id: string; messageId: string | null; conversationId: string } | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT id, message_id, conversation_id FROM channel_inbound_messages WHERE channel = ? AND external_message_id = ?"
+    )
+    .get(channel, externalMessageId) as
+    | { id: string; message_id: string | null; conversation_id: string }
+    | undefined;
+  return row ? { id: row.id, messageId: row.message_id, conversationId: row.conversation_id } : null;
 }

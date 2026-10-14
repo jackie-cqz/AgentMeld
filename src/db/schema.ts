@@ -562,3 +562,80 @@ export const channelBindings = sqliteTable(
     uniqueIndex("idx_channel_bindings_agent_channel").on(table.agentId, table.channel)
   ]
 );
+
+/**
+ * An external chat mapped to one AgentMeld conversation.
+ *
+ * Uniqueness runs both ways on purpose: a chat cannot map to two conversations,
+ * and a conversation cannot be the projection target of two chats. Letting
+ * either hold would make "where does this message go?" ambiguous, and the
+ * inbound path has no way to resolve an ambiguity.
+ */
+export const channelConversations = sqliteTable(
+  "channel_conversations",
+  {
+    id: text("id").primaryKey(),
+    channel: text("channel").notNull(),
+    chatId: text("chat_id").notNull(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("idx_channel_conversations_chat").on(table.channel, table.chatId),
+    uniqueIndex("idx_channel_conversations_conversation").on(table.conversationId)
+  ]
+);
+
+/**
+ * Which agents have been **observed** in a chat.
+ *
+ * Observed, not requested: the one-click preset grants no scope that can list a
+ * chat's bots (`getChatBots` answers 400), so membership can only be learned
+ * from the fact that an agent's bot received an event there. A member row is
+ * therefore evidence, and it accumulates rather than being asserted up front.
+ */
+export const channelConversationMembers = sqliteTable(
+  "channel_conversation_members",
+  {
+    channelConversationId: text("channel_conversation_id")
+      .notNull()
+      .references(() => channelConversations.id, { onDelete: "cascade" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    firstSeenAt: integer("first_seen_at").notNull()
+  },
+  (table) => [
+    primaryKey({ columns: [table.channelConversationId, table.agentId] })
+  ]
+);
+
+/**
+ * Every external message that has been taken in, one row per platform message.
+ *
+ * The unique index on `(channel, external_message_id)` IS the deduplication:
+ * inserting is an atomic claim, so two deliveries of the same platform message
+ * cannot both proceed, whether they arrive concurrently or across a restart.
+ * `message_id` is null until the local message is written, which keeps the row
+ * as the record of an accepted message even if writing it fails.
+ */
+export const channelInboundMessages = sqliteTable(
+  "channel_inbound_messages",
+  {
+    id: text("id").primaryKey(),
+    channel: text("channel").notNull(),
+    chatId: text("chat_id").notNull(),
+    externalMessageId: text("external_message_id").notNull(),
+    conversationId: text("conversation_id").notNull(),
+    messageId: text("message_id"),
+    agentId: text("agent_id").notNull(),
+    createdAt: integer("created_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("idx_channel_inbound_external").on(table.channel, table.externalMessageId),
+    index("idx_channel_inbound_conversation").on(table.conversationId)
+  ]
+);
