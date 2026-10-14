@@ -133,10 +133,12 @@ describe("dispatch-plan-manager", () => {
     expect(row?.finished_at).not.toBeNull();
   });
 
-  // Regression: when the Conductor asks a clarifying question during the plan
-  // stage, pending-questions.ts creates this same row id as 'running' before the
-  // plan is approved. An INSERT OR IGNORE at approval time was therefore ignored
-  // and the row stayed running forever — the exact case the fix above missed.
+  // Regression guard for rows written by the OLD pending-questions.ts, which
+  // inserted this same row id as 'running' before the plan was approved. An
+  // INSERT OR IGNORE at approval time was therefore ignored and the row stayed
+  // running forever — the exact case the fix above missed. pending-questions.ts
+  // now writes the row terminal itself, so this seeds the legacy shape directly
+  // to keep the approval path able to repair rows already in a user's database.
   it("finishes a conductor meta-attempt that a pending question created first", async () => {
     const now = Date.now();
     createConversation({ id: "conv_plan_q", title: "plan q", mode: "single", agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now });
