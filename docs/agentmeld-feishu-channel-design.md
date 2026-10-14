@@ -12,7 +12,7 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条它排�
 **两条好消息**
 
 1. **「每个 Agent 一个 Bot 身份」不需要手工建应用。** 飞书官方「一键创建智能体应用」提供 OAuth 2.0 设备码流程（RFC 8628）：服务端拿到验证链接/二维码 → 用户扫码确认 → 直接返回 `App ID` + `App Secret`。这正好就是「一键扫码把智能体绑定到飞书 Bot」。Node 侧入口是 `registerApp`（`@larksuite/channel` 重新导出）。
-2. **bot@bot 权限扫码即得。** 默认「智能体应用配置清单」里已经包含 `im:message.group_at_msg.include_bot:readonly`（*获取群组中其他机器人和用户 @ 当前机器人的消息*）。第 6 节 R3 曾把这一项列为头号风险，官方清单把它的风险等级下调为「F0 确认」而非「F0 决定成败」。
+2. **bot@bot 权限扫码即得——且已实测确认事件真的到达。** 默认「智能体应用配置清单」里包含 `im:message.group_at_msg.include_bot:readonly`（*获取群组中其他机器人和用户 @ 当前机器人的消息*），扫码后在开发者后台可见；两个真实应用在同一群里互相 @ 时，接收方拿到的是 `senderType=bot` / `senderIsBot=true` / `mentionedBot=true` 的事件。**第 6 节 R3 因此结案**：「多 Bot 各自身份」的设计成立，不必塌缩成「单 Conductor Bot + 网页投影」。详见第 8 节。
 
 **一条坏消息（但归因需要更正）**
 
@@ -29,7 +29,7 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条它排�
 | --- | --- | --- |
 | 建议新增 `src/server/channels/feishu/` | 同意，该目录当前不存在 | `src/server/` 列表 |
 | 参考「飞书官方 Channel SDK」指向 `larksuite/channel-sdk-node` | 仓库名如此，但**可安装的包名是 `@larksuite/channel`**（npm latest 0.7.1，直接依赖 `@larksuiteoapi/node-sdk ^1.73.1`） | npm registry；[README.zh.md](https://github.com/larksuite/channel-sdk-node/blob/main/README.zh.md) |
-| F0 第三项验证 bot@bot 权限 | 应提为 **F0 第一项**：默认清单已含该权限，但平台对未开通场景**静默失败且无自查 API**，必须先确认事件真的到达 | SDK README「Bot-at-bot」 |
+| F0 第三项验证 bot@bot 权限 | 曾提为 **F0 第一项**（平台对未开通场景静默失败且无自查 API）。**已完成,结果可达** | §8.1.1 |
 | 「本地优先场景验证官方 SDK 长连接」 | 不仅是可行，而且是**一键创建应用的默认订阅方式**（事件与卡片回调均默认 WebSocket 长连接），无需公网回调地址 | [一键创建应用 overview](https://open.feishu.cn/document/mcp_open_tools/integrating-agents-with-feishu/overview) |
 | 「持久化入站去重」列为自建能力 | **不需要自建**。SDK 的去重是双层结构（内存 LRU + **可注入的长期 Cache**），去重键为裸 `messageId`、namespace 固定 `channel:seen`、无 appId 隔离；**注入一个共享且持久化的 `Cache` 即可获得跨重启、跨 App 的去重**。详见 5.1 | `channel-sdk-node/src/safety/dedup-cache.ts`、`src/safety/types.ts` |
 | 「Bot 协作限制目标、轮数、超时及资源预算」 | `policy.botLoopGuard` **只**统计「别的 bot @ 我」的消息、滑动窗口超阈值即 `drop`/`reject`（且默认**关闭**）。对「目标、超时、资源预算」零覆盖，对「轮数」只是粗粒度窗口计数。其余仍需自建 | SDK README；`src/safety/loop-guard.ts` |
@@ -85,7 +85,8 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条它排�
 - **流水线顺序**（`src/safety/index.ts:48` 注释）：stale → dedup → policy → lock → batch → queue。
 - 卡片动作队列默认 `'same'`，`'separate'` 是显式选项（`src/safety/types.ts` `resolveCardActionQueueMode`）。
 - 一键创建应用默认订阅方式为 **WebSocket 长连接**（事件 + `card.action.trigger` 回调），无需公网地址。
-- 默认清单已含：`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message.p2p_msg:readonly`、`im:message:send_as_bot`、`cardkit:card:write|read`、`im:chat.members:bot_access`、`application:bot.basic_info:read` 等；回调 `card.action.trigger`。
+- 默认清单已含：`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message.p2p_msg:readonly`、`im:message:send_as_bot`、`cardkit:card:write|read`、`im:chat.members:bot_access`、`im:chat:read`、`application:bot.basic_info:read` 等；回调 `card.action.trigger`。
+- **实测更正**：这份清单**不覆盖**「列出群内机器人」。`getChatBots`（`GET /im/v1/chats/{chat_id}/members/bots`）实测返回 400，服务端要求 `im:chat:readonly` / `im:chat` / `im:chat.group_info:readonly` / `im:chat.members:read` 之一——清单里的 `im:chat:read` 与 `im:chat.members:bot_access` **都不在其中**。后果与对策见 §5.7 与 §8.1。
 - `addons` 可**增量**追加权限/事件/回调，预填到用户确认页；**不能删减**基础权限；敏感配置（事件订阅方式、回调地址、`security.*`、加密 key）**不能**经 `addons` 传入，需走 `application-config` OpenAPI。
 - `createOnly: true` 让落地页只允许新建应用，隐藏「选择已有应用」——**对逐 Agent 绑定是必要的**，否则用户可能误选并覆盖另一个 Agent 的应用配置。
 - 传入已有 `appId` 则流程变为「为该应用增量开通权限」，可用于「补授权/重新授权」。
@@ -225,6 +226,15 @@ SDK 的去重是双层结构，长期层是可注入的 `Cache`，源码注释�
 
 必须遵守 Issue 的「不逐 token 新发群消息」。`/api/stream` 的流式增量应聚合后用 `stream()` 流式卡片或 `updateCard()` 就地更新，而不是每条事件发一条群消息。默认不发布原始推理、凭据、完整工具日志。
 
+### 5.7 提及别的 Bot：用已知 openId，不要依赖按名字解析
+
+「@ 某个 Agent」有两条路，实测只有一条默认可用：
+
+- ❌ **按名字解析**（`resolveMentionsInText: true` 或只传 `{ name }` 的 `mentions`）依赖 SDK 的群成员 roster，而 roster 的两个来源里，`getChatBots` **需要一键清单没有的 scope**（§3 更正、§8.1）。名册不全时，未解析的 `@xxx` 会被**保留为纯文本**——不会误 @，但也**不会送达**，静默失效。
+- ✅ **用已知 openId 构造 `mentions`**，SDK 会渲染成 `<at user_id="ou_…">名字</at>` 前缀。openId 从哪来：本进程 `connect()` 后的 `getBotIdentity()`（自己的），以及入站事件的 `mentions[].openId`（别人 @ 过我时观察到的）。**实测跨 Bot 提及走的正是这条。**
+
+因此实现约定：**凡是要 @ 某个已知 Agent，一律用它的 openId，不用名字。** 名字只用于展示。若将来确实需要按名字解析（例如用户手打的 `@PM`），再走 §4.4 的重授权补 `im:chat:readonly` 之类的 scope，并把它当成一项独立工作。
+
 ## 6. 风险与未验证项
 
 | 编号 | 风险 | 处置 |
@@ -240,6 +250,9 @@ SDK 的去重是双层结构，长期层是可注入的 `Cache`，源码注释�
 | **R9** | `resolved_by` 不装操作者，「审批校验操作者」有列无值 | 独立小 PR 先修（7.2 PR1） |
 | **R10** | SDK 默认按 chat 批合并（600ms / 最多 8 条）改变分派语义，且 `sourceIds` 不外泄 | F1 前显式决策（5.2）。这是本次复核新增项 |
 | **R11** | `mobileDeviceToken` / `companionMode` 字段存在却从不参与请求校验，疑似为 LAN/移动端鉴权预留但未接线 | 设计入站鉴权前先确认这两个字段的既定意图，避免另起一套。本次复核新增项 |
+| **R3** | ~~未开通 `include_bot` 时 bot@bot 静默失败~~ **已结案**：权限在清单里且事件确实投递（§8.1） | 无需处理。保留此条是为了记住它曾被列为头号风险 |
+| **R12** | **Bot 接力回环。已实测复现**：一个「任何群消息 → @ 其他 Bot」的无条件规则在两秒内自激，以约 **1.5 秒一轮**持续往返，直到进程被杀。SDK 的 `botLoopGuard` **默认关闭**，且官方自述只是「启发式兜底，非协议级保证」 | **必须由任务层断环**，不能指望传输层：① PR2 的 `origin` 闸门已让非人类消息不启动工作（§5.3）；② 出站接力要有**目标白名单、轮次上限、超时与预算**；③ `botLoopGuard` 作为第二道，显式开启。F1 的第一条验收就该是「这个循环不会发生」 |
+| **R13** | **一键清单缺少「列出群内机器人」的 scope**（§3 更正、§8.1 实测 400） | 按名字提及因此默认不可用；改用已知 openId（§5.7）。需要用名字时走 §4.4 重授权补 scope，作为独立工作 |
 
 ## 7. 架构选择与实施顺序
 
@@ -271,7 +284,8 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 价值：让渠道落地时**无法**引入 5.3 那条回环，并把「谁写的」变成消息的一等属性。**注意它今天不关闭任何正在发生的回环**——见 5.3 的准确表述。
 
 **F0（需凭据）— 接入验证**
-按 R1–R6、R10、R11 逐项取判定，产出「实际权限、发布配置、平台限制」记录。**R3（bot@bot 事件是否真的到达）第一项做**，它的结果决定后续是「多 Bot 各自身份」还是「单 Conductor Bot + 网页投影」。
+**第一项已完成**：bot@bot 事件可达,「多 Bot 各自身份」的设计成立(§8.1)。其余项按 R1、R2、R4–R6、R10、R11 逐项取判定,产出「实际权限、发布配置、平台限制」记录。
+**下一块工作据此变为:连接层 + 从第一天就带环路防护**(R12)。这是 F1 的前置,而不是 F1 的一部分。
 
 **F1+**：按 Issue 原计划，但把 5.2（批合并决策）、5.3（来源标记）作为前置，而不是事后补。
 
@@ -281,19 +295,58 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 - 部署预览的公网可达地址（Issue F3）：与 R1 同源，都属「本地优先 vs 平台可访问」这一未解矛盾，需单独讨论。
 - 现有 `db:seed` 启动恢复副作用（见 README 警告）：与本功能无关，不在此处理。
 
-## 8. 待办清单（F0 问题表）
+## 8. F0 问题表与实测结果
 
-按「答不出来就不能继续」排序：
+按「答不出来就不能继续」排序。**已实测的标注结果、日期与原始证据。**
 
-1. 两个 Bot 同群，A @ B，B 是否收到事件？（`include_bot` 静默失败风险 R3）
-2. 扫码人非管理员时权限是否即时生效？（R2）
-3. `appPreset.avatar` 的图片由谁抓取——用户客户端还是平台服务端？（R1）
-4. 卡片按钮回调、表单提交、卡片就地更新、流式回复是否均可用（长连接模式下无需公网地址）？
-5. 断线重连后事件是否补投？重复事件如何表现？（配合 5.1 的持久化 Cache 验证跨重启去重）
-6. 单应用开两条 WS 连接时事件是否分流？（R6）
-7. 逐 Agent 创建应用的数量与频率上限？（R5）
-8. 是否存在删除应用的 OpenAPI？（R4）
-9. 一批合并后交付对用户体验与上下文的影响（5.2 决策 A 的实测）。（R10）
+### 8.1 已实测
+
+#### 8.1.1 两个 Bot 同群，A @ B，B 是否收到事件？→ ✅ **可达**
+
+2026-10-15,两个真实应用(`cli_aa45114061789c1b` = Conductor、`cli_aa4512cf2bb8dc0a` = PM 小灰)+ 一个真实群 + 各一条 WS 长连接。原始日志:
+
+```
+你 @Conductor        → Conductor RECEIVED  senderType=user  senderIsBot=false  mentionedBot=true
+Conductor @PM 小灰    → PM 小灰   RECEIVED  senderType=bot   senderIsBot=true   mentionedBot=true
+PM 小灰 @Conductor    → Conductor RECEIVED  senderType=bot   senderIsBot=true   mentionedBot=true
+```
+
+- 扫码后在开发者后台**确认** `im:message.group_at_msg.include_bot:readonly` 存在于权限清单。
+- **事件确实投递**,且 `senderType` / `senderIsBot` / `mentionedBot` 解析正确。
+- 结论:**「每个 Agent 一个 Bot 身份、互相 @」的设计成立**,不必塌缩成「单 Conductor Bot + 网页投影」。R3 结案。
+- 同时确认:**用已知 openId 构造的 `<at user_id="ou_…">` 提及可以跨 Bot 生效**。
+
+**附带(重要)**:这轮实测里一个「任何群消息 → @ 群里其他 Bot」的**无条件**接力规则在两秒内自激,以**约 1.5 秒一轮**持续往返约 40 条消息,直到进程被杀。这不是意外,而是 R12 的实测确认:**回环不但是真的,而且很快**。任何实现都必须从第一行代码就断环。
+
+#### 8.1.2 一键清单是否覆盖「列出群内机器人」？→ ❌ **不覆盖**
+
+调用 `getChatBots`(`GET /im/v1/chats/{chat_id}/members/bots`)实测 400:
+
+```
+Access denied. One of the following scopes is required:
+  [im:chat:readonly, im:chat, im:chat.group_info:readonly, im:chat.members:read]
+应用尚未开通所需的应用身份权限
+```
+
+一键清单含 `im:chat:read`(查看群信息)与 `im:chat.members:bot_access`(机器人进出群事件),但**都不在服务端要求的这四个之中**。这是一处对 §3 的更正(§3 原先只依据官方文档逐字符核对清单,没有实测调用)。
+
+**后果与对策**:「按 Bot 名字 @」默认走不通(名册不全时未解析的 `@xxx` 会被静默保留为纯文本)。本方案改为**一律用已知 openId 构造提及**,见 §5.7;需要用名字时再走 §4.4 的重授权补 scope。
+
+#### 8.1.3 其他顺手确认的
+
+- **长连接可用,无需公网地址**:两条 WS 均 `ws client ready`,事件正常到达。SDK 会打印一条「订阅方式需在开发者后台设为长连接」的提示,实测**没有阻塞**(一键创建默认为长连接)。
+- **注册链接的有效期**:`onQRCodeReady` 的 `expireIn` 实测为 **3600**(秒),而公开文档说「十分钟」。会话跟随 SDK 实际给的值;文档口径的差异未再深究。
+
+### 8.2 未实测
+
+1. 扫码人非管理员时权限是否即时生效？(R2)。本次扫码人权限足够,这条**仍未覆盖**。
+2. `appPreset.avatar` 的图片由谁抓取——用户客户端还是平台服务端?(R1)
+3. 卡片按钮回调、表单提交、卡片就地更新、流式回复是否均可用?
+4. 断线重连后事件是否补投?重复事件如何表现?(配合 5.1 的持久化 Cache 验证跨重启去重)
+5. 单应用开两条 WS 连接时事件是否分流?(R6)
+6. 逐 Agent 创建应用的数量与频率上限?(R5)
+7. 是否存在删除应用的 OpenAPI?(R4)
+8. 一批合并后交付对用户体验与上下文的影响(5.2 决策 A 的实测)。(R10)
 
 ## 9. 参考
 
