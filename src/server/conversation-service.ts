@@ -287,7 +287,16 @@ function pickResponders(conversation: Conversation, mentionedAgentIds: string[])
   return conductor ? [conductor.id] : [];
 }
 
-function createWorkspace(conversationId: string, now: number) {
+/**
+ * Give a conversation a workspace.
+ *
+ * Exported because a conversation can also be discovered rather than created by
+ * hand — a channel chat that speaks for the first time — and that path has to
+ * produce the same thing. Without a workspace every run in the conversation
+ * fails immediately with "Workspace not found", which is exactly what happened
+ * the first time this was exercised for real.
+ */
+export function createWorkspace(conversationId: string, now: number) {
   const workspaceId = newWorkspaceId();
   const workspaceRoot = path.join(getDataDir(), "workspaces", conversationId);
   fs.mkdirSync(workspaceRoot, { recursive: true });

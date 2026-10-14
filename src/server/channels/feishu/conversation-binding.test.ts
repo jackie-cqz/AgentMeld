@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
 import { setupTestDatabase } from "@/test/test-database";
 import { resolveChannelConversation } from "@/server/channels/feishu/conversation-binding";
 import {
   getChannelConversationByChat,
   getConversation,
+  getWorkspaceForConversation,
   listChannelConversationMembers
 } from "@/server/repositories";
 
@@ -42,6 +44,20 @@ describe("resolveChannelConversation", () => {
     const conversation = getConversation(channelConversation.conversationId);
     expect(conversation?.agentIds).toEqual(["ag_pm"]);
     expect(conversation?.mode).toBe("group");
+  });
+
+  it("gives the new conversation a workspace, or every run in it fails", () => {
+    // A conversation without a workspace answers "⚠️ Workspace not found." and
+    // never runs anything. This is not hypothetical: routing went in without it
+    // and the first real agent run in a channel conversation died on exactly
+    // that. The service's createConversation does this, but its rules do not fit
+    // here — it demands two agents for a group, and a discovered group starts
+    // with the one whose bot spoke first.
+    const { channelConversation } = resolveChannelConversation(first);
+
+    const workspace = getWorkspaceForConversation(channelConversation.conversationId);
+    expect(workspace).not.toBeNull();
+    expect(fs.existsSync(workspace!.rootPath)).toBe(true);
   });
 
   it("maps the chat so a later message finds it again", () => {

@@ -7,6 +7,7 @@ import {
   listChannelConversationMembers,
   updateConversation
 } from "@/server/repositories";
+import { createWorkspace } from "@/server/conversation-service";
 import { newChannelConversationId, newConversationId } from "@/shared/ids";
 import type { ChannelConversation } from "@/shared/types";
 
@@ -45,6 +46,13 @@ export function resolveChannelConversation(input: {
     fsWriteApprovalMode: "auto",
     now: input.now
   });
+
+  // The service's createConversation does this, but its rules do not fit here:
+  // it requires at least two agents for a group, and a discovered group starts
+  // with the one agent whose bot spoke first. Members accumulate from then on.
+  // Skipping the workspace is not an option — every run would fail with
+  // "Workspace not found".
+  createWorkspace(conversation.id, input.now);
 
   let channelConversation: ChannelConversation;
   try {
