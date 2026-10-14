@@ -441,7 +441,7 @@ describe("evaluateChildTaskResult evidence gates", () => {
     expect(result.status).toBe("complete");
   });
 
-  it("fails when required human-readable evidence is omitted", () => {
+  it("fails when the report carries no structured evidence despite declared evidence requirements", () => {
     const result = evaluateChildTaskResult(
       task({ requiredEvidence: ["说明浏览器验证结果"] }),
       report(),
@@ -450,5 +450,36 @@ describe("evaluateChildTaskResult evidence gates", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("说明浏览器验证结果");
+  });
+
+  // Regression (issue #11): requiredEvidence items are natural-language phrases
+  // written by the plan author, so a report conveying the right information in
+  // different words must pass. Demanding the exact wording made completion
+  // impossible — a report failed for not reproducing
+  // "构建/自测结果（构建通过或静态实现可运行）" character for character.
+  it("accepts required evidence that is reported in different words", () => {
+    const result = evaluateChildTaskResult(
+      task({ requiredEvidence: ["构建/自测结果（构建通过或静态实现可运行）", "关键产物文件路径"] }),
+      report({
+        summary: "构建通过，产物已交付。",
+        files: [{ path: "index.html", action: "created" }]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("accepts a command report as the structured evidence for a declared requirement", () => {
+    const result = evaluateChildTaskResult(
+      task({ requiredEvidence: ["构建/自测结果（构建通过或静态实现可运行）"] }),
+      report({
+        summary: "已按契约自测。",
+        commands: [{ command: "node build.mjs", exitCode: 0, passed: true }]
+      }),
+      evidence()
+    );
+
+    expect(result.status).toBe("complete");
   });
 });

@@ -140,23 +140,34 @@ export function evaluateChildTaskResult(
     };
   }
 
-  // ⑧ requiredEvidence mentioned in the structured report?
-  const reportEvidenceText = [
-    report.summary,
-    ...(report.acceptanceResults ?? []).flatMap((result) => [result.criterion, result.evidence]),
-    ...(report.files ?? []).flatMap((file) => [file.path, file.summary ?? ""]),
-    ...(report.commands ?? []).flatMap((command) => [command.command, command.summary ?? ""]),
-    ...(report.tests ?? []).flatMap((test) => [test.command, test.summary ?? ""]),
-    ...(report.blockers ?? [])
-  ].join("\n").toLowerCase();
-  const missingEvidence = (task.requiredEvidence ?? []).filter(
-    (requirement) => !reportEvidenceText.includes(requirement.trim().toLowerCase())
-  );
-  if (missingEvidence.length > 0) {
-    return {
-      status: "failed",
-      error: `缺少必需证据说明: ${missingEvidence.join(", ")}`
-    };
+  // ⑧ requiredEvidence: does the report carry evidence at all?
+  //
+  // These items are natural-language phrases written by the plan author (and
+  // editable by the user), so they cannot be matched literally. Requiring the
+  // report to contain the wording made completion impossible — a report that
+  // satisfied every requirement still failed for not reproducing the string
+  // "构建/自测结果（构建通过或静态实现可运行）" character for character (issue #11).
+  //
+  // The concrete obligations are already checked structurally: ⑥ covers declared
+  // paths and ⑦ covers declared commands. What remains is that a task declaring
+  // evidence requirements must return *some* structured evidence rather than
+  // prose alone — that is the claim-versus-evidence distinction this gate exists
+  // for, and it is satisfiable.
+  if ((task.requiredEvidence ?? []).length > 0) {
+    const structuredEvidence = [
+      ...(report.files ?? []).filter((file) => file.action !== "read"),
+      ...(report.commands ?? []),
+      ...(report.tests ?? []),
+      ...(report.acceptanceResults ?? []).filter((result) => result.evidence.trim().length > 0)
+    ];
+    if (structuredEvidence.length === 0) {
+      return {
+        status: "failed",
+        error:
+          `缺少证据说明: 本任务声明了 ${(task.requiredEvidence ?? []).length} 项必需证据` +
+          `（${(task.requiredEvidence ?? []).join("; ")}），但报告未附带任何结构化证据（文件/命令/测试/验收结果）`
+      };
+    }
   }
 
   return { status: "complete" };

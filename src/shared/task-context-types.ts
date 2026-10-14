@@ -85,7 +85,23 @@ export interface TaskContextEnvelope {
   blocked: boolean;
   identity: { conductorRunId: string; planId: string; planRevision: number; taskId: string; attemptId: string; attempt: number; contextSnapshotId: string };
   task: { title: string; objective: string; assignedAgentId: string; dependsOn: string[] };
-  requirements: { constraints: unknown[]; expectedOutputs: Array<{ outputKey: string; type: string; required: boolean; description?: string }> };
+  requirements: {
+    constraints: unknown[];
+    expectedOutputs: Array<{ outputKey: string; type: string; required: boolean; description?: string }>;
+    /**
+     * The task's evidence contract. The evaluator enforces every field here, so
+     * each one has to reach the model: a requirement the agent never sees is a
+     * requirement it cannot meet.
+     */
+    /** Criteria the task is verified against; the report must answer each one. */
+    acceptanceCriteria: string[];
+    /** Paths the task is expected to create or modify (checked against file evidence). */
+    targetPaths: string[];
+    /** Commands the task is expected to run (checked against command evidence). */
+    requiredCommands: Array<{ command: string; timeoutMs?: number }>;
+    /** Aspects the report is expected to address, in the plan author's own words. */
+    requiredEvidence: string[];
+  };
   upstreamInputs: unknown[];
   /** P3: Items that survived packing — these ARE the context the model receives */
   includedContextItems: ContextItem[];

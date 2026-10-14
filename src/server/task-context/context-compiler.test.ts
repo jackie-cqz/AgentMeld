@@ -19,7 +19,7 @@ import { scoreCandidate, rankCandidates } from "@/server/task-context/relevance-
 import { compressCandidate } from "@/server/task-context/context-compressor";
 import { externalizeCandidate } from "@/server/task-context/context-externalizer";
 import { packContext } from "@/server/task-context/context-packer";
-import { compileTaskContext } from "@/server/task-context/context-compiler";
+import { buildRequirements, compileTaskContext } from "@/server/task-context/context-compiler";
 import { createArtifact, createConversation } from "@/server/repositories";
 import type { ContextCandidate } from "@/server/task-context/context-candidates";
 import type { TaskContextEnvelope } from "@/shared/task-context-types";
@@ -151,7 +151,7 @@ describe("context-renderer", () => {
       policyVersion: "evidence-context-p3-v1",
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "ctx1" },
       task: { title: "Test", objective: "Build a todo app", assignedAgentId: "ag1", dependsOn: [] },
-      requirements: { constraints: [], expectedOutputs: [{ outputKey: "app", type: "web_app", required: true }] },
+      requirements: { constraints: [], expectedOutputs: [{ outputKey: "app", type: "web_app", required: true }], acceptanceCriteria: [], targetPaths: [], requiredCommands: [], requiredEvidence: [] },
       blocked: false,
       includedContextItems: [],
       upstreamInputs: [],
@@ -173,7 +173,7 @@ describe("context-renderer", () => {
       schemaVersion: 1, policyVersion: "v1",
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "c1" },
       task: { title: "T", objective: "A < B && C > D", assignedAgentId: "ag1", dependsOn: [] },
-      requirements: { constraints: [], expectedOutputs: [] },
+      requirements: { constraints: [], expectedOutputs: [], acceptanceCriteria: [], targetPaths: [], requiredCommands: [], requiredEvidence: [] },
       blocked: false, includedContextItems: [],
       upstreamInputs: [], failureContext: null,
       manifest: [], budget: { maxInputTokens: 1000, requiredTokens: 0, optionalTokens: 0, omittedTokens: 0 }, createdAt: 1,
@@ -187,7 +187,7 @@ describe("context-renderer", () => {
       schemaVersion: 1, policyVersion: "v1",
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 2, contextSnapshotId: "c1" },
       task: { title: "T", objective: "Fix build", assignedAgentId: "ag1", dependsOn: [] },
-      requirements: { constraints: [], expectedOutputs: [] },
+      requirements: { constraints: [], expectedOutputs: [], acceptanceCriteria: [], targetPaths: [], requiredCommands: [], requiredEvidence: [] },
       blocked: false, includedContextItems: [],
       upstreamInputs: [],
       failureContext: {
@@ -210,7 +210,7 @@ describe("context-renderer", () => {
       schemaVersion: 1, policyVersion: "v1",
       identity: { conductorRunId: "r1", planId: "p1", planRevision: 0, taskId: "t1", attemptId: "a1", attempt: 1, contextSnapshotId: "c1" },
       task: { title: "T", objective: "Fix app", assignedAgentId: "ag1", dependsOn: [] },
-      requirements: { constraints: [], expectedOutputs: [] },
+      requirements: { constraints: [], expectedOutputs: [], acceptanceCriteria: [], targetPaths: [], requiredCommands: [], requiredEvidence: [] },
       blocked: false,
       includedContextItems: [{
         category: "workspace",
@@ -241,7 +241,7 @@ describe("context-renderer", () => {
       schemaVersion: 1, policyVersion: "v1",
       identity: { conductorRunId: "run1", planId: "plan1", planRevision: 0, taskId: "r2", attemptId: "a1", attempt: 1, contextSnapshotId: "ctx1" },
       task: { title: "Style guide", objective: "基于 r1 PRD 设计 UI", assignedAgentId: "ag_designer", dependsOn: ["r1"] },
-      requirements: { constraints: [], expectedOutputs: [] },
+      requirements: { constraints: [], expectedOutputs: [], acceptanceCriteria: [], targetPaths: [], requiredCommands: [], requiredEvidence: [] },
       blocked: false,
       includedContextItems: [],
       upstreamInputs: [{
@@ -534,5 +534,51 @@ describe("context-packer", () => {
     const result = packContext(scored, 10000);
     expect(result.packed.map(p => p.id)).toContain("m1");
     expect(result.omitted.length).toBeGreaterThan(0);
+  });
+});
+
+// Regression (issue #11): the evidence contract is enforced by
+// evaluateChildTaskResult, so every field the plan declares has to survive the
+// trip from the plan task into the envelope the renderer consumes. This is the
+// exact wiring that was missing — the renderer had nothing to render because the
+// envelope never carried the contract.
+describe("buildRequirements contract wiring", () => {
+  it("carries every declared contract field into the envelope", () => {
+    const requirements = buildRequirements({
+      id: "t1",
+      agentId: "ag_worker",
+      title: "交付页面",
+      prompt: "实现并部署",
+      dependsOn: [],
+      inputs: [],
+      expectedOutputs: [{ id: "web_app", type: "web_app", required: true }],
+      acceptanceCriteria: [
+        '{"id":"contract-artifact-web_app","description":"web_app 产物已创建","required":true,"validator":{"type":"artifact_exists"}}',
+        "倒计时以 MM:SS 显示"
+      ],
+      maxAttempts: 1,
+      targetPaths: ["index.html"],
+      requiredCommands: [{ command: "npm run build", timeoutMs: 300000 }],
+      requiredEvidence: ["构建结果", "预览地址"]
+    }, [{ canonicalKey: "ui.theme.primaryColor", value: "#22c55e" }]);
+
+    expect(requirements.expectedOutputs).toEqual([{ outputKey: "web_app", type: "web_app", required: true }]);
+    expect(requirements.acceptanceCriteria).toHaveLength(2);
+    expect(requirements.targetPaths).toEqual(["index.html"]);
+    expect(requirements.requiredCommands).toEqual([{ command: "npm run build", timeoutMs: 300000 }]);
+    expect(requirements.requiredEvidence).toEqual(["构建结果", "预览地址"]);
+    expect(requirements.constraints).toEqual([{ canonicalKey: "ui.theme.primaryColor", value: "#22c55e" }]);
+  });
+
+  it("defaults to empty contract arrays when the plan declares none", () => {
+    const requirements = buildRequirements({
+      id: "t2", agentId: "ag_worker", title: "无契约", prompt: "p", dependsOn: [], inputs: [],
+      expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1
+    }, []);
+
+    expect(requirements.targetPaths).toEqual([]);
+    expect(requirements.requiredCommands).toEqual([]);
+    expect(requirements.requiredEvidence).toEqual([]);
+    expect(requirements.acceptanceCriteria).toEqual([]);
   });
 });

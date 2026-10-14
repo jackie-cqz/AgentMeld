@@ -9,7 +9,7 @@ import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { validatePlan, topologicalWaves, parsePlanArgs, type ParsedTask } from "@/server/tools/conductor-tools";
 import { buildChildTaskPrompt, resolveTaskInputs, resolveVerifiedTaskInputs, renderTaskContextPrompt, hasMissingRequiredInputs, type UpstreamArtifact, type ActiveFactEntry } from "@/server/child-prompt-builder";
-import { compileTaskContext } from "@/server/task-context/context-compiler";
+import { buildRequirements, compileTaskContext } from "@/server/task-context/context-compiler";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
 import { buildContractGuidance } from "@/server/agent-contracts/contract-resolver";
@@ -1483,7 +1483,7 @@ export function buildMinimalContextEnvelope(
       contextSnapshotId: identity.contextSnapshotId
     },
     task: { title: task.title, objective: task.prompt, assignedAgentId: task.agentId, dependsOn: task.dependsOn },
-    requirements: { constraints: [], expectedOutputs: (task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true, description: eo.description })) },
+    requirements: buildRequirements(task, []),
     upstreamInputs: resolvedInputs.filter(ri => ri.artifactId).map(ri => ({ fromTaskId: ri.fromTaskId, outputKey: ri.outputId, artifactId: ri.artifactId!, artifactVersion: 0, artifactType: "unknown", title: ri.outputId, verificationId: "", evidenceIds: [] })),
     failureContext: failureHint ? { previousAttemptId: failureHint.previousAttemptId, previousChildRunId: "", failedCriteria: [], failedEvidenceIds: [], failedCommands: [], missingOutputs: [], changedFiles: [], retryInstructions: [`Previous attempt failed: ${failureHint.error}`] } : null,
     blocked: false,
