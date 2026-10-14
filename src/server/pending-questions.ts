@@ -95,10 +95,16 @@ export function answerQuestion(id: string, answers: Record<string, string>): boo
       const planRow = db.prepare("SELECT id, revision FROM conductor_plans WHERE conductor_run_id = ? ORDER BY revision DESC LIMIT 1").get(q.runId) as { id: string; revision: number } | undefined;
       const realPlanId = planRow?.id ?? `plan_${q.runId}_init`;
       const metaId = `ta_conductor_${realPlanId}`;
+      // Written terminal, like the approval path in dispatch-plan-manager.ts: this
+      // row is an evidence container, not an in-flight attempt. The question's
+      // pending state lives in pending_questions/pending_approvals, and nothing
+      // finishes this row when the user abandons the plan instead of approving it,
+      // so a 'running' row here could leak forever.
+      // (Reuses this function's `now` rather than shadowing it.)
       db.prepare(`
-        INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'conductor', ?, 0, 'running', 'not_started', ?, ?)
-      `).run(metaId, q.runId, q.conversationId, realPlanId, planRow?.revision ?? 0, q.agentId, Date.now(), Date.now());
+        INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, started_at, finished_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'conductor', ?, 0, 'reported_complete', 'not_started', ?, ?, ?, ?)
+      `).run(metaId, q.runId, q.conversationId, realPlanId, planRow?.revision ?? 0, q.agentId, now, now, now, now);
       attempt = db.prepare("SELECT * FROM task_attempts WHERE id = ?").get(metaId) as Record<string, unknown> | undefined;
     }
     if (attempt) {

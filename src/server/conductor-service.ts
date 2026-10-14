@@ -1038,9 +1038,21 @@ async function runChildTask(
       clearRunToolEvidence(attemptRunId);
       clearTaskResultsForRun(attemptRunId);
 
-      // P1: Update attempt execution status
+      // P1: Both statuses belong to THIS attempt, not only to the last one.
+      // Writing execution_status alone left every retried attempt reporting
+      // `failed / not_started`, which reads as "verification never ran" when in
+      // fact it ran and rejected — and hid the real reason, including
+      // "没有调用 report_task_result". The blocked path above already writes both.
+      // The post-loop update below still runs, because the missing-required-outputs
+      // gate can re-judge the final attempt after the loop.
       const executionStatus = finalEvaluation.status === "complete" ? "reported_complete" : "failed";
       finishTaskAttempt(attemptId, executionStatus, Date.now());
+      updateTaskAttemptVerification(
+        attemptId,
+        finalEvaluation.status === "complete" ? "verified" : "rejected",
+        finalEvaluation.status !== "complete" ? JSON.stringify({ error: finalEvaluation.error }) : null,
+        Date.now()
+      );
 
       // P8: Incremental FTS rebuild — evidence + verdicts are now persisted,
       // so the FTS index should include this attempt's data for future searches.
