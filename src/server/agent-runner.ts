@@ -115,19 +115,23 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   // 1. Look up entities
   const agent = getAgent(input.agentId);
   if (!agent) {
-    createErrorMessage(input.conversationId, input.triggerMessage.id, `Agent "${input.agentId}" not found.`);
+    // `null`, not the id that was asked for: `messages.agent_id` is a foreign
+    // key, and this agent does not exist. There is also no bot for it, so a
+    // notice with no author is both the only insertable thing and the only
+    // honest one.
+    createErrorMessage(input.conversationId, input.triggerMessage.id, `Agent "${input.agentId}" not found.`, null);
     return;
   }
 
   const conversation = getConversation(input.conversationId);
   if (!conversation) {
-    createErrorMessage(input.conversationId, input.triggerMessage.id, "Conversation not found.");
+    createErrorMessage(input.conversationId, input.triggerMessage.id, "Conversation not found.", input.agentId);
     return;
   }
 
   const workspace = getWorkspaceForConversation(input.conversationId);
   if (!workspace) {
-    createErrorMessage(input.conversationId, input.triggerMessage.id, "Workspace not found.");
+    createErrorMessage(input.conversationId, input.triggerMessage.id, "Workspace not found.", input.agentId);
     return;
   }
 
@@ -200,7 +204,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : "Conductor failed.";
-      createErrorMessage(input.conversationId, message.id, `Conductor error: ${errorText}`);
+      createErrorMessage(input.conversationId, message.id, `Conductor error: ${errorText}`, input.agentId);
       completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "conductor", inputTokens: 0, outputTokens: 0 });
     }
     activeRuns.delete(run.id);
@@ -326,9 +330,12 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   };
 
   // 8. Consume adapter stream via unified consumeStream
-  const adapter = getAdapter(agent.adapterName);
-
   try {
+    // Inside the try on purpose: an unknown adapter name used to throw out of
+    // this function entirely, leaving the run row "running" for ever and
+    // nothing said. Here it becomes an ordinary failure — recorded, announced,
+    // and visible.
+    const adapter = getAdapter(agent.adapterName);
     const { parts, usage: streamUsage } = await consumeStream({
       stream: adapter.run(adapterInput, abortController.signal),
       messageId: message.id,
@@ -364,7 +371,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       parts: message.parts.length > 0 ? message.parts : [{ type: "text", content: `⚠️ Agent 运行失败：${errorText}` }],
       updatedAt: Date.now()
     };
-    createErrorMessage(input.conversationId, message.id, `Agent run failed: ${errorText}`);
+    createErrorMessage(input.conversationId, message.id, `Agent run failed: ${errorText}`, input.agentId);
     completeRun(run, message, "failed", errorText, fallbackUsage);
   }
   activeRuns.delete(run.id);
@@ -423,11 +430,26 @@ function completeRun(
   });
 }
 
-function createErrorMessage(conversationId: string, relatedMessageId: string, error: string): void {
+/**
+ * Record a failure as a message in the conversation.
+ *
+ * The agent is carried on the message because without it nobody can say WHICH
+ * agent failed — and the channel needs exactly that: a room's bot is per-agent,
+ * so a notice with no agent has no bot that can deliver it. The three early
+ * exits below (no agent, no conversation, no workspace) run before any run row
+ * exists, so `run.end` cannot cover them and this is the only thing that can.
+ */
+function createErrorMessage(
+  conversationId: string,
+  relatedMessageId: string,
+  error: string,
+  agentId: string | null
+): void {
   const now = Date.now();
   const message = createMessage({
     id: newMessageId(),
     conversationId,
+    agentId,
     role: "system",
     parts: [{ type: "text", content: `⚠️ ${error}` }],
     status: "complete",

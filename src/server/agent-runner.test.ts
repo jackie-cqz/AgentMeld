@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
-import { resetDatabaseForTests } from "@/db/client";
+import { getDatabase, resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import {
   abortRun,
@@ -376,6 +376,31 @@ describe("agent-runner", () => {
       const textPart = errorMsg.parts.find((p) => p.type === "text");
       expect(textPart?.type === "text" && textPart.content).toContain("⚠️");
     }
+  });
+
+  it("attributes a workspace failure to the agent, so the group can hear it", async () => {
+    // The link the channel needs: a room's bot is per-agent, so a failure
+    // notice with no agent has no bot that could deliver it. Without this the
+    // notice reaches the web and stops there — which is what "Workspace not
+    // found" did, silently, for a user whose only view was the group.
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    // The service creates a workspace; this failure needs one that is missing.
+    getDatabase().prepare("DELETE FROM workspaces WHERE conversation_id = ?").run(conv.id);
+
+    await sendMessage({
+      origin: "human",
+      conversationId: conv.id,
+      content: "开始吧",
+      mentionedAgentIds: ["ag_mock_builder"]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const notice = listMessages(conv.id).find((m) => m.role === "system");
+    expect(notice).toBeDefined();
+    // The agent is what makes it deliverable to the room.
+    expect(notice?.agentId).toBe("ag_mock_builder");
+    const body = notice?.parts.find((p) => p.type === "text");
+    expect(body?.type === "text" && body.content).toContain("Workspace not found");
   });
 
   it("respects event ordering: run.start → message.start → part events → run.end", async () => {
