@@ -280,7 +280,15 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
     <div className="ui-form flex min-h-full flex-col gap-3 p-4">
       <Modal open={pendingNavigation !== null} onClose={() => setPendingNavigation(null)} title="放弃产物修改？" size="small"
         footer={<><button className="ui-button" onClick={() => setPendingNavigation(null)}>继续编辑</button>
-          <button className="ui-button ui-button--danger" onClick={() => { const navigate = pendingNavigation; setPendingNavigation(null); guardCleanup.current?.(); navigate?.(); }}>放弃修改</button></>}>
+          <button className="ui-button ui-button--danger" onClick={() => {
+            const navigate = pendingNavigation;
+            setPendingNavigation(null);
+            guardCleanup.current?.();
+            setTitle(artifact.title);
+            setDocumentContent(artifact.content.type === "document" ? artifact.content.content : "");
+            setFiles(artifact.content.type === "web_app" ? artifact.content.files : {});
+            navigate?.();
+          }}>放弃修改</button></>}>
         <p className="ui-muted">「{artifact.title}」有未保存修改。离开编辑器后，这些修改将不会保留。</p>
       </Modal>
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 bg-[var(--ui-surface)] py-2">
@@ -289,6 +297,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           aria-label="产物标题"
+          disabled={saving}
         />
         <button
           type="button"
@@ -305,6 +314,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
         <textarea
           className="min-h-[520px] flex-1 resize-y rounded-md border border-slate-200 bg-white p-4 font-mono text-sm leading-6 outline-none focus:border-blue-400"
           aria-label="文档内容"
+          disabled={saving}
           value={documentContent}
           onChange={(event) => setDocumentContent(event.target.value)}
         />
@@ -332,6 +342,7 @@ function ArtifactEditor({ artifact }: { artifact: Artifact }) {
             value={files[activeFile] ?? ""}
             onChange={(event) => setFiles((current) => ({ ...current, [activeFile]: event.target.value }))}
             aria-label={activeFile || "Web App 文件"}
+            disabled={saving}
           />
         </div>
       ) : null}

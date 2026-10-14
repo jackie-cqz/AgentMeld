@@ -22,7 +22,7 @@ const artifacts = [1, 2].map(version => ({
 }));
 const messages = Array.from({ length: 16 }, (_, index) => ({
   id: `ui_message_${index}`, conversationId: conversation.id, role: index % 2 ? 'agent' : 'user',
-  origin: index % 2 ? 'agent' : 'human', agentId: index % 2 ? agent.id : null, runId: null,
+  origin: index % 2 ? 'agent' : 'human', agentId: index % 2 ? agent.id : null, runId: index === 15 ? 'ui_trace_run' : null,
   parts: [{ type: 'text', content: index % 2 ? `已核对当前任务的相关输入。\n\n${'本轮仅采用可验证的工具结果与产物。'.repeat(index === 15 ? 35 : 2)}` : '请检查这轮协作结果。' }],
   status: 'complete', mentionedAgentIds: [], parentMessageId: null, createdAt: now + index, updatedAt: now + index
 }));
@@ -170,6 +170,16 @@ try {
   assert(await chatScroll.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 125), 'Returning from a file must keep the chat at the bottom');
   await page.getByTitle('上下文统计与压缩', { exact: true }).click();
   await page.getByRole('dialog', { name: '上下文统计', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.route('**/api/context-trace/by-run/ui_trace_run', route => route.fulfill({ json: { attempt: { attemptId: 'ui_trace_attempt' } } }));
+  await page.route('**/api/context-trace/ui_trace_attempt', route => route.fulfill({ json: {
+    attempt: { attemptId: 'ui_trace_attempt', taskId: 't1', agentId: agent.id, executionStatus: 'complete', verificationStatus: 'verified', contextSnapshotId: null },
+    snapshot: null, upstreamInputs: [], includedManifest: [], omittedManifest: [], evidence: [], verdicts: [], outputBindings: [], warnings: []
+  } }));
+  await page.locator('#message-ui_message_15').getByTitle('上下文追踪', { exact: true }).click();
+  await modalCheck(page, 'trace-drawer');
+  await screenshot(page, 'trace-drawer');
+  await page.getByRole('tab', { name: '证据', exact: true }).click();
   await page.keyboard.press('Escape');
   await page.close();
   for (const width of [1440, 390]) {
