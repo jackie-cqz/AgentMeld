@@ -168,9 +168,10 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
 
   channel.on("cardAction", (event) => {
     // Returned to the platform so the click gets immediate feedback and the card
-    // updates in place. Deliberately NOT awaited on anything that runs an agent:
-    // §5.4 — the SDK serialises per chat, so awaiting a run here would leave the
-    // click waiting behind the very work it just unblocked.
+    // updates in place. Nothing here awaits an agent run, which is what §5.4
+    // requires: the SDK runs card actions and messages on the same per-chat
+    // queue, so a handler that gave the work back to that queue would wait for
+    // itself.
     return handleCardAction(event).catch((error: unknown) => {
       console.error("[feishu] failed to handle a card action:", error);
       return { toast: { type: "error", content: "处理失败，请在 AgentMeld 网页操作。" } };
