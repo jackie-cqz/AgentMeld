@@ -18,6 +18,10 @@ import {
 import { buildHistoryFor } from "@/server/conversation-context";
 import { getLatestSummary, calculateContextBudget } from "@/server/context-compaction-service";
 import { executeConductor } from "@/server/conductor-service";
+import { cancelPendingBashForRun } from "@/server/pending-bash";
+import { cancelPendingWritesForRun } from "@/server/pending-writes";
+import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
+import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { resolveApiKeyForAgent, resolveApiBaseUrl, getSettings } from "@/server/settings-service";
 import { estimateTokens } from "@/shared/token-estimate";
 import { getModelLimits } from "@/shared/model-registry";
@@ -35,15 +39,33 @@ export function abortRun(runId: string): boolean {
   const controller = activeRuns.get(runId);
   if (!controller) return false;
   controller.abort();
+  settlePendingApprovalsForRun(runId);
 
   // P1.4: Cascade abort — abort all child runs too
   const childIds = listChildRunIds(runId);
   for (const childId of childIds) {
     const childController = activeRuns.get(childId);
     if (childController) childController.abort();
+    settlePendingApprovalsForRun(childId);
   }
 
   return true;
+}
+
+/**
+ * Release a run from any approval it is parked on.
+ *
+ * `registerPending*` returns a bare promise that only settles when a human acts,
+ * so aborting the AbortController alone left the awaited tool call — and with it
+ * the run — in `running` forever, leaking the entry in `activeRuns`. Cancelling
+ * the queues resolves those promises with "not approved", which lets the tool
+ * return, the agent loop observe the aborted signal, and the run finalize.
+ */
+export function settlePendingApprovalsForRun(runId: string): void {
+  cancelPendingBashForRun(runId);
+  cancelPendingWritesForRun(runId);
+  cancelPendingPlansForRun(runId);
+  cancelPendingQuestionsForRun(runId);
 }
 
 export function isRunActive(runId: string): boolean {

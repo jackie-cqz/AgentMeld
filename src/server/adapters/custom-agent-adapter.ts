@@ -426,6 +426,14 @@ export const customAgentAdapter: AgentPlatformAdapter = {
       const ctx = buildToolContext(input, signal);
 
       for (const [, tc] of toolCalls) {
+        // Re-check the signal for every tool, not just once per round. A round can
+        // carry several approval-gated calls; if the user aborts while the first is
+        // waiting, executing the next one would register a fresh pending approval
+        // after abortRun already settled the queues — parking the run forever.
+        // tool.call is emitted below, so breaking here leaves the transcript
+        // consistent instead of orphaning a tool_use.
+        if (signal.aborted) break;
+
         const injectedArguments = toolArgumentFaultInterceptor?.({
           runId: input.runId,
           toolName: tc.name,
