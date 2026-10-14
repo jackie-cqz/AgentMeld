@@ -2,7 +2,7 @@
 
 ## Scope and Baseline
 
-The implementation starts from `1b08ffb` and is rebased on `461d082` so that the Feishu connection health work in PR #32 is preserved. It changes frontend presentation and navigation, not Runtime, Conductor, tool execution, database schemas, or API contracts. The only server-side file changed is a test: Bash policy expectations now use native platform paths instead of Unix-only literals.
+The implementation starts from `1b08ffb` and is rebased on `0c2d97e` so that the Feishu connection, inbound and projection work in PRs #32-#35 is preserved. It changes frontend presentation and navigation, not Runtime, Conductor, tool execution, database schemas, or API contracts. The only server-side file changed is a test: Bash policy expectations now use native platform paths instead of Unix-only literals.
 
 The visual direction is a compact work surface: neutral semantic colors, restrained blue actions, consistent 6-8px corners, a single scrolling modal body, and fixed header/navigation/footer regions. No marketing screen or new UI/state framework is introduced.
 
@@ -27,7 +27,7 @@ Start AgentMeld in one PowerShell terminal:
 
 ```powershell
 $env:AGENTMELD_DATA_DIR = Join-Path $PWD '.tmp-ui-data'
-node node_modules/next/dist/bin/next dev --webpack --port 3018 --hostname 127.0.0.1
+node node_modules/next/dist/bin/next dev --port 3018 --hostname 127.0.0.1
 ```
 
 Start an isolated headless Chrome profile and run checks in another terminal:
@@ -66,7 +66,7 @@ Browser verification uses current Chromium. Native dialog/popover support is req
 
 - `pnpm typecheck`: passed.
 - `pnpm lint`: passed, with 52 existing unused-variable warnings.
-- `pnpm test`: 103 files passed; 1155 tests passed; 2 existing tests skipped at the first rebased verification. Two focused panel-geometry tests were subsequently added; the final PR CI checks include them.
+- `pnpm test`: 109 files passed; 1221 tests passed; 2 existing tests skipped on the final rebased baseline.
 - `pnpm build`: passed. An existing Turbopack file-tracing warning remains in the SDK/backend import graph.
 - All three CDP regression scripts passed without runtime page errors.
 

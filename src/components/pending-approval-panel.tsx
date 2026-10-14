@@ -70,7 +70,6 @@ function PendingWriteCard({ write }: { write: PendingWrite }) {
       });
     } catch (resolveError) {
       setError(resolveError instanceof Error ? resolveError.message : "审批失败。");
-    } finally {
       setResolving(false);
     }
   };
@@ -131,7 +130,6 @@ function PendingBashCard({ bash }: { bash: PendingBashCommand }) {
       });
     } catch (resolveError) {
       setError(resolveError instanceof Error ? resolveError.message : "命令审批失败。");
-    } finally {
       setResolving(false);
     }
   };
@@ -213,7 +211,6 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
       setFeedback("");
     } catch (resolveError) {
       setError(resolveError instanceof Error ? resolveError.message : "计划审批失败。");
-    } finally {
       setResolving(false);
     }
   };

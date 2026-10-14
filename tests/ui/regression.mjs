@@ -235,11 +235,13 @@ try {
     const planResponse = page.waitForResponse(response => response.url().endsWith('/ui_plan/resolve'));
     await planSurface.getByTitle('批准执行', { exact: true }).click();
     await planResponse;
+    assert(await planSurface.getByTitle('批准执行', { exact: true }).isDisabled(), 'Resolved plan stays disabled until its stream event');
     await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'dispatch.plan.resolved', conversationId: conversation.id, timestamp: now, pendingId: 'ui_plan', runId: 'ui_run', approved: true });
     await page.getByText('编排计划待审批', { exact: true }).waitFor({ state: 'detached' });
     const bashResponse = page.waitForResponse(response => response.url().endsWith('/ui_bash/resolve'));
     await page.getByTitle('拒绝执行', { exact: true }).click();
     await bashResponse;
+    assert(await page.getByTitle('拒绝执行', { exact: true }).isDisabled(), 'Resolved command stays disabled until its stream event');
     await page.getByRole('button', { name: '查看修改差异', exact: true }).click();
     await page.getByText('export const ready = true;', { exact: false }).waitFor();
     await noOverflow(page, `${width}-file-diff`);
