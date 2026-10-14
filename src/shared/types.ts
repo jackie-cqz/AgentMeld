@@ -71,6 +71,13 @@ export interface ChannelInboundMessage {
    * deliveries — without it, a second addressee would be dropped as a duplicate.
    */
   mentionOpenIds: string[];
+  /**
+   * Files attached to the message, as the platform names them. The bytes are
+   * fetched separately — they are not in the event, and pulling them is a
+   * decision the router makes rather than something the transport does on every
+   * message.
+   */
+  resources: Array<{ type: string; fileKey: string; fileName: string | null }>;
   content: string;
   threadId: string | null;
   createTime: number;

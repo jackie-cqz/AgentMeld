@@ -7,6 +7,10 @@ import {
   listChannelConversationMembers,
   setChannelInboundMessageId
 } from "@/server/repositories";
+import {
+  describeSkippedResources,
+  importInboundResources
+} from "@/server/channels/feishu/attachment-import";
 import { newChannelInboundMessageId } from "@/shared/ids";
 import type { ChannelInboundMessage, MessageOrigin } from "@/shared/types";
 
@@ -151,12 +155,37 @@ export async function routeChannelInbound(
   const mentionedAgentIds = addressees(inbound, participants);
   const origin = originForSender(inbound.senderType, inbound.senderIsBot);
 
+  // Attachments are fetched before the message is written, so the message can
+  // refer to them. A file that fails to arrive is reported in the room rather
+  // than only in the server log — the person who sent it is the one who needs
+  // to know.
+  const imported = await importInboundResources({
+    agentId: inbound.agentId,
+    conversationId: channelConversation.conversationId,
+    platformMessageId: inbound.messageId,
+    resources: inbound.resources ?? []
+  });
+  const attachmentIds = imported.status === "imported" ? imported.attachmentIds : [];
+  const skippedNote =
+    imported.status === "imported" ? describeSkippedResources(imported.skipped) : null;
+
   const result = await sendMessage({
     conversationId: channelConversation.conversationId,
     content,
     mentionedAgentIds,
+    attachmentIds,
     origin
   });
+
+  if (skippedNote) {
+    await sendMessage({
+      conversationId: channelConversation.conversationId,
+      content: skippedNote,
+      origin: "internal"
+    }).catch(() => {
+      // The note is a courtesy; the message it is about is already recorded.
+    });
+  }
 
   setChannelInboundMessageId(claimId, result.message.id);
 

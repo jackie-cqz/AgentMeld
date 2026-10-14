@@ -43,6 +43,7 @@ function inbound(overrides: Partial<ChannelInboundMessage> = {}): ChannelInbound
     senderIsBot: false,
     mentionedBot: true,
     mentionOpenIds: [],
+    resources: [],
     content: "帮我看看这个",
     threadId: null,
     createTime: 1,
@@ -208,6 +209,7 @@ describe("routeChannelInbound", () => {
         inbound({
           agentId: "ag_pm",
           mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+          resources: [],
           messageId: "om_two"
         })
       );
@@ -224,6 +226,7 @@ describe("routeChannelInbound", () => {
         inbound({
           agentId: "ag_pm",
           mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+          resources: [],
           messageId: "om_two"
         })
       );
@@ -231,6 +234,7 @@ describe("routeChannelInbound", () => {
         inbound({
           agentId: "ag_designer",
           mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+          resources: [],
           messageId: "om_two"
         })
       );
@@ -247,6 +251,7 @@ describe("routeChannelInbound", () => {
         inbound({
           agentId: "ag_pm",
           mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+          resources: [],
           messageId: "om_two"
         })
       );
@@ -260,6 +265,7 @@ describe("routeChannelInbound", () => {
         inbound({
           agentId: "ag_pm",
           mentionOpenIds: ["ou_bot_pm", "ou_some_stranger"],
+          resources: [],
           messageId: "om_three"
         })
       );

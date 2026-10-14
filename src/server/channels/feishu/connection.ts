@@ -124,6 +124,11 @@ function toInbound(agentId: string, message: NormalizedMessage): ChannelInboundM
     mentionOpenIds: message.mentions
       .map((mention) => mention.openId)
       .filter((openId): openId is string => Boolean(openId)),
+    resources: (message.resources ?? []).map((resource) => ({
+      type: resource.type,
+      fileKey: resource.fileKey,
+      fileName: resource.fileName ?? null
+    })),
     content: message.content,
     threadId: message.threadId ?? null,
     createTime: message.createTime

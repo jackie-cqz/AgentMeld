@@ -83,6 +83,7 @@ function inbound(overrides: Partial<ChannelInboundMessage> = {}): ChannelInbound
     senderIsBot: false,
     mentionedBot: true,
     mentionOpenIds: [],
+    resources: [],
     content: "开始吧",
     threadId: null,
     createTime: 1,
@@ -171,6 +172,7 @@ describe("a group where two bots mention each other", () => {
         senderType: "bot",
         senderIsBot: true,
         mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+        resources: [],
         content: "@设计 你来做"
       })
     });
@@ -209,6 +211,7 @@ describe("a group where two bots mention each other", () => {
         senderType: null,
         senderIsBot: null,
         mentionOpenIds: ["ou_bot_pm"],
+        resources: [],
         content: "我是谁"
       })
     });
@@ -281,6 +284,7 @@ describe("a group where two bots mention each other", () => {
         senderType: "bot",
         senderIsBot: true,
         mentionOpenIds: ["ou_bot_pm", "ou_bot_designer"],
+        resources: [],
         content: "接力给你"
       })
     });
