@@ -290,20 +290,29 @@ describe("startChannelRouter", () => {
     teardown();
   });
 
-  it("subscribes only once, so a message is not routed twice", async () => {
-    // The module is re-evaluated on hot reload; a second subscription would
-    // route every message again, and the claim would turn the duplicate into a
-    // silent drop rather than a visible error.
+  it("returns the same subscription when started twice", () => {
+    // The module is re-evaluated on hot reload, so this idempotence is the
+    // guard. Asserting it directly is the only honest check: an earlier version
+    // of this test counted dispatch calls after a second subscription, which
+    // proves nothing — the per-message claim would dedupe the duplicate anyway,
+    // so the count stays at one whether or not the guard works.
     const first = startChannelRouter();
     const second = startChannelRouter();
     expect(second).toBe(first);
+  });
 
-    eventBus.publish({
-      type: "channel.inbound",
+  it("routes a message once even when it is delivered twice", async () => {
+    // What the previous test only appeared to show. This is the claim doing the
+    // work, not the subscription guard.
+    startChannelRouter();
+    const event = {
+      type: "channel.inbound" as const,
       conversationId: "",
       timestamp: 1,
       message: inbound()
-    });
+    };
+    eventBus.publish(event);
+    eventBus.publish(event);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(startAgentRunMock).toHaveBeenCalledTimes(1);

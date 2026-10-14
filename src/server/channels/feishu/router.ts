@@ -24,6 +24,16 @@ import type { ChannelInboundMessage, MessageOrigin } from "@/shared/types";
  * It also never sends anything back. It cannot: the only thing it produces is a
  * local message. That keeps §5.8's first rule true by construction rather than
  * by discipline.
+ *
+ * Known limitation, from review: the SDK batches deliveries per chat by default
+ * and labels the batch with its LAST message id, so this claim is keyed on that
+ * representative. A redelivery that happens to be batched differently would
+ * therefore present a different id and be routed again. The SDK's own dedup
+ * would catch that, but it is in-memory unless a persistent Cache is injected —
+ * which this does not do. Narrow (it needs both a redelivery and a different
+ * batch grouping) but real, and it is the reason §5.1's "inject the cache"
+ * recommendation still stands as work to do rather than a decision already
+ * taken.
  */
 export type RouteOutcome =
   | { status: "duplicate" }
@@ -97,8 +107,10 @@ export async function routeChannelInbound(
     now
   });
 
-  // Claim before doing anything else. The claim is the deduplication and it is
-  // atomic, so a concurrent or redelivered copy stops here.
+  // Deduplicate before any dispatch. The claim is atomic, so a concurrent or
+  // redelivered copy stops here. Note that resolving the conversation above it
+  // has already run — those side effects are idempotent, and the claim has to
+  // know which conversation it is recording against.
   const claimId = newChannelInboundMessageId();
   const claimed = claimChannelInboundMessage({
     id: claimId,
@@ -111,16 +123,10 @@ export async function routeChannelInbound(
   });
   if (!claimed) return { status: "duplicate" };
 
-  const content = inbound.content.trim();
-  if (!content) {
-    // An @ with no text is something people really do. The claim above records
-    // that it was seen, so a redelivery is not mistaken for a new message, but
-    // there is nothing to hand to an agent.
-    return { status: "ignored", reason: "empty content" };
-  }
-
-  // Record every mentioned agent as present before working out who was
-  // addressed, so a first-time mention still counts as evidence of membership.
+  // Record every mentioned agent as present BEFORE deciding whether there is
+  // anything to hand to an agent. An @ with no text is a real interaction — the
+  // SDK explicitly wakes a bot on a bare mention — and it is still evidence that
+  // the mentioned bot is in the room. Returning early here used to lose that.
   for (const openId of inbound.mentionOpenIds) {
     const agentId = findAgentIdByBotOpenId(inbound.channel, openId);
     if (agentId) {
@@ -132,6 +138,13 @@ export async function routeChannelInbound(
         now
       });
     }
+  }
+
+  const content = inbound.content.trim();
+  if (!content) {
+    // Recorded as seen, so a redelivery is not mistaken for a new message, but
+    // there is nothing to hand to an agent.
+    return { status: "ignored", reason: "empty content" };
   }
 
   const participants = listChannelConversationMembers(channelConversation.id);

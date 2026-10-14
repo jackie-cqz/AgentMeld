@@ -2,6 +2,7 @@ import {
   addChannelConversationMember,
   createChannelConversation,
   createConversation,
+  deleteConversation,
   getChannelConversationByChat,
   getConversation,
   listChannelConversationMembers,
@@ -65,12 +66,15 @@ export function resolveChannelConversation(input: {
     });
   } catch (error) {
     // Two deliveries for a chat can arrive together, and the unique index on
-    // (channel, chat_id) is what makes that safe — but one of them loses. It
-    // adopts the winner's mapping rather than failing: the conversation the
-    // loser just created is left with no chat pointing at it, which is untidy
-    // but harmless, whereas throwing would drop a real message.
+    // (channel, chat_id) is what makes that safe — but one of them loses.
     const winner = getChannelConversationByChat(input.channel, input.chatId);
     if (!winner) throw error;
+
+    // Clean up the conversation this attempt created before adopting the
+    // winner's. Leaving it would put an unreachable, workspace-less conversation
+    // in the user's sidebar that no chat can ever speak to.
+    deleteConversation(conversation.id);
+
     joinChannelConversation(winner, input.receivingAgentId, input.now);
     return { channelConversation: winner, created: false };
   }
