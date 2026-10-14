@@ -455,25 +455,39 @@ describe("unsupported artifact claims", () => {
     )).toEqual(["art_invalid_123"]);
   });
 
-  // The report's free-text summary is narrative, not a claim. Scanning it used to
-  // fail whole attempts over a typo in prose (observed live: an agent wrote its
-  // own artifact id one character short) or over a passing reference to another
-  // conversation's artifact. Bindings come from evidence, never from prose, so
-  // these must not be treated as claims. context-trace-service still surfaces
-  // such mentions as a `guessed_artifact_id` warning.
-  it("ignores artifact ids that appear only in the free-text summary", () => {
+  // A task that really produced artifacts may mention ids in its narrative. A
+  // typo there, or a passing reference to another conversation's artifact, used
+  // to fail the whole attempt (observed live: an agent wrote its own artifact id
+  // one character short). Bindings come from evidence, never from prose.
+  it("ignores prose artifact ids once the task recorded real artifacts", () => {
+    const recorded = { web_app: "art_real_123" };
+    const evidence = [{
+      subjectId: "web_app",
+      payloadJson: JSON.stringify({ artifactId: "art_real_123" }),
+      status: "valid" as const,
+    }];
+
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: recorded, summary: "Produced the report as art_W2DRQxZRBqg (one character off)." },
+      evidence,
+    )).toEqual([]);
+    expect(findUnsupportedArtifactClaims(
+      { artifacts: recorded, summary: "Based on art_OTHER_CONVERSATION_999." },
+      evidence,
+    )).toEqual([]);
+  });
+
+  // The false-completion shape: nothing was produced, yet the report narrates an
+  // artifact id. This is what tests/e2e-fixtures/fake-artifact-id.json exercises.
+  it("treats a prose artifact id as a claim when the task recorded no artifacts", () => {
     expect(findUnsupportedArtifactClaims(
       { summary: "Created art_benchmark_fake_123." },
       [],
-    )).toEqual([]);
+    )).toEqual(["art_benchmark_fake_123"]);
     expect(findUnsupportedArtifactClaims(
-      { summary: "Produced the report as art_W2DRQxZRBqg (one character off)." },
+      { artifacts: {}, summary: "Created art_benchmark_fake_123." },
       [],
-    )).toEqual([]);
-    expect(findUnsupportedArtifactClaims(
-      { summary: "Based on art_OTHER_CONVERSATION_999." },
-      [],
-    )).toEqual([]);
+    )).toEqual(["art_benchmark_fake_123"]);
   });
 });
 

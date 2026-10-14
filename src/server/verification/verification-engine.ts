@@ -222,25 +222,32 @@ function parseArtifactPayload(payloadJson: string): { outputKey?: string; artifa
 }
 
 export function findUnsupportedArtifactClaims(
-  // `summary` is accepted (callers pass the real report) but deliberately NOT
-  // scanned — see the note below.
   taskReport: { artifacts?: Record<string, string>; summary?: string } | undefined,
   evidence: Array<{ subjectId: string; payloadJson: string; status: string }>,
 ): string[] {
   if (!taskReport) return [];
-  // Only the structured artifact map counts as a claim.
+
+  // `artifacts` holds the ids the PLATFORM recorded from successful
+  // write_artifact calls, so scanning it is a platform-record ↔ evidence-ledger
+  // consistency check. The report's free-text summary is only treated as a claim
+  // when the task recorded NO artifacts at all — that is the false-completion
+  // shape (an agent narrating artifacts it never produced).
   //
-  // The report's free-text summary used to be scanned as well, which failed an
-  // entire task attempt over a typo in prose — or over a legitimate mention of an
-  // artifact belonging to another conversation. That is disproportionate: output
-  // bindings are built from `artifact_created` evidence and never from
-  // self-report, so an id written in narrative text cannot influence the
-  // pipeline. A live run failed its recovery task for exactly this reason (the
-  // agent wrote its own review_report id one character short).
+  // Scanning the summary unconditionally failed entire attempts over a typo in
+  // prose, or over a legitimate mention of another conversation's artifact: a
+  // live run lost its recovery task because the agent wrote its own review_report
+  // id one character short, even though that artifact really existed. Output
+  // bindings come from `artifact_created` evidence and never from self-report, so
+  // narrative text cannot influence the pipeline.
   //
-  // Observability is not lost: context-trace-service still reports artifact ids
+  // Observability is unaffected: context-trace-service still reports artifact ids
   // mentioned in agent messages as a `guessed_artifact_id` warning.
-  const claimedIds = extractArtifactIds(Object.values(taskReport.artifacts ?? {}).join("\n"));
+  const recordedArtifactIds = Object.values(taskReport.artifacts ?? {});
+  const claimedIds = extractArtifactIds(
+    recordedArtifactIds.length > 0
+      ? recordedArtifactIds.join("\n")
+      : taskReport.summary ?? ""
+  );
   if (claimedIds.length === 0) return [];
 
   const supportedIds = new Set<string>();
