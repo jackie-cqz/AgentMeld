@@ -9,14 +9,17 @@ import {
   startChannelArtifactDelivery,
   stopChannelArtifactDeliveryForTests
 } from "@/server/channels/feishu/artifact-delivery";
-import { setChannelProjectionPaused } from "@/server/channels/feishu/projection";
+import {
+  setChannelProjectionPaused,
+  stopChannelProjectionForTests
+} from "@/server/channels/feishu/projection";
 import { eventBus } from "@/server/event-bus";
 import {
   createChannelConversation,
   createConversation,
   upsertChannelBinding
 } from "@/server/repositories";
-import type { Artifact } from "@/shared/types";
+import type { Artifact, Workspace } from "@/shared/types";
 
 const { channelsByAgent, sent } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
@@ -76,6 +79,14 @@ describe("artifactFileFor", () => {
     expect(file.name).toBe("artifact.md");
   });
 
+  /** A workspace record the guard can resolve, pointed at a real directory. */
+  function workspaceAt(root: string): Workspace {
+    return {
+      id: "ws", conversationId: "conv_1", mode: "sandbox", rootPath: root,
+      boundPath: null, createdAt: 1, updatedAt: 1
+    };
+  }
+
   it("reads a code file out of the workspace", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-artifact-"));
     try {
@@ -85,7 +96,7 @@ describe("artifactFileFor", () => {
           title: "main.ts",
           content: { type: "code_file", workspacePath: "main.ts" }
         }),
-        root
+        workspaceAt(root)
       );
       if ("reason" in file) throw new Error("expected a file");
       expect(file.content.toString("utf-8")).toContain("export const a = 1;");
@@ -101,12 +112,77 @@ describe("artifactFileFor", () => {
     try {
       const file = artifactFileFor(
         artifact({ content: { type: "code_file", workspacePath: "../../etc/passwd" } }),
-        root
+        workspaceAt(root)
       );
       expect("reason" in file).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("refuses a symlink that points out of the workspace", () => {
+    // The review's find, with a probe: the lexical check passed a link whose
+    // target was outside, and the target's contents were read and sent. A
+    // symlink to ~/.ssh would have gone to the group.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-artifact-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-outside-"));
+    try {
+      fs.writeFileSync(path.join(outside, "secret.txt"), "TOP SECRET");
+      fs.symlinkSync(path.join(outside, "secret.txt"), path.join(root, "link.txt"));
+
+      const file = artifactFileFor(
+        artifact({ title: "link.txt", content: { type: "code_file", workspacePath: "link.txt" } }),
+        workspaceAt(root)
+      );
+
+      expect("reason" in file).toBe(true);
+      if ("reason" in file) expect(file.reason).toContain("escapes");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a file larger than it will read", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-artifact-"));
+    try {
+      fs.writeFileSync(path.join(root, "big.bin"), Buffer.alloc(2 * 1024 * 1024));
+
+      const file = artifactFileFor(
+        artifact({ title: "big", content: { type: "code_file", workspacePath: "big.bin" } }),
+        workspaceAt(root)
+      );
+
+      expect("reason" in file && file.reason).toContain("over the");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("decodes an inline image, because an image IS one file", () => {
+    // The earlier refusal said an image "has no single file to send", which was
+    // simply wrong — it is a single image.
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    const file = artifactFileFor(
+      artifact({
+        title: "图",
+        content: { type: "image", url: `data:image/png;base64,${png.toString("base64")}` }
+      }),
+      null
+    );
+
+    if ("reason" in file) throw new Error("expected a file");
+    expect(file.name).toBe("图.png");
+    expect(file.content.equals(png)).toBe(true);
+  });
+
+  it("will not fetch a URL a model supplied", () => {
+    // Fetching it would make this process a request to anywhere the model names.
+    const file = artifactFileFor(
+      artifact({ content: { type: "image", url: "http://169.254.169.254/latest/meta-data/" } }),
+      null
+    );
+    expect("reason" in file && file.reason).toContain("will not fetch");
   });
 
   it("says why a type it cannot send is not sent", () => {
@@ -115,13 +191,15 @@ describe("artifactFileFor", () => {
       artifact({ content: { type: "web_app", files: { "index.html": "<p>x</p>" }, entry: "index.html" } }),
       null
     );
-    expect("reason" in web && web.reason).toContain("set of files");
+    expect("reason" in web && web.reason).toContain("opened in a browser");
 
     const diff = artifactFileFor(
       artifact({ content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } }),
       null
     );
-    expect("reason" in diff).toBe(true);
+    // The reason is asserted, not just its presence: a mutation replacing the
+    // whole sentence used to leave this green.
+    expect("reason" in diff && diff.reason).toContain("diff");
   });
 
   it("says the file is gone rather than sending something empty", () => {
@@ -129,7 +207,7 @@ describe("artifactFileFor", () => {
     try {
       const file = artifactFileFor(
         artifact({ content: { type: "code_file", workspacePath: "missing.ts" } }),
-        root
+        workspaceAt(root)
       );
       expect("reason" in file && file.reason).toContain("no longer on disk");
     } finally {
@@ -146,6 +224,10 @@ describe("delivering an artifact into the room", () => {
     sent.length = 0;
     channelsByAgent.clear();
     stopChannelArtifactDeliveryForTests();
+    // The rate limit is a rolling window per conversation, and it lives in
+    // globalThis — so a test that spends the budget leaves the next one unable
+    // to send anything, failing for a reason that has nothing to do with it.
+    stopChannelProjectionForTests();
     setChannelProjectionPaused(false);
 
     createConversation({
@@ -207,6 +289,28 @@ describe("delivering an artifact into the room", () => {
   it("yields to the pause switch", async () => {
     setChannelProjectionPaused(true);
     expect(await projectArtifact(artifact())).toEqual({ status: "skipped", reason: "paused" });
+  });
+
+  it("does not deliver the same artifact twice", async () => {
+    // Nothing stopped a second: `deploy_artifact` on a document re-announces it,
+    // and the same artifact can arrive from two places.
+    const first = await projectArtifact(artifact());
+    const second = await projectArtifact(artifact());
+
+    expect(first.status).toBe("delivered");
+    expect(second).toEqual({ status: "skipped", reason: "already delivered" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("counts what it sends against the rate limit", async () => {
+    // The check existed and never counted, so twenty-five artifacts went out
+    // inside a twenty-message window.
+    for (let i = 0; i < 25; i += 1) {
+      await projectArtifact(artifact({ id: `art_${i}`, title: `f${i}` }));
+    }
+
+    expect(sent.length).toBeLessThanOrEqual(20);
+    expect(sent.length).toBeGreaterThan(0);
   });
 
   it("subscribes once and delivers on creation", async () => {

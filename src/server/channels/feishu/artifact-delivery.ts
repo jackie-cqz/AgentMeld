@@ -2,9 +2,13 @@ import fs from "node:fs";
 import { eventBus } from "@/server/event-bus";
 import { getChannelConversationByConversationId, getWorkspaceForConversation } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
-import { resolveSafePath } from "@/server/workspace-utils";
-import { isChannelProjectionPaused, withinSendBudget } from "@/server/channels/feishu/projection";
-import type { Artifact } from "@/shared/types";
+import {
+  isChannelProjectionPaused,
+  recordSend,
+  withinSendBudget
+} from "@/server/channels/feishu/projection";
+import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/workspace-utils";
+import type { Artifact, Workspace } from "@/shared/types";
 
 /**
  * Deliver an artifact into the room as a file.
@@ -48,7 +52,7 @@ function safeFileName(title: string, fallback: string, extension: string): strin
  */
 export function artifactFileFor(
   artifact: Artifact,
-  workspaceRoot: string | null
+  workspace: Workspace | null
 ): ArtifactFile | { reason: string } {
   const content = artifact.content;
 
@@ -60,30 +64,56 @@ export function artifactFileFor(
   }
 
   if (content.type === "code_file") {
-    if (!workspaceRoot) return { reason: "the conversation has no workspace" };
-    try {
-      // Through the same guard the file browser uses: a stored path is not a
-      // reason to trust it.
-      const absolute = resolveSafePath(workspaceRoot, content.workspacePath);
-      const body = fs.readFileSync(absolute);
-      const name = safeFileName(
+    if (!workspace) return { reason: "the conversation has no workspace" };
+    // Through the SAME function the file browser uses, which resolves symlinks
+    // and compares real paths. The earlier version used a lexical check and
+    // claimed this; a symlink to /etc passed it and its contents were sent.
+    const resolved = resolveWorkspaceFileForRead(workspace, content.workspacePath);
+    if (!resolved.ok) return { reason: resolved.reason };
+    if (resolved.size > MAX_FILE_READ_BYTES) {
+      return { reason: `the file is ${resolved.size} bytes, over the ${MAX_FILE_READ_BYTES} limit` };
+    }
+    const extension = content.workspacePath.includes(".")
+      ? `.${content.workspacePath.split(".").pop()}`
+      : "";
+    return {
+      name: safeFileName(
         artifact.title,
         content.workspacePath.split("/").pop() ?? "file",
-        ""
-      );
-      return { name, content: body };
-    } catch {
-      return { reason: "the file is no longer on disk" };
+        extension
+      ),
+      content: fs.readFileSync(resolved.realPath)
+    };
+  }
+
+  if (content.type === "image") {
+    // An image IS one file, and the earlier refusal ("no single file to send")
+    // was simply wrong. Only a data URL is decoded: fetching a URL the model
+    // supplied would make this process a request to anywhere it names.
+    const match = /^data:([^;,]+);base64,(.*)$/s.exec(content.url);
+    if (!match) {
+      return { reason: "the image points at a URL, and this will not fetch one" };
     }
+    const body = Buffer.from(match[2], "base64");
+    const extension = match[1].includes("png")
+      ? ".png"
+      : match[1].includes("jpeg")
+        ? ".jpg"
+        : match[1].includes("gif")
+          ? ".gif"
+          : match[1].includes("webp")
+            ? ".webp"
+            : ".bin";
+    return { name: safeFileName(artifact.title, "image", extension), content: body };
   }
 
   if (content.type === "web_app") {
     return {
-      reason: "a web app is a set of files, and this would send only one of them"
+      reason: "a web app is meant to be opened in a browser, and a .html attachment is not that"
     };
   }
 
-  return { reason: `a ${content.type} artifact has no single file to send` };
+  return { reason: `a ${content.type} artifact is not a single file` };
 }
 
 export type DeliveryOutcome =
@@ -104,19 +134,34 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
   const channel = getFeishuChannelForAgent(agentId);
   if (!channel) return { status: "skipped", reason: "agent has no live channel" };
 
-  const workspace = getWorkspaceForConversation(artifact.conversationId);
-  const file = artifactFileFor(artifact, workspace?.rootPath ?? null);
-  if ("reason" in file) return { status: "skipped", reason: file.reason };
+  // One delivery per artifact. Nothing else stopped a second: `deploy_artifact`
+  // on a document re-announces it, and a message projection would send a file
+  // for the same artifact again.
+  const delivered = getDeliveredArtifacts();
+  if (delivered.has(artifact.id)) return { status: "skipped", reason: "already delivered" };
 
-  // The rate limit applies: an agent that writes ten files should not turn the
-  // room into a file dump.
-  if (!withinSendBudget(artifact.conversationId, Date.now())) {
+  const workspace = getWorkspaceForConversation(artifact.conversationId);
+  const file = artifactFileFor(artifact, workspace ?? null);
+  if ("reason" in file) {
+    // Said out loud: a skip nobody can see is indistinguishable from a bug.
+    console.info(`[feishu] not delivering ${artifact.id}: ${file.reason}`);
+    return { status: "skipped", reason: file.reason };
+  }
+
+  // The rate limit applies, and is RECORDED. It used to be checked and never
+  // counted, so twenty-five artifacts went out inside one twenty-message
+  // window — a limit that does not count is not a limit.
+  const now = Date.now();
+  if (!withinSendBudget(artifact.conversationId, now)) {
+    console.info(`[feishu] not delivering ${artifact.id}: send budget exhausted`);
     return { status: "skipped", reason: "send budget exhausted" };
   }
 
   const sent = await channel.send(channelConversation.chatId, {
     file: { source: file.content, fileName: file.name }
   });
+  recordSend(artifact.conversationId, now);
+  delivered.add(artifact.id);
   console.info(
     `[feishu] delivered ${file.name} (${file.content.length} bytes) to ${channelConversation.chatId} (${sent.messageId})`
   );
@@ -125,6 +170,12 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
 
 declare global {
   var __agentMeldChannelArtifactStop: (() => void) | undefined;
+  var __agentMeldDeliveredArtifacts: Set<string> | undefined;
+}
+
+function getDeliveredArtifacts(): Set<string> {
+  globalThis.__agentMeldDeliveredArtifacts ??= new Set<string>();
+  return globalThis.__agentMeldDeliveredArtifacts;
 }
 
 /**
@@ -150,4 +201,5 @@ export function startChannelArtifactDelivery(): () => void {
 export function stopChannelArtifactDeliveryForTests(): void {
   globalThis.__agentMeldChannelArtifactStop?.();
   globalThis.__agentMeldChannelArtifactStop = undefined;
+  globalThis.__agentMeldDeliveredArtifacts = undefined;
 }
