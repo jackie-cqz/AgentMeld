@@ -1,21 +1,25 @@
 # AgentMeld 飞书渠道接入 — 设计评审与实现方案
 
 > 对应 Issue：feat: 接入飞书多 Agent 机器人与群聊协作
-> 状态：**方案评审稿，尚未实现任何代码。** 本文所有「已验证」结论都附代码位置或官方文档依据；「待验证」项明确标注，需由 F0 PoC 回答。
+> 状态：**方案评审稿，尚未实现任何代码。** 本文所有「已验证」结论都附代码位置、SDK 源码或官方文档依据；「待验证」项明确标注，需由 F0 PoC 回答。
+> 本文已经过一轮独立对抗式复核，被推翻的结论已修正；修正记录见第 10 节。
 > 日期：2026-10-15
 
 ## 1. 结论摘要
 
-Issue 的方向成立，且有两条比它预期更好的消息和一条比它预期更麻烦的消息。
+Issue 的方向成立，且有两条比它预期更好的消息和一条它排序错了的风险。
 
 **两条好消息**
 
-1. **「每个 Agent 一个 Bot 身份」不需要手工建应用。** 飞书官方「一键创建智能体应用」提供 OAuth 2.0 设备码流程（RFC 8628）：服务端拿到验证链接/二维码 → 用户扫码确认 → 直接返回 `App ID` + `App Secret`。这正好就是「一键扫码把智能体绑定到飞书 Bot」。Node 侧入口是 `registerApp`（`@larksuite/channel` 重新导出，底层 `@larksuiteoapi/node-sdk` ≥ 1.61.1）。
-2. **bot@bot 权限扫sw码即得。** 默认「智能体应用配置清单」里已经包含 `im:message.group_at_msg.include_bot:readonly`（*获取群组中其他机器人和用户 @ 当前机器人的消息*）。本文第 3 节曾把这一项列为头号风险，官方清单把它的风险等级下调为「F0 确认」而非「F0 决定成败」。
+1. **「每个 Agent 一个 Bot 身份」不需要手工建应用。** 飞书官方「一键创建智能体应用」提供 OAuth 2.0 设备码流程（RFC 8628）：服务端拿到验证链接/二维码 → 用户扫码确认 → 直接返回 `App ID` + `App Secret`。这正好就是「一键扫码把智能体绑定到飞书 Bot」。Node 侧入口是 `registerApp`（`@larksuite/channel` 重新导出）。
+2. **bot@bot 权限扫码即得。** 默认「智能体应用配置清单」里已经包含 `im:message.group_at_msg.include_bot:readonly`（*获取群组中其他机器人和用户 @ 当前机器人的消息*）。第 6 节 R3 曾把这一项列为头号风险，官方清单把它的风险等级下调为「F0 确认」而非「F0 决定成败」。
 
-**一条坏消息**
+**一条坏消息（但归因需要更正）**
 
-3. **独立网关进程不是免费的，而且它的前置条件是一个安全问题。** 全仓 `/api` 路由**没有任何入站鉴权**，且 `next dev` / `next start` 均未指定 host（默认监听所有网卡）。一旦引入网关，`POST /api/pending-bash/{id}/resolve` 就是任何人（含同一局域网）可调用的工具执行审批入口。Issue 的「群消息入口不改变现有工具权限」「未授权用户和 Bot 无法批准敏感工具」在今天**依赖一个不存在的信任边界**。因此：**入站鉴权必须先落地，或者选择进程内方案绕过它。**
+3. **全仓 `/api` 路由没有任何入站鉴权**，且 `next dev` / `next start` 均未指定 host（默认 `0.0.0.0`，已实测监听 `*:3000`）。所以 `POST /api/pending-bash/{id}/resolve` 这一类工具执行审批入口，**今天**就已经对同网段可用。
+   - **这不是引入网关才产生的问题**，网关只是让它多一个调用方。Issue 的「群消息入口不改变现有工具权限」「未授权用户和 Bot 无法批准敏感工具」在今天依赖一个不存在的信任边界。
+   - 顺带发现：`app_settings` 有 `companion_mode`（`off|lan|tailnet`）与 `mobile_device_token` 两个字段，看起来正是为 LAN/移动端鉴权预留的槽位，但**从不参与任何请求校验**（见 R11）。
+   - 因此：**入站鉴权必须先落地，或者选择进程内方案绕过它。**
 
 **建议**：先做两个凭据无关的小 PR（审批操作者身份、消息来源标记），再跑 F0，最后才决定网关形态。理由见第 7 节。
 
@@ -24,16 +28,16 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条比它�
 | Issue 原文 | 实际情况 | 依据 |
 | --- | --- | --- |
 | 建议新增 `src/server/channels/feishu/` | 同意，该目录当前不存在 | `src/server/` 列表 |
-| 参考「飞书官方 Channel SDK」指向 `larksuite/channel-sdk-node` | 仓库名如此，但**可安装的包名是 `@larksuite/channel`** | [README.zh.md](https://github.com/larksuite/channel-sdk-node/blob/main/README.zh.md) |
+| 参考「飞书官方 Channel SDK」指向 `larksuite/channel-sdk-node` | 仓库名如此，但**可安装的包名是 `@larksuite/channel`**（npm latest 0.7.1，直接依赖 `@larksuiteoapi/node-sdk ^1.73.1`） | npm registry；[README.zh.md](https://github.com/larksuite/channel-sdk-node/blob/main/README.zh.md) |
 | F0 第三项验证 bot@bot 权限 | 应提为 **F0 第一项**：默认清单已含该权限，但平台对未开通场景**静默失败且无自查 API**，必须先确认事件真的到达 | SDK README「Bot-at-bot」 |
 | 「本地优先场景验证官方 SDK 长连接」 | 不仅是可行，而且是**一键创建应用的默认订阅方式**（事件与卡片回调均默认 WebSocket 长连接），无需公网回调地址 | [一键创建应用 overview](https://open.feishu.cn/document/mcp_open_tools/integrating-agents-with-feishu/overview) |
-| 「持久化入站去重」列为自建能力 | 部分重复：SDK 的 `safety.dedup` 已提供去重，但它是**进程内 Cache（TTL）**，重启即失，且**按实例隔离**。跨重启、跨 App 的去重仍需自建 | SDK README `SafetyConfig` / `cache` |
-| 「Bot 协作限制目标、轮数、超时及资源预算」 | 大部分已由 `policy.botLoopGuard` 提供（窗口内 bot @ 阈值命中即 `drop`/`reject`），但官方自称「启发式兜底，非协议级保证」 | SDK README |
+| 「持久化入站去重」列为自建能力 | **不需要自建**。SDK 的去重是双层结构（内存 LRU + **可注入的长期 Cache**），去重键为裸 `messageId`、namespace 固定 `channel:seen`、无 appId 隔离；**注入一个共享且持久化的 `Cache` 即可获得跨重启、跨 App 的去重**。详见 5.1 | `channel-sdk-node/src/safety/dedup-cache.ts`、`src/safety/types.ts` |
+| 「Bot 协作限制目标、轮数、超时及资源预算」 | `policy.botLoopGuard` **只**统计「别的 bot @ 我」的消息、滑动窗口超阈值即 `drop`/`reject`（且默认**关闭**）。对「目标、超时、资源预算」零覆盖，对「轮数」只是粗粒度窗口计数。其余仍需自建 | SDK README；`src/safety/loop-guard.ts` |
 | 「设置允许使用的群、用户及可信 Bot」 | `policy.groupAllowlist` + `requireMention` 即可圈定；官方建议**按群授权而非逐个发送方**（发送方 open_id 事先拿不到） | SDK README |
-| 「审批校验操作者」 | **当前无处落账**：`resolved_by` 被写成状态字面量，没有任何调用点传身份 | `src/server/repositories.ts:392-395` |
-| 「多端同时审批时只允许一次状态转换」 | **原语已存在**，无需新建：条件是 `WHERE status = 'pending'` 的 UPDATE，靠 `changes > 0` 判首个决定 | `src/server/repositories.ts:388-399` |
+| 「审批校验操作者」 | `resolved_by` **列存在但被写成状态字面量**，且没有任何调用点传身份——有位置，但从未装过「谁」 | `src/server/repositories.ts:392,395` |
+| 「多端同时审批时只允许一次状态转换」 | **原语已存在**，无需新建：条件是 `WHERE status = 'pending'` 的 UPDATE，靠 `changes > 0` 判首个决定；`resolve` 路由已返回 409 | `src/server/repositories.ts:388-399`、`src/app/api/pending-bash/[id]/resolve/route.ts` |
 | 「当前 `sendMessage` 会创建 user 消息」 | 属实，且比描述的更危险：无 `@` 时会兜底分派给 Conductor，构成真实回环路径 | `src/server/conversation-service.ts:193`、`:232-246` |
-| 「内存 EventBus 与审批 Promise 不能跨进程直接共享」 | 属实 | `src/server/event-bus.ts:69-74`、`src/server/pending-bash.ts:13-22,44-59` |
+| 「内存 EventBus 与审批 Promise 不能跨进程直接共享」 | 属实。但审批的**跨进程结算通道已经存在**（HTTP resolve 端点），缺的只是鉴权，不是机制 | `src/server/event-bus.ts:69-74`、`src/server/pending-bash.ts:13-22,44-59`、`src/app/api/pending-bash/[id]/resolve/route.ts` |
 
 ## 3. 已验证的代码事实
 
@@ -42,43 +46,50 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条比它�
 **消息入口**
 
 - `sendMessage` 对任何来源都硬编码 `role: "user"`（`src/server/conversation-service.ts:193`）。`SendMessageInput` 没有来源/渠道字段。
-- `pickResponders`（`src/server/conversation-service.ts:232-246`）：`single` 模式取首个 agent；有 `@` 取被 @ 的；**否则兜底分派给 Conductor**。因此一条 bot 回显只要走进 `sendMessage`，即使没 @ 任何人也会启动一次新的 Conductor 运行。
+- `pickResponders`（`src/server/conversation-service.ts:232-246`）：`single` 模式取首个 agent；有 `@` 取被 @ 的；**否则在会话含 Conductor 时兜底分派给 Conductor**，不含则返回空。因此一条 bot 回显只要走进 `sendMessage`，即使没 @ 任何人也会启动一次新的 Conductor 运行。
 - `messages` 表只有 `role` / `agentId` / `runId` / `mentionedAgentIds` / `parentMessageId`，**没有来源列**（`src/db/schema.ts:59-76`）。
 
 **运行与审批**
 
 - `startAgentRun` 是**同步**函数，把 `executeRun(...)` 脱离执行后立刻返回 `{ runId, promise }`（`src/server/agent-runner.ts:94-100`）；HTTP 路由返回 `202`。
-  - 这直接决定 F2 的安全性：SDK 明确警告在 `message` handler 里 `await` 一次卡片审批会**死锁**（默认 `safety.chatQueue.cardActions: 'same'` 时点击排在该 chat 在途工作之后）。AgentMeld 的 run 天然是脱离的，所以**只要渠道 handler 永不 await run 或审批**，就不会踩中；进展只能通过订阅事件投影。这条应写成显式设计铁律。
-- `resolveApproval` 是 `UPDATE ... WHERE id = ? AND status = 'pending'`，返回 `changes > 0`（`src/server/repositories.ts:388-399`）——即「首个决定生效」的原子原语已经正确实现。
-- 但同一语句里 `resolved_by` 被写入 `approved ? "approved" : "rejected"`（`src/server/repositories.ts:392,395`），**不是操作者身份**。全仓 7 个调用点没有一个传身份。`resolved_by` 列存在（`src/db/schema.ts:195`、`src/db/bootstrap.ts:149`）但从未装过「谁」。
+  - 两个必须说清的边界：
+    1. **顶层 run 不被 await，但并非所有 run 都「天然脱离」。** Conductor 派发子任务时**确实 await 了** run 的 promise（`src/server/conductor-service.ts:925` `await promise;`）。它在 Conductor run 内部而不是渠道 handler，所以 5.2 的铁律结论仍然成立，但「天然脱离」不能当普适陈述。
+    2. `startAgentRun` 在返回前已给 promise 挂了 `.catch(...)`，只做 `console.error`（`src/server/agent-runner.ts:96-98`），因此该 promise **不会 reject**，不会产生 unhandled rejection；也正因如此 `conductor-service.ts:926` 的 `catch` 是死代码。
+- `resolveApproval` 是 `UPDATE ... WHERE id = ? AND status = 'pending'`，返回 `changes > 0`（`src/server/repositories.ts:388-399`）——「首个决定生效」的原子原语已经正确实现。
+- 但同一语句里 `resolved_by` 被写入 `approved ? "approved" : "rejected"`（`src/server/repositories.ts:392,395`），**不是操作者身份**。`src/` 下共 **8 个调用点**，无一传身份：`pending-bash.ts:103,113`、`dispatch-plan-manager.ts:108,122`、`pending-writes.ts:108,118`、`pending-questions.ts:82,169`。
 
 **事件与跨进程**
 
-- `eventBus` 是 `globalThis` 上的进程内单例，回放缓冲 `MAX_REPLAY_EVENTS = 500` 且纯内存（`src/server/event-bus.ts:10,69-74`）。`/api/stream` 以 SSE 暴露，支持 `last-event-id` 回放（`src/app/api/stream/route.ts`）。
-- 审批 resolver 是 `globalThis` 上 Map 里的进程内 Promise（`src/server/pending-bash.ts:13-22,44-59`）。DB 里持久化的只有审批**状态**，唤醒等待方的那一半不可跨进程。
+- `eventBus` 是 `globalThis` 上的进程内单例，回放缓冲 `MAX_REPLAY_EVENTS = 500` 且纯内存（`src/server/event-bus.ts:10,69-74`）。`/api/stream` 以 SSE 暴露，支持 `last-event-id` 回放（`src/app/api/stream/route.ts:12`）。
+- 审批 resolver 是 `globalThis` 上 Map 里的进程内 Promise（`src/server/pending-bash.ts:13-22,44-59`）。DB 里持久化的只有审批**状态**。
+- **但跨进程结算是现成的**：`POST /api/pending-bash/{id}/resolve` 取到同进程的 `getPendingBash(id)` 后调 `approvePendingBash/rejectPendingBash`，并在已结算时返回 409（`src/app/api/pending-bash/[id]/resolve/route.ts`）。即：另一进程可以结算这个进程内的 Promise，缺的只是鉴权。
 
 **安全基线**
 
-- `src/app/api/` 下**没有任何入站鉴权**：按 `unauthorized|401|signature|timingSafeEqual` 全量搜索零命中；`src/server/api-utils.ts` 只有响应封装；`src/server/security.ts` 是危险 shell 命令模式拦截，与请求鉴权无关。唯一像鉴权的匹配是 `settings` 路由里的**出站** LLM key。
-- `package.json` 的 `dev`/`start` 均无 `-H`/`--hostname`。
-- 结论：今天是「本地优先、信任本机」的合理基线，但它不是一个可承载网关的边界。
+- `src/app/api/` 下**没有任何入站鉴权**：按 `unauthorized|401|signature|timingSafeEqual` 全量搜索零命中；无 `middleware.ts`（Next 16 的新名 `proxy.ts` 也查过）；`next.config` 无鉴权相关 `headers`/`rewrites`；`src/server/api-utils.ts` 只有响应封装；`src/server/security.ts` 是危险 shell 命令模式拦截，与请求鉴权无关。唯一像鉴权的匹配是 `settings` 路由里的**出站** LLM key。
+- `package.json` 的 `dev`/`start` 均无 `-H`/`--hostname`；安装版 `next@16.2.6` CLI 帮助两处标注 `(default: 0.0.0.0)`；**实测**在跑的 `next dev` 监听 `TCP *:3000`。
+- `mobileDeviceToken` 有 schema 列、有 bootstrap `ensureColumn`、有行映射与类型（`src/db/schema.ts:325`、`src/db/bootstrap.ts:238,472`、`src/db/rows.ts:153,308`、`src/shared/types.ts:276`），但**从不被任何请求读取或校验**——grep 全仓只命中配置读写链路，`src/app/api/` 下零使用。
+- 结论：今天是「本地优先、信任本机」的合理基线，但它不是一个可承载网关的边界；而它**今天就已经是敞开的**。
 
 **存储侧**
 
 - `agents` 表已有 `name` / `avatar` / `description`（`src/db/schema.ts:20-37`）——与 `registerApp` 的 `appPreset.{name,avatar,desc}` 字段一一对应，绑定流程可以直接复用，无需用户重新填写机器人身份。
-- **但 `avatar` 是 emoji/短文本**（全仓取值样例：`"🧭"`、`"🎨"`、`"🔍"`、`"A"`、`""`），而 `appPreset.avatar` 要求 `png/jpg/jpeg/webp/gif` 的 **URL**。见第 6 节风险 R1。
+- **但 `avatar` 是 emoji/短文本**（取值样例：`"🧭"`、`"🎨"`、`"🔍"`、`"A"`、`""`），而 `appPreset.avatar` 要求 `png/jpg/jpeg/webp/gif` 的 **URL**。见第 6 节风险 R1。
 - `app_settings` 是单例行；密钥掩码助手 `maskSettings`/`maskKey` 定义在**路由文件内部**（`src/app/api/settings/route.ts:36,46`），不是共享工具——新渠道路由需要自己实现或先把它们提出来。
 - `package.json` 中**没有任何二维码依赖**。
 
-**SDK 能力（官方文档）**
+**SDK 行为（源码级，非 README 转述）**
 
+- **去重（tier 1 流水线）**：`SeenCache` 是**双层**结构——热内存 LRU + 可注入的长期 `Cache`（`src/safety/dedup-cache.ts`）。检查在 push 时按**原始消息**做（`src/safety/index.ts:110` `seenCache.has(msg.messageId)`）；标记写在与 handler 同级的 `finally` 里，且**对 `batch.sourceIds` 中每一个 id 都写**（`src/safety/index.ts:153-155`）；在途重复由按 `messageId` 的 `ProcessingLock` 兜住（`:142`）。默认参数 `ttl=12h`、`maxEntries=5000`、`namespace='channel:seen'`（`src/safety/types.ts` `DEFAULT_DEDUP`）。
+- **批合并默认开启**：`queueEnabled = chatQueue.enabled ?? true`（`src/safety/index.ts:75`）。开启时同一 chat 内 `delayMs=600` 窗口内最多 `maxMessages=8` 条会被合并成**一条** `NormalizedMessage` 再交给 handler，且 `sourceIds` **不暴露给 handler**（`:147-149` 只传 `batch.message`）。关闭队列时不合并，`sourceIds: [msg.messageId]`（`:167`）。默认值见 `DEFAULT_BATCH`（`src/safety/types.ts`）；另有 `DEFAULT_STALE_MS=30min`、`DEFAULT_LOCK_TTL_MS=5min`。
+- **流水线顺序**（`src/safety/index.ts:48` 注释）：stale → dedup → policy → lock → batch → queue。
+- 卡片动作队列默认 `'same'`，`'separate'` 是显式选项（`src/safety/types.ts` `resolveCardActionQueueMode`）。
 - 一键创建应用默认订阅方式为 **WebSocket 长连接**（事件 + `card.action.trigger` 回调），无需公网地址。
 - 默认清单已含：`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message.p2p_msg:readonly`、`im:message:send_as_bot`、`cardkit:card:write|read`、`im:chat.members:bot_access`、`application:bot.basic_info:read` 等；回调 `card.action.trigger`。
 - `addons` 可**增量**追加权限/事件/回调，预填到用户确认页；**不能删减**基础权限；敏感配置（事件订阅方式、回调地址、`security.*`、加密 key）**不能**经 `addons` 传入，需走 `application-config` OpenAPI。
 - `createOnly: true` 让落地页只允许新建应用，隐藏「选择已有应用」——**对逐 Agent 绑定是必要的**，否则用户可能误选并覆盖另一个 Agent 的应用配置。
 - 传入已有 `appId` 则流程变为「为该应用增量开通权限」，可用于「补授权/重新授权」。
-- 二维码链接**10 分钟有效、仅一位用户可扫、一次只创建一个应用**。
-- 返回值含 `client_id` / `client_secret` / `user_info.{open_id,tenant_brand}`；错误 `access_denied|expired_token|abort`；状态 `polling|slow_down|domain_switched`（自动区分飞书/Lark）。
+- 二维码链接**10 分钟有效、仅一位用户可扫**（官方原文）；返回值含 `client_id` / `client_secret` / `user_info.{open_id,tenant_brand}`；错误 `access_denied|expired_token|abort`；状态 `polling|slow_down|domain_switched`（自动区分飞书/Lark）。
 - Channel SDK 层面额外提供：`senderType`/`senderIsBot`、`getBotIdentity()`、`getChatBots()`、`policy.requireMention`/`groupAllowlist`/`botLoopGuard`、`reply()`（跟随触发消息是否在话题内）、`stream()` 流式卡片、`updateCard()`。
 
 ## 4. 一键扫码绑定设计
@@ -131,7 +142,7 @@ channel_bindings（待确认）  Map<bindingId, {
 | `appId` | `cli_…` |
 | `appSecret` | **仅服务端**，永不经 API 返回 |
 | `tenantBrand` | `feishu` \| `lark` |
-| `botOpenId` | `getBotIdentity().openId`，用于识别自身回显 |
+| `botOpenId` | `getBotIdentity().openId`，用于识别自身发言 |
 | `boundByOpenId` | 扫码人 open_id（`user_info.open_id`） |
 | `chatId` / `conversationId` | 群/会话绑定（F1，可空） |
 | `createdAt` / `updatedAt` | |
@@ -161,21 +172,55 @@ appPreset: {
 
 ## 5. 入站路由设计
 
-### 5.1 身份与去重
+### 5.1 去重：注入持久化 Cache，不要自建
 
-本仓的既有语义（`conversation-service.ts`）假定「一条人类消息 → 一次分派」。飞书侧要补三件事：
+**结论：去掉「自建持久化去重」这项工作量。**
 
-1. **来源**：消息必须带 `origin`（`human` | `bot` | `internal`）。`sendMessage` 当前硬编码 `role:"user"`，无法区分 bot 回显与人类输入，而 `pickResponders` 会在无 `@` 时兜底触发 Conductor——这是**可复现的回环**，不是理论风险。
-2. **去重**：SDK 的 `safety.dedup` 是进程内、按实例隔离的。**跨 App 去重必须自建**：同一个人类消息被多个 Bot（各为独立 App）同时收到时，`messageId` 是**同一条消息的同一个 id**，因此持久化去重键应为 `(chatId, externalMessageId)`——**不含 appId**。这样多个 Bot 收到也只创建一条内部消息，正对 Issue 的「多 Bot 接收同一人类消息时，只创建一条」。
-3. **回显识别**：出站发送后保存飞书 `messageId`（`SendResult.messageId`，流式卡片另有 `chunkIds`）；入站事件若命中已记录的出站 id，则判为自身回显，不进入路由。
+SDK 的去重是双层结构，长期层是可注入的 `Cache`，源码注释明确写着长期层「survives process restarts when a persistent Cache implementation is provided」，而默认 `node-sdk` 的 `internalCache` 只有内存。
 
-### 5.2 永不 await（设计铁律）
+因此正确做法是：**给所有 channel 实例注入同一个、持久化的 `Cache` 实现（例如基于 SQLite）**，于是同时得到两件事：
+
+- **跨重启去重**：进程重启后长期层仍在。
+- **跨 App 去重**：去重键是裸 `messageId`，namespace 固定 `'channel:seen'`，**没有 appId 隔离**——所以多个 Bot（各自独立 App）收到同一条人类消息时，`messageId` 相同，第二个实例必然命中去重。正对 Issue 的「多 Bot 接收同一人类消息时，只创建一条内部消息」。
+
+**为什么 `messageId` 可以作为键（依据）**：官方《消息管理概述》说明单个租户内系统为每条消息生成唯一 `message_id`；《接收消息》进一步明确：「特殊情况下可能会收到重复的推送，如有幂等需求请使用 `message_id` 去重，**不要依赖 `event_id`**」。所以按 `messageId` 去重是官方推荐路径，`event_id` 反而不行。
+
+**AgentMeld 侧仍需自己的表**，但用途不同：保存**外部 id → 内部 message/run/task 的映射**（回复目标、话题归属、审计），**不承担去重的正确性责任**。两者不要混为一谈。
+
+### 5.2 批合并会改变分派语义（必须显式决策）
+
+**这是最容易踩空的一点。** SDK 的按 chat 队列默认**开启**（`chatQueue.enabled ?? true`），开启时同一 chat 内 600ms 窗口、最多 8 条消息会被合并成**一条** `NormalizedMessage` 再交给 handler，且 `sourceIds` 不暴露给 handler。
+
+后果：
+
+1. 「一条人类消息 → 一次分派」的既有前提变成「**一批消息 → 一次分派**」。`sendMessage` 每次调用都会创建一个 user 消息并触发 `pickResponders`，所以一批 3 条若逐条落库会触发 3 次分派。
+2. AgentMeld 在 handler 里**只能看到合并后的代表 `messageId`**，无法知道这批还包含哪些外部消息 id，因此任何「逐条外部 id 映射」都是不完整的。
+3. 去重的正确性**不受**影响：SDK 在原始消息层检查去重（`index.ts:110`），并在 dispatch 的 `finally` 里对**全部 `sourceIds`** 写标记（`:153-155`），在途重复另有按 `messageId` 的锁兜住。这批消息整体不会重复投递。
+
+**决策点**（F1 前必须定，二选一）：
+
+- **A. 接受批语义**：把合并后的一条当作一次输入投给 `sendMessage`。符合人类的真实输入习惯（连发几句是一句话），也让「一次分派」重新成立。代价：模型看到的是拼接后的文本，元数据取最后一条。
+- **B. 关掉批合并**：`chatQueue.enabled = false`（或把 `batch.text.delayMs` 设为 0），恢复逐条语义。代价：失去按 chat 串行与忙时合并。
+
+建议 **A**，并在文档/实现里把「批」当作一等概念，而不是假装它是单条。
+
+### 5.3 来源与回显
+
+1. **来源标记是必需的**：消息必须带 `origin`（`human` | `bot` | `internal`）。`sendMessage` 当前硬编码 `role:"user"`，无法区分 bot 回显与人类输入，而 `pickResponders` 会在无 `@` 时兜底触发 Conductor——这是**可复现的回环**，不是理论风险。
+2. **自身回显检测在 IM 路径不是必需的**（更正 Issue 的假设）：飞书**不把机器人自己发送的消息投递给它自己**——群消息权限说明明确「不包含当前机器人自己发送的消息」，`im.message.receive_v1` 的投递前提是被 @ 或单聊；SDK 也只对**会议通道**提供 `selfEcho`。
+   - 因此「保存出站 `messageId` 以识别自身回显」**不构成 IM 路径的正确性依赖**。可以保留为防御性措施（成本低），但不要当作设计支柱，也不要为它牺牲简洁性。真正的回环风险来自 `origin`，不是来自自身回显。
+
+### 5.4 永不 await（设计铁律）
 
 渠道 handler 的职责边界：**归一化 → 去重 → 落库 → 触发 → 返回**。触发即 `sendMessage`（同步返回 runIds），**绝不 await run、绝不 await 审批**。所有进展、审批请求、产物交付都通过订阅事件异步投影回飞书。
 
-理由见第 3 节：SDK 的默认 per-chat 队列下，在 message handler 里等待一次卡片点击是死锁。这条铁律同时让「取消运行」「进度查询」等能力自然落到事件投影上。
+理由：SDK 明确警告在 `message` handler 里 `await` 一次卡片审批会**死锁**（默认 `safety.chatQueue.cardActions: 'same'`，点击排在该 chat 在途工作之后）。AgentMeld 从 `sendMessage` 发起的顶层 run 恰好不被 await，所以只要遵守这条铁律就不会踩中。
 
-### 5.3 事件 → 飞书消息
+### 5.5 不要用 `onRawEvent` 接管 IM 消息
+
+`onRawEvent` 注册的 handler 会**绕过整个安全管线**：`PolicyGate`（`dmMode`/`dmAllowlist`/`groupAllowlist`/`requireMention`）、去重、按 chat 串行的锁、防回环、过期丢弃**全部不生效**。SDK 文档明确警告，对 `im.message.receive_v1` 注册 raw handler「等于为它开了第二条不设防的入口」，被白名单拒掉的消息照样收得到。本方案不使用它。
+
+### 5.6 事件 → 飞书消息
 
 必须遵守 Issue 的「不逐 token 新发群消息」。`/api/stream` 的流式增量应聚合后用 `stream()` 流式卡片或 `updateCard()` 就地更新，而不是每条事件发一条群消息。默认不发布原始推理、凭据、完整工具日志。
 
@@ -183,52 +228,55 @@ appPreset: {
 
 | 编号 | 风险 | 处置 |
 | --- | --- | --- |
-| **R1** | **`appPreset.avatar` 与本地优先冲突。** 它要求可访问的图片 URL（png/jpg/webp/gif），而本仓 `avatar` 是 emoji 短文本。要「身份一致」，需把 emoji 渲染成 PNG 并托管在一个**飞书服务端可访问**的地址——这与本地优先直接矛盾 | F0 验证：确认头像是由**用户客户端**还是**平台服务端**抓取。前者可用本机地址，后者必须公网。**降级方案**：不传 `avatar`，让用户在确认页自行选择；文档不得承诺「头像自动一致」 |
+| **R1** | **`appPreset.avatar` 与本地优先冲突。** 它要求可访问的图片 URL（png/jpg/webp/gif），而本仓 `avatar` 是 emoji 短文本。要「身份一致」，需把 emoji 渲染成 PNG 并托管在一个**飞书可访问**的地址——这与本地优先直接矛盾 | F0 验证：确认头像是由**用户客户端**还是**平台服务端**抓取。前者可用本机地址，后者必须公网。**降级方案**：不传 `avatar`，让用户在确认页自行选择；文档不得承诺「头像自动一致」 |
 | **R2** | 权限是否需要租户管理员审批。扫码人若非管理员，部分 scopes 可能停在待审批态 | F0 用普通成员账号扫一次，观察 `getBotIdentity`/发消息是否成功 |
-| **R3** | 未开通 `include_bot` 时 bot@bot **静默失败且无自查 API** | F0 第一项：两个 Bot 同群互 @，验证事件真的到达。这是整个「多 Bot 身份」前提 |
-| **R4** | 解绑后飞书侧应用是否可程序化删除 | 查 `application` 系列 OpenAPI；不确定则在 UI 明示「需手动到开发者后台清理」 |
+| **R3** | 未开通 `include_bot` 时 bot@bot **静默失败且无自查 API**（默认清单已含该权限，故风险等级为「确认」而非「决定成败」） | F0 第一项：两个 Bot 同群互 @，验证事件真的到达 |
+| **R4** | 解绑后飞书侧应用是否可程序化删除（`application` 删除文档路径实测 404，未能确认存在） | 查 `application` 系列 OpenAPI；不确定则在 UI 明示「需手动到开发者后台清理」 |
 | **R5** | 逐 Agent 建应用是否有配额/频率限制 | F0 记录实际创建数量与报错 |
 | **R6** | 每 Agent 一条 WS 长连接（官方：同一应用开两条连接会导致事件分流）。`next dev` 的 HMR 会重新求值模块，可能造成重复连接 | F0 验证重连与实例行为；连接宿主必须做单例保护。这是第 7 节架构选择的直接输入 |
-| **R7** | `safety.dedup` 重启即失 | 自建持久化去重（5.1），不依赖 SDK 去重做正确性保证 |
-| **R8** | `/api` 无入站鉴权 + 默认监听所有网卡 | **网关方案的硬前置**。见第 7 节 |
-| **R9** | `resolved_by` 不装操作者，「审批校验操作者」无处落账 | 独立小 PR 先修（第 7 节 PR1） |
+| **R7** | 去重若**不注入**持久化 Cache，则重启即失（默认 `internalCache` 只有内存） | 注入共享持久化 `Cache`（5.1）。这不是「必须自建」，而是「必须注入」 |
+| **R8** | `/api` 无入站鉴权 + 默认监听所有网卡。**此风险今天已存在，非网关引入** | 网关方案的硬前置（7.1）。若走进程内形态则不新增网络入口 |
+| **R9** | `resolved_by` 不装操作者，「审批校验操作者」有列无值 | 独立小 PR 先修（7.2 PR1） |
+| **R10** | SDK 默认按 chat 批合并（600ms / 最多 8 条）改变分派语义，且 `sourceIds` 不外泄 | F1 前显式决策（5.2）。这是本次复核新增项 |
+| **R11** | `mobileDeviceToken` / `companionMode` 字段存在却从不参与请求校验，疑似为 LAN/移动端鉴权预留但未接线 | 设计入站鉴权前先确认这两个字段的既定意图，避免另起一套。本次复核新增项 |
 
 ## 7. 架构选择与实施顺序
 
 ### 7.1 进程内 vs 独立网关
 
-Issue 推荐独立网关进程。核实后，两条路的代价差得比看上去大：
+Issue 推荐独立网关进程。核实后，两条路的代价差得比看上去小——**因为跨进程审批结算是现成的**：
 
 | | 进程内（渠道跑在 Next 进程内） | 独立网关（Issue 方案） |
 | --- | --- | --- |
 | 事件 → 飞书 | 直接 `eventBus.subscribe` | 走 `/api/stream` SSE（已有），但回放缓冲仅 500 条且内存态 |
-| 审批结算 | 直接 `resolvePendingBash` | **不可行**：唤醒等待方的 Promise 在另一进程。必须新增轮询/通知机制 |
-| 入站鉴权（R8） | 不需要（不新增网络入口） | **必须先做**，否则审批接口对局域网裸奔 |
-| 持久化 inbox/outbox | 不需要 | 需要，否则断线丢事件 |
+| 审批结算 | 直接 `resolvePendingBash` | **已可行**：`POST /api/pending-bash/{id}/resolve` 现成，且已用条件 UPDATE 保证首个决定生效、重复调用返回 409。缺的是**鉴权**，不是机制 |
+| 入站鉴权（R8） | 不新增网络入口 | **必须先做** |
+| 持久化 inbox/outbox | 不需要 | 需要，否则断线丢事件（SSE 回放只有 500 条） |
 | WS 长连接生命周期 | 与 Web 进程绑定，HMR 下需单例保护（R6） | 独立进程更稳 |
 | 与 Issue 的一致性 | 偏离 | 一致 |
 
-**结论：先做进程内形态。** 它把 R8（鉴权）、审批跨进程、inbox/outbox 三个最贵的问题一次性消掉，并且**不损害未来拆分**——只要渠道适配层本身不直接依赖 `eventBus`/审批模块，而是面向一个内部接口，将来换成网关只需替换实现。当前证据不足以证明独立网关是本地优先场景的必要代价。
+**结论：先做进程内形态。** 它消掉的是**入站鉴权**与**持久化 inbox/outbox** 两件事（注意：不含审批结算，那本来就可行），并且**不损害未来拆分**——只要渠道适配层面向内部接口而非直接依赖 `eventBus`/审批模块，将来换成网关只需替换实现。当前证据不足以证明独立网关是本地优先场景的必要代价。
 
 ### 7.2 建议顺序
 
 **PR1（无凭据，现在可做）— 审批操作者身份**
-修 `resolveApproval` 把状态写进 `resolved_by` 的问题（`src/server/repositories.ts:392,395`）：增加操作者参数并持久化，7 个调用点透传，schema + bootstrap + 类型 + API 暴露同步跟进。同时补测试。
+修 `resolveApproval` 把状态写进 `resolved_by` 的问题（`src/server/repositories.ts:392,395`）：增加操作者参数并持久化，**8 个调用点**透传，schema + bootstrap + 类型 + API 暴露同步跟进，并补测试。
+范围需明确（本次复核新增）：目前只有**计划审批**会写 `approval_resolved` 证据行（`src/server/dispatch-plan-manager.ts:164`），`pending-bash` 与 `pending-writes` 的审批**没有任何 evidence 行**。PR1 要决定是只修 `resolved_by`，还是同时给三处补审批证据。
 价值：直接满足「审批校验操作者」「未授权用户和 Bot 无法批准敏感工具」两条验收标准的前置条件；**与飞书无关**，独立可评审。
 注：「首个决定生效」已由现有条件 UPDATE 保证（`src/server/repositories.ts:388-399`），不要重复实现。
 
 **PR2（无凭据，现在可做）— 消息来源标记**
 为消息引入 `origin`（`human`/`bot`/`internal`），解除 `sendMessage` 的 `role:"user"` 硬编码（`src/server/conversation-service.ts:193`），并让 `pickResponders`（`:232-246`）拒绝把 bot/internal 来源当作新的人类要求。
-价值：堵住第 5.1 节那条可复现的回环；是「内部消息回显不重复执行」的实现基础。
+价值：堵住 5.3 那条可复现的回环；是「内部消息回显不重复执行」的实现基础。
 
 **F0（需凭据）— 接入验证**
-按 R1–R6 逐项取判定，产出「实际权限、发布配置、平台限制」记录。**R3（bot@bot 事件是否真的到达）第一项做**，它的结果决定后续是「多 Bot 各自身份」还是「单 Conductor Bot + 网页投影」。
+按 R1–R6、R10、R11 逐项取判定，产出「实际权限、发布配置、平台限制」记录。**R3（bot@bot 事件是否真的到达）第一项做**，它的结果决定后续是「多 Bot 各自身份」还是「单 Conductor Bot + 网页投影」。
 
-**F1+**：按 Issue 原计划，但把第 5 节的来源/去重/回显三件事作为前置，而不是事后补。
+**F1+**：按 Issue 原计划，但把 5.2（批合并决策）、5.3（来源标记）作为前置，而不是事后补。
 
 ### 7.3 明确不在本方案内
 
-- 入站鉴权、持久化 inbox/outbox、网关拆分：等 F0 与进程内形态验证后再定。
+- 持久化 inbox/outbox、网关拆分：等 F0 与进程内形态验证后再定。
 - 部署预览的公网可达地址（Issue F3）：与 R1 同源，都属「本地优先 vs 平台可访问」这一未解矛盾，需单独讨论。
 - 现有 `db:seed` 启动恢复副作用（见 README 警告）：与本功能无关，不在此处理。
 
@@ -240,10 +288,11 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 2. 扫码人非管理员时权限是否即时生效？（R2）
 3. `appPreset.avatar` 的图片由谁抓取——用户客户端还是平台服务端？（R1）
 4. 卡片按钮回调、表单提交、卡片就地更新、流式回复是否均可用（长连接模式下无需公网地址）？
-5. 断线重连后事件是否补投？重复事件如何表现？
+5. 断线重连后事件是否补投？重复事件如何表现？（配合 5.1 的持久化 Cache 验证跨重启去重）
 6. 单应用开两条 WS 连接时事件是否分流？（R6）
 7. 逐 Agent 创建应用的数量与频率上限？（R5）
 8. 是否存在删除应用的 OpenAPI？（R4）
+9. 一批合并后交付对用户体验与上下文的影响（5.2 决策 A 的实测）。（R10）
 
 ## 9. 参考
 
@@ -253,4 +302,32 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 - [官方 Bot-at-bot 说明](https://github.com/larksuite/channel-sdk-node#bot-at-bot)
 - [飞书官方 Node SDK](https://github.com/larksuite/node-sdk)
 - [接收消息事件](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)
+- [消息管理概述（message_id 唯一性）](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/intro)
 - [发送消息接口](https://open.feishu.cn/document/server-docs/im-v1/message/create)
+
+## 10. 复核记录
+
+本文经过一轮独立对抗式复核（复核方无作者上下文），结果如下，已全部落进正文：
+
+**被推翻并更正的结论**
+
+| 编号 | 原结论 | 更正 |
+| --- | --- | --- |
+| F1 | SDK 去重是进程内 Cache、重启即失、跨 App 必须自建 | **错**。双层结构 + 可注入持久化 Cache；键为裸 `messageId`、无 appId 隔离，注入共享持久 Cache 即得跨重启/跨 App 去重 → 改为「注入，不要自建」（5.1） |
+| F2 | `botLoopGuard` 已提供「限制目标/轮数/超时/预算」的大部分 | **夸大**。它只统计「别的 bot @ 我」并做窗口阈值 `drop`/`reject`，默认关闭 → 已改为准确描述 |
+| F3 | 全仓 7 个 `resolveApproval` 调用点 | **实为 8 个** → 已改 |
+| F4 | 独立网关的审批结算「不可行，必须新增轮询/通知机制」 | **错**，且与本文 §1 自相矛盾。HTTP resolve 端点已现成，缺的是鉴权 → 7.1 表已重写 |
+| F5 | 「AgentMeld 的 run 天然是脱离的」 | **过度概括**。Conductor 派发子任务时会 await（`conductor-service.ts:925`）→ 已限定并补充 `.catch` 吞 rejection 的事实 |
+| U2 | 「二维码一次只创建一个应用」 | 官方未述，属推论 → 已删 |
+| U3 | `resolved_by`「当前无处落账」 | 措辞不准：列存在但被写成状态字面量 → 已改 |
+| U4 | 「本文第 3 节曾把该风险列为头号风险」 | 交叉引用错误，应为第 6 节 R3 → 已改 |
+| U5 | 底层 node-sdk「≥1.61.1」 | 混淆了「直连安装要求」与传递依赖；`@larksuite/channel` 实际依赖 `^1.73.1` → 已改 |
+| M2 | 出站 `messageId` 判自身回显为必需 | 飞书不向机器人投递其自身消息，`selfEcho` 仅会议通道 → 已降级为可选防御措施并说明 |
+| M4 | 把该鉴权风险说成「引入网关的坏消息」 | 风险**今天已存在**，与网关无关 → §1 已更正归因 |
+| M5 | PR1 只谈 `resolveApproval` 一处 | 只有计划审批写 `approval_resolved` 证据，bash/write 无 → 7.2 已补范围问题 |
+
+**新增内容**：5.2（批合并语义 + 决策点，R10）、5.5（`onRawEvent` 绕过安全管线）、R11（`mobileDeviceToken`/`companionMode` 未接线）、5.1 的官方 `messageId` 依据、7.1 的审批结算更正。
+
+**对复核意见的一处纠正**：复核的 M1 指出「SDK 默认批合并」属实且重要（已采纳并升格为 5.2），但其机制描述「一批 N 条只落 1 条去重记录，重启后另外 N−1 条不被拦」**不成立**——源码显示去重标记在 dispatch 的 `finally` 里对**全部 `batch.sourceIds`** 逐个写入（`src/safety/index.ts:153-155`），在途重复另由按 `messageId` 的 `ProcessingLock` 兜住（`:142`）。批合并影响的是**分派语义与 id 可见性**，不是去重完整性。
+
+**复核确认无误的关键结论**（未在正文改动）：`/api` 无入站鉴权且默认监听所有网卡（实测 `*:3000`）；`resolveApproval` 的条件 UPDATE 与「首个决定生效」；`pickResponders` 语义；`sendMessage` 硬编码 `role:"user"`；`agents.avatar` 为 emoji 且 `appPreset.avatar` 需图片 URL（R1 为真风险）；一键创建默认 WebSocket 长连接且清单逐字符含 `im:message.group_at_msg.include_bot:readonly`；`addons` 增量语义、`createOnly`、传 `appId` 增量授权、返回值/错误码/状态机；`registerApp` 由 `@larksuite/channel` 重新导出；卡片回调死锁警告与 `cardActions` 默认 `'same'`；全部引用 URL 有效。
