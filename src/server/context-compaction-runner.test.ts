@@ -15,6 +15,7 @@ import { startConversationCompaction } from "@/server/context-compaction-runner"
 import { eventBus } from "@/server/event-bus";
 import { createMessage } from "@/server/repositories";
 import { updateSettings } from "@/server/settings-service";
+import type { StreamEvent } from "@/shared/types";
 
 let tempDir: string;
 let originalFetch: typeof fetch;
@@ -59,6 +60,38 @@ describe("context compaction runner", () => {
       .prepare("SELECT id FROM conversation_context_summaries WHERE id = ?")
       .get(completed.resultSummaryId) as { id: string } | undefined;
     expect(summary?.id).toBe(completed.resultSummaryId);
+  });
+
+  it("persists the same origin it publishes for its system message", async () => {
+    // postSystemMessage writes the row with raw SQL rather than createMessage,
+    // so the origin is stated twice. When they disagree the live event and the
+    // value a client reads after a reload differ, which is silent until
+    // something reads the column.
+    const conversation = createCompactionConversation();
+
+    const events: StreamEvent[] = [];
+    eventBus.subscribe((entry) => {
+      events.push(entry.event);
+    });
+
+    const started = startConversationCompaction(conversation.id);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await waitForJob(started.job.id, "complete");
+
+    const added = events.filter((event) => event.type === "message.added");
+    const systemEvent = added[added.length - 1];
+    expect(systemEvent?.type).toBe("message.added");
+    if (systemEvent?.type !== "message.added") return;
+
+    expect(systemEvent.message.role).toBe("system");
+    expect(systemEvent.message.origin).toBe("internal");
+
+    const row = getDatabase()
+      .prepare("SELECT origin FROM messages WHERE id = ?")
+      .get(systemEvent.message.id) as { origin: string } | undefined;
+
+    expect(row?.origin).toBe(systemEvent.message.origin);
   });
 
   it("retry creates and starts a linked job with an incremented attempt", async () => {

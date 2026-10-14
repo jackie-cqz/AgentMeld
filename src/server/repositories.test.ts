@@ -6,8 +6,15 @@
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from "vitest";
+import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
-import { createConversation, createRun, persistConductorTask } from "@/server/repositories";
+import {
+  createConversation,
+  createMessage,
+  createRun,
+  getMessage,
+  persistConductorTask
+} from "@/server/repositories";
 import { setupTestDatabase } from "@/test/test-database";
 
 function readVerificationStatus(id: string): string | undefined {
@@ -98,6 +105,109 @@ describe("persistConductorTask", () => {
 
       persistConductorTask({ ...base, status: "complete", attempt: 2, verificationStatus: "verified" });
       expect(readVerificationStatus("res_t1")).toBe("verified");
+    } finally {
+      teardown();
+    }
+  });
+});
+
+describe("message origin", () => {
+  it("defaults by role and honours an explicit origin", () => {
+    const teardown = setupTestDatabase("agentmeld-repo-origin-");
+    try {
+      const now = Date.now();
+      seedConversationAndRun("conv_origin", "run_origin", now);
+
+      const human = createMessage({
+        id: "msg_human", conversationId: "conv_origin", role: "user",
+        parts: [{ type: "text", content: "hi" }], status: "complete", now
+      });
+      expect(human.origin).toBe("human");
+
+      // Agent output is produced by the runtime, not authored by a person.
+      const agentMessage = createMessage({
+        id: "msg_agent", conversationId: "conv_origin", role: "agent",
+        parts: [{ type: "text", content: "out" }], status: "complete", now
+      });
+      expect(agentMessage.origin).toBe("bot");
+
+      // Channel ingress states the origin itself; it must win over the default.
+      const botMessage = createMessage({
+        id: "msg_bot", conversationId: "conv_origin", role: "user", origin: "bot",
+        parts: [{ type: "text", content: "echo" }], status: "complete", now
+      });
+      expect(botMessage.origin).toBe("bot");
+    } finally {
+      teardown();
+    }
+  });
+
+  it("derives origin by role when the column is added to an existing database", () => {
+    // The real risk in this migration is not "does the column appear" but
+    // "what do the rows that predate it become". Labelling them all 'human'
+    // would contradict defaultOriginForRole, which gives agent rows 'bot' and
+    // system rows 'internal'. So this drops the column, writes legacy rows,
+    // then runs the migration the way a real upgrade would.
+    const teardown = setupTestDatabase("agentmeld-repo-origin-migrate-");
+    try {
+      const now = Date.now();
+      seedConversationAndRun("conv_origin", "run_origin", now);
+      const db = getDatabase();
+
+      db.exec("ALTER TABLE messages DROP COLUMN origin");
+
+      const insertLegacy = db.prepare(`
+        INSERT INTO messages
+          (id, conversation_id, role, agent_id, run_id, parts, status,
+           mentioned_agent_ids, parent_message_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const parts = JSON.stringify([{ type: "text", content: "legacy" }]);
+      insertLegacy.run("m_legacy_user", "conv_origin", "user", null, null, parts, "complete", "[]", null, now, now);
+      insertLegacy.run("m_legacy_agent", "conv_origin", "agent", null, null, parts, "complete", "[]", null, now, now);
+      insertLegacy.run("m_legacy_system", "conv_origin", "system", null, null, parts, "complete", "[]", null, now, now);
+
+      resetBootstrapForTests();
+      ensureDatabase();
+
+      expect(getMessage("m_legacy_user")?.origin).toBe("human");
+      expect(getMessage("m_legacy_agent")?.origin).toBe("bot");
+      expect(getMessage("m_legacy_system")?.origin).toBe("internal");
+
+      // The backfill must belong to the ALTER, not to every boot. A row created
+      // afterwards with a deliberate origin for its role has to survive a later
+      // bootstrap untouched.
+      createMessage({
+        id: "m_after_migration", conversationId: "conv_origin", role: "agent", origin: "human",
+        parts: [{ type: "text", content: "deliberate" }], status: "complete", now
+      });
+      resetBootstrapForTests();
+      ensureDatabase();
+      expect(getMessage("m_after_migration")?.origin).toBe("human");
+    } finally {
+      teardown();
+    }
+  });
+
+  it("accepts an out-of-enum origin, because the column has no CHECK constraint", () => {
+    // Named for what it actually asserts. There is no runtime validation of the
+    // value: TypeScript is the only guard, so a production caller using the same
+    // cast could store garbage. Documented rather than hidden.
+    const teardown = setupTestDatabase("agentmeld-repo-origin-");
+    try {
+      const now = Date.now();
+      seedConversationAndRun("conv_origin", "run_origin", now);
+
+      createMessage({
+        id: "msg_bogus", conversationId: "conv_origin", role: "user",
+        origin: "nonsense" as never,
+        parts: [{ type: "text", content: "?" }], status: "complete", now
+      });
+
+      const row = getDatabase()
+        .prepare("SELECT origin FROM messages WHERE id = ?")
+        .get("msg_bogus") as { origin: string };
+      expect(row.origin).toBe("nonsense");
     } finally {
       teardown();
     }

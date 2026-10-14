@@ -57,6 +57,7 @@ export function ensureDatabase() {
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       role TEXT NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'human',
       agent_id TEXT REFERENCES agents(id),
       run_id TEXT,
       parts TEXT NOT NULL,
@@ -463,6 +464,8 @@ function migrateLegacyTables() {
   ensureColumn("agents", "supports_vision", "INTEGER NOT NULL DEFAULT 0");
 
   ensureColumn("conversations", "archived", "INTEGER NOT NULL DEFAULT 0");
+
+  ensureMessageOriginColumn();
 
   ensureColumn("agent_runs", "error", "TEXT");
   ensureColumn("agent_runs", "started_at", "INTEGER NOT NULL DEFAULT 0");
@@ -1066,6 +1069,7 @@ function tableExists(tableName: string) {
 }
 
 /**
+/**
  * Bring approval rows written before this column was maintained into line with
  * how it is documented now.
  *
@@ -1103,6 +1107,43 @@ function repairLegacyApprovalRecords() {
   `).run();
 }
 
+/**
+ * Add `messages.origin`, deriving a value for rows that predate the column.
+ *
+ * A bare `ensureColumn` would label every historical row 'human', which is only
+ * right for user-role rows: agent and system rows are equally old, and
+ * `defaultOriginForRole` would have given them 'bot' and 'internal'. So the
+ * backfill lives inside the same one-time branch as the ALTER. It must not run
+ * on every boot, or it would keep rewriting rows that legitimately carry a
+ * non-default origin for their role.
+ *
+ * The ALTER and the backfill share one transaction because they are only
+ * correct together: a crash in between would leave the column present and every
+ * row on the default, and the guard above would then never run the backfill
+ * again — permanently reproducing the problem the derivation exists to avoid.
+ *
+ * The CASE mirrors `defaultOriginForRole` in repositories.ts; keep them in step.
+ * `ELSE` covers every role that is neither user nor agent, not just system.
+ */
+function ensureMessageOriginColumn() {
+  if (columnExists("messages", "origin")) return;
+  const db = getDatabase();
+  db.exec("BEGIN");
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'human'");
+    db.prepare(`
+      UPDATE messages SET origin = CASE role
+        WHEN 'user' THEN 'human'
+        WHEN 'agent' THEN 'bot'
+        ELSE 'internal'
+      END
+    `).run();
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 function migrateLegacyConductorNames() {
   const db = getDatabase();
   const legacyRole = legacyRoleKey();

@@ -56,7 +56,7 @@ function createPayload(): BootstrapPayload {
         {
           id: "msg_late",
           conversationId: "conv_new",
-          role: "user",
+          role: "user", origin: "human",
           agentId: null,
           runId: null,
           parts: [],
@@ -69,7 +69,7 @@ function createPayload(): BootstrapPayload {
         {
           id: "msg_early",
           conversationId: "conv_new",
-          role: "user",
+          role: "user", origin: "human",
           agentId: null,
           runId: null,
           parts: [],

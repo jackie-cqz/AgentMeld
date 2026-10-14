@@ -50,7 +50,7 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
     triggerMessage: {
       id: "msg_trigger",
       conversationId: "conv_test",
-      role: "user",
+      role: "user", origin: "human",
       agentId: null,
       runId: null,
       parts: [{ type: "text", content: "帮我写前端代码" }],

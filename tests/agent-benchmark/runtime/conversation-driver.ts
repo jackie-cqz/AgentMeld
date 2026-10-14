@@ -77,6 +77,7 @@ export class ConversationDriver {
     const mutationBaselines = captureMutationBaselines(workspacePath, benchmarkCase);
 
     const response = await this.dependencies.sendMessage({
+      origin: "human",
       conversationId: conversation.id,
       content: benchmarkCase.prompt,
     });

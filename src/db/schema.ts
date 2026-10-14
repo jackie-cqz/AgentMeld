@@ -10,6 +10,7 @@ import type {
   ConversationMode,
   FsWriteApprovalMode,
   MessagePart,
+  MessageOrigin,
   MessageRole,
   MessageStatus,
   ModelProvider,
@@ -63,6 +64,7 @@ export const messages = sqliteTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
     role: text("role").$type<MessageRole>().notNull(),
+    origin: text("origin").$type<MessageOrigin>().notNull().default("human"),
     agentId: text("agent_id").references(() => agents.id),
     runId: text("run_id"),
     parts: text("parts", { mode: "json" }).$type<MessagePart[]>().notNull(),

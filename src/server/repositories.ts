@@ -25,6 +25,7 @@ import type {
   FsWriteApprovalMode,
   Message,
   MessagePart,
+  MessageOrigin,
   MessageRole,
   MessageStatus,
   UsagePayload
@@ -54,6 +55,11 @@ interface CreateMessageInput {
   id: string;
   conversationId: string;
   role: MessageRole;
+  /**
+   * Who authored the message. Defaults by role: user-role messages are human,
+   * everything else is internal. Pass it explicitly for channel ingress.
+   */
+  origin?: MessageOrigin;
   agentId?: string | null;
   runId?: string | null;
   parts: MessagePart[];
@@ -201,20 +207,34 @@ export function getMessage(messageId: string): Message | null {
   return row ? mapMessage(row) : null;
 }
 
+/**
+ * Who authored a message when the caller does not say. Mirrors the role:
+ * user-role messages are typed by a person, agent-role messages carry an
+ * agent's bot identity, and system-role messages are runtime bookkeeping.
+ * Keep this in step with `message-events.ts`, which builds the optimistic
+ * streaming message for an agent as `bot`.
+ */
+function defaultOriginForRole(role: MessageRole): MessageOrigin {
+  if (role === "user") return "human";
+  if (role === "agent") return "bot";
+  return "internal";
+}
+
 export function createMessage(input: CreateMessageInput): Message {
   getDatabase()
     .prepare(
       `
         INSERT INTO messages (
-          id, conversation_id, role, agent_id, run_id, parts, status,
+          id, conversation_id, role, origin, agent_id, run_id, parts, status,
           mentioned_agent_ids, parent_message_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
       input.id,
       input.conversationId,
       input.role,
+      input.origin ?? defaultOriginForRole(input.role),
       input.agentId ?? null,
       input.runId ?? null,
       JSON.stringify(input.parts),

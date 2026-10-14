@@ -171,6 +171,7 @@ describe("conversation-service", () => {
       });
 
       const result = await sendMessage({
+        origin: "human",
         conversationId: conv.id,
         content: "Hello agent"
       });
@@ -193,13 +194,13 @@ describe("conversation-service", () => {
       });
 
       await expect(
-        sendMessage({ conversationId: conv.id, content: "   " })
+        sendMessage({ origin: "human", conversationId: conv.id, content: "   " })
       ).rejects.toThrow("Message content cannot be empty.");
     });
 
     it("rejects message for non-existent conversation", async () => {
       await expect(
-        sendMessage({ conversationId: "conv_nonexistent", content: "hello" })
+        sendMessage({ origin: "human", conversationId: "conv_nonexistent", content: "hello" })
       ).rejects.toThrow("Conversation not found.");
     });
 
@@ -211,6 +212,7 @@ describe("conversation-service", () => {
       });
 
       const result = await sendMessage({
+        origin: "human",
         conversationId: conv.id,
         content: "hello",
         mentionedAgentIds: []
@@ -227,6 +229,7 @@ describe("conversation-service", () => {
       });
 
       const result = await sendMessage({
+        origin: "human",
         conversationId: conv.id,
         content: "hello builder",
         mentionedAgentIds: ["ag_mock_builder"]
@@ -234,6 +237,130 @@ describe("conversation-service", () => {
 
       // Should only trigger the mentioned agent, not the conductor
       expect(result.runIds).toHaveLength(1);
+    });
+
+    it("records the origin the caller declared", async () => {
+      // Renamed: sendMessage has no origin default any more, so this cannot be
+      // testing one. The per-role default lives in createMessage and is covered
+      // in repositories.test.ts.
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+
+      const result = await sendMessage({ origin: "human", conversationId: conv.id, content: "hi" });
+
+      expect(result.message.origin).toBe("human");
+    });
+
+    it("fails loudly when a caller bypasses the required origin", async () => {
+      // The type makes origin required, but that only binds TypeScript callers.
+      // Without this guard the role default would write 'human' while the gate
+      // refused to dispatch, leaving a row that disagrees with what happened.
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+
+      await expect(
+        sendMessage({ conversationId: conv.id, content: "hi" } as never)
+      ).rejects.toThrow(/requires an explicit origin/);
+
+      // Nothing was written.
+      expect(getConversationPayload(conv.id)?.messages).toHaveLength(0);
+    });
+
+    // The next two cases are a matched pair: identical conversation (a group
+    // that DOES contain a conductor), identical lack of mentions. The only
+    // difference is the origin, so the pair isolates the dispatch gate from
+    // "there was simply no responder".
+    it("dispatches a human message through the conductor fallback", async () => {
+      const conv = createConversation({
+        mode: "group",
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
+      });
+
+      const result = await sendMessage({ origin: "human", conversationId: conv.id, content: "hello" });
+
+      expect(result.runIds).toHaveLength(1);
+    });
+
+    it("never dispatches a bot-authored message, even where the conductor fallback would fire", async () => {
+      const conv = createConversation({
+        mode: "group",
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
+      });
+
+      const result = await sendMessage({
+        conversationId: conv.id,
+        content: "bot echo",
+        origin: "bot"
+      });
+
+      expect(result.runIds).toHaveLength(0);
+      expect(result.message.origin).toBe("bot");
+    });
+
+    it("never dispatches an internal message", async () => {
+      const conv = createConversation({
+        mode: "group",
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
+      });
+
+      const result = await sendMessage({
+        conversationId: conv.id,
+        content: "projected internal event",
+        origin: "internal"
+      });
+
+      expect(result.runIds).toHaveLength(0);
+      expect(result.message.origin).toBe("internal");
+    });
+
+    it("never dispatches a bot message that names an agent", async () => {
+      const conv = createConversation({
+        mode: "group",
+        agentIds: ["ag_mock_conductor", "ag_mock_builder"]
+      });
+
+      const result = await sendMessage({
+        conversationId: conv.id,
+        content: "hello builder",
+        mentionedAgentIds: ["ag_mock_builder"],
+        origin: "bot"
+      });
+
+      expect(result.runIds).toHaveLength(0);
+    });
+
+    it("still records a bot message in the conversation so later turns can see it", async () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+
+      const result = await sendMessage({
+        conversationId: conv.id,
+        content: "bot echo",
+        origin: "bot"
+      });
+
+      const payload = getConversationPayload(conv.id);
+      expect(payload).not.toBeNull();
+      const stored = payload?.messages.find((m) => m.id === result.message.id);
+      expect(stored?.origin).toBe("bot");
+    });
+
+    it("does not treat a bot-authored deploy command as a deploy", async () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+
+      const result = await sendMessage({
+        conversationId: conv.id,
+        content: "部署",
+        origin: "bot"
+      });
+
+      expect("deploy" in result && result.deploy).toBeFalsy();
+      expect(result.runIds).toHaveLength(0);
+    });
+
+    it("still runs the deploy command for a human", async () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+
+      const result = await sendMessage({ origin: "human", conversationId: conv.id, content: "部署" });
+
+      expect("deploy" in result && result.deploy).toBeTruthy();
     });
   });
 
@@ -264,7 +391,7 @@ describe("conversation-service", () => {
         agentIds: ["ag_mock_builder"]
       });
 
-      await sendMessage({ conversationId: conv.id, content: "test" });
+      await sendMessage({ origin: "human", conversationId: conv.id, content: "test" });
 
       // Wait for the agent run to complete so we get both messages
       await new Promise<void>((resolve) => {

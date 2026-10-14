@@ -77,7 +77,11 @@ export async function editMessage(messageId: string, content: string) {
     content,
     mentionedAgentIds: existing.mentionedAgentIds,
     attachmentIds,
-    parentMessageId: existing.parentMessageId
+    parentMessageId: existing.parentMessageId,
+    // Carry the original author across the withdraw-and-resend. Dropping it
+    // would launder a bot-authored message into a human one and let an edit
+    // start a run the original message was not allowed to start.
+    origin: existing.origin
   });
 
   return { ...mutation, ...result };

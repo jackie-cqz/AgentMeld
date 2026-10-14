@@ -132,7 +132,7 @@ function seedConversationAndRun() {
   const triggerMessage: Message = {
     id: messageId,
     conversationId,
-    role: "user",
+    role: "user", origin: "human",
     agentId: null,
     runId: null,
     parts,

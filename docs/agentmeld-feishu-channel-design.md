@@ -45,9 +45,9 @@ Issue 的方向成立，且有两条比它预期更好的消息和一条它排�
 
 **消息入口**
 
-- `sendMessage` 对任何来源都硬编码 `role: "user"`（`src/server/conversation-service.ts:193`）。`SendMessageInput` 没有来源/渠道字段。
-- `pickResponders`（`src/server/conversation-service.ts:232-246`）：`single` 模式取首个 agent；有 `@` 取被 @ 的；**否则在会话含 Conductor 时兜底分派给 Conductor**，不含则返回空。因此一条 bot 回显只要走进 `sendMessage`，即使没 @ 任何人也会启动一次新的 Conductor 运行。
-- `messages` 表只有 `role` / `agentId` / `runId` / `mentionedAgentIds` / `parentMessageId`，**没有来源列**（`src/db/schema.ts:59-76`）。
+- ~~`sendMessage` 对任何来源都硬编码 `role: "user"`。`SendMessageInput` 没有来源/渠道字段。~~ **已由「消息来源标记」改动解决**：`sendMessage` 现在要求显式传入 `origin`（`human` | `bot` | `internal`，见 5.3），消息落库也带该列。
+- `pickResponders`（`src/server/conversation-service.ts`）：`single` 模式取首个 agent；有 `@` 取被 @ 的；**否则在会话含 Conductor 时兜底分派给 Conductor**，不含则返回空。因此一条 bot 回显只要走进 `sendMessage`，即使没 @ 任何人也会启动一次新的 Conductor 运行。**这正是 5.3 的闸门所拦的路径。**
+- `messages` 表此前只有 `role` / `agentId` / `runId` / `mentionedAgentIds` / `parentMessageId`，**没有来源列**；现已新增 `origin`。
 
 **运行与审批**
 
@@ -206,7 +206,8 @@ SDK 的去重是双层结构，长期层是可注入的 `Cache`，源码注释�
 
 ### 5.3 来源与回显
 
-1. **来源标记是必需的**：消息必须带 `origin`（`human` | `bot` | `internal`）。`sendMessage` 当前硬编码 `role:"user"`，无法区分 bot 回显与人类输入，而 `pickResponders` 会在无 `@` 时兜底触发 Conductor——这是**可复现的回环**，不是理论风险。
+1. **来源标记是必需的，且已实现**：消息带 `origin`（`human` | `bot` | `internal`），`sendMessage` 要求显式传入。`dispatchTargets` 对任何非 `human` 来源返回空目标，于是 `pickResponders` 的无 `@` 兜底触发 Conductor **不会被非人类消息走到**。
+   - **准确表述（此处曾写错）**：这条路径在**当前代码里不可达**——还没有任何生产调用方传入非人类 `origin`，渠道本身也尚未实现。闸门与它建立的区分目前都是**惰性的**；这次改动的价值是让渠道落地时**无法**引入该回环，而不是关掉一个正在发生的回环。同一个改动还让 `origin` 成为消息的一等属性（`role` 表示对话如何对待它，`origin` 表示它实际来自谁——外部 bot 的消息仍是 `role: "user"`）。
 2. **自身回显检测在 IM 路径不是必需的**（更正 Issue 的假设）：飞书**不把机器人自己发送的消息投递给它自己**——群消息权限说明明确「不包含当前机器人自己发送的消息」，`im.message.receive_v1` 的投递前提是被 @ 或单聊；SDK 也只对**会议通道**提供 `selfEcho`。
    - 因此「保存出站 `messageId` 以识别自身回显」**不构成 IM 路径的正确性依赖**。可以保留为防御性措施（成本低），但不要当作设计支柱，也不要为它牺牲简洁性。真正的回环风险来自 `origin`，不是来自自身回显。
 
@@ -266,8 +267,8 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 注：「首个决定生效」已由现有条件 UPDATE 保证（`src/server/repositories.ts:388-399`），不要重复实现。
 
 **PR2（无凭据，现在可做）— 消息来源标记**
-为消息引入 `origin`（`human`/`bot`/`internal`），解除 `sendMessage` 的 `role:"user"` 硬编码（`src/server/conversation-service.ts:193`），并让 `pickResponders`（`:232-246`）拒绝把 bot/internal 来源当作新的人类要求。
-价值：堵住 5.3 那条可复现的回环；是「内部消息回显不重复执行」的实现基础。
+为消息引入 `origin`（`human`/`bot`/`internal`）并落库，`sendMessage` 要求显式传入；`dispatchTargets` 让任何非 `human` 来源都得不到分派目标（`pickResponders` 保持为纯路由函数）。
+价值：让渠道落地时**无法**引入 5.3 那条回环，并把「谁写的」变成消息的一等属性。**注意它今天不关闭任何正在发生的回环**——见 5.3 的准确表述。
 
 **F0（需凭据）— 接入验证**
 按 R1–R6、R10、R11 逐项取判定，产出「实际权限、发布配置、平台限制」记录。**R3（bot@bot 事件是否真的到达）第一项做**，它的结果决定后续是「多 Bot 各自身份」还是「单 Conductor Bot + 网页投影」。
@@ -330,4 +331,4 @@ Issue 推荐独立网关进程。核实后，两条路的代价差得比看上�
 
 **对复核意见的一处纠正**：复核的 M1 指出「SDK 默认批合并」属实且重要（已采纳并升格为 5.2），但其机制描述「一批 N 条只落 1 条去重记录，重启后另外 N−1 条不被拦」**不成立**——源码显示去重标记在 dispatch 的 `finally` 里对**全部 `batch.sourceIds`** 逐个写入（`src/safety/index.ts:153-155`），在途重复另由按 `messageId` 的 `ProcessingLock` 兜住（`:142`）。批合并影响的是**分派语义与 id 可见性**，不是去重完整性。
 
-**复核确认无误的关键结论**（未在正文改动）：`/api` 无入站鉴权且默认监听所有网卡（实测 `*:3000`）；`resolveApproval` 的条件 UPDATE 与「首个决定生效」；`pickResponders` 语义；`sendMessage` 硬编码 `role:"user"`；`agents.avatar` 为 emoji 且 `appPreset.avatar` 需图片 URL（R1 为真风险）；一键创建默认 WebSocket 长连接且清单逐字符含 `im:message.group_at_msg.include_bot:readonly`；`addons` 增量语义、`createOnly`、传 `appId` 增量授权、返回值/错误码/状态机；`registerApp` 由 `@larksuite/channel` 重新导出；卡片回调死锁警告与 `cardActions` 默认 `'same'`；全部引用 URL 有效。
+**复核确认无误的关键结论**（未在正文改动）：`/api` 无入站鉴权且默认监听所有网卡（实测 `*:3000`）；`resolveApproval` 的条件 UPDATE 与「首个决定生效」；`pickResponders` 语义；`sendMessage` 曾硬编码 `role:"user"`（现已由来源标记改动解决，见 5.3）；`agents.avatar` 为 emoji 且 `appPreset.avatar` 需图片 URL（R1 为真风险）；一键创建默认 WebSocket 长连接且清单逐字符含 `im:message.group_at_msg.include_bot:readonly`；`addons` 增量语义、`createOnly`、传 `appId` 增量授权、返回值/错误码/状态机；`registerApp` 由 `@larksuite/channel` 重新导出；卡片回调死锁警告与 `cardActions` 默认 `'same'`；全部引用 URL 有效。

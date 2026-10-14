@@ -74,7 +74,7 @@ function buildAdapterInput(overrides?: Partial<AdapterInput>): AdapterInput {
   const triggerMessage: Message = {
     id: "msg_trigger",
     conversationId: "conv_test",
-    role: "user",
+    role: "user", origin: "human",
     agentId: null,
     runId: null,
     parts: [{ type: "text", content: "Hello, how are you?" }],
