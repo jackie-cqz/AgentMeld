@@ -447,6 +447,7 @@ export function resetBootstrapForTests() {
 
 function migrateLegacyTables() {
   migrateLegacyConductorNames();
+  repairLegacyApprovalRecords();
   migrateLegacyConductorTables();
   renameColumnIfPresent("agents", legacyRoleKey("is_"), "is_conductor");
   renameColumnIfPresent("conductor_task_results", legacyRoleKey("", "_run_id"), "conductor_run_id");
@@ -1062,6 +1063,44 @@ function tableExists(tableName: string) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
     .get(tableName);
   return Boolean(row);
+}
+
+/**
+ * Bring approval rows written before this column was maintained into line with
+ * how it is documented now.
+ *
+ * 1. Attribution. The old `resolveApproval` always copied the *status* into
+ *    `resolved_by`, so the rows it corrupted are exactly those with a status in
+ *    ('approved','rejected') AND `resolved_by = status`. Both halves matter: the
+ *    status half excludes cancelled/interrupted rows, which never had the column
+ *    written at all, and the equality half separates a corrupted row from a
+ *    genuine operator label.
+ *    Without this, `getApprovalRecord` — the first code that ever reads the
+ *    column — would surface corruption as an operator literally named
+ *    "approved".
+ * 2. Timestamps. Cancellation and interruption used to leave `resolved_at` NULL,
+ *    which contradicts the documented meaning of the column ("when the row
+ *    stopped being pending"). `updated_at` is the only available proxy.
+ *
+ * Residual, disclosed rather than hidden: this runs on every bootstrap, so an
+ * operator whose label happens to equal the resulting status — "approved" on an
+ * approved approval — would be cleared again at the next start. Such a label is
+ * not a realistic operator identifier, and silently dropping caller values in
+ * `normalizeResolvedBy` was judged the worse alternative.
+ */
+function repairLegacyApprovalRecords() {
+  const db = getDatabase();
+  db.prepare(`
+    UPDATE pending_approvals
+    SET resolved_by = NULL
+    WHERE status IN ('approved', 'rejected') AND resolved_by = status
+  `).run();
+  db.prepare(`
+    UPDATE pending_approvals
+    SET resolved_at = updated_at
+    WHERE status IN ('approved', 'rejected', 'cancelled', 'interrupted')
+      AND resolved_at IS NULL
+  `).run();
 }
 
 function migrateLegacyConductorNames() {

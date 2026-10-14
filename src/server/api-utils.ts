@@ -44,6 +44,36 @@ export function conflict(message: string): Response {
   );
 }
 
+/** Attribution of an approval that some other actor already resolved. */
+export interface ResolvedAttribution {
+  resolvedBy: string | null;
+  resolvedAt: number | null;
+  status: string | null;
+}
+
+/**
+ * 409 for an approval another actor already resolved.
+ *
+ * Carries the recorded attribution so a second surface can show *who* handled
+ * it — e.g. the web UI learning that a Feishu user already approved — instead
+ * of failing with an opaque conflict. `resolvedBy` is a caller-declared
+ * attribution label and is not authenticated; treat it as display data only.
+ */
+export function conflictAlreadyResolved(
+  message: string,
+  record: { resolvedBy: string | null; resolvedAt: number | null; status: string } | undefined
+): Response {
+  const attribution: ResolvedAttribution = {
+    resolvedBy: record?.resolvedBy ?? null,
+    resolvedAt: record?.resolvedAt ?? null,
+    status: record?.status ?? null
+  };
+  return Response.json(
+    { error: message, ...attribution } satisfies ApiErrorBody & ResolvedAttribution,
+    { status: 409 }
+  );
+}
+
 /**
  * Return a structured 500 error response.
  */

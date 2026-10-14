@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval, SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import type { PendingBashCommand } from "@/shared/types";
 
 type Resolver = (approved: boolean) => void;
@@ -71,12 +71,12 @@ export function getPendingBashCommandsForConversation(conversationId: string): P
   return getAllPendingBashCommands().filter((c) => c.conversationId === conversationId);
 }
 
-export function approvePendingBash(id: string): boolean {
-  return resolvePendingBash(id, true);
+export function approvePendingBash(id: string, resolvedBy?: string | null): boolean {
+  return resolvePendingBash(id, true, resolvedBy);
 }
 
-export function rejectPendingBash(id: string): boolean {
-  return resolvePendingBash(id, false);
+export function rejectPendingBash(id: string, resolvedBy?: string | null): boolean {
+  return resolvePendingBash(id, false, resolvedBy);
 }
 
 export function cancelPendingBashForRun(runId: string): void {
@@ -100,17 +100,17 @@ export function cancelPendingBashForRun(runId: string): void {
 export function clearPendingBashForTests(): void {
   const store = getStore();
   for (const [id, entry] of store) {
-    resolveApproval(id, false, Date.now());
+    resolveApproval(id, false, Date.now(), SYSTEM_RESOLVED_BY);
     entry.resolver(false);
   }
   store.clear();
 }
 
-function resolvePendingBash(id: string, approved: boolean): boolean {
+function resolvePendingBash(id: string, approved: boolean, resolvedBy?: string | null): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
-  if (!resolveApproval(id, approved, Date.now())) return false;
+  if (!resolveApproval(id, approved, Date.now(), resolvedBy ?? null)) return false;
   store.delete(id);
   entry.resolver(approved);
   return true;

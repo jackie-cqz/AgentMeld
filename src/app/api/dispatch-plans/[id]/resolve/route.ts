@@ -1,14 +1,21 @@
 import { z } from "zod";
 import { approvePlan, getPendingPlan, rejectPlan, revisePlanWithFeedback } from "@/server/dispatch-plan-manager";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
-import { getConversation, getAgent } from "@/server/repositories";
+import { getApprovalRecord, getConversation, getAgent, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { eventBus } from "@/server/event-bus";
+import { conflictAlreadyResolved } from "@/server/api-utils";
 
 export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
   action: z.enum(["approve", "reject", "revise"]),
   feedback: z.string().optional(),
+  // Caller-declared attribution label (not authenticated). Omit it, or send
+  // null, when the operator is unknown. Note the deliberate split with the
+  // server side: this boundary rejects an over-long label (400) while
+  // normalizeResolvedBy truncates, because an internal caller may hold a
+  // longer identifier than the HTTP contract allows.
+  resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional(),
   plan: z.array(z.object({
     id: z.string().min(1),
     agentId: z.string().min(1),
@@ -49,14 +56,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const entry = getPendingPlan(id);
   if (!entry) {
+    // See the bash route: consult the record of this type so a second surface
+    // learns who resolved it instead of getting an uninformative 404.
+    const record = getApprovalRecord(id);
+    if (record && record.approvalType === "dispatch_plan" && record.status !== "pending") {
+      return conflictAlreadyResolved("Plan was already resolved.", record);
+    }
     return Response.json({ error: "Pending plan not found." }, { status: 404 });
   }
 
   const { action, feedback } = parsed.data;
 
   if (action === "reject") {
-    if (!rejectPlan(id)) {
-      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    if (!rejectPlan(id, parsed.data.resolvedBy)) {
+      return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
       type: "dispatch.plan.resolved",
@@ -71,8 +84,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (action === "revise") {
     const effectiveFeedback = feedback?.trim() || "请调整计划。";
-    if (!revisePlanWithFeedback(id, effectiveFeedback)) {
-      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    if (!revisePlanWithFeedback(id, effectiveFeedback, parsed.data.resolvedBy)) {
+      return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
       type: "dispatch.plan.resolved",
@@ -120,8 +133,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (typeof validationResult === "string") {
     // Plan fails validation at approval gate — reject it
-    if (!rejectPlan(id)) {
-      return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+    if (!rejectPlan(id, parsed.data.resolvedBy)) {
+      return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
       type: "dispatch.plan.resolved",
@@ -139,8 +152,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   // Plan validated — approve
-  if (!approvePlan(id, validationResult)) {
-    return Response.json({ error: "Plan was already resolved." }, { status: 409 });
+  if (!approvePlan(id, validationResult, parsed.data.resolvedBy)) {
+    return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({
     type: "dispatch.plan.resolved",

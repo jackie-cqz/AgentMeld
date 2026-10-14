@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval, SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
 import { getDatabase } from "@/db/client";
 import { newEvidenceId } from "@/shared/ids";
@@ -71,16 +71,16 @@ export function getPendingPlansForConversation(conversationId: string): PendingD
   return getAllPendingPlans().filter((p) => p.conversationId === conversationId);
 }
 
-export function approvePlan(id: string, plan?: DispatchPlanItem[]): boolean {
-  return resolvePlan(id, { approved: true, plan });
+export function approvePlan(id: string, plan?: DispatchPlanItem[], resolvedBy?: string | null): boolean {
+  return resolvePlan(id, { approved: true, plan, resolvedBy });
 }
 
-export function rejectPlan(id: string): boolean {
-  return resolvePlan(id, { approved: false });
+export function rejectPlan(id: string, resolvedBy?: string | null): boolean {
+  return resolvePlan(id, { approved: false, resolvedBy });
 }
 
-export function revisePlanWithFeedback(id: string, feedback: string): boolean {
-  return resolvePlan(id, { approved: true, feedback });
+export function revisePlanWithFeedback(id: string, feedback: string, resolvedBy?: string | null): boolean {
+  return resolvePlan(id, { approved: true, feedback, resolvedBy });
 }
 
 export function cancelPendingPlansForRun(runId: string): void {
@@ -105,7 +105,7 @@ export function cancelPendingPlansForRun(runId: string): void {
 export function clearPendingPlansForTests(): void {
   const store = getStore();
   for (const [id, entry] of store) {
-    resolveApproval(id, false, Date.now());
+    resolveApproval(id, false, Date.now(), SYSTEM_RESOLVED_BY);
     entry.resolver({ approved: false });
   }
   store.clear();
@@ -113,13 +113,13 @@ export function clearPendingPlansForTests(): void {
 
 function resolvePlan(
   id: string,
-  outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[] }
+  outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[]; resolvedBy?: string | null }
 ): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
   const now = Date.now();
-  if (!resolveApproval(id, outcome.approved, now)) return false;
+  if (!resolveApproval(id, outcome.approved, now, outcome.resolvedBy ?? null)) return false;
 
   // P1: Record approval evidence — use real planId from conductor_plans table
   const p = entry.plan;
