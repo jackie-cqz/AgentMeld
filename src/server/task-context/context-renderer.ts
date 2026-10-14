@@ -148,11 +148,49 @@ export function renderTaskContextPrompt(envelope: TaskContextEnvelope): string {
     parts.push(`  </recent_messages>`);
   }
 
-  // Evidence contract
+  // Evidence contract.
+  //
+  // Every item below is enforced by evaluateChildTaskResult, so it has to be
+  // rendered: requirements the agent never sees are requirements it cannot meet.
+  // This block used to hold only comments, which made group tasks fail on
+  // "缺少必需证据说明" / "验收标准漏报" / "缺少成功命令证据" no matter what the
+  // agent did (issue #11).
   parts.push(`  <evidence_contract>`);
-  parts.push(`    <!-- All tool calls during this task will be automatically recorded. -->`);
-  parts.push(`    <!-- You MUST call report_task_result when finished. -->`);
+  parts.push(`    <!-- All tool calls during this task are recorded automatically. -->`);
   parts.push(`    <!-- The Runtime independently verifies evidence — your report is a claim, not a verdict. -->`);
+  if (requirements.targetPaths.length > 0) {
+    parts.push(`    <target_paths>`);
+    parts.push(`      <!-- Create or modify exactly these paths; the run looks for file evidence for each. -->`);
+    for (const targetPath of requirements.targetPaths) {
+      parts.push(`      <path>${escapeXml(targetPath)}</path>`);
+    }
+    parts.push(`    </target_paths>`);
+  }
+  if (requirements.requiredCommands.length > 0) {
+    parts.push(`    <required_commands>`);
+    parts.push(`      <!-- Run these commands and let them succeed — the run is checked against command evidence, and an equivalent command does not count. -->`);
+    for (const required of requirements.requiredCommands) {
+      parts.push(`      <command>${escapeXml(required.command)}</command>`);
+    }
+    parts.push(`    </required_commands>`);
+  }
+  if (requirements.requiredEvidence.length > 0) {
+    parts.push(`    <required_evidence>`);
+    parts.push(`      <!-- Address each of these in your report (summary, files, commands, tests). -->`);
+    for (const item of requirements.requiredEvidence) {
+      parts.push(`      <item>${escapeXml(item)}</item>`);
+    }
+    parts.push(`    </required_evidence>`);
+  }
+  if (requirements.acceptanceCriteria.length > 0) {
+    parts.push(`    <acceptance_criteria>`);
+    parts.push(`      <!-- Return every criterion verbatim in report_task_result.acceptanceResults, with passed and evidence. -->`);
+    for (const criterion of requirements.acceptanceCriteria) {
+      parts.push(`      <criterion>${escapeXml(criterion)}</criterion>`);
+    }
+    parts.push(`    </acceptance_criteria>`);
+  }
+  parts.push(`    <!-- You MUST call report_task_result when finished. -->`);
   parts.push(`  </evidence_contract>`);
 
   // Failure context

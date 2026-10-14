@@ -50,6 +50,35 @@ export interface CompileTaskContextInput {
   toolSchemaTokens?: number;
 }
 
+/**
+ * The task's evidence contract, carried into the envelope.
+ *
+ * `evaluateChildTaskResult` enforces every one of these, so the renderer has to
+ * emit them — for a long time it emitted none of them (the only code that
+ * rendered the contract, `buildChildTaskPrompt`, is not on the production path),
+ * which made group tasks fail no matter what the agent did. See issue #11.
+ */
+export function buildRequirements(
+  task: ParsedTask,
+  constraints: unknown[]
+): TaskContextEnvelope["requirements"] {
+  return {
+    constraints,
+    expectedOutputs: (task.expectedOutputs ?? []).map(eo => ({
+      outputKey: eo.id,
+      type: eo.type,
+      required: eo.required ?? true
+    })),
+    acceptanceCriteria: [...(task.acceptanceCriteria ?? [])],
+    targetPaths: [...(task.targetPaths ?? [])],
+    requiredCommands: (task.requiredCommands ?? []).map(command => ({
+      command: command.command,
+      timeoutMs: command.timeoutMs
+    })),
+    requiredEvidence: [...(task.requiredEvidence ?? [])]
+  };
+}
+
 export async function compileTaskContext(input: CompileTaskContextInput): Promise<TaskContextEnvelope> {
   const now = Date.now();
   const strategy = getActiveStrategy();
@@ -343,10 +372,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
       blocked: true,
       identity,
       task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
-      requirements: {
-        constraints: input.activeFacts.map(f => ({ canonicalKey: f.canonicalKey, value: f.value })),
-        expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
-      },
+      requirements: buildRequirements(input.task, input.activeFacts.map(f => ({ canonicalKey: f.canonicalKey, value: f.value }))),
       upstreamInputs: [],
       includedContextItems: [],
       failureContext: null,
@@ -418,10 +444,7 @@ export async function compileTaskContext(input: CompileTaskContextInput): Promis
     blocked: false,
     identity,
     task: { title: input.task.title, objective: input.task.prompt, assignedAgentId: input.task.agentId, dependsOn: input.task.dependsOn },
-    requirements: {
-      constraints,
-      expectedOutputs: (input.task.expectedOutputs ?? []).map(eo => ({ outputKey: eo.id, type: eo.type, required: eo.required ?? true })),
-    },
+    requirements: buildRequirements(input.task, constraints),
     upstreamInputs,
     includedContextItems,
     failureContext: failureCtx,
