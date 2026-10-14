@@ -174,6 +174,65 @@ export function updateTaskAttemptVerification(
     .run(verificationStatus, failureContextJson, now, attemptId);
 }
 
+/** 'queued' and 'running' are the only non-terminal execution states an attempt has. */
+function isNonTerminal(executionStatus: string): boolean {
+  return executionStatus === "queued" || executionStatus === "running";
+}
+
+/**
+ * Finish one attempt as failed, but ONLY while it is still non-terminal.
+ *
+ * Used on the error path of `runChildTask`. A throw after the attempt was already
+ * finished (output binding, FTS rebuild, the blocked-envelope branch) must not rewrite
+ * a correct terminal row as failed, so the current row is read back first and a
+ * terminal row is left alone. Returns whether a write happened.
+ */
+export function failOpenTaskAttempt(attemptId: string, error: string, now: number): boolean {
+  const row = getTaskAttempt(attemptId);
+  if (!row || !isNonTerminal(row.executionStatus)) return false;
+  finishTaskAttempt(attemptId, "failed", now);
+  updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ error }), now);
+  return true;
+}
+
+/**
+ * Retire attempt rows that nothing can ever finish.
+ *
+ * An attempt row is written by the conductor and finished by the retry loop. Once its
+ * conductor run is no longer running, the only writer that could have finished the row
+ * is gone, so a row still sitting at 'queued'/'running' is stale by construction. The
+ * paths that produce such rows are: the retry loop writing only `execution_status`
+ * (fixed for the happy path, but a throw inside `runChildTask` still leaves the
+ * in-flight attempt behind), the clarifying-question meta-attempt inserted as 'running'
+ * with only the approval path to finish it, and any run interrupted mid-flight.
+ *
+ * A conductor meta-attempt (`task_id = 'conductor'`) is a pure evidence container, not
+ * an in-flight attempt: `reported_complete` is its success token (what
+ * `finishTaskAttempt` writes) and it never gets verdicts, so its verification status is
+ * left as it is. A child attempt that never finished is genuinely failed.
+ *
+ * `finished_at` is only filled when absent — an already-finished row must not be
+ * re-timestamped by a repair pass.
+ */
+export function retireNonTerminalAttempts(now: number): number {
+  const result = getDatabase()
+    .prepare(`
+      UPDATE task_attempts
+      SET execution_status = CASE WHEN task_id = 'conductor' THEN 'reported_complete' ELSE 'failed' END,
+          verification_status = CASE WHEN task_id = 'conductor' THEN verification_status ELSE 'rejected' END,
+          failure_context_json = CASE
+            WHEN task_id = 'conductor' THEN failure_context_json
+            ELSE COALESCE(failure_context_json, '{"error":"attempt was left non-terminal by a run that had already stopped"}')
+          END,
+          finished_at = COALESCE(finished_at, ?),
+          updated_at = ?
+      WHERE execution_status IN ('queued', 'running')
+        AND conductor_run_id IN (SELECT id FROM agent_runs WHERE status <> 'running')
+    `)
+    .run(now, now) as { changes?: number };
+  return result.changes ?? 0;
+}
+
 export function getTaskAttempt(attemptId: string): TaskAttemptRecord | undefined {
   const row = getDatabase()
     .prepare("SELECT * FROM task_attempts WHERE id = ?")

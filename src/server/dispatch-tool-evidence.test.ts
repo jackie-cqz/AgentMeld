@@ -2,12 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockListEvidenceForTask = vi.fn();
 
-vi.mock("@/server/repositories/evidence-repository", () => ({
-  getTaskAttemptByChildRun: vi.fn(),
-  insertEvidence: vi.fn(),
-  listEvidenceForChildRun: vi.fn(() => []),
-  listEvidenceForTask: (...args: unknown[]) => mockListEvidenceForTask(...args),
-}));
+vi.mock("@/server/repositories/evidence-repository", async (importOriginal) => {
+  // Spread the real module and override only what this suite drives. A whitelist
+  // factory breaks every OTHER consumer of the module: the global test setup calls
+  // ensureDatabase -> recoverOrphanedRuns, so an export added for the startup path
+  // (retireNonTerminalAttempts) crashed this file's collection.
+  const actual = await importOriginal<typeof import("@/server/repositories/evidence-repository")>();
+  return {
+    ...actual,
+    getTaskAttemptByChildRun: vi.fn(),
+    insertEvidence: vi.fn(),
+    listEvidenceForChildRun: vi.fn(() => []),
+    listEvidenceForTask: (...args: unknown[]) => mockListEvidenceForTask(...args),
+  };
+});
 
 import {
   clearAllToolEvidenceForTests,

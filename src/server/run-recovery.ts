@@ -1,4 +1,5 @@
 import { markRunInterrupted, listOrphanedRunningRuns, interruptAllPendingApprovals, cancelApprovalsForRun } from "@/server/repositories";
+import { retireNonTerminalAttempts } from "@/server/repositories/evidence-repository";
 import { recoverCompactionJobs } from "@/server/context-compaction-service";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -27,19 +28,30 @@ export function recoverOrphanedRuns() {
   }
 
   const orphaned = listOrphanedRunningRuns();
-  if (orphaned.length === 0) return;
+  if (orphaned.length > 0) {
+    for (const run of orphaned) {
+      markRunInterrupted(run.id, now);
 
-  for (const run of orphaned) {
-    markRunInterrupted(run.id, now);
+      // Clear in-memory pending items + DB approvals for this run
+      cancelApprovalsForRun(run.id, now);
+      cancelPendingPlansForRun(run.id);
+      cancelPendingQuestionsForRun(run.id);
+      clearFileWrites(run.id);
+      clearTaskResultsForRun(run.id);
+      clearRunToolEvidence(run.id);
+    }
 
-    // Clear in-memory pending items + DB approvals for this run
-    cancelApprovalsForRun(run.id, now);
-    cancelPendingPlansForRun(run.id);
-    cancelPendingQuestionsForRun(run.id);
-    clearFileWrites(run.id);
-    clearTaskResultsForRun(run.id);
-    clearRunToolEvidence(run.id);
+    console.log(`[run-recovery] Marked ${orphaned.length} orphaned runs as interrupted.`);
   }
 
-  console.log(`[run-recovery] Marked ${orphaned.length} orphaned runs as interrupted.`);
+  // Runs are repaired above; the attempt rows they own need repairing too, and this
+  // must NOT be skipped when there are no orphaned runs. An attempt is finished by the
+  // run that owns it, so once that run is no longer running the row can never be
+  // finished by anything — whether the run was interrupted just now, or ended earlier
+  // and leaked the row. Rows leaked by an older build have exactly that shape: their
+  // parent run completed normally, so scanning only orphaned runs would never see them.
+  const retired = retireNonTerminalAttempts(now);
+  if (retired > 0) {
+    console.log(`[run-recovery] Retired ${retired} attempt(s) left non-terminal by a stopped run.`);
+  }
 }

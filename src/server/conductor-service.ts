@@ -32,6 +32,7 @@ import {
   startTaskAttempt,
   finishTaskAttempt,
   updateTaskAttemptVerification,
+  failOpenTaskAttempt,
   insertContextSnapshot,
   listEvidenceForAttempt,
 } from "@/server/repositories/evidence-repository";
@@ -696,6 +697,11 @@ async function runChildTask(
     return { taskId: task.id, status: "aborted", summary: "Aborted before start." };
   }
 
+  // The attempt row currently in flight, so the catch below can finish it. Stale by
+  // design after an iteration completes — `failOpenTaskAttempt` re-reads the row and
+  // refuses to touch one that already reached a terminal state.
+  let currentAttemptId: string | null = null;
+
   try {
     // Build child prompt with full context
 
@@ -807,6 +813,7 @@ async function runChildTask(
         createdAt: now,
         updatedAt: now,
       });
+      currentAttemptId = attemptId;
 
       // P3+P5: Build compiled context snapshot via full compiler pipeline.
       // On retry (attempt > 1), pass the previous attempt's identity and error
@@ -1196,6 +1203,21 @@ async function runChildTask(
       childRunId: finalRunId,
       verificationStatus
     };
+  } catch (err) {
+    // The attempt row is created before the child run and only finished at the end of
+    // the iteration, so a throw in between leaves it non-terminal forever. The same
+    // throw also kills the whole plan: executeConductorPlan awaits runChildTask through
+    // Promise.all with no catch of its own. Finish the in-flight row, then let the
+    // error propagate so the failure is still visible and the run is not silently
+    // declared healthy.
+    if (currentAttemptId) {
+      failOpenTaskAttempt(
+        currentAttemptId,
+        err instanceof Error ? err.message : String(err),
+        Date.now()
+      );
+    }
+    throw err;
   } finally {
     release?.();
   }

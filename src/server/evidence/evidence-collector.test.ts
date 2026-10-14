@@ -12,13 +12,20 @@ const mockListForRun = vi.fn((_arg?: unknown) => []);
 const mockListForAttempt = vi.fn((_arg?: unknown) => []);
 const mockGetEvidence = vi.fn((_arg?: unknown) => undefined);
 
-vi.mock("@/server/repositories/evidence-repository", () => ({
-  insertEvidence: (arg: unknown) => mockInsertEvidence(arg),
-  listEvidenceForChildRun: (arg: unknown) => mockListForRun(arg),
-  listEvidenceForAttempt: (arg: unknown) => mockListForAttempt(arg),
-  getEvidence: (arg: unknown) => mockGetEvidence(arg),
-  // re-export types for dependent imports
-}));
+vi.mock("@/server/repositories/evidence-repository", async (importOriginal) => {
+  // Spread the real module and override only the four calls this suite drives. A
+  // whitelist factory breaks every other consumer: the global test setup calls
+  // ensureDatabase -> recoverOrphanedRuns, so an export added for the startup path
+  // (retireNonTerminalAttempts) crashed this file's collection.
+  const actual = await importOriginal<typeof import("@/server/repositories/evidence-repository")>();
+  return {
+    ...actual,
+    insertEvidence: (arg: unknown) => mockInsertEvidence(arg),
+    listEvidenceForChildRun: (arg: unknown) => mockListForRun(arg),
+    listEvidenceForAttempt: (arg: unknown) => mockListForAttempt(arg),
+    getEvidence: (arg: unknown) => mockGetEvidence(arg),
+  };
+});
 
 vi.mock("@/shared/ids", () => ({
   newEvidenceId: vi.fn(() => `ev_mock_${Math.random().toString(36).slice(2, 10)}`),
