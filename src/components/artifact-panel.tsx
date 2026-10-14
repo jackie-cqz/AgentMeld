@@ -20,9 +20,8 @@ import type { Artifact, ArtifactContent } from "@/shared/types";
 import { Modal } from "@/components/ui/modal";
 import { Tabs, Feedback } from "@/components/ui/controls";
 import { registerWorkspaceGuard, requestWorkspaceNavigation } from "@/lib/workspace-navigation";
-
-const MIN_PANEL_WIDTH = 380;
-const MAX_PANEL_WIDTH = 960;
+import { constrainPanelWidth } from "@/lib/workspace-panel-layout";
+import { usePanelSize } from "@/components/ui/use-panel-size";
 
 export function ArtifactPanel() {
   const activeConversationId = useAppStore((s) => s.activeConversationId);
@@ -30,7 +29,7 @@ export function ArtifactPanel() {
   const activeArtifact = useAppStore(selectSelectedArtifact);
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
   const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
-  const panelWidth = useAppStore((s) => s.artifactPanelWidth);
+  const { width: panelWidth, bounds: panelBounds } = usePanelSize();
   const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
   const [mode, setMode] = useState<"preview" | "source" | "edit">("preview");
 
@@ -47,8 +46,7 @@ export function ArtifactPanel() {
     const startWidth = panelWidth;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
-      const maxWidth = Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * 0.72));
-      const nextWidth = clamp(startWidth + startX - moveEvent.clientX, MIN_PANEL_WIDTH, maxWidth);
+      const nextWidth = constrainPanelWidth(startWidth + startX - moveEvent.clientX, panelBounds);
       setPanelWidth(nextWidth);
     };
 
@@ -68,9 +66,8 @@ export function ArtifactPanel() {
   const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    const maxWidth = Math.min(MAX_PANEL_WIDTH, Math.round(window.innerWidth * 0.72));
     const delta = event.key === "ArrowLeft" ? 24 : -24;
-    setPanelWidth((current) => clamp(current + delta, MIN_PANEL_WIDTH, maxWidth));
+    setPanelWidth(constrainPanelWidth(panelWidth + delta, panelBounds));
   };
 
   return (
@@ -80,8 +77,8 @@ export function ArtifactPanel() {
       <div
         aria-label="调整 Artifact Workspace 宽度"
         aria-orientation="vertical"
-        aria-valuemax={MAX_PANEL_WIDTH}
-        aria-valuemin={MIN_PANEL_WIDTH}
+        aria-valuemax={panelBounds.max}
+        aria-valuemin={panelBounds.min}
         aria-valuenow={panelWidth}
         className="group absolute left-0 top-0 z-20 h-full w-2 -translate-x-1 cursor-col-resize touch-none"
         onKeyDown={handleResizeKeyDown}
@@ -484,10 +481,6 @@ function formatArtifactType(type: Artifact["type"]) {
   if (type === "document") return "Document";
   if (type === "image") return "Image";
   return type;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
 }
 
 function VersionHistoryButton({ artifact }: { artifact: Artifact | null }) {

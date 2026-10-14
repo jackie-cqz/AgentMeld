@@ -25,6 +25,16 @@ try {
   await page.getByLabel('工具权限预设').selectOption('review');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  await page.getByTitle('新建 Agent', { exact: true }).click();
+  await page.getByRole('button', { name: /快速创建/ }).click();
+  await page.getByPlaceholder(/例如：一个前端开发 Agent/).fill('审查文档与验收记录');
+  await page.getByRole('button', { name: '生成草稿并预览', exact: true }).click();
+  assert.equal(await page.getByLabel('Agent 描述', { exact: true }).inputValue(), '审查文档与验收记录');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+  assert.equal(await page.getByLabel('Agent 描述', { exact: true }).inputValue(), '审查文档与验收记录');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '放弃修改', exact: true }).click();
   await page.getByRole('button', { name: `查看 ${name} 的详情`, exact: true }).click();
   await page.getByRole('button', { name: '编辑配置', exact: true }).click();
   await page.getByLabel('Agent 描述', { exact: true }).fill('更新后的职责描述');

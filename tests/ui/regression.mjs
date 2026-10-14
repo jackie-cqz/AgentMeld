@@ -26,6 +26,12 @@ const messages = Array.from({ length: 16 }, (_, index) => ({
   parts: [{ type: 'text', content: index % 2 ? `已核对当前任务的相关输入。\n\n${'本轮仅采用可验证的工具结果与产物。'.repeat(index === 15 ? 35 : 2)}` : '请检查这轮协作结果。' }],
   status: 'complete', mentionedAgentIds: [], parentMessageId: null, createdAt: now + index, updatedAt: now + index
 }));
+messages[15].parts.push(
+  { type: 'tool_use', callId: 'ui_tool_1', toolName: 'fs_read', args: { path: 'acceptance.md' } },
+  { type: 'tool_result', callId: 'ui_tool_1', result: { content: 'Acceptance evidence' } },
+  { type: 'tool_use', callId: 'ui_tool_2', toolName: 'ask_user', args: { questions: [] } },
+  { type: 'tool_result', callId: 'ui_tool_2', result: { answered: true } }
+);
 const fixture = { ...bootstrap, messagesByConversation: { ...bootstrap.messagesByConversation, [conversation.id]: messages },
   artifactsByConversation: { ...bootstrap.artifactsByConversation, [conversation.id]: artifacts } };
 async function newPage(width = 1440, height = 900, pending = false) {
@@ -45,10 +51,12 @@ async function newPage(width = 1440, height = 900, pending = false) {
       { header: '补充要求', question: '还有哪些验收要求？', options: [] }
     ] };
     const command = { ...common, id: 'ui_bash', command: 'npm run build -- --configuration=production-with-a-long-readable-command', cwd: 'workspace/project/long-path/src', reason: '验证构建结果' };
+    const write = { ...common, id: 'ui_write', path: 'src/acceptance.ts', absolutePath: '/test-only/src/acceptance.ts', oldContent: 'export const ready = false;', newContent: 'export const ready = true;' };
     const workerId = conversation.agentIds.find(id => bootstrap.agents.some(item => item.id === id && !item.isConductor));
     const plan = { ...common, id: 'ui_plan', plan: [{ id: 't1', agentId: workerId, task: '检查主要界面的布局、可访问性和工具执行结果', dependsOn: [], acceptanceCriteria: ['构建通过', '小屏没有遮挡'] }] };
     await page.route('**/pending-questions', route => route.fulfill({ json: { pendingQuestions: [question] } }));
     await page.route('**/pending-bash-commands', route => route.fulfill({ json: { pendingBashCommands: [command] } }));
+    await page.route('**/pending-writes', route => route.fulfill({ json: { pendingWrites: [write] } }));
     await page.route('**/pending-dispatch-plans', route => route.fulfill({ json: { pendingDispatchPlans: [plan] } }));
   }
   await page.route('**/api/artifacts/ui_artifact_*/versions', route => route.fulfill({ json: { versions: artifacts, latestId: 'ui_artifact_2' } }));
@@ -60,6 +68,12 @@ async function screenshot(page, name) { await page.screenshot({ path: `${output}
 async function noOverflow(page, name) {
   const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
   assert(dimensions.scroll <= dimensions.client + 1, `${name}: page overflow ${JSON.stringify(dimensions)}`);
+}
+async function railGap(page) {
+  const rail = await page.getByTitle('跳转到第 1 条消息', { exact: true }).boundingBox();
+  const avatar = await page.locator('#message-ui_message_14').getByText('我', { exact: true }).last().boundingBox();
+  assert(rail && avatar && rail.x > avatar.x + avatar.width + 6, 'Timeline remains to the right of user avatar');
+  return rail.x - avatar.x - avatar.width;
 }
 async function modalCheck(page, name) {
   const modal = page.locator('dialog[open]').last();
@@ -84,12 +98,25 @@ try {
       if (theme === 'dark') await page.getByTitle('深色模式', { exact: true }).click();
       await screenshot(page, `${width}-${theme}-panel-open`);
       await noOverflow(page, `${width}-${theme}-panel-open`);
+      if (width >= 1024) {
+        const handle = page.getByRole('separator', { name: '调整 Artifact Workspace 宽度' });
+        const before = (await page.locator('.ui-right-pane').boundingBox()).width;
+        await handle.focus();
+        await page.keyboard.press('ArrowRight');
+        const narrower = (await page.locator('.ui-right-pane').boundingBox()).width;
+        assert(narrower < before, `${width}: first resize key must change rendered width`);
+        const box = await handle.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + 100);
+        await page.mouse.down();
+        await page.mouse.move(box.x - 12, box.y + 100);
+        await page.mouse.up();
+        assert((await page.locator('.ui-right-pane').boundingBox()).width > narrower, `${width}: pointer resize starts at actual width`);
+      }
+      const openGap = await railGap(page);
       await page.getByTitle('关闭预览', { exact: true }).click();
       await screenshot(page, `${width}-${theme}-panel-closed`);
       await noOverflow(page, `${width}-${theme}-panel-closed`);
-      const timeline = await page.getByTitle('跳转到第 1 条消息', { exact: true }).boundingBox();
-      const avatar = await page.locator('#message-ui_message_14').getByText('我', { exact: true }).last().boundingBox();
-      assert(timeline && avatar && timeline.x > avatar.x + avatar.width + 6, 'Timeline must remain to the right of user avatar');
+      assert(Math.abs(await railGap(page) - openGap) <= 1, 'Opening the pane preserves rail/avatar spacing');
       await page.getByTitle('设置', { exact: true }).click();
       await page.getByLabel('DeepSeek API Key').waitFor();
       await modalCheck(page, `${width}-${theme}-settings`);
@@ -153,6 +180,9 @@ try {
   await page.getByTitle('关闭预览', { exact: true }).click();
   await page.getByRole('button', { name: '放弃修改', exact: true }).click();
   await page.locator('.ui-right-pane').waitFor({ state: 'detached' });
+  await page.locator('#message-ui_message_15').getByRole('button', { name: /工具调用 × 2/ }).click();
+  await page.locator('#message-ui_message_15').getByText('读取文件', { exact: true }).waitFor();
+  await page.locator('#message-ui_message_15').getByText('询问用户', { exact: true }).waitFor();
   await page.getByTitle('Artifact Workspace', { exact: true }).click();
   const resize = page.getByRole('separator', { name: '调整 Artifact Workspace 宽度' });
   const originalWidth = (await page.locator('.ui-right-pane').boundingBox()).width;
@@ -193,6 +223,7 @@ try {
     await page.route('**/api/pending-questions/ui_question/answer', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/dispatch-plans/ui_plan/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/pending-bash/ui_bash/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
+    await page.route('**/api/pending-writes/ui_write/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.getByRole('button', { name: '完整流程', exact: true }).click();
     await page.getByLabel('还有哪些验收要求？').fill('无横向溢出，保留任务证据');
     const answerResponse = page.waitForResponse(response => response.url().endsWith('/ui_question/answer'));
@@ -209,9 +240,17 @@ try {
     const bashResponse = page.waitForResponse(response => response.url().endsWith('/ui_bash/resolve'));
     await page.getByTitle('拒绝执行', { exact: true }).click();
     await bashResponse;
-    assert.equal(submitted.length, 3);
+    await page.getByRole('button', { name: '查看修改差异', exact: true }).click();
+    await page.getByText('export const ready = true;', { exact: false }).waitFor();
+    await noOverflow(page, `${width}-file-diff`);
+    const writeResponse = page.waitForResponse(response => response.url().endsWith('/ui_write/resolve'));
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await writeResponse;
+    await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'fs_write.resolved', conversationId: conversation.id, timestamp: now, pendingId: 'ui_write', applied: true });
+    assert.equal(submitted.length, 4);
     assert.equal(submitted[1].action, 'approve');
     assert.equal(submitted[2].approved, false);
+    assert.equal(submitted[3].approved, true);
     await page.close();
   }
   assert.deepEqual(errors, [], 'Runtime page errors');

@@ -66,7 +66,7 @@ Browser verification uses current Chromium. Native dialog/popover support is req
 
 - `pnpm typecheck`: passed.
 - `pnpm lint`: passed, with 52 existing unused-variable warnings.
-- `pnpm test`: 103 files passed; 1155 tests passed; 2 existing tests skipped.
+- `pnpm test`: 103 files passed; 1155 tests passed; 2 existing tests skipped at the first rebased verification. Two focused panel-geometry tests were subsequently added; the final PR CI checks include them.
 - `pnpm build`: passed. An existing Turbopack file-tracing warning remains in the SDK/backend import graph.
 - All three CDP regression scripts passed without runtime page errors.
 
