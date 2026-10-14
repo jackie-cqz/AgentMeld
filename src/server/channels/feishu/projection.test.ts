@@ -10,8 +10,12 @@ import {
   withinSendBudget
 } from "@/server/channels/feishu/projection";
 import { eventBus } from "@/server/event-bus";
-import { createChannelConversation, createConversation } from "@/server/repositories";
-import type { Message, MessagePart } from "@/shared/types";
+import {
+  createChannelConversation,
+  createConversation,
+  createMessage
+} from "@/server/repositories";
+import type { Message, MessagePart, MessageStatus } from "@/shared/types";
 
 /**
  * `getFeishuChannelForAgent` is stubbed: this suite is about WHICH channel a
@@ -286,23 +290,7 @@ describe("startChannelProjection", () => {
     sent.length = 0;
     channelsByAgent.clear();
     stopChannelProjectionForTests();
-  });
 
-  afterEach(() => {
-    stopChannelProjectionForTests();
-    teardown();
-  });
-
-  it("subscribes once, so nothing is posted twice", () => {
-    const first = startChannelProjection();
-    const second = startChannelProjection();
-    expect(second).toBe(first);
-  });
-
-  it("waits for the message to finish before posting", async () => {
-    // This is what makes the projection aggregated rather than per-token: the
-    // runner streams parts into one message, and only its completion is worth
-    // sending.
     createConversation({
       id: "conv_1",
       title: "飞书群",
@@ -319,37 +307,83 @@ describe("startChannelProjection", () => {
       now: 1
     });
     channelsByAgent.set("ag_pm", { send: async () => ({ messageId: "om_out" }) });
-    startChannelProjection();
+  });
 
+  afterEach(() => {
+    stopChannelProjectionForTests();
+    teardown();
+  });
+
+  /** Insert a message the way the runner does, and finish it. */
+  function finishedMessage(options: {
+    role: "agent" | "user";
+    agentId: string | null;
+    status?: MessageStatus;
+  }) {
+    const message = createMessage({
+      id: `msg_${Math.random().toString(36).slice(2, 8)}`,
+      conversationId: "conv_1",
+      role: options.role,
+      agentId: options.agentId,
+      parts: [{ type: "text", content: "这是结论" }],
+      status: "complete",
+      now: 1
+    });
+    eventBus.publish({
+      type: "message.end",
+      conversationId: "conv_1",
+      timestamp: 2,
+      messageId: message.id,
+      status: options.status ?? "complete"
+    });
+    return message;
+  }
+
+  it("posts an agent's answer once it ends", async () => {
+    startChannelProjection();
+    finishedMessage({ role: "agent", agentId: "ag_pm" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(1);
+    expect((sent[0].input as { text: string }).text).toBe("这是结论");
+  });
+
+  it("does not post on message.added, which is not how an answer finishes", async () => {
+    // The bug this pins: an agent's answer is created with `message.start` and
+    // finished with `message.end`. It is never published as `message.added`, so
+    // subscribing to that meant the projection never ran at all — and the tests
+    // did not catch it because they published the event the code expected.
+    startChannelProjection();
     eventBus.publish({
       type: "message.added",
       conversationId: "conv_1",
       timestamp: 1,
-      message: agentMessage({ status: "streaming" })
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sent).toHaveLength(0);
-
-    eventBus.publish({
-      type: "message.added",
-      conversationId: "conv_1",
-      timestamp: 2,
       message: agentMessage()
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sent).toHaveLength(1);
+
+    expect(sent).toHaveLength(0);
   });
 
-  it("ignores a message from a human even when it is complete", async () => {
+  it("does not post a reply that ended badly", async () => {
     startChannelProjection();
-    eventBus.publish({
-      type: "message.added",
-      conversationId: "conv_1",
-      timestamp: 1,
-      message: agentMessage({ role: "user", agentId: null })
-    });
+    finishedMessage({ role: "agent", agentId: "ag_pm", status: "error" });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(sent).toHaveLength(0);
+  });
+
+  it("does not post a human's message", async () => {
+    startChannelProjection();
+    finishedMessage({ role: "user", agentId: null });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it("returns the same subscription when started twice", () => {
+    const first = startChannelProjection();
+    const second = startChannelProjection();
+    expect(second).toBe(first);
   });
 });

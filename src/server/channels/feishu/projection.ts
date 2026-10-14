@@ -1,5 +1,5 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
-import { getChannelConversationByConversationId } from "@/server/repositories";
+import { getChannelConversationByConversationId, getMessage } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/connection";
 import type { Message, MessagePart } from "@/shared/types";
 
@@ -157,12 +157,21 @@ export function startChannelProjection(): () => void {
 
   const stop = eventBus.subscribe((entry: EventBusEntry) => {
     const event = entry.event;
-    // A message is projected when it is finished: the runner streams parts into
-    // one message, so waiting for the end is what makes this aggregated rather
-    // than per-token.
-    if (event.type !== "message.added") return;
-    if (event.message.role !== "agent" || event.message.status !== "complete") return;
-    void projectMessage(event.message).catch((error: unknown) => {
+    // `message.end`, not `message.added`. An agent's answer is created with
+    // `message.start` while streaming and finished with `message.end`; it is
+    // never published as `message.added` at all (the one `message.added` the
+    // runner emits carries a system error notice). Subscribing to the wrong one
+    // meant the projection simply never ran — the unit tests could not see it,
+    // because they published the event the code was expecting.
+    //
+    // Waiting for the end is also what makes this aggregated rather than
+    // per-token: the runner streams parts into a single message.
+    if (event.type !== "message.end") return;
+    const message = getMessage(event.messageId);
+    if (!message || message.role !== "agent") return;
+    // A withdrawn or errored reply is not an answer worth posting.
+    if ((event.status ?? message.status) !== "complete") return;
+    void projectMessage(message).catch((error: unknown) => {
       console.error("[feishu] failed to project a message:", error);
     });
   });
