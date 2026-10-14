@@ -19,7 +19,18 @@ const ArgsSchema = z.object({
 // Commands that require user approval but are not banned
 const APPROVAL_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|update|ci)\b/,
-  /\bnpx\b/,
+  // `npx <verification tool>` is already declared a legitimate verification
+  // command by VERIFICATION_PATTERNS. Demanding approval for it as well made
+  // unattended runs hang forever on a command the policy itself blesses — an
+  // agent that only wants to run `npx eslint` would sit in the approval queue
+  // until a human clicked, and then fail its task for lack of a report.
+  //
+  // The exemption must match the tool name as a WHOLE token: with a trailing `\b`
+  // the lookahead also excused `npx eslint-foo` / `npx eslint.exe`, which npx
+  // happily fetches from the registry — an approval-free RCE path. `(?![\w.-])`
+  // rejects those. The pattern is case-insensitive because VERIFICATION_PATTERNS
+  // is, and a case mismatch would recreate the very hang this fixes.
+  /\bnpx\b(?!\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-]))/i,
   /\bpnpm\s+dlx\b/,
   /\bpip\s+install\b/,
   /\buv\s+sync\b/,
@@ -49,16 +60,19 @@ const SOURCE_MUTATION_PATTERNS: RegExp[] = [
 const VERIFICATION_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|lint|typecheck|check)\b/i,
   /\b(?:npm|pnpm|yarn|bun)\s+(?:ls|list)\b/i,
-  /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
-  /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
-  /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)\b/i,
-  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)\b/i,
+  // Tool names are matched as whole tokens (`(?![\w.-])`, not `\b`): otherwise
+  // `npx eslint-foo` / `pnpm exec eslint-foo` count as verification and reach the
+  // registry / a differently-named binary while bypassing the approval gate.
+  /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
+  /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
+  /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
+  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
   /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+-m\s+(?:unittest|pytest)\b/i,
   /^pytest(?:\.exe)?\b/i,
   /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+(?:--version|-V)\b/i
 ];
 
-function needsApproval(command: string): boolean {
+export function needsApproval(command: string): boolean {
   return APPROVAL_PATTERNS.some((pattern) => pattern.test(command));
 }
 

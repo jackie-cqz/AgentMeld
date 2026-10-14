@@ -8,8 +8,18 @@ import { eventBus } from "@/server/event-bus";
 import {
   abortRun,
   isRunActive,
+  settlePendingApprovalsForRun,
   startAgentRun
 } from "@/server/agent-runner";
+import {
+  clearPendingBashForTests,
+  getAllPendingBashCommands,
+  registerPendingBash,
+  rejectPendingBash
+} from "@/server/pending-bash";
+import { clearPendingWritesForTests, registerPendingWrite } from "@/server/pending-writes";
+import { clearPendingQuestionsForTests, registerPendingQuestion } from "@/server/pending-questions";
+import { clearPendingPlansForTests, registerPendingPlan } from "@/server/dispatch-plan-manager";
 import {
   createConversation,
   sendMessage
@@ -28,6 +38,7 @@ beforeEach(() => {
   resetBootstrapForTests();
   resetDatabaseForTests();
   eventBus.clearForTests();
+  clearPendingApprovalStores();
   ensureDatabase();
 });
 
@@ -36,8 +47,18 @@ afterEach(() => {
   resetDatabaseForTests();
   delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
+  // The approval queues live on globalThis, not in the database, so a leaked
+  // entry would survive into the next test and break its length assertions.
+  clearPendingApprovalStores();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+function clearPendingApprovalStores(): void {
+  clearPendingBashForTests();
+  clearPendingWritesForTests();
+  clearPendingQuestionsForTests();
+  clearPendingPlansForTests();
+}
 
 /**
  * Collect all events that occur within `timeoutMs` — subscription starts
@@ -238,8 +259,20 @@ describe("agent-runner", () => {
     await waiter.waitFor("run.start");
 
     expect(isRunActive(runId)).toBe(true);
+
+    // Park the run on an approval the way a tool would, then abort. Aborting the
+    // AbortController alone cannot release an approval promise, so the run used to
+    // stay `running` forever, waiting for a human who never clicks.
+    const parked = registerPendingBash(
+      conv.id, "ag_mock_builder", runId, "npm install lodash", "/tmp", "approval required"
+    );
+    expect(getAllPendingBashCommands()).toHaveLength(1);
+
     const aborted = abortRun(runId);
     expect(aborted).toBe(true);
+
+    await expect(parked).resolves.toBe(false);
+    expect(getAllPendingBashCommands()).toHaveLength(0);
 
     const endEvent = await waiter.waitFor("run.end");
     unsub();
@@ -256,6 +289,51 @@ describe("agent-runner", () => {
 
   it("isRunActive returns false for unknown run id", () => {
     expect(isRunActive("run_nonexistent")).toBe(false);
+  });
+
+  it("settles every approval queue a run is parked on", async () => {
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const runId = "run_parked_on_approvals";
+
+    const bash = registerPendingBash(
+      conv.id, "ag_mock_builder", runId, "npm install lodash", "/tmp", "approval required"
+    );
+    const write = registerPendingWrite(
+      conv.id, "ag_mock_builder", runId, "src/app.ts", "/tmp/src/app.ts", null, "content"
+    );
+    const question = registerPendingQuestion(conv.id, "ag_mock_builder", runId, [
+      { question: "Which one?", header: "choose", options: [] }
+    ]);
+    const plan = registerPendingPlan(conv.id, runId, []);
+
+    expect(getAllPendingBashCommands()).toHaveLength(1);
+
+    settlePendingApprovalsForRun(runId);
+
+    await expect(bash).resolves.toBe(false);
+    await expect(write).resolves.toBe(false);
+    await expect(question).resolves.toEqual({});
+    await expect(plan).resolves.toMatchObject({ approved: false });
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  });
+
+  it("only releases approvals belonging to the settled run", async () => {
+    const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const mine = registerPendingBash(
+      conv.id, "ag_mock_builder", "run_mine", "npm install lodash", "/tmp", "approval required"
+    );
+    registerPendingBash(
+      conv.id, "ag_mock_builder", "run_other", "npm install lodash", "/tmp", "approval required"
+    );
+
+    settlePendingApprovalsForRun("run_mine");
+
+    await expect(mine).resolves.toBe(false);
+    const remaining = getAllPendingBashCommands();
+    expect(remaining).toHaveLength(1);
+
+    // Clean up the untouched entry so no promise is left dangling.
+    expect(rejectPendingBash(remaining[0].id)).toBe(true);
   });
 
   it("creates an error message when the agent is not found", async () => {
