@@ -58,10 +58,18 @@ export interface ChannelBindingSession {
   id: string;
   agentId: string;
   status: ChannelBindingStatus;
-  /** When the launcher URL stops being usable, from the SDK's own `expireIn`. */
+  /**
+   * When the launcher URL stops being usable, from the SDK's own `expireIn`.
+   * `0` means unknown — a session the client learned about from a stream event
+   * or a list rather than from the start response. Unknown is not the same as
+   * expired, and the UI must not present it as such.
+   */
   expiresAt: number;
   qrUrl?: string;
   error?: string;
+  /** Set once the scan succeeded, so the UI can show the binding without a refetch. */
+  bindingId?: string;
+  appId?: string;
 }
 
 

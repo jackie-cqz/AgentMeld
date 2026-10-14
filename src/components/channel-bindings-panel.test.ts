@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { deriveAgentBindingState, formatRemainingMs } from "@/components/channel-bindings-panel";
+import {
+  deriveAgentBindingState,
+  describeLauncherWindow,
+  formatRemainingMs,
+  isSafeLauncherUrl
+} from "@/components/channel-bindings-panel";
 import type { ChannelBinding, ChannelBindingSession } from "@/shared/types";
 
 function binding(agentId: string, appId = "cli_1"): ChannelBinding {
@@ -35,7 +40,8 @@ describe("deriveAgentBindingState", () => {
     const state = deriveAgentBindingState("ag_1", binding("ag_1"), {});
     expect(state.kind).toBe("bound");
     if (state.kind !== "bound") return;
-    expect(state.binding.appId).toBe("cli_1");
+    expect(state.appId).toBe("cli_1");
+    expect(state.bindingId).toBe("cb_1");
   });
 
   it("prefers the binding over a leftover session", () => {
@@ -74,11 +80,32 @@ describe("deriveAgentBindingState", () => {
     expect(state.kind).toBe("unbound");
   });
 
-  it("does not treat a succeeded session without a binding as bound", () => {
-    // Possible if the binding list has not been refreshed yet; "unbound" is the
-    // honest answer until the stored binding actually arrives.
+  it("reports bound straight from a succeeded session, before the binding arrives", () => {
+    // A success event names the app id but not the whole row. Falling through to
+    // "unbound" here made a completed scan look like it had failed, because
+    // nothing else populated the binding map until a refetch happened.
+    const state = deriveAgentBindingState("ag_1", undefined, {
+      s1: session("ag_1", "succeeded", { appId: "cli_9", bindingId: "cb_9" })
+    });
+    expect(state.kind).toBe("bound");
+    if (state.kind !== "bound") return;
+    expect(state.appId).toBe("cli_9");
+    expect(state.bindingId).toBe("cb_9");
+  });
+
+  it("still reports bound when a success event carried no app id", () => {
     const state = deriveAgentBindingState("ag_1", undefined, { s1: session("ag_1", "succeeded") });
-    expect(state.kind).toBe("unbound");
+    expect(state.kind).toBe("bound");
+    if (state.kind !== "bound") return;
+    expect(state.bindingId).toBeNull();
+  });
+
+  it("takes the app id from the stored binding when one exists", () => {
+    const state = deriveAgentBindingState("ag_1", binding("ag_1", "cli_from_row"), {});
+    expect(state.kind).toBe("bound");
+    if (state.kind !== "bound") return;
+    expect(state.appId).toBe("cli_from_row");
+    expect(state.bindingId).toBe("cb_1");
   });
 
   it("prefers a waiting attempt over an earlier failure", () => {
@@ -104,5 +131,41 @@ describe("formatRemainingMs", () => {
 
   it("floors partial seconds instead of rounding up", () => {
     expect(formatRemainingMs(1_999)).toBe("0:01");
+  });
+});
+
+describe("describeLauncherWindow", () => {
+  it("phrases an unknown deadline as ready rather than expired", () => {
+    // `expiresAt: 0` means the client never learned the deadline — a session it
+    // heard about from the stream. Rendering the countdown anyway produced the
+    // nonsense "链接剩余 已过期" while the QR stayed on screen.
+    expect(describeLauncherWindow(0, 1_000_000)).toBe("链接已就绪");
+  });
+
+  it("distinguishes expired from unknown", () => {
+    expect(describeLauncherWindow(500, 1_000)).toBe("链接已过期");
+  });
+
+  it("counts down while the window is open", () => {
+    expect(describeLauncherWindow(1_000 + 65_000, 1_000)).toBe("链接剩余 1:05");
+  });
+});
+
+describe("isSafeLauncherUrl", () => {
+  it("accepts the https launcher the server actually returns", () => {
+    expect(isSafeLauncherUrl("https://open.feishu.cn/page/launcher?user_code=X")).toBe(true);
+  });
+
+  it("rejects scheme that could navigate or execute", () => {
+    // The value is rendered into an href, so the scheme is the dangerous part.
+    expect(isSafeLauncherUrl("javascript:alert(1)")).toBe(false);
+    expect(isSafeLauncherUrl("http://open.feishu.cn/page/launcher")).toBe(false);
+    expect(isSafeLauncherUrl("data:text/html,<script>x</script>")).toBe(false);
+  });
+
+  it("rejects missing and unparseable values", () => {
+    expect(isSafeLauncherUrl(undefined)).toBe(false);
+    expect(isSafeLauncherUrl("")).toBe(false);
+    expect(isSafeLauncherUrl("not a url")).toBe(false);
   });
 });

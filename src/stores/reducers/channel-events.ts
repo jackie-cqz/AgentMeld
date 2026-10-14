@@ -18,10 +18,17 @@ export function applyChannelEvent(state: StoreDraft, event: StreamEvent): boolea
     id: event.sessionId,
     agentId: event.agentId,
     status: event.status,
-    // Unknown for a session this client did not start; the start response is
-    // what normally supplies it.
+    // Unknown for a session this client learned about from the stream rather
+    // than from the start response. 0 means unknown here, NOT expired; the
+    // panel must not render a countdown from it.
     expiresAt: existing?.expiresAt ?? 0
   };
+
+  // The app id and the row id come with a success, and the panel needs them:
+  // without them the row would fall back to "unbound" until a refetch lands,
+  // which reads as the binding having failed.
+  if (event.appId) Object.assign(next, { appId: event.appId });
+  if (event.bindingId) Object.assign(next, { bindingId: event.bindingId });
 
   state.channelBindingSessions[event.sessionId] = event.status === "awaiting_scan" && existing?.qrUrl
     ? { ...next, qrUrl: existing.qrUrl }

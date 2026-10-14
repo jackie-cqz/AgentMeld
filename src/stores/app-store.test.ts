@@ -679,6 +679,132 @@ describe("channel binding state", () => {
 
     expect(useAppStore.getState().channelBindingSessions["cbs_2"]?.error).toBe("access_denied");
   });
+
+  it("records the app id and row id a success event carries", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 4,
+      sessionId: "cbs_3",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_3",
+      appId: "cli_3"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_3"];
+    expect(session?.appId).toBe("cli_3");
+    expect(session?.bindingId).toBe("cb_3");
+  });
+});
+
+describe("channel binding actions", () => {
+  const originalFetch = globalThis.fetch;
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("keeps the failure message and does not refresh when the start fails for another reason", async () => {
+    // The refresh used to run unconditionally and its success path cleared the
+    // error, so a 502 reached the user as no message at all.
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(502, { error: "upstream exploded", sessionId: "cbs_9" });
+    }) as typeof fetch;
+
+    await expect(useAppStore.getState().startFeishuBinding("ag_1")).rejects.toThrow();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindingError).toContain("upstream exploded");
+    expect(urls).toHaveLength(1);
+  });
+
+  it("refreshes on a conflict but still reports the conflict", async () => {
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      if (call === 1) return json(409, { error: "already in progress", sessionId: "cbs_9" });
+      return json(200, {
+        data: {
+          bindings: [],
+          sessions: [{ id: "cbs_9", agentId: "ag_1", status: "awaiting_scan", expiresAt: 5000 }]
+        }
+      });
+    }) as typeof fetch;
+
+    await expect(useAppStore.getState().startFeishuBinding("ag_1")).rejects.toThrow();
+
+    const state = useAppStore.getState();
+    // The refresh reveals the attempt that is already waiting…
+    expect(state.channelBindingSessions["cbs_9"]).toBeDefined();
+    // …and the conflict is still surfaced rather than being cleared by it.
+    expect(state.channelBindingError).toContain("already in progress");
+  });
+
+  it("loads bindings and sessions and clears the previous error", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindingError = "stale";
+    });
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          bindings: [
+            {
+              id: "cb_1",
+              agentId: "ag_1",
+              channel: "feishu",
+              appId: "cli_1",
+              tenantBrand: "feishu",
+              botOpenId: null,
+              boundByOpenId: null,
+              chatId: null,
+              conversationId: null,
+              createdAt: 1,
+              updatedAt: 1
+            }
+          ],
+          sessions: []
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindings["ag_1"]?.appId).toBe("cli_1");
+    expect(state.channelBindingError).toBeNull();
+    expect(state.channelBindingsLoaded).toBe(true);
+  });
+
+  it("unbinds using the row id carried by a success event, without a prior load", async () => {
+    // The button used to do nothing at all when the local map was stale: no
+    // request, no error, no feedback.
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 5,
+      sessionId: "cbs_5",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_5",
+      appId: "cli_5"
+    });
+
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(200, { data: { removed: "cb_5", appLeftBehind: "cli_5" } });
+    }) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    expect(urls[0]).toContain("/api/channels/feishu/bindings/cb_5");
+    // The binding is gone, so nothing should still render that agent as bound.
+    expect(useAppStore.getState().channelBindingSessions["cbs_5"]).toBeUndefined();
+  });
 });
 
 function createArtifact(): Artifact {

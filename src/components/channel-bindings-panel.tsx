@@ -14,7 +14,7 @@ import type { ChannelBinding, ChannelBindingSession } from "@/shared/types";
 export type AgentBindingState =
   | { kind: "unbound" }
   | { kind: "binding"; session: ChannelBindingSession }
-  | { kind: "bound"; binding: ChannelBinding }
+  | { kind: "bound"; appId: string; bindingId: string | null }
   | { kind: "failed"; session: ChannelBindingSession };
 
 export function deriveAgentBindingState(
@@ -24,11 +24,21 @@ export function deriveAgentBindingState(
 ): AgentBindingState {
   // A stored binding wins: the server refuses a new attempt while one exists, so
   // a live session here would be a stale leftover rather than a real attempt.
-  if (binding) return { kind: "bound", binding };
+  if (binding) return { kind: "bound", appId: binding.appId, bindingId: binding.id };
 
   const mine = Object.values(sessions).filter((session) => session.agentId === agentId);
+
   const waiting = mine.find((session) => session.status === "awaiting_scan");
   if (waiting) return { kind: "binding", session: waiting };
+
+  // A success event names the app it created, so the row can say "bound"
+  // straight away. Falling through to "unbound" here used to make a completed
+  // scan look like it had failed, because nothing else populated the binding
+  // map until a refetch happened.
+  const succeeded = mine.find((session) => session.status === "succeeded");
+  if (succeeded) {
+    return { kind: "bound", appId: succeeded.appId ?? "未知应用", bindingId: succeeded.bindingId ?? null };
+  }
 
   // Sessions carry no creation timestamp, so when several failed attempts are
   // around the choice between them is arbitrary. Any of them conveys the same
@@ -48,6 +58,31 @@ export function formatRemainingMs(remainingMs: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+/**
+ * A whole phrase rather than a duration, because concatenating one produced
+ * "链接剩余 已过期". `expiresAt <= 0` means the client never learned the
+ * deadline, which is not the same as the link having expired.
+ */
+export function describeLauncherWindow(expiresAt: number, now: number): string {
+  if (expiresAt <= 0) return "链接已就绪";
+  if (expiresAt <= now) return "链接已过期";
+  return `链接剩余 ${formatRemainingMs(expiresAt - now)}`;
+}
+
+/**
+ * The launcher URL is rendered into an href, so its scheme matters: a value that
+ * is not https could navigate the user somewhere unwanted. The URL comes from
+ * the server, but nothing downstream should have to trust that.
+ */
+export function isSafeLauncherUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function ChannelBindingsPanel() {
   const agents = useAppStore((state) => state.agents);
   const agentIds = useAppStore((state) => state.agentIds);
@@ -61,6 +96,20 @@ export function ChannelBindingsPanel() {
   useEffect(() => {
     void useAppStore.getState().loadChannelBindings().catch(() => {});
   }, []);
+
+  // A scan that finished on the server arrives as an event naming the app id but
+  // not the whole binding row, so pull the row once. The flag clears as soon as
+  // the refetch lands, which is what stops this from looping.
+  const needsBindingRefresh = useMemo(
+    () =>
+      Object.values(sessions).some(
+        (session) => session.status === "succeeded" && !bindings[session.agentId]
+      ),
+    [sessions, bindings]
+  );
+  useEffect(() => {
+    if (needsBindingRefresh) void useAppStore.getState().loadChannelBindings().catch(() => {});
+  }, [needsBindingRefresh]);
 
   // Drives the countdown on the launcher URL. One interval for the panel rather
   // than one per row.
@@ -81,9 +130,7 @@ export function ChannelBindingsPanel() {
 
   const activeEntry = states.find((entry) => entry.state.kind === "binding");
   const activeSession =
-    activeEntry && activeEntry.state.kind === "binding" && activeEntry.state.session.qrUrl
-      ? activeEntry.state.session
-      : null;
+    activeEntry && activeEntry.state.kind === "binding" ? activeEntry.state.session : null;
   const activeAgentName = activeEntry
     ? agents[activeEntry.agentId]?.name ?? activeEntry.agentId
     : "";
@@ -93,7 +140,7 @@ export function ChannelBindingsPanel() {
     try {
       await action();
     } catch {
-      // The store records the message; nothing else to do here.
+      // The store records the message; the banner below renders it.
     } finally {
       setBusyAgentId(null);
     }
@@ -111,7 +158,9 @@ export function ChannelBindingsPanel() {
       </div>
 
       {error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+        <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </div>
       ) : null}
 
       {!loaded ? (
@@ -124,10 +173,7 @@ export function ChannelBindingsPanel() {
         {states.map(({ agentId, agent, state }) => (
           <li key={agentId} className="flex items-center justify-between gap-3 px-3 py-2">
             <div className="min-w-0">
-              <div className="truncate text-sm text-stone-900">
-                {agent?.name ?? agentId}
-                <span className="ml-2 text-xs text-stone-400">{agentId}</span>
-              </div>
+              <div className="truncate text-sm text-stone-900">{agent?.name ?? agentId}</div>
               <BindingStatusLine state={state} now={now} />
             </div>
 
@@ -135,6 +181,7 @@ export function ChannelBindingsPanel() {
               {state.kind === "bound" ? (
                 <button
                   type="button"
+                  aria-label={`解绑 ${agent?.name ?? agentId} 的飞书应用`}
                   disabled={busyAgentId !== null}
                   onClick={() => void run(agentId, () => useAppStore.getState().unbindFeishu(agentId))}
                   className="flex items-center gap-1 rounded-md border border-stone-200 px-2 py-1 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-50"
@@ -144,6 +191,7 @@ export function ChannelBindingsPanel() {
               ) : state.kind === "binding" ? (
                 <button
                   type="button"
+                  aria-label={`取消 ${agent?.name ?? agentId} 的绑定`}
                   disabled={busyAgentId !== null}
                   onClick={() =>
                     void run(agentId, () =>
@@ -157,6 +205,7 @@ export function ChannelBindingsPanel() {
               ) : (
                 <button
                   type="button"
+                  aria-label={`绑定 ${agent?.name ?? agentId} 到飞书`}
                   disabled={busyAgentId !== null}
                   onClick={() => void run(agentId, () => useAppStore.getState().startFeishuBinding(agentId))}
                   className="flex items-center gap-1 rounded-md bg-stone-900 px-2 py-1 text-xs text-white hover:bg-stone-700 disabled:opacity-50"
@@ -179,9 +228,7 @@ export function ChannelBindingsPanel() {
           agentName={activeAgentName}
           session={activeSession}
           now={now}
-          onClose={() =>
-            void useAppStore.getState().cancelChannelBindingSession(activeSession.id)
-          }
+          onCancel={() => void useAppStore.getState().cancelChannelBindingSession(activeSession.id)}
         />
       ) : null}
     </div>
@@ -193,14 +240,14 @@ function BindingStatusLine({ state, now }: { state: AgentBindingState; now: numb
     return (
       <div className="flex items-center gap-1 text-xs text-emerald-700">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        已绑定 · {state.binding.appId}
+        已绑定 · {state.appId}
       </div>
     );
   }
   if (state.kind === "binding") {
     return (
       <div className="text-xs text-stone-500">
-        等待扫码 · 链接剩余 {formatRemainingMs(state.session.expiresAt - now)}
+        等待扫码 · {describeLauncherWindow(state.session.expiresAt, now)}
       </div>
     );
   }
@@ -219,40 +266,53 @@ function LauncherDialog({
   agentName,
   session,
   now,
-  onClose
+  onCancel
 }: {
   agentName: string;
   session: ChannelBindingSession;
   now: number;
-  onClose: () => void;
+  onCancel: () => void;
 }) {
+  const safe = isSafeLauncherUrl(session.qrUrl);
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/40 p-4">
-      <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl">
-        <h3 className="text-sm font-semibold text-stone-950">用飞书扫码绑定「{agentName}」</h3>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feishu-launcher-title"
+        className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl"
+      >
+        <h3 id="feishu-launcher-title" className="text-sm font-semibold text-stone-950">
+          用飞书扫码绑定「{agentName}」
+        </h3>
         <p className="mt-1 text-xs leading-5 text-stone-500">
-          扫码后在确认页完成创建。链接剩余 {formatRemainingMs(session.expiresAt - now)}。
+          扫码后在确认页完成创建。{describeLauncherWindow(session.expiresAt, now)}。
         </p>
 
         <div className="mt-4 grid place-items-center rounded-md border border-stone-200 p-4">
-          {session.qrUrl ? <QRCodeSVG value={session.qrUrl} size={180} /> : null}
+          {safe ? <QRCodeSVG value={session.qrUrl!} size={180} /> : null}
         </div>
 
-        {session.qrUrl ? (
+        {safe ? (
           <a
             href={session.qrUrl}
             target="_blank"
-            rel="noreferrer"
+            rel="noreferrer noopener"
             className="mt-3 block break-all text-xs text-blue-600 hover:underline"
           >
             {session.qrUrl}
           </a>
-        ) : null}
+        ) : (
+          <p className="mt-3 break-all text-xs text-amber-700">
+            服务端返回的绑定链接不是 https，已拒绝跳转与渲染：{session.qrUrl}
+          </p>
+        )}
 
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={onCancel}
             className="h-8 rounded-md border border-stone-200 px-3 text-xs text-stone-600 hover:bg-stone-50"
           >
             取消绑定

@@ -262,10 +262,19 @@ export function getBindingSession(id: string): ChannelBindingSession | undefined
   return getSessions().get(id)?.session;
 }
 
+/**
+ * Sessions for a list view. The launcher URL is stripped: whoever can reach the
+ * bindings endpoint could otherwise open a URL that creates an app, and the
+ * design keeps that URL with the response that started the attempt.
+ */
 export function listBindingSessions(): ChannelBindingSession[] {
   const now = Date.now();
   sweep(now);
-  return Array.from(getSessions().values()).map((entry) => entry.session);
+  return Array.from(getSessions().values()).map((entry) => {
+    const session: ChannelBindingSession = { ...entry.session };
+    delete session.qrUrl;
+    return session;
+  });
 }
 
 /**

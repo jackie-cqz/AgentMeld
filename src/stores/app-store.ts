@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { requestJson } from "@/lib/request-json";
+import { ApiRequestError, requestJson } from "@/lib/request-json";
 import { applyStreamEvent } from "@/stores/apply-stream-event";
 import { normalizeBootstrap } from "@/stores/normalize-bootstrap";
 import { ensureConversationBuckets } from "@/stores/store-helpers";
@@ -501,13 +501,19 @@ export const useAppStore = create<AppState>()(
           state.channelBindingError = null;
         });
       } catch (error) {
+        // Only a conflict means "an attempt is already running for this agent",
+        // and that attempt's id exists only on the server — so refresh to reveal
+        // the QR code that is already waiting. Every other failure is reported
+        // as it is; refreshing on those was both pointless and harmful.
+        if (error instanceof ApiRequestError && error.status === 409) {
+          await get().loadChannelBindings().catch(() => {});
+        }
+        // Set the message AFTER any refresh. A successful refresh clears the
+        // error, which previously erased the very failure the user needed to
+        // see — a 502 came back with no message at all.
         set((state) => {
           state.channelBindingError = describeError(error);
         });
-        // A 409 can mean an attempt is already running for this agent, and the
-        // attempt's id only exists on the server. Refresh so the UI can show the
-        // QR that is already waiting instead of just an error.
-        await get().loadChannelBindings().catch(() => {});
         throw error;
       }
     },
@@ -531,12 +537,29 @@ export const useAppStore = create<AppState>()(
     },
 
     async unbindFeishu(agentId) {
-      const binding = get().channelBindings[agentId];
-      if (!binding) return;
+      // A success event carries the row id, so an unbind can work even before
+      // the binding list has been refetched. Without this the button would do
+      // nothing at all whenever the local map was stale — no request, no error.
+      const local = get().channelBindings[agentId];
+      const fromSession = Object.values(get().channelBindingSessions).find(
+        (session) => session.agentId === agentId && session.bindingId
+      )?.bindingId;
+      const bindingId = local?.id ?? fromSession;
+      if (!bindingId) {
+        // Nothing to delete locally; re-read in case this client is simply
+        // out of date rather than the agent being genuinely unbound.
+        await get().loadChannelBindings().catch(() => {});
+        return;
+      }
       try {
-        await requestJson(`/api/channels/feishu/bindings/${binding.id}`, { method: "DELETE" });
+        await requestJson(`/api/channels/feishu/bindings/${bindingId}`, { method: "DELETE" });
         set((state) => {
           delete state.channelBindings[agentId];
+          // The succeeded session is about a binding that no longer exists, so
+          // it must not keep the row rendered as bound.
+          for (const [id, session] of Object.entries(state.channelBindingSessions)) {
+            if (session.agentId === agentId) delete state.channelBindingSessions[id];
+          }
           state.channelBindingError = null;
         });
       } catch (error) {
