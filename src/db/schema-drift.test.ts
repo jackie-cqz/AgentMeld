@@ -30,21 +30,38 @@ function isFtsImplementationTable(tableName: string, ftsRoots: string[]) {
   return ftsRoots.some((root) => tableName === root || tableName.startsWith(`${root}_`));
 }
 
-function readRuntimeColumnNames(tableName: string): string[] {
-  const rows = getDatabase()
-    .prepare(`PRAGMA table_info(${tableName})`)
-    .all() as Array<{ name: string }>;
-  return rows.map((row) => row.name);
+interface TableColumn {
+  name: string;
+  /** SQLite declared type, lower-cased for comparison (e.g. "text", "integer", "real"). */
+  declaredType: string;
+  notNull: boolean;
 }
 
-function readDrizzleSchemaTables(): Map<string, string[]> {
-  const tables = new Map<string, string[]>();
+function readRuntimeColumns(tableName: string): TableColumn[] {
+  const rows = getDatabase()
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as Array<{ name: string; type: string; notnull: number; pk: number }>;
+  return rows.map((row) => ({
+    name: row.name,
+    declaredType: row.type.toLowerCase(),
+    // SQLite reports notnull=0 for a bare PRIMARY KEY column, so treat the
+    // primary key as implicitly NOT NULL on both sides.
+    notNull: row.notnull === 1 || row.pk === 1
+  }));
+}
+
+function readDrizzleSchemaTables(): Map<string, TableColumn[]> {
+  const tables = new Map<string, TableColumn[]>();
   for (const value of Object.values(schema)) {
     if (!is(value, SQLiteTable)) continue;
     const config = getTableConfig(value);
     tables.set(
       config.name,
-      config.columns.map((column) => column.name)
+      config.columns.map((column) => ({
+        name: column.name,
+        declaredType: (column as unknown as { getSQLType(): string }).getSQLType().toLowerCase(),
+        notNull: column.notNull || Boolean(column.primary)
+      }))
     );
   }
   return tables;
@@ -64,7 +81,7 @@ describe("schema drift guard: src/db/schema.ts mirrors src/db/bootstrap.ts", () 
     teardown = undefined;
   });
 
-  it("declares exactly the tables and columns that bootstrap creates", () => {
+  it("declares exactly the tables, columns, column types and nullability that bootstrap creates", () => {
     teardown = setupTestDatabase("agentmeld-schema-drift-");
 
     const sqliteMasterRows = readSqliteMasterTables();
@@ -101,20 +118,43 @@ describe("schema drift guard: src/db/schema.ts mirrors src/db/bootstrap.ts", () 
     const columnProblems: string[] = [];
     for (const [tableName, drizzleColumns] of drizzleTables) {
       if (!runtimeTables.has(tableName)) continue;
-      const runtimeColumns = readRuntimeColumnNames(tableName);
-      const missingColumns = difference(runtimeColumns, drizzleColumns);
-      const extraColumns = difference(drizzleColumns, runtimeColumns);
+      const runtimeColumns = readRuntimeColumns(tableName);
+      const runtimeNames = runtimeColumns.map((column) => column.name);
+      const drizzleNames = drizzleColumns.map((column) => column.name);
+
+      const missingColumns = difference(runtimeNames, drizzleNames);
+      const extraColumns = difference(drizzleNames, runtimeNames);
       if (missingColumns.length > 0 || extraColumns.length > 0) {
         columnProblems.push(
           `  ${tableName}: missing from schema.ts [${missingColumns.join(", ") || "-"}] ` +
             `| declared but not created [${extraColumns.join(", ") || "-"}]`
         );
       }
+
+      // Names alone are not enough: a wrong declared type or nullability would
+      // still let `drizzle-kit push` rewrite the column and would give the rest
+      // of the application the wrong TypeScript type.
+      for (const drizzleColumn of drizzleColumns) {
+        const runtimeColumn = runtimeColumns.find((column) => column.name === drizzleColumn.name);
+        if (!runtimeColumn) continue;
+        if (runtimeColumn.declaredType !== drizzleColumn.declaredType) {
+          columnProblems.push(
+            `  ${tableName}.${drizzleColumn.name}: schema.ts declares type "${drizzleColumn.declaredType}" ` +
+              `but bootstrap.ts creates "${runtimeColumn.declaredType}"`
+          );
+        }
+        if (runtimeColumn.notNull !== drizzleColumn.notNull) {
+          columnProblems.push(
+            `  ${tableName}.${drizzleColumn.name}: schema.ts declares notNull=${drizzleColumn.notNull} ` +
+              `but bootstrap.ts creates notNull=${runtimeColumn.notNull}`
+          );
+        }
+      }
     }
     expect(
       columnProblems,
       `Column drift between bootstrap.ts (runtime authority) and schema.ts (typed mirror).\n` +
-        `Each line lists columns to add to / remove from schema.ts:\n${columnProblems.join("\n")}`
+        `Each line lists a column to add, remove, or fix in schema.ts:\n${columnProblems.join("\n")}`
     ).toEqual([]);
   });
 });
