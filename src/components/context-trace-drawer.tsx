@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, XCircle, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
+import { Modal } from "@/components/ui/modal";
+import { Tabs } from "@/components/ui/controls";
+import { XCircle, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import type { ContextTraceResponse, ContextTraceWarning } from "@/server/context-trace/context-trace-types";
 
@@ -64,26 +66,9 @@ export function ContextTraceDrawer({
   ];
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-[30rem] border-l border-slate-200 bg-white shadow-xl flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-medium text-slate-800 truncate">
-            Context Trace
-          </h3>
-          {hasNoAttempt ? (
-            <p className="text-[10px] text-amber-600 mt-0.5">未关联任务尝试 — 该消息可能不是子 Agent 执行结果</p>
-          ) : data && (
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              {data.attempt.taskId} · {data.attempt.agentId} · attempt {data.attempt.attemptId?.slice(0, 12)}…
-            </p>
-          )}
-        </div>
-        <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
+    <Modal open onClose={onClose} title="上下文追踪" description={attemptId ?? "未关联任务尝试"} size="drawer"
+      navigation={<Tabs label="上下文追踪视图" value={tab} onChange={setTab} items={tabs.map(item => ({ value: item.key, label: item.label }))} />}
+      footer={<button className="ui-button" onClick={onClose}>完成</button>}>
       {/* Loading / Error / No-attempt / Content */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
@@ -121,24 +106,8 @@ export function ContextTraceDrawer({
             )}
           </div>
 
-          {/* Tabs */}
-          <div className="flex border-b">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`flex-1 px-2 py-1.5 text-[11px] font-medium border-b-2 transition-colors ${
-                  tab === t.key ? "border-blue-500 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {t.label}
-                {t.count !== undefined && <span className="ml-0.5 text-slate-400">({t.count})</span>}
-              </button>
-            ))}
-          </div>
-
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="p-3">
             {tab === "inputs" && <UpstreamInputsTab data={data} />}
             {tab === "manifest" && <ManifestTab data={data} />}
             {tab === "evidence" && <EvidenceTab data={data} />}
@@ -154,7 +123,7 @@ export function ContextTraceDrawer({
           </div>
         </>
       ) : null}
-    </div>
+    </Modal>
   );
 }
 

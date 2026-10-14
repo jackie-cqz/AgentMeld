@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { ApiRequestError, requestJson } from "@/lib/request-json";
+import { requestWorkspaceNavigation } from "@/lib/workspace-navigation";
 import { applyStreamEvent } from "@/stores/apply-stream-event";
 import { mergeSessions } from "@/stores/reducers/channel-events";
 import { normalizeBootstrap } from "@/stores/normalize-bootstrap";
@@ -210,16 +211,18 @@ export const useAppStore = create<AppState>()(
     },
 
     setActiveConversation(conversationId) {
-      set((state) => {
+      if (conversationId === get().activeConversationId) return;
+      requestWorkspaceNavigation(() => set((state) => {
         state.activeConversationId = conversationId;
-      });
+      }));
     },
 
     setActiveArtifact(artifactId) {
-      set((state) => {
+      if (artifactId === get().activeArtifactId) { if (artifactId) get().setRightPanelOpen(true); return; }
+      requestWorkspaceNavigation(() => set((state) => {
         state.activeArtifactId = artifactId;
         if (artifactId) state.rightPanelOpen = true;
-      });
+      }));
     },
 
     setSidebarTab(tab: SidebarTab) {
@@ -229,16 +232,19 @@ export const useAppStore = create<AppState>()(
     },
 
     setRightPanelOpen(open) {
-      set((state) => {
+      const update = () => set((state) => {
         state.rightPanelOpen = open;
       });
+      if (open) update();
+      else requestWorkspaceNavigation(update);
     },
 
     setRightPanelMode(mode) {
-      set((state) => {
+      if (mode === get().rightPanelMode) { get().setRightPanelOpen(true); return; }
+      requestWorkspaceNavigation(() => set((state) => {
         state.rightPanelMode = mode;
         state.rightPanelOpen = true;
-      });
+      }));
     },
 
     setArtifactPanelWidth(width) {

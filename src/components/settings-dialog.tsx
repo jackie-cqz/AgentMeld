@@ -1,8 +1,10 @@
 "use client";
 
-import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, TestTube2, Trash2, X, XCircle } from "lucide-react";
+import { CheckCircle2, Cpu, Eye, EyeOff, Globe, Loader2, MessageSquare, TestTube2, Trash2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ChannelBindingsPanel } from "@/components/channel-bindings-panel";
+import { Modal, useUnsavedChanges } from "@/components/ui/modal";
+import { Feedback, SectionHeading } from "@/components/ui/controls";
 
 interface SettingsData {
   openaiApiKey: string | null;
@@ -47,10 +49,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [tab, setTab] = useState("models");
+  const [baseline, setBaseline] = useState("");
+  const [loadVersion, setLoadVersion] = useState(0);
+  const discard = useUnsavedChanges(Boolean(baseline && JSON.stringify(settings) !== baseline), onClose, saving);
 
   useEffect(() => {
     if (!open) return;
-    fetch("/api/settings")
+    const controller = new AbortController();
+    fetch("/api/settings", { signal: controller.signal })
       .then(async (r) => {
         setLoadError(null);
         const data = await r.json() as {
@@ -58,15 +65,19 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           keySources?: Record<string, ApiKeySource>;
           error?: string;
         };
+        if (controller.signal.aborted) return;
         if (!r.ok || !data.settings) throw new Error(data.error ?? "加载设置失败。");
         setSettings(data.settings);
+        setBaseline(JSON.stringify(data.settings));
         setKeySources(data.keySources ?? {});
         setDirtyKeys({});
       })
       .catch((error) => {
+        if (controller.signal.aborted) return;
         setLoadError(error instanceof Error ? error.message : "加载设置失败。");
       });
-  }, [open]);
+    return () => controller.abort();
+  }, [open, loadVersion]);
 
   if (!open) return null;
 
@@ -75,6 +86,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   };
 
   const handleSave = async () => {
+    if (saving || !baseline) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -106,6 +118,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   };
 
   const handleTestDeepSeek = async () => {
+    if (testing) return;
     setTesting(true);
     setTestResult(null);
     try {
@@ -138,14 +151,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     }
   };
 
-  const renderKeyField = (label: string, key: ApiKeySetting, envVar: string, prominent = false) => (
-    <div className={`mt-4 rounded-md ${prominent ? "border border-blue-200 bg-blue-50 p-3" : ""}`}>
-      <label className="block text-sm font-medium text-stone-700">{label}</label>
+  const renderKeyField = (label: string, key: ApiKeySetting, envVar: string) => (
+    <div className="ui-key-field">
+      <label htmlFor={`settings-${key}`} className="ui-field-label">{label}</label>
       <div className="mt-1 flex gap-2">
         <input
+          id={`settings-${key}`}
           type={showKeys[key] ? "text" : "password"}
           className="h-9 flex-1 rounded-md border border-stone-300 px-3 text-sm font-mono outline-none focus:border-stone-500"
-          placeholder={`留空使用环境变量 ${envVar}`}
+          placeholder="API Key"
           value={settings[key] ?? ""}
           onChange={(e) => {
             setDirtyKeys((current) => ({ ...current, [key]: true }));
@@ -172,7 +186,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         </button>
       </div>
       <p className="mt-1 text-xs text-stone-400">
-        {dirtyKeys[key] ? "此字段将在保存时更新。" : `未修改时保留现有值；也可使用 ${envVar}。`}
+        {dirtyKeys[key] ? "保存后更新此凭据" : envVar}
       </p>
       <p className="mt-1 text-xs text-stone-500">
         当前来源：{formatKeySource(keySources[keyToProvider(key)])}
@@ -181,38 +195,26 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   );
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/30 px-4">
-      <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-2xl">
-        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-stone-950">设置</h2>
-            <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-stone-400 hover:bg-stone-100">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+    <><Modal open={open} onClose={discard.requestClose} title="设置" description="工作空间配置" size="wide" busy={saving}
+      footer={<>{saveError ? <Feedback>{saveError}</Feedback> : null}
+        <button className="ui-button ui-button--quiet" onClick={discard.requestClose} disabled={saving}>取消</button>
+        <button className="ui-button ui-button--primary" onClick={() => void handleSave()} disabled={saving || !baseline}>{saving ? <Loader2 size={16} className="animate-spin" /> : null}{saving ? "保存中..." : "保存设置"}</button></>}>
+      <div className="ui-settings-layout ui-form">
+        <nav className="ui-settings-rail" aria-label="设置分类">
+          {[{ id: "models", label: "模型与凭据", icon: <Cpu size={16} /> }, { id: "channels", label: "渠道绑定", icon: <MessageSquare size={16} /> }, { id: "publishing", label: "发布与预览", icon: <Globe size={16} /> }].map(item =>
+            <button key={item.id} aria-current={tab === item.id} onClick={() => setTab(item.id)}>{item.icon}{item.label}</button>)}
+        </nav>
+        <div className="min-w-0">
+        {loadError ? <div className="mb-4 space-y-2"><Feedback>{loadError}</Feedback><button className="ui-button" onClick={() => setLoadVersion(value => value + 1)}>重新加载</button></div> : !baseline ? <p role="status" className="ui-muted mb-4">正在读取设置...</p> : null}
+        <fieldset hidden={tab !== "models"} disabled={!baseline || saving}>
+        <SectionHeading title="模型与凭据" detail="Agent 可单独覆盖全局凭据。未修改的 Key 会保留现有值。" />
 
-        <p className="mt-2 text-sm text-stone-500">
-          配置 API Key 后，所有 Agent 共享使用。Agent 编辑页可单独覆盖 Key。
-        </p>
-
-        {loadError ? (
-          <div className="mt-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <XCircle className="h-4 w-4 shrink-0" />
-            <span className="break-all leading-5">{loadError}</span>
-          </div>
-        ) : null}
-
-        <div className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-800">
-          <KeyRound className="h-4 w-4" />
-          当前 Web MVP 默认使用 DeepSeek
-        </div>
-
-        {renderKeyField("DeepSeek API Key", "deepseekApiKey", "DEEPSEEK_API_KEY", true)}
+        {renderKeyField("DeepSeek API Key", "deepseekApiKey", "DEEPSEEK_API_KEY")}
         {renderKeyField("OpenAI API Key", "openaiApiKey", "OPENAI_API_KEY")}
         {renderKeyField("火山方舟 API Key", "arkApiKey", "ARK_API_KEY")}
         {renderKeyField("Anthropic API Key", "anthropicApiKey", "ANTHROPIC_API_KEY")}
 
-        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="mt-4 border-t border-[var(--ui-line)] pt-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium text-slate-800">DeepSeek 诊断</div>
@@ -247,7 +249,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           />
         </div>
 
-        <div className="mt-6 border-t border-stone-200 pt-5">
+        </fieldset>
+        <fieldset hidden={tab !== "publishing"} disabled={!baseline || saving}>
+        <SectionHeading title="发布与预览" detail="同步部署文件到指定目录，公网服务由你自行管理。" />
+        <div>
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-sm font-medium text-stone-800">外部静态发布</div>
@@ -309,32 +314,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           ) : null}
         </div>
 
-        <div className="mt-5 border-t border-stone-200 pt-4">
+        </fieldset>
+          <section hidden={tab !== "channels"}>
           <ChannelBindingsPanel />
-        </div>
+          </section>
 
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-stone-200 bg-white px-6 py-4">
-          {saveError ? (
-            <span className="mr-auto flex min-w-0 items-center gap-1.5 text-xs text-red-700">
-              <XCircle className="h-4 w-4 shrink-0" />
-              <span className="break-all leading-5">{saveError}</span>
-            </span>
-          ) : null}
-          <button onClick={onClose} className="h-9 rounded-md px-4 text-sm text-stone-600 hover:bg-stone-100">
-            取消
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="h-9 rounded-md bg-stone-950 px-4 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {saving ? "保存中..." : "保存"}
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>{discard.confirmation}</>
   );
 }
 

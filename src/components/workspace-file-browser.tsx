@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Loader2, RefreshCw, X } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
+import { usePanelSize } from "@/components/ui/use-panel-size";
+import { constrainPanelWidth } from "@/lib/workspace-panel-layout";
 
 interface FileEntry {
   name: string;
@@ -17,10 +19,8 @@ interface Props {
 }
 
 export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Props) {
-  const panelWidth = useAppStore((s) => s.artifactPanelWidth);
+  const { width: panelWidth, bounds: panelBounds } = usePanelSize();
   const setPanelWidth = useAppStore((s) => s.setArtifactPanelWidth);
-  const MIN_W = 380;
-  const MAX_W = 960;
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,8 +96,7 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
     const startX = event.clientX;
     const startWidth = panelWidth;
     const move = (moveEvent: PointerEvent) => {
-      const maxWidth = Math.min(MAX_W, Math.round(window.innerWidth * 0.72));
-      setPanelWidth(Math.min(Math.max(startWidth + startX - moveEvent.clientX, MIN_W), maxWidth));
+      setPanelWidth(constrainPanelWidth(startWidth + startX - moveEvent.clientX, panelBounds));
     };
     const up = () => {
       document.body.style.cursor = "";
@@ -115,7 +114,7 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const delta = event.key === "ArrowLeft" ? 24 : -24;
-    setPanelWidth((width) => Math.min(Math.max(width + delta, MIN_W), MAX_W));
+    setPanelWidth(constrainPanelWidth(panelWidth + delta, panelBounds));
   };
 
   const bg = darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200";
@@ -124,16 +123,15 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
 
   return (
     <aside
-      className={`relative flex h-screen shrink-0 flex-col border-l ${bg}`}
-      style={{ width: panelWidth, minWidth: MIN_W, maxWidth: MAX_W }}
+      className={`ui-workspace-panel relative flex h-full shrink-0 flex-col border-l ${bg}`}
     >
       <div
         role="separator"
         tabIndex={0}
         aria-label="调整工作区文件面板宽度"
         aria-orientation="vertical"
-        aria-valuemin={MIN_W}
-        aria-valuemax={MAX_W}
+        aria-valuemin={panelBounds.min}
+        aria-valuemax={panelBounds.max}
         aria-valuenow={panelWidth}
         onPointerDown={handleResizeStart}
         onKeyDown={handleResizeKeyDown}

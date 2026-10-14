@@ -4,6 +4,9 @@ import { FileText, Globe, Image as ImageIcon, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { requestJson } from "@/lib/request-json";
 import { useAppStore } from "@/stores/app-store";
+import { requestWorkspaceNavigation } from "@/lib/workspace-navigation";
+import { Modal } from "@/components/ui/modal";
+import { Feedback } from "@/components/ui/controls";
 
 export function ArtifactLibrary() {
   const artifacts = useAppStore((s) => s.artifacts);
@@ -12,6 +15,8 @@ export function ArtifactLibrary() {
   const setActiveArtifact = useAppStore((s) => s.setActiveArtifact);
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
   const [error, setError] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const allArtifacts = Object.values(artifacts)
     .map((artifact) => ({
@@ -21,17 +26,24 @@ export function ArtifactLibrary() {
     .sort((a, b) => b.artifact.updatedAt - a.artifact.updatedAt);
 
   const handleSelect = (item: typeof allArtifacts[0]) => {
-    setActiveConversation(item.artifact.conversationId);
-    setActiveArtifact(item.artifact.id);
+    requestWorkspaceNavigation(() => {
+      setActiveConversation(item.artifact.conversationId);
+      setActiveArtifact(item.artifact.id);
+    });
   };
 
   const handleDelete = async (artifactId: string) => {
+    if (deleting) return;
+    setDeleting(true);
     setError(null);
     try {
       await requestJson(`/api/artifacts/${artifactId}`, { method: "DELETE" });
       await loadBootstrap();
+      setDeleteId(null);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "删除产物失败。");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -82,7 +94,8 @@ export function ArtifactLibrary() {
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                handleDelete(artifact.id);
+                setError(null);
+                setDeleteId(artifact.id);
               }}
               className="grid h-7 w-7 shrink-0 place-items-center rounded text-stone-400 hover:bg-red-50 hover:text-red-600"
               title="删除"
@@ -92,6 +105,11 @@ export function ArtifactLibrary() {
           </div>
         ))}
       </div>
+      <Modal open={deleteId !== null} onClose={() => setDeleteId(null)} title="删除产物？" size="small" busy={deleting}
+        footer={<>{error ? <Feedback>{error}</Feedback> : null}<button className="ui-button" disabled={deleting} onClick={() => setDeleteId(null)}>取消</button>
+          <button className="ui-button ui-button--danger" disabled={deleting} onClick={() => deleteId ? void handleDelete(deleteId) : undefined}>{deleting ? "删除中..." : "删除产物"}</button></>}>
+        <p className="ui-muted">将删除「{deleteId ? artifacts[deleteId]?.title : ""}」。此操作无法撤销。</p>
+      </Modal>
     </div>
   );
 }

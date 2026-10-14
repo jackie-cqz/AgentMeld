@@ -4,6 +4,9 @@ import { CheckCircle2, Loader2, QrCode, Unlink, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAppStore } from "@/stores/app-store";
+import { Modal } from "@/components/ui/modal";
+import { Feedback } from "@/components/ui/controls";
+import { getAgentAvatarStyle } from "@/shared/agent-avatar";
 import type {
   ChannelBinding,
   ChannelBindingSession,
@@ -148,6 +151,7 @@ export function ChannelBindingsPanel() {
   const error = useAppStore((state) => state.channelBindingError);
   const loaded = useAppStore((state) => state.channelBindingsLoaded);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
+  const [unbindAgentId, setUnbindAgentId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -198,6 +202,7 @@ export function ChannelBindingsPanel() {
     : "";
 
   const run = async (agentId: string, action: () => Promise<void>) => {
+    if (busyAgentId) return;
     setBusyAgentId(agentId);
     try {
       await action();
@@ -231,9 +236,10 @@ export function ChannelBindingsPanel() {
         </div>
       ) : null}
 
-      <ul className="divide-y divide-stone-100 rounded-md border border-stone-200">
+      <ul>
         {states.map(({ agentId, agent, state }) => (
-          <li key={agentId} className="flex items-center justify-between gap-3 px-3 py-2">
+          <li key={agentId} className="ui-list-row">
+            {agent ? <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs ${getAgentAvatarStyle(agent).solid}`}>{agent.avatar}</span> : null}
             <div className="min-w-0">
               <div className="truncate text-sm text-stone-900">
                 {agent?.name ?? agentId}
@@ -248,8 +254,8 @@ export function ChannelBindingsPanel() {
                   type="button"
                   aria-label={`解绑 ${agent?.name ?? agentId} 的飞书应用`}
                   disabled={busyAgentId !== null}
-                  onClick={() => void run(agentId, () => useAppStore.getState().unbindFeishu(agentId))}
-                  className="flex items-center gap-1 rounded-md border border-stone-200 px-2 py-1 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+                  onClick={() => setUnbindAgentId(agentId)}
+                  className="ui-button ui-button--quiet"
                 >
                   <Unlink className="h-3.5 w-3.5" /> 解绑
                 </button>
@@ -263,7 +269,7 @@ export function ChannelBindingsPanel() {
                       useAppStore.getState().cancelChannelBindingSession(state.session.id)
                     )
                   }
-                  className="rounded-md border border-stone-200 px-2 py-1 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-50"
+                  className="ui-button"
                 >
                   取消
                 </button>
@@ -273,7 +279,7 @@ export function ChannelBindingsPanel() {
                   aria-label={`绑定 ${agent?.name ?? agentId} 到飞书`}
                   disabled={busyAgentId !== null}
                   onClick={() => void run(agentId, () => useAppStore.getState().startFeishuBinding(agentId))}
-                  className="flex items-center gap-1 rounded-md bg-stone-900 px-2 py-1 text-xs text-white hover:bg-stone-700 disabled:opacity-50"
+                  className="ui-button"
                 >
                   {busyAgentId === agentId ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -288,12 +294,17 @@ export function ChannelBindingsPanel() {
         ))}
       </ul>
 
+      {unbindAgentId ? <Modal open onClose={() => setUnbindAgentId(null)} title="解绑飞书应用？" size="small" busy={busyAgentId !== null}
+        footer={<>{error ? <Feedback>{error}</Feedback> : null}<button className="ui-button" disabled={busyAgentId !== null} onClick={() => setUnbindAgentId(null)}>取消</button>
+          <button className="ui-button ui-button--danger" disabled={busyAgentId !== null} onClick={() => void run(unbindAgentId, async () => { await useAppStore.getState().unbindFeishu(unbindAgentId); setUnbindAgentId(null); })}>确认解绑</button></>}>
+        <p className="ui-muted">仅移除「{agents[unbindAgentId]?.name ?? unbindAgentId}」的本地绑定，不会删除飞书侧应用。</p>
+      </Modal> : null}
       {activeSession ? (
         <LauncherDialog
           agentName={activeAgentName}
           session={activeSession}
           now={now}
-          onCancel={() => void useAppStore.getState().cancelChannelBindingSession(activeSession.id)}
+          onCancel={() => useAppStore.getState().cancelChannelBindingSession(activeSession.id)}
         />
       ) : null}
     </div>
@@ -360,27 +371,27 @@ function LauncherDialog({
   agentName: string;
   session: ChannelBindingSession;
   now: number;
-  onCancel: () => void;
+  onCancel: () => Promise<void>;
 }) {
   const url = session.qrUrl;
   const safe = isSafeLauncherUrl(url);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const cancel = async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    try { await onCancel(); } catch (error) { setCancelError(error instanceof Error ? error.message : "取消失败。"); }
+    finally { setCancelling(false); }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/40 p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="feishu-launcher-title"
-        className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl"
-      >
-        <h3 id="feishu-launcher-title" className="text-sm font-semibold text-stone-950">
-          用飞书扫码绑定「{agentName}」
-        </h3>
+    <Modal open onClose={() => void cancel()} title={`绑定飞书 · ${agentName}`} size="small" busy={cancelling}
+      footer={<>{cancelError ? <Feedback>{cancelError}</Feedback> : null}<button className="ui-button" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? "取消中..." : "取消绑定"}</button></>}>
         <p className="mt-1 text-xs leading-5 text-stone-500">
           扫码后在确认页完成创建。{describeLauncherWindow(session.expiresAt, now)}。
         </p>
 
-        <div className="mt-4 grid place-items-center rounded-md border border-stone-200 p-4">
+        <div className="mt-4 grid place-items-center rounded-md bg-white p-4">
           {safe ? <QRCodeSVG value={url!} size={180} /> : null}
         </div>
 
@@ -405,16 +416,6 @@ function LauncherDialog({
           <p className="mt-3 text-xs text-stone-500">正在获取二维码…</p>
         )}
 
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="h-8 rounded-md border border-stone-200 px-3 text-xs text-stone-600 hover:bg-stone-50"
-          >
-            取消绑定
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

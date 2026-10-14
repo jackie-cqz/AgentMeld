@@ -1,7 +1,9 @@
 "use client";
 
-import { X, FileText, Terminal, Package, UserCheck, FolderOpen } from "lucide-react";
+import { FileText, Terminal, Package, UserCheck, FolderOpen } from "lucide-react";
 import type { ReactElement } from "react";
+import { Modal } from "@/components/ui/modal";
+import { Tabs } from "@/components/ui/controls";
 import { CriterionVerdictList, type VerdictItem } from "@/components/criterion-verdict-list";
 import { TaskContextManifest, type ManifestEntry } from "@/components/task-context-manifest";
 import { TaskAttemptTimeline, type AttemptRecord } from "@/components/task-attempt-timeline";
@@ -64,38 +66,10 @@ export function TaskEvidenceDrawer({
   ];
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-96 border-l border-slate-200 bg-white shadow-xl flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <div>
-          <h3 className="text-sm font-medium text-slate-800">{taskId}</h3>
-          <p className="text-[10px] text-slate-500">证据与验收详情</p>
-        </div>
-        <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => onTabChange(tab.key)}
-            className={`flex-1 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === tab.key
-                ? "border-blue-500 text-blue-700"
-                : "border-transparent text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {tab.label}
-            {tab.count !== undefined ? (
-              <span className="ml-1 text-[10px] text-slate-400">({tab.count})</span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-
+    <Modal open onClose={onClose} title="证据与验收详情" description={taskId} size="drawer"
+      navigation={<Tabs label="任务详情" value={activeTab} onChange={onTabChange}
+        items={tabs.map(tab => ({ value: tab.key, label: `${tab.label}${tab.count === undefined ? "" : ` (${tab.count})`}` }))} />}
+      footer={<button className="ui-button" onClick={onClose}>完成</button>}>
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
         {activeTab === "context" && manifestIncluded && manifestOmitted ? (
@@ -144,6 +118,6 @@ export function TaskEvidenceDrawer({
           <p className="text-xs text-slate-400">暂无数据。</p>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }

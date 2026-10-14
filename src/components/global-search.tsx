@@ -1,10 +1,11 @@
 "use client";
 
-import { Loader2, Search, X } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { selectSearchState } from "@/stores/selectors";
 import type { SearchHit } from "@/shared/types";
+import { Modal } from "@/components/ui/modal";
 
 export function GlobalSearch() {
   const search = useAppStore(selectSearchState);
@@ -19,8 +20,6 @@ export function GlobalSearch() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setSearchOpen(true);
-      } else if (event.key === "Escape" && useAppStore.getState().searchState.isOpen) {
-        setSearchOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -39,14 +38,8 @@ export function GlobalSearch() {
   if (!search.isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-start justify-center bg-slate-950/35 px-4 pt-[10vh]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setSearchOpen(false);
-      }}
-    >
-      <section className="flex max-h-[72vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 px-4">
+    <Modal open={search.isOpen} onClose={() => setSearchOpen(false)} title="搜索对话" footer={<span className="ui-muted mr-auto">{search.total} 条结果</span>}>
+        <div className="flex items-center gap-3 border-b border-[var(--ui-line)] pb-4">
           {search.status === "loading" ? (
             <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
           ) : (
@@ -54,22 +47,15 @@ export function GlobalSearch() {
           )}
           <input
             ref={inputRef}
+            data-autofocus
+            aria-label="搜索所有对话"
             value={search.query}
             maxLength={200}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="搜索所有对话中的消息..."
             className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-slate-400"
           />
-          <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-400">ESC</span>
-          <button
-            type="button"
-            title="关闭搜索"
-            onClick={() => setSearchOpen(false)}
-            className="grid h-8 w-8 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
+        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {search.query.trim().length < 2 ? (
@@ -94,12 +80,7 @@ export function GlobalSearch() {
           )}
         </div>
 
-        <footer className="flex h-10 shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50 px-4 text-xs text-slate-500">
-          <span>{search.total > 0 ? `${search.total} 条结果` : "全文搜索"}</span>
-          <span>{search.mode === "like" ? "短词子串搜索" : "FTS5 全文索引"}</span>
-        </footer>
-      </section>
-    </div>
+    </Modal>
   );
 }
 

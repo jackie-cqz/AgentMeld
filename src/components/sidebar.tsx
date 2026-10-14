@@ -6,9 +6,7 @@ import {
   Pin,
   BarChart3,
   Bot,
-  Check,
   ChevronRight,
-  Cpu,
   Layers,
   MessageSquare,
   Moon,
@@ -16,24 +14,33 @@ import {
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   Sun,
   Trash2,
-  Users,
-  X
+  Users
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AgentsPanel } from "@/components/agents-panel";
 import { AnalyticsPanel } from "@/components/analytics-panel";
 import { ArtifactLibrary } from "@/components/artifact-library";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { Modal, useUnsavedChanges } from "@/components/ui/modal";
+import { Popover } from "@/components/ui/popover";
+import { requestWorkspaceNavigation } from "@/lib/workspace-navigation";
+import { Feedback, Tabs } from "@/components/ui/controls";
 import { requestJson } from "@/lib/request-json";
 import { getAgentAvatarStyle } from "@/shared/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList, selectConversationList } from "@/stores/selectors";
 import type { Agent, Conversation } from "@/shared/types";
+
+function isSmallScreen() { return window.matchMedia("(max-width: 900px)").matches; }
+function subscribeToScreen(callback: () => void) {
+  const query = window.matchMedia("(max-width: 900px)");
+  query.addEventListener("change", callback);
+  return () => query.removeEventListener("change", callback);
+}
 
 export function Sidebar() {
   const agents = useAppStore(useShallow(selectAgentList));
@@ -59,16 +66,17 @@ export function Sidebar() {
   const [editValue, setEditValue] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
-  const contextRef = useRef<HTMLDivElement>(null);
+  const [deleteConversation, setDeleteConversation] = useState<Conversation | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
-
-  // Close context menu on click outside
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [contextMenu]);
+  const smallScreen = useSyncExternalStore(subscribeToScreen, isSmallScreen, () => false);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+  const compactSidebar = smallScreen ? !mobileExpanded : sidebarCollapsed;
+  const toggleSidebar = () => { if (smallScreen) setMobileExpanded(current => !current); else toggleSidebarCollapsed(); };
+  const selectNavigation = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    if (smallScreen) setMobileExpanded(true);
+    else if (sidebarCollapsed) toggleSidebarCollapsed();
+  };
 
   // Focus inline edit input
   useEffect(() => {
@@ -78,12 +86,13 @@ export function Sidebar() {
   const loadBootstrap = useAppStore((state) => state.loadBootstrap);
 
   const handleDelete = async (conv: Conversation) => {
-    if (!confirm(`确定删除会话「${conv.title}」吗？此操作不可撤销。`)) return;
+    if (busyConversationId) return;
     setBusyConversationId(conv.id);
     setActionError(null);
     try {
       await requestJson(`/api/conversations/${conv.id}`, { method: "DELETE" });
       await loadBootstrap();
+      setDeleteConversation(null);
       setContextMenu(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "删除会话失败。");
@@ -170,7 +179,7 @@ export function Sidebar() {
   }, [conversations, query]);
 
   return (
-    <aside className={`relative flex h-screen shrink-0 flex-col border-r transition-all duration-200 ${darkMode ? "border-slate-700 bg-slate-900 text-slate-100" : "border-slate-200 bg-white"} ${sidebarCollapsed ? "w-[56px]" : "w-[344px]"}`}>
+    <aside className={`ui-sidebar relative flex h-dvh shrink-0 flex-col border-r border-[var(--ui-line)] bg-[var(--ui-surface)] transition-all duration-200 ${compactSidebar ? "w-[56px]" : "w-[280px]"}`}>
       {actionError ? (
         <button
           type="button"
@@ -182,12 +191,12 @@ export function Sidebar() {
         </button>
       ) : null}
       {/* Collapsed narrow bar */}
-      {sidebarCollapsed ? (
+      {compactSidebar ? (
         <div className="flex h-full flex-col items-center gap-2 py-3">
           {/* Row 1: expand + settings + dark mode */}
           <div className="flex flex-col items-center gap-2">
             <button
-              onClick={toggleSidebarCollapsed}
+              onClick={toggleSidebar}
               className="grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
               type="button"
               title="展开侧栏"
@@ -217,7 +226,7 @@ export function Sidebar() {
 
           {/* Nav icons */}
           <button
-            onClick={() => setActiveTab("conversations")}
+            onClick={() => selectNavigation("conversations")}
             className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "conversations" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
             type="button"
             title="对话"
@@ -225,7 +234,7 @@ export function Sidebar() {
             <MessageSquare className="h-4 w-4" />
           </button>
           <button
-            onClick={() => setActiveTab("artifacts")}
+            onClick={() => selectNavigation("artifacts")}
             className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "artifacts" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
             type="button"
             title="产物库"
@@ -233,7 +242,7 @@ export function Sidebar() {
             <Layers className="h-4 w-4" />
           </button>
           <button
-            onClick={() => setActiveTab("agents")}
+            onClick={() => selectNavigation("agents")}
             className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "agents" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
             type="button"
             title="Agents"
@@ -241,7 +250,7 @@ export function Sidebar() {
             <Bot className="h-4 w-4" />
           </button>
           <button
-            onClick={() => setActiveTab("analytics")}
+            onClick={() => selectNavigation("analytics")}
             className={`grid h-9 w-9 place-items-center rounded-lg ${activeTab === "analytics" ? "bg-[#4264ff] text-white" : "text-slate-500 hover:bg-slate-100"}`}
             type="button"
             title="分析"
@@ -307,7 +316,7 @@ export function Sidebar() {
               {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
             <button
-              onClick={toggleSidebarCollapsed}
+              onClick={toggleSidebar}
               className="grid h-8 w-8 place-items-center rounded-md text-slate-600 hover:bg-slate-100"
               type="button"
               title="折叠侧栏"
@@ -323,25 +332,25 @@ export function Sidebar() {
           active={activeTab === "conversations"}
           icon={<MessageSquare className="h-4 w-4" />}
           label="对话"
-          onClick={() => setActiveTab("conversations")}
+          onClick={() => selectNavigation("conversations")}
         />
         <NavButton
           active={activeTab === "artifacts"}
           icon={<Layers className="h-4 w-4" />}
           label="产物库"
-          onClick={() => setActiveTab("artifacts")}
+          onClick={() => selectNavigation("artifacts")}
         />
         <NavButton
           active={activeTab === "agents"}
           icon={<Bot className="h-4 w-4" />}
           label="Agents"
-          onClick={() => setActiveTab("agents")}
+          onClick={() => selectNavigation("agents")}
         />
         <NavButton
           active={activeTab === "analytics"}
           icon={<BarChart3 className="h-4 w-4" />}
           label="分析"
-          onClick={() => setActiveTab("analytics")}
+          onClick={() => selectNavigation("analytics")}
         />
       </nav>
 
@@ -351,7 +360,7 @@ export function Sidebar() {
             <button
               className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-950 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
               type="button"
-              onClick={() => setDialogOpen(true)}
+              onClick={() => requestWorkspaceNavigation(() => setDialogOpen(true))}
             >
               <Plus className="h-4 w-4" />
               新建对话
@@ -390,8 +399,11 @@ export function Sidebar() {
                   }`}
                   type="button"
                   onClick={() => {
-                    setActiveConversation(conversation.id);
-                    setActiveTab("conversations");
+                    requestWorkspaceNavigation(() => {
+                      setActiveConversation(conversation.id);
+                      setActiveTab("conversations");
+                      setMobileExpanded(false);
+                    });
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -440,31 +452,26 @@ export function Sidebar() {
         <AnalyticsPanel />
       )}
 
+        </>
+      )}
+
       {dialogOpen ? (
         <CreateConversationDialog
           agents={agents}
           onClose={() => setDialogOpen(false)}
           onCreate={(payload) =>
-            void createConversation(payload).then(() => {
+            createConversation(payload).then(() => {
               setDialogOpen(false);
-            }).catch((error: unknown) => {
-              setActionError(error instanceof Error ? error.message : "创建会话失败。");
             })
           }
         />
       ) : null}
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        </>
-      )}
+      {settingsOpen ? <SettingsDialog open onClose={() => setSettingsOpen(false)} /> : null}
 
       {/* Right-click context menu */}
       {contextMenu ? (
-        <div
-          ref={contextRef}
-          className="fixed z-50 min-w-[160px] rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
+        <Popover x={contextMenu.x} y={contextMenu.y} label="会话操作" className="ui-context-menu py-1" onClose={() => setContextMenu(null)}>
           <div className="truncate border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
             {contextMenu.conversation.title}
           </div>
@@ -495,248 +502,76 @@ export function Sidebar() {
           <button
             disabled={busyConversationId === contextMenu.conversation.id}
             className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
-            onClick={() => void handleDelete(contextMenu.conversation)}
+            onClick={() => { setActionError(null); setDeleteConversation(contextMenu.conversation); setContextMenu(null); }}
           >
             <Trash2 className="h-4 w-4" />
             删除
           </button>
-        </div>
+        </Popover>
       ) : null}
+      <Modal open={deleteConversation !== null} onClose={() => setDeleteConversation(null)} title="删除会话？" size="small" busy={busyConversationId !== null}
+        footer={<>{actionError ? <Feedback>{actionError}</Feedback> : null}<button className="ui-button" disabled={busyConversationId !== null} onClick={() => setDeleteConversation(null)}>取消</button>
+          <button className="ui-button ui-button--danger" disabled={busyConversationId !== null} onClick={() => deleteConversation ? void handleDelete(deleteConversation) : undefined}>删除会话</button></>}>
+        <p className="ui-muted">将删除「{deleteConversation?.title}」及该会话的数据。此操作无法撤销。</p>
+      </Modal>
     </aside>
   );
 }
 
 function CreateConversationDialog({
-  agents,
-  onClose,
-  onCreate
+  agents, onClose, onCreate
 }: {
   agents: Agent[];
   onClose: () => void;
-  onCreate: (payload: {
-    title?: string;
-    mode: "single" | "group";
-    agentIds: string[];
-    fsWriteApprovalMode: "auto" | "review";
-  }) => void;
+  onCreate: (payload: { title?: string; mode: "single" | "group"; agentIds: string[]; fsWriteApprovalMode: "auto" | "review" }) => Promise<void>;
 }) {
-  const defaultAgentIds = agents
-    .filter((agent) => agent.isConductor || agent.name.includes("前端"))
-    .map((agent) => agent.id);
+  const preferred = agents.filter(agent => agent.isConductor || agent.name.includes("前端")).map(agent => agent.id);
+  const defaults = preferred.length >= 2 ? preferred : agents.slice(0, 2).map(agent => agent.id);
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<"single" | "group">("group");
-  const [agentIds, setAgentIds] = useState<string[]>(defaultAgentIds.length >= 2 ? defaultAgentIds : agents.slice(0, 2).map((agent) => agent.id));
+  const [agentIds, setAgentIds] = useState<string[]>(defaults);
   const [approvalMode, setApprovalMode] = useState<"auto" | "review">("review");
-
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const valid = mode === "single" ? agentIds.length === 1 : agentIds.length >= 2;
-  const toggleAgent = (agentId: string) => {
-    setAgentIds((current) => {
-      if (mode === "single") return [agentId];
-      return current.includes(agentId) ? current.filter((id) => id !== agentId) : [...current, agentId];
-    });
-  };
-  const selectedAgents = agents.filter((agent) => agentIds.includes(agent.id));
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 px-4 py-6 backdrop-blur-sm">
-      <div className="flex max-h-[88vh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl shadow-slate-950/20 dark:border-slate-700 dark:bg-slate-950">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5 dark:border-slate-800">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-medium text-blue-600 dark:text-blue-300">
-              <MessageSquare className="h-4 w-4" />
-              新建协作空间
-            </div>
-            <h2 className="mt-2 text-xl font-semibold text-slate-950 dark:text-slate-50">选择参与这次对话的 Agent</h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              为不同任务组合合适的角色，创建后会进入新的群聊工作区。
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-100"
-            title="关闭"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_260px] gap-0 overflow-hidden max-lg:grid-cols-1">
-          <div className="min-h-0 overflow-y-auto px-6 py-5">
-            <label className="block">
-              <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">对话标题</span>
-              <input
-                className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                placeholder="例如：Todo App 协作开发，可留空"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-              />
-            </label>
-
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              {(["group", "single"] as const).map((item) => {
-                const active = mode === item;
-                return (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`rounded-xl border p-4 text-left transition ${
-                      active
-                        ? "border-blue-500 bg-blue-50 shadow-sm ring-4 ring-blue-500/10 dark:bg-blue-500/10"
-                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-                    }`}
-                    onClick={() => {
-                      setMode(item);
-                      setAgentIds((current) => item === "single" ? current.slice(0, 1) : current);
-                    }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className={`grid h-9 w-9 place-items-center rounded-lg ${active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>
-                        {item === "group" ? <Users className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-                      </span>
-                      <span>
-                        <span className="block text-sm font-semibold text-slate-950 dark:text-slate-100">{item === "group" ? "多 Agent 协作" : "单 Agent 对话"}</span>
-                        <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{item === "group" ? "适合产品、设计、开发、审查串联" : "适合单角色快速问答或执行"}</span>
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-6">
-              <div className="mb-3 flex items-end justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">参与 Agent</div>
-                  <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">查看职责、能力和当前接入模型后再选择。</div>
-                </div>
-                <div className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                  已选 {agentIds.length}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-                {agents.map((agent) => {
-                  const selected = agentIds.includes(agent.id);
-                  const description = buildDialogAgentDescription(agent);
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => toggleAgent(agent.id)}
-                      className={`group min-h-[154px] rounded-xl border p-4 text-left transition ${
-                        selected
-                          ? "border-blue-500 bg-blue-50/80 shadow-sm ring-4 ring-blue-500/10 dark:bg-blue-500/10"
-                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-full text-sm font-semibold ${getAgentAvatarStyle(agent).solid}`}>
-                          {agent.avatar}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2">
-                            <span className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{agent.name}</span>
-                            {agent.isConductor ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-200">Conductor</span> : null}
-                          </span>
-                          <span className="mt-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                            <Cpu className="h-3.5 w-3.5" />
-                            {formatAgentModel(agent)}
-                          </span>
-                        </span>
-                        <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full border transition ${
-                          selected
-                            ? "border-blue-600 bg-blue-600 text-white"
-                            : "border-slate-300 text-transparent group-hover:text-slate-300 dark:border-slate-600"
-                        }`}>
-                          <Check className="h-3.5 w-3.5" />
-                        </span>
-                      </div>
-
-                      <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{description}</p>
-
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {(agent.capabilities.length > 0 ? agent.capabilities.slice(0, 3) : [agent.adapterName]).map((capability) => (
-                          <span key={capability} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            {capability}
-                          </span>
-                        ))}
-                        {agent.capabilities.length > 3 ? (
-                          <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">+{agent.capabilities.length - 3}</span>
-                        ) : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          <aside className="border-l border-slate-100 bg-slate-50/80 px-5 py-5 dark:border-slate-800 dark:bg-slate-900/80 max-lg:border-l-0 max-lg:border-t">
-            <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">本次配置</div>
-            <div className="mt-4 space-y-3">
-              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950">
-                <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                  <Users className="h-3.5 w-3.5" />
-                  协作模式
-                </div>
-                <div className="mt-2 text-sm font-semibold text-slate-950 dark:text-slate-100">{mode === "group" ? "群聊协作" : "单聊"}</div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{selectedAgents.map((agent) => agent.name).join("、") || "尚未选择 Agent"}</div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950">
-                <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  文件写入审批
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-                  {(["review", "auto"] as const).map((item) => (
-                    <button
-                      key={item}
-                      className={`h-8 rounded-md text-xs transition ${approvalMode === item ? "bg-white font-semibold text-slate-950 shadow-sm dark:bg-slate-950 dark:text-slate-100" : "text-slate-500 dark:text-slate-400"}`}
-                      type="button"
-                      onClick={() => setApprovalMode(item)}
-                    >
-                      {item === "review" ? "Review" : "Auto"}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                  {approvalMode === "review" ? "写入文件前需要你确认，适合不确定任务。" : "自动通过文件写入，更适合连续实现。"}
-                </p>
-              </div>
-            </div>
-          </aside>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-6 py-4 dark:border-slate-800">
-          <div className="min-h-5 text-xs text-red-600 dark:text-red-300">
-            {!valid ? (mode === "single" ? "单聊需要选择 1 位 Agent。" : "群聊至少选择 2 位 Agent。") : ""}
-          </div>
-          <div className="flex gap-2">
-            <button className="h-10 rounded-lg px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800" type="button" onClick={onClose}>
-              取消
-            </button>
-            <button
-              className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:bg-slate-300 disabled:shadow-none dark:disabled:bg-slate-700"
-              type="button"
-              disabled={!valid}
-              onClick={() =>
-                onCreate({
-                  title: title.trim() || undefined,
-                  mode,
-                  agentIds,
-                  fsWriteApprovalMode: approvalMode
-                })
-              }
-            >
-              创建对话
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+  const { requestClose, confirmation } = useUnsavedChanges(
+    Boolean(title.trim()) || mode !== "group" || approvalMode !== "review" || JSON.stringify(agentIds) !== JSON.stringify(defaults), onClose, saving
   );
+  const create = async () => {
+    if (!valid || saving) return;
+    setSaving(true);
+    setError(null);
+    try { await onCreate({ title: title.trim() || undefined, mode, agentIds, fsWriteApprovalMode: approvalMode }); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "创建会话失败。"); }
+    finally { setSaving(false); }
+  };
+  return <>
+    <Modal open onClose={requestClose} title="新建会话" description={`已选 ${agentIds.length} 位 Agent`} busy={saving}
+      footer={<>{error ? <Feedback>{error}</Feedback> : null}<button className="ui-button" disabled={saving} onClick={requestClose}>取消</button>
+        <button className="ui-button ui-button--primary" disabled={!valid || saving} onClick={() => void create()}>{saving ? "创建中..." : "创建对话"}</button></>}>
+      <label className="ui-field"><span className="ui-field-label">会话标题</span>
+        <input data-autofocus aria-label="会话标题" value={title} placeholder="可留空" onChange={event => setTitle(event.target.value)} /></label>
+      <Tabs label="会话模式" value={mode} onChange={next => { setMode(next); if (next === "single") setAgentIds(current => current.slice(0, 1)); }}
+        items={[{ value: "group", label: "多 Agent 协作", icon: <Users size={15} /> }, { value: "single", label: "单 Agent 对话", icon: <Bot size={15} /> }]} />
+      <div className="my-4">
+        {agents.map(agent => <label key={agent.id} className="ui-list-row cursor-pointer">
+          <input type={mode === "single" ? "radio" : "checkbox"} name="conversation-agents" aria-label={agent.name}
+            checked={agentIds.includes(agent.id)} disabled={saving}
+            onChange={() => setAgentIds(current => mode === "single" ? [agent.id] : current.includes(agent.id) ? current.filter(id => id !== agent.id) : [...current, agent.id])} />
+          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${getAgentAvatarStyle(agent).solid}`}>{agent.avatar}</span>
+          <span className="min-w-0"><strong className="block text-sm font-medium">{agent.name}</strong>
+            <span className="block text-xs text-[var(--ui-muted)]">{formatAgentModel(agent)}</span>
+            <span className="mt-1 block text-xs text-[var(--ui-muted)]">{buildDialogAgentDescription(agent)}</span></span>
+        </label>)}
+      </div>
+      <label className="ui-field"><span className="ui-field-label">文件写入审批</span>
+        <select aria-label="文件写入审批" value={approvalMode} disabled={saving} onChange={event => setApprovalMode(event.target.value as "auto" | "review")}>
+          <option value="review">Review · 手动审批</option><option value="auto">Auto · 自动审批</option>
+        </select></label>
+      {!valid ? <Feedback tone="info">{mode === "single" ? "请选择 1 位 Agent" : "请至少选择 2 位 Agent"}</Feedback> : null}
+    </Modal>
+    {confirmation}
+  </>;
 }
 
 function buildDialogAgentDescription(agent: Agent) {
