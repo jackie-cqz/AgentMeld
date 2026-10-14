@@ -415,6 +415,14 @@ export function ensureDatabase() {
       PRIMARY KEY (channel_conversation_id, agent_id)
     );
 
+    -- The platform SDK's own cache, made persistent. expired_at is an
+    -- absolute epoch-ms deadline, which is what the SDK passes.
+    CREATE TABLE IF NOT EXISTS channel_cache (
+      cache_key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      expired_at INTEGER
+    );
+
     -- The UNIQUE index is the deduplication: inserting is an atomic claim.
     CREATE TABLE IF NOT EXISTS channel_inbound_messages (
       id TEXT PRIMARY KEY,

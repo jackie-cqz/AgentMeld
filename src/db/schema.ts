@@ -639,3 +639,18 @@ export const channelInboundMessages = sqliteTable(
     index("idx_channel_inbound_conversation").on(table.conversationId)
   ]
 );
+
+/**
+ * The platform SDK's persistent cache.
+ *
+ * Deliberately generic and keyed by the SDK's own composed key (plus namespace)
+ * rather than by anything AgentMeld understands: the SDK uses it for tokens as
+ * well as deduplication, and narrowing it would break the parts we do not call.
+ * `expired_at` is an absolute epoch-millisecond deadline, matching the SDK's
+ * contract.
+ */
+export const channelCache = sqliteTable("channel_cache", {
+  cacheKey: text("cache_key").primaryKey(),
+  value: text("value").notNull(),
+  expiredAt: integer("expired_at")
+});

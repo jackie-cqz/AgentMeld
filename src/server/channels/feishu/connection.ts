@@ -6,6 +6,7 @@ import {
   type RejectEvent
 } from "@larksuite/channel";
 import { ensureDatabase } from "@/db/bootstrap";
+import { createPersistentCache, type SdkCache } from "@/server/channels/feishu/cache";
 import { eventBus } from "@/server/event-bus";
 import { listFeishuBindings } from "@/server/channels/feishu/binding";
 import { getChannelBindingSecret, setChannelBindingBotOpenId } from "@/server/repositories";
@@ -89,6 +90,18 @@ declare global {
  * halves what each one receives (R6). Keying by app makes that structurally
  * impossible rather than a rule someone has to remember.
  */
+/**
+ * One cache for the whole process, so every channel shares the dedup marks.
+ *
+ * Built lazily because it touches the database, which is not open at module
+ * load.
+ */
+let persistentCache: SdkCache | undefined;
+function getPersistentCache(): SdkCache {
+  persistentCache ??= createPersistentCache();
+  return persistentCache;
+}
+
 function getRegistry(): Map<string, ConnectionEntry> {
   globalThis.__agentMeldFeishuConnections ??= new Map<string, ConnectionEntry>();
   return globalThis.__agentMeldFeishuConnections;
@@ -182,7 +195,14 @@ async function connectOne(binding: ChannelBinding, appSecret: string): Promise<C
     appId: binding.appId,
     appSecret,
     policy: CHANNEL_POLICY,
-    source: "agentmeld"
+    source: "agentmeld",
+    // A persistent cache, shared by every channel. The SDK's dedup marks every
+    // message id in a batch as seen; its own cache is in memory, so without
+    // this the marks are lost on restart and a redelivery batched differently
+    // is claimed under a different representative id and routed again. The
+    // dedup key carries no app id, so a shared cache is also what makes two
+    // bots receiving one human message deduplicate against each other.
+    cache: getPersistentCache(),
     // `loggerLevel` is deliberately left at the SDK default. It takes a numeric
     // enum that `@larksuite/channel` does not re-export, and importing the
     // underlying node-sdk directly would depend on hoisting rather than on a
