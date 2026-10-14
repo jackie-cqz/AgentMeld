@@ -168,7 +168,11 @@ export interface AppState {
   clearSearchHighlight: () => void;
   applyEvent: (event: StreamEvent) => void;
 
-  loadChannelBindings: () => Promise<void>;
+  /**
+   * `preserveError` is for passive refreshes: a successful read must not erase a
+   * message the user still needs to see from an action that just failed.
+   */
+  loadChannelBindings: (options?: { preserveError?: boolean }) => Promise<void>;
   startFeishuBinding: (agentId: string) => Promise<void>;
   cancelChannelBindingSession: (sessionId: string) => Promise<void>;
   unbindFeishu: (agentId: string) => Promise<void>;

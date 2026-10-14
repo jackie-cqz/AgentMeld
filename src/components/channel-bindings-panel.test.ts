@@ -3,7 +3,8 @@ import {
   deriveAgentBindingState,
   describeLauncherWindow,
   formatRemainingMs,
-  isSafeLauncherUrl
+  isSafeLauncherUrl,
+  shouldRefreshBindings
 } from "@/components/channel-bindings-panel";
 import type { ChannelBinding, ChannelBindingSession } from "@/shared/types";
 
@@ -148,6 +149,38 @@ describe("describeLauncherWindow", () => {
 
   it("counts down while the window is open", () => {
     expect(describeLauncherWindow(1_000 + 65_000, 1_000)).toBe("链接剩余 1:05");
+  });
+});
+
+describe("shouldRefreshBindings", () => {
+  it("asks for a refetch when a success event names a row we do not hold", () => {
+    expect(
+      shouldRefreshBindings({ s1: session("ag_1", "succeeded", { bindingId: "cb_1" }) }, {})
+    ).toBe(true);
+  });
+
+  it("asks for a refetch when we hold a *different* binding than the event named", () => {
+    // The stale-row case: a plain "do we have a binding?" test says yes and the
+    // row would keep showing the old app id forever.
+    const stale = { ag_1: binding("ag_1", "cli_old") };
+    expect(
+      shouldRefreshBindings({ s1: session("ag_1", "succeeded", { bindingId: "cb_new" }) }, stale)
+    ).toBe(true);
+  });
+
+  it("stays quiet once the row matches", () => {
+    // This is what stops the effect from looping.
+    const current = { ag_1: binding("ag_1") };
+    expect(
+      shouldRefreshBindings({ s1: session("ag_1", "succeeded", { bindingId: "cb_1" }) }, current)
+    ).toBe(false);
+  });
+
+  it("stays quiet for sessions that are not successes, and for unattributed successes", () => {
+    expect(shouldRefreshBindings({ s1: session("ag_1", "awaiting_scan") }, {})).toBe(false);
+    expect(shouldRefreshBindings({ s1: session("ag_1", "failed") }, {})).toBe(false);
+    // No row id means nothing to compare against.
+    expect(shouldRefreshBindings({ s1: session("ag_1", "succeeded") }, {})).toBe(false);
   });
 });
 

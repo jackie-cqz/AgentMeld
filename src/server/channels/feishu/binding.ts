@@ -263,18 +263,25 @@ export function getBindingSession(id: string): ChannelBindingSession | undefined
 }
 
 /**
- * Sessions for a list view. The launcher URL is stripped: whoever can reach the
- * bindings endpoint could otherwise open a URL that creates an app, and the
- * design keeps that URL with the response that started the attempt.
+ * Sessions for a list view, including a live attempt's launcher URL.
+ *
+ * An earlier revision stripped that URL here, on the theory that only the
+ * response which started the attempt should carry it. That was security
+ * theatre: the list still hands out the session id, and `getBindingSession`
+ * serves the same URL for a live attempt, so any caller able to read the list
+ * could obtain it with one more request. The only thing the strip actually did
+ * was lose the QR code for good after a reload — the client has no other way to
+ * get it back.
+ *
+ * The honest statement of the exposure: this API has no inbound
+ * authentication, so anyone who can reach the port can obtain a launcher URL
+ * and, by opening it first, create an app in the tenant. Restricting that needs
+ * authentication, not a field omission.
  */
 export function listBindingSessions(): ChannelBindingSession[] {
   const now = Date.now();
   sweep(now);
-  return Array.from(getSessions().values()).map((entry) => {
-    const session: ChannelBindingSession = { ...entry.session };
-    delete session.qrUrl;
-    return session;
-  });
+  return Array.from(getSessions().values()).map((entry) => entry.session);
 }
 
 /**

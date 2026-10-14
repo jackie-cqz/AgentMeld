@@ -121,21 +121,21 @@ describe("GET /api/channels/feishu/bindings", () => {
     expect(raw).not.toContain("route_secret");
   });
 
-  it("does not hand out a live attempt's launcher URL", async () => {
-    // Whoever holds that URL first can create the app, so it belongs to the
-    // response that started the attempt — not to a list any caller can read.
-    pendingRegistration("https://open.feishu.cn/page/launcher?user_code=LIST_LEAK");
+  it("returns a live attempt's launcher URL, which is the client's only way back to it", async () => {
+    // Stripping this field was tried and reverted: it did not reduce exposure
+    // (the list still hands out the session id, and the session route serves the
+    // same URL) and it lost the QR code for good after any reload.
+    pendingRegistration("https://open.feishu.cn/page/launcher?user_code=LIST_OK");
     const started = await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     expect(started.status).toBe(200);
 
     const res = await listBindings();
-    const body = (await res.json()) as { data: { sessions: Array<{ id: string; qrUrl?: string }> } };
+    const body = (await res.json()) as {
+      data: { sessions: Array<{ id: string; qrUrl?: string }> };
+    };
 
-    // The attempt is listed so the UI can show that one is running…
     expect(body.data.sessions).toHaveLength(1);
-    // …but without the URL, and without the field at all.
-    expect(body.data.sessions[0]).not.toHaveProperty("qrUrl");
-    expect(JSON.stringify(body)).not.toContain("LIST_LEAK");
+    expect(body.data.sessions[0].qrUrl).toContain("user_code=LIST_OK");
   });
 });
 

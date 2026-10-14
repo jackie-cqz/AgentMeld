@@ -83,6 +83,27 @@ export function isSafeLauncherUrl(url: string | undefined): boolean {
   }
 }
 
+/**
+ * Whether a stored binding row needs re-reading. Fires when a session reported a
+ * success that the local map does not reflect — including the case where the map
+ * holds a *different* binding for that agent, which a plain "do we have a
+ * binding?" test would never correct.
+ *
+ * Extracted so the condition is testable; it previously lived inline with no
+ * coverage at all, and deleting it broke nothing in the suite.
+ */
+export function shouldRefreshBindings(
+  sessions: Record<string, ChannelBindingSession>,
+  bindings: Record<string, ChannelBinding>
+): boolean {
+  return Object.values(sessions).some(
+    (session) =>
+      session.status === "succeeded" &&
+      session.bindingId !== undefined &&
+      bindings[session.agentId]?.id !== session.bindingId
+  );
+}
+
 export function ChannelBindingsPanel() {
   const agents = useAppStore((state) => state.agents);
   const agentIds = useAppStore((state) => state.agentIds);
@@ -94,21 +115,22 @@ export function ChannelBindingsPanel() {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    void useAppStore.getState().loadChannelBindings().catch(() => {});
+    // Passive read: it must not erase a message from an action that just failed.
+    void useAppStore.getState().loadChannelBindings({ preserveError: true }).catch(() => {});
   }, []);
 
   // A scan that finished on the server arrives as an event naming the app id but
-  // not the whole binding row, so pull the row once. The flag clears as soon as
-  // the refetch lands, which is what stops this from looping.
+  // not the whole binding row, so pull the row once. Also fires when the row we
+  // hold is a *different* binding than the one the event named — the stale-row
+  // case, where a plain "do we have a binding?" test would never correct itself.
   const needsBindingRefresh = useMemo(
-    () =>
-      Object.values(sessions).some(
-        (session) => session.status === "succeeded" && !bindings[session.agentId]
-      ),
+    () => shouldRefreshBindings(sessions, bindings),
     [sessions, bindings]
   );
   useEffect(() => {
-    if (needsBindingRefresh) void useAppStore.getState().loadChannelBindings().catch(() => {});
+    if (needsBindingRefresh) {
+      void useAppStore.getState().loadChannelBindings({ preserveError: true }).catch(() => {});
+    }
   }, [needsBindingRefresh]);
 
   // Drives the countdown on the launcher URL. One interval for the panel rather
@@ -173,7 +195,10 @@ export function ChannelBindingsPanel() {
         {states.map(({ agentId, agent, state }) => (
           <li key={agentId} className="flex items-center justify-between gap-3 px-3 py-2">
             <div className="min-w-0">
-              <div className="truncate text-sm text-stone-900">{agent?.name ?? agentId}</div>
+              <div className="truncate text-sm text-stone-900">
+                {agent?.name ?? agentId}
+                <span className="ml-2 text-xs text-stone-400">{agentId}</span>
+              </div>
               <BindingStatusLine state={state} now={now} />
             </div>
 
@@ -273,7 +298,8 @@ function LauncherDialog({
   now: number;
   onCancel: () => void;
 }) {
-  const safe = isSafeLauncherUrl(session.qrUrl);
+  const url = session.qrUrl;
+  const safe = isSafeLauncherUrl(url);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/40 p-4">
@@ -291,22 +317,28 @@ function LauncherDialog({
         </p>
 
         <div className="mt-4 grid place-items-center rounded-md border border-stone-200 p-4">
-          {safe ? <QRCodeSVG value={session.qrUrl!} size={180} /> : null}
+          {safe ? <QRCodeSVG value={url!} size={180} /> : null}
         </div>
 
         {safe ? (
           <a
-            href={session.qrUrl}
+            href={url}
             target="_blank"
             rel="noreferrer noopener"
             className="mt-3 block break-all text-xs text-blue-600 hover:underline"
           >
-            {session.qrUrl}
+            {url}
           </a>
-        ) : (
+        ) : url ? (
+          // Present but not https: refuse to navigate or render it.
           <p className="mt-3 break-all text-xs text-amber-700">
-            服务端返回的绑定链接不是 https，已拒绝跳转与渲染：{session.qrUrl}
+            服务端返回的绑定链接不是 https，已拒绝跳转与渲染：{url}
           </p>
+        ) : (
+          // Absent is a different situation from unsafe, and saying "not https"
+          // about a missing URL was simply false. It happens while the list is
+          // still loading or if the server dropped the URL on settle.
+          <p className="mt-3 text-xs text-stone-500">正在获取二维码…</p>
         )}
 
         <div className="mt-5 flex justify-end gap-2">

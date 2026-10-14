@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { ApiRequestError, requestJson } from "@/lib/request-json";
 import { applyStreamEvent } from "@/stores/apply-stream-event";
+import { mergeSessions } from "@/stores/reducers/channel-events";
 import { normalizeBootstrap } from "@/stores/normalize-bootstrap";
 import { ensureConversationBuckets } from "@/stores/store-helpers";
 import { RIGHT_PANEL_WIDTH_STORAGE_KEY } from "@/shared/constants";
@@ -461,7 +462,7 @@ export const useAppStore = create<AppState>()(
       });
     },
 
-    async loadChannelBindings() {
+    async loadChannelBindings(options) {
       try {
         const payload = await requestJson<{
           data: { bindings: ChannelBinding[]; sessions: ChannelBindingSession[] };
@@ -471,10 +472,14 @@ export const useAppStore = create<AppState>()(
           state.channelBindings = Object.fromEntries(
             payload.data.bindings.map((binding) => [binding.agentId, binding])
           );
-          state.channelBindingSessions = Object.fromEntries(
-            payload.data.sessions.map((session) => [session.id, session])
+          // Merge rather than replace: this response and the event stream race,
+          // and a snapshot taken before an attempt finished would otherwise undo
+          // a terminal status or drop a launcher URL the dialog still needs.
+          state.channelBindingSessions = mergeSessions(
+            state.channelBindingSessions,
+            payload.data.sessions
           );
-          state.channelBindingError = null;
+          if (!options?.preserveError) state.channelBindingError = null;
           state.channelBindingsLoaded = true;
         });
       } catch (error) {
@@ -537,28 +542,33 @@ export const useAppStore = create<AppState>()(
     },
 
     async unbindFeishu(agentId) {
-      // A success event carries the row id, so an unbind can work even before
-      // the binding list has been refetched. Without this the button would do
-      // nothing at all whenever the local map was stale — no request, no error.
       const local = get().channelBindings[agentId];
       const fromSession = Object.values(get().channelBindingSessions).find(
         (session) => session.agentId === agentId && session.bindingId
       )?.bindingId;
-      const bindingId = local?.id ?? fromSession;
+      // The session's id comes from the most recent success event, so it is
+      // newer than a list row. Preferring the row instead would delete a stale
+      // binding — the wrong one, after a rebind — and leave the current one in
+      // place with a 404 to show for it.
+      const bindingId = fromSession ?? local?.id;
       if (!bindingId) {
-        // Nothing to delete locally; re-read in case this client is simply
-        // out of date rather than the agent being genuinely unbound.
-        await get().loadChannelBindings().catch(() => {});
+        // Nothing to delete locally; re-read in case this client is simply out
+        // of date rather than the agent being genuinely unbound.
+        await get().loadChannelBindings({ preserveError: true }).catch(() => {});
         return;
       }
       try {
         await requestJson(`/api/channels/feishu/bindings/${bindingId}`, { method: "DELETE" });
         set((state) => {
           delete state.channelBindings[agentId];
-          // The succeeded session is about a binding that no longer exists, so
-          // it must not keep the row rendered as bound.
+          // Drop only the *terminal* sessions: they describe a binding that no
+          // longer exists. An attempt still awaiting a scan is a different, live
+          // attempt, and removing it here would make it invisible and
+          // uncancellable from this client.
           for (const [id, session] of Object.entries(state.channelBindingSessions)) {
-            if (session.agentId === agentId) delete state.channelBindingSessions[id];
+            if (session.agentId === agentId && session.status !== "awaiting_scan") {
+              delete state.channelBindingSessions[id];
+            }
           }
           state.channelBindingError = null;
         });
@@ -566,6 +576,9 @@ export const useAppStore = create<AppState>()(
         set((state) => {
           state.channelBindingError = describeError(error);
         });
+        // A 404 means the row was already gone; re-read so the UI stops showing
+        // it as bound instead of leaving the user with a dead button.
+        await get().loadChannelBindings({ preserveError: true }).catch(() => {});
         throw error;
       }
     },

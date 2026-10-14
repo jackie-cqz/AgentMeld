@@ -67,7 +67,12 @@ export interface ChannelBindingSession {
   expiresAt: number;
   qrUrl?: string;
   error?: string;
-  /** Set once the scan succeeded, so the UI can show the binding without a refetch. */
+  /**
+   * Filled in by the client when a success event arrives, NOT by the server:
+   * the session endpoints do not return these. A reload or another client
+   * therefore loses them, which is why the UI can also resolve the app id from
+   * the stored binding.
+   */
   bindingId?: string;
   appId?: string;
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/stores/app-store";
+import { mergeSession } from "@/stores/reducers/channel-events";
 import type { AgentRun, Artifact, Message, PendingQuestion } from "@/shared/types";
 
 const conversationId = "conv_123456789abc";
@@ -723,7 +724,7 @@ describe("channel binding actions", () => {
     expect(urls).toHaveLength(1);
   });
 
-  it("refreshes on a conflict but still reports the conflict", async () => {
+  it("refreshes on a conflict so the waiting QR code becomes visible", async () => {
     let call = 0;
     globalThis.fetch = (async () => {
       call += 1;
@@ -731,7 +732,15 @@ describe("channel binding actions", () => {
       return json(200, {
         data: {
           bindings: [],
-          sessions: [{ id: "cbs_9", agentId: "ag_1", status: "awaiting_scan", expiresAt: 5000 }]
+          sessions: [
+            {
+              id: "cbs_9",
+              agentId: "ag_1",
+              status: "awaiting_scan",
+              expiresAt: 5000,
+              qrUrl: "https://open.feishu.cn/page/launcher?user_code=WAITING"
+            }
+          ]
         }
       });
     }) as typeof fetch;
@@ -739,8 +748,9 @@ describe("channel binding actions", () => {
     await expect(useAppStore.getState().startFeishuBinding("ag_1")).rejects.toThrow();
 
     const state = useAppStore.getState();
-    // The refresh reveals the attempt that is already waiting…
-    expect(state.channelBindingSessions["cbs_9"]).toBeDefined();
+    // The refresh reveals the attempt that is already waiting — including its
+    // URL, which is the whole point: without it the dialog has no QR to show.
+    expect(state.channelBindingSessions["cbs_9"]?.qrUrl).toContain("user_code=WAITING");
     // …and the conflict is still surfaced rather than being cleared by it.
     expect(state.channelBindingError).toContain("already in progress");
   });
@@ -805,7 +815,147 @@ describe("channel binding actions", () => {
     // The binding is gone, so nothing should still render that agent as bound.
     expect(useAppStore.getState().channelBindingSessions["cbs_5"]).toBeUndefined();
   });
+
+  it("keeps the same agent's live attempt when unbinding, and drops its finished one", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindings["ag_1"] = {
+        id: "cb_1", agentId: "ag_1", channel: "feishu", appId: "cli_1",
+        tenantBrand: null, botOpenId: null, boundByOpenId: null,
+        chatId: null, conversationId: null, createdAt: 1, updatedAt: 1
+      };
+      // Both belong to the agent being unbound, so a blanket delete of that
+      // agent's sessions would take the live attempt with it.
+      state.channelBindingSessions["cbs_live"] = sessionFor("ag_1", "awaiting_scan");
+      state.channelBindingSessions["cbs_done"] = sessionFor("ag_1", "succeeded");
+    });
+    globalThis.fetch = (async () => json(200, { data: { removed: "cb_1", appLeftBehind: "cli_1" } })) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    const state = useAppStore.getState();
+    // The terminal session described a binding that no longer exists…
+    expect(state.channelBindingSessions["cbs_done"]).toBeUndefined();
+    // …but a live attempt must survive, or it becomes invisible and
+    // uncancellable from this client.
+    expect(state.channelBindingSessions["cbs_live"]).toBeDefined();
+  });
+
+  it("deletes the row a success event named, not a stale local row", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindings["ag_1"] = {
+        id: "cb_old", agentId: "ag_1", channel: "feishu", appId: "cli_old",
+        tenantBrand: null, botOpenId: null, boundByOpenId: null,
+        chatId: null, conversationId: null, createdAt: 1, updatedAt: 1
+      };
+      state.channelBindingSessions["cbs_new"] = {
+        id: "cbs_new", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_new"
+      };
+    });
+
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(200, { data: { removed: "cb_new", appLeftBehind: "cli_new" } });
+    }) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    // The stale row would delete a binding that is already gone and leave the
+    // current one in place.
+    expect(urls[0]).toContain("/api/channels/feishu/bindings/cb_new");
+  });
+
+  it("merges a list snapshot into the sessions already held", async () => {
+    // The pure merge is tested directly, but the wiring is what decides whether
+    // it is used at all — replacing it with a blind copy must fail something.
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_1"
+      };
+      state.channelBindingSessions["cbs_2"] = {
+        id: "cbs_2", agentId: "ag_2", status: "awaiting_scan", expiresAt: 10,
+        qrUrl: "https://open.feishu.cn/page/launcher?user_code=KEEP"
+      };
+    });
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          bindings: [],
+          sessions: [
+            // A snapshot taken before cbs_1 finished.
+            { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 },
+            // …and one for cbs_2 that carries no URL.
+            { id: "cbs_2", agentId: "ag_2", status: "awaiting_scan", expiresAt: 20 }
+          ]
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindingSessions["cbs_1"]?.status).toBe("succeeded");
+    expect(state.channelBindingSessions["cbs_2"]?.qrUrl).toContain("user_code=KEEP");
+  });
+
+  it("does not clear a real error when a passive refresh succeeds", async () => {
+    // The refetch effect runs mid-flow; without this flag it erased a message
+    // from an action that had just failed.
+    useAppStore.setState((state) => {
+      state.channelBindingError = "解绑失败：404";
+    });
+    globalThis.fetch = (async () => json(200, { data: { bindings: [], sessions: [] } })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings({ preserveError: true });
+
+    expect(useAppStore.getState().channelBindingError).toBe("解绑失败：404");
+    // An explicit load is still allowed to clear it.
+    await useAppStore.getState().loadChannelBindings();
+    expect(useAppStore.getState().channelBindingError).toBeNull();
+  });
 });
+
+describe("channel session merging", () => {
+  it("does not let a pre-success snapshot undo a terminal status", () => {
+    // The list and the event stream race; a snapshot taken before the attempt
+    // finished used to send a succeeded row back to "waiting to scan".
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_1" },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 }
+    );
+    expect(merged.status).toBe("succeeded");
+    expect(merged.bindingId).toBe("cb_1");
+  });
+
+  it("does not drop a launcher URL the client already holds", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 10, qrUrl: "https://x/y" },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 }
+    );
+    expect(merged.qrUrl).toBe("https://x/y");
+    expect(merged.expiresAt).toBe(20);
+  });
+
+  it("lets a genuinely terminal snapshot win over an older live one", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 10, qrUrl: "https://x/y" },
+      { id: "cbs_1", agentId: "ag_1", status: "failed", expiresAt: 10, error: "expired" }
+    );
+    expect(merged.status).toBe("failed");
+    expect(merged.error).toBe("expired");
+  });
+
+  it("keeps a known expiry when the snapshot does not report one", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 500 },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 0 }
+    );
+    expect(merged.expiresAt).toBe(500);
+  });
+});
+
+function sessionFor(agentId: string, status: "awaiting_scan" | "succeeded") {
+  return { id: `cbs_${agentId}_${status}`, agentId, status, expiresAt: 1000 };
+}
 
 function createArtifact(): Artifact {
   return {
