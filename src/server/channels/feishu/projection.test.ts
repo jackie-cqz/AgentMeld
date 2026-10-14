@@ -28,7 +28,7 @@ const { channelsByAgent, sent } = vi.hoisted(() => ({
   sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>
 }));
 
-vi.mock("@/server/channels/feishu/connection", () => ({
+vi.mock("@/server/channels/feishu/registry", () => ({
   getFeishuChannelForAgent: (agentId: string) => {
     const channel = channelsByAgent.get(agentId);
     if (!channel) return null;

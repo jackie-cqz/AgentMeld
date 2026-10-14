@@ -7,6 +7,17 @@ import {
 } from "@larksuite/channel";
 import { ensureDatabase } from "@/db/bootstrap";
 import { createPersistentCache, type SdkCache } from "@/server/channels/feishu/cache";
+import { handleCardAction } from "@/server/channels/feishu/interaction";
+import {
+  getRegistry,
+  getStopEpoch,
+  listFeishuConnections,
+  type ConnectionEntry
+} from "@/server/channels/feishu/registry";
+
+// Re-exported so the places that only ever wanted to ask "which channel?" keep
+// one import, and so the smoke of this module's lifecycle stays out of them.
+export { getFeishuChannelForAgent, listFeishuConnections, resetFeishuConnectionsForTests } from "@/server/channels/feishu/registry";
 import { eventBus } from "@/server/event-bus";
 import { listFeishuBindings } from "@/server/channels/feishu/binding";
 import { getChannelBindingSecret, setChannelBindingBotOpenId } from "@/server/repositories";
@@ -59,30 +70,7 @@ const RETRY_COOLDOWN_MS = 30_000;
  */
 const CONNECT_TIMEOUT_MS = 20_000;
 
-interface ConnectionEntry {
-  binding: ChannelBinding;
-  /** `null` on a failed attempt: the entry exists to REPORT the failure. */
-  channel: LarkChannel | null;
-  status: ChannelConnectionStatus;
-  botOpenId: string | null;
-  botName: string | null;
-  lastError: string | null;
-  connectedAt: number | null;
-  /** When this app was last attempted, so a failure is not retried in a loop. */
-  lastAttemptAt: number;
-}
 
-declare global {
-  var __agentMeldFeishuConnections: Map<string, ConnectionEntry> | undefined;
-  var __agentMeldFeishuStarting: Promise<ChannelConnectionInfo[]> | undefined;
-  /**
-   * Bumped by every `stop`. A start that began before a stop must not register
-   * its connection afterwards — otherwise stopping during a connect would leave
-   * a live connection nothing holds a reference to, which is worse than either
-   * outcome on its own.
-   */
-  var __agentMeldFeishuStopEpoch: number | undefined;
-}
 
 /**
  * Keyed by **appId**, not agentId: the platform splits an app's events across
@@ -102,15 +90,7 @@ function getPersistentCache(): SdkCache {
   return persistentCache;
 }
 
-function getRegistry(): Map<string, ConnectionEntry> {
-  globalThis.__agentMeldFeishuConnections ??= new Map<string, ConnectionEntry>();
-  return globalThis.__agentMeldFeishuConnections;
-}
 
-function getStopEpoch(): number {
-  globalThis.__agentMeldFeishuStopEpoch ??= 0;
-  return globalThis.__agentMeldFeishuStopEpoch;
-}
 
 function publishConnection(
   binding: ChannelBinding,
@@ -162,6 +142,18 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
       conversationId: "",
       timestamp: Date.now(),
       message: toInbound(binding.agentId, message)
+    });
+  });
+
+  channel.on("cardAction", (event) => {
+    // Returned to the platform so the click gets immediate feedback and the card
+    // updates in place. Nothing here awaits an agent run, which is what §5.4
+    // requires: the SDK runs card actions and messages on the same per-chat
+    // queue, so a handler that gave the work back to that queue would wait for
+    // itself.
+    return handleCardAction(event).catch((error: unknown) => {
+      console.error("[feishu] failed to handle a card action:", error);
+      return { toast: { type: "error", content: "处理失败，请在 AgentMeld 网页操作。" } };
     });
   });
 
@@ -418,27 +410,5 @@ export async function stopFeishuChannels(): Promise<void> {
  * agent has no binding, or its connection failed — callers must treat that as
  * "this agent has no Feishu presence", never as "use someone else's".
  */
-export function getFeishuChannelForAgent(agentId: string): LarkChannel | null {
-  for (const entry of getRegistry().values()) {
-    if (entry.binding.agentId === agentId && entry.channel) return entry.channel;
-  }
-  return null;
-}
 
-export function listFeishuConnections(): ChannelConnectionInfo[] {
-  return [...getRegistry().values()].map((entry) => ({
-    agentId: entry.binding.agentId,
-    appId: entry.binding.appId,
-    status: entry.status,
-    botOpenId: entry.botOpenId,
-    botName: entry.botName,
-    lastError: entry.lastError,
-    connectedAt: entry.connectedAt
-  }));
-}
 
-export function resetFeishuConnectionsForTests(): void {
-  globalThis.__agentMeldFeishuConnections = undefined;
-  globalThis.__agentMeldFeishuStarting = undefined;
-  globalThis.__agentMeldFeishuStopEpoch = undefined;
-}
