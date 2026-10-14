@@ -278,7 +278,17 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
     const epochAtStart = getStopEpoch();
     const now = Date.now();
 
-    for (const binding of listFeishuBindings()) {
+    const bindings = listFeishuBindings();
+
+    // Drop connections whose binding has gone. A removal that happened while
+    // this process was not looking (another process, or a failed disconnect)
+    // would otherwise leave a bot speaking for an agent nobody bound any more.
+    const live = new Set(bindings.map((binding) => binding.appId));
+    for (const appId of [...registry.keys()]) {
+      if (!live.has(appId)) await disconnectFeishuApp(appId);
+    }
+
+    for (const binding of bindings) {
       const existing = registry.get(binding.appId);
       // A live entry is left alone. A FAILED entry is retried, but not sooner
       // than the cooldown: otherwise every page load that reads the status
@@ -336,6 +346,28 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
   } finally {
     globalThis.__agentMeldFeishuStarting = undefined;
   }
+}
+
+/**
+ * Close one app's connection and forget it.
+ *
+ * Called when a binding is removed. Without it, unbinding deleted the row while
+ * the connection kept running, so the agent carried on speaking in the group as
+ * itself until the process restarted — the opposite of "no connection, no
+ * voice".
+ */
+export async function disconnectFeishuApp(appId: string): Promise<boolean> {
+  const registry = getRegistry();
+  const entry = registry.get(appId);
+  if (!entry) return false;
+  registry.delete(appId);
+  try {
+    await entry.channel?.disconnect();
+  } catch {
+    // The row is gone either way; a failed close is not actionable.
+  }
+  publishConnection(entry.binding, "disconnected");
+  return true;
 }
 
 /**

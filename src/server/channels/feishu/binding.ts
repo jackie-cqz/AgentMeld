@@ -325,7 +325,21 @@ export function unbindAgent(agentId: string): boolean {
   ensureDatabase();
   const binding = getChannelBindingForAgent(agentId, CHANNEL);
   if (!binding) return false;
-  return deleteChannelBinding(binding.id);
+  const removed = deleteChannelBinding(binding.id);
+
+  if (removed) {
+    // Removing the row is not enough: the live connection would keep speaking
+    // as this agent until the process restarted. Imported lazily because the
+    // connection module reads bindings from this one.
+    void import("@/server/channels/feishu/connection")
+      .then((mod) => mod.disconnectFeishuApp(binding.appId))
+      .catch(() => {
+        // The binding is gone; failing to close the socket is not actionable
+        // here, and the next start sweeps anything left behind.
+      });
+  }
+
+  return removed;
 }
 
 export function clearBindingSessionsForTests(): void {

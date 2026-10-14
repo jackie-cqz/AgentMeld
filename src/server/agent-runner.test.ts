@@ -409,6 +409,7 @@ describe("agent-runner", () => {
     const runStartIdx = relevant.indexOf("run.start");
     const msgStartIdx = relevant.indexOf("message.start");
     const partStartIdx = relevant.findIndex((t) => t === "part.start");
+    const msgEndIdx = relevant.indexOf("message.end");
     const runEndIdx = relevant.lastIndexOf("run.end");
 
     expect(runStartIdx).toBeGreaterThan(-1);
@@ -418,5 +419,13 @@ describe("agent-runner", () => {
     expect(runStartIdx).toBeLessThan(msgStartIdx);
     expect(msgStartIdx).toBeLessThan(partStartIdx);
     expect(partStartIdx).toBeLessThan(runEndIdx);
+
+    // `message.end` is how a finished answer is announced, and the only event
+    // the channel projection listens for. It was missing from this assertion
+    // and from every other test, which is why removing the publish left the
+    // whole suite green while the projection silently stopped working in
+    // production. Asserting it here is what makes that a test failure.
+    expect(msgEndIdx).toBeGreaterThan(partStartIdx);
+    expect(msgEndIdx).toBeLessThan(runEndIdx);
   }, 10000);
 });

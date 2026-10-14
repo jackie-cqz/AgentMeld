@@ -18,10 +18,14 @@ export async function register(): Promise<void> {
 
   const { startFeishuChannels } = await import("@/server/channels/feishu/connection");
   const { startChannelRouter } = await import("@/server/channels/feishu/router");
+  const { startChannelProjection } = await import("@/server/channels/feishu/projection");
 
   // Subscribe before connecting: a message that arrives in the window between
-  // the two would otherwise be published with nobody listening for it.
+  // the two would otherwise be published with nobody listening for it. The
+  // projection has no such race — it only reads what the app already produced —
+  // but subscribing both here keeps the wiring in one place.
   startChannelRouter();
+  startChannelProjection();
 
   // Deliberately not awaited. A slow or unreachable platform must never delay
   // or fail server startup; each app's outcome is reported through a

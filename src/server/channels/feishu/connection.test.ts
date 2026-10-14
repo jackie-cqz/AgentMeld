@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestDatabase } from "@/test/test-database";
 import { resetFeishuConnectionsForTests } from "@/server/channels/feishu/connection";
+import { unbindAgent } from "@/server/channels/feishu/binding";
+import { getDatabase } from "@/db/client";
 import { upsertChannelBinding } from "@/server/repositories";
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
@@ -375,6 +377,35 @@ describe("feishu connection layer", () => {
 
     expect(listFeishuConnections()).toHaveLength(0);
     expect(created[0].disconnect).toHaveBeenCalled();
+  });
+
+  it("stops speaking for an agent whose binding is removed", async () => {
+    // Unbinding used to delete the row and leave the connection running, so the
+    // agent carried on posting in the group as itself until the process
+    // restarted. That is the opposite of "no connection, no voice".
+    seedBinding("ag_pm", "cli_a");
+    await startFeishuChannels();
+    expect(getFeishuChannelForAgent("ag_pm")).not.toBeNull();
+
+    unbindAgent("ag_pm");
+    // The close is kicked off from a synchronous function, so let it land.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(created[0].disconnect).toHaveBeenCalled();
+    expect(getFeishuChannelForAgent("ag_pm")).toBeNull();
+    expect(listFeishuConnections()).toHaveLength(0);
+  });
+
+  it("drops a connection whose binding has gone, on the next start", async () => {
+    // The backstop for a removal this process did not perform.
+    seedBinding("ag_pm", "cli_a");
+    await startFeishuChannels();
+
+    getDatabase().prepare("DELETE FROM channel_bindings").run();
+    await startFeishuChannels();
+
+    expect(created[0].disconnect).toHaveBeenCalled();
+    expect(listFeishuConnections()).toHaveLength(0);
   });
 
   it("allows reconnecting after a stop", async () => {
