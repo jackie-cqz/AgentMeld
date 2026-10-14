@@ -14,6 +14,13 @@ import { clearRunToolEvidence } from "@/server/dispatch-tool-evidence";
  * - Don't resume mid-LLM-stream. Mark orphaned runs as interrupted/failed.
  * - Mark orphaned pending approvals as interrupted.
  * - Clean up in-memory pending items and file write records.
+ *
+ * PRECONDITION: this assumes nothing is in flight — it force-fails EVERY run still
+ * marked 'running'. That holds when it is reached from `ensureDatabase`, whose first
+ * call in a process necessarily precedes any run, but it does NOT hold for an arbitrary
+ * later call: a second process sharing the data directory (or a mid-session
+ * re-bootstrap) would kill live runs and retire their attempts. Anything calling this
+ * outside process start has to revisit that assumption first.
  */
 export function recoverOrphanedRuns() {
   const now = Date.now();
@@ -50,6 +57,10 @@ export function recoverOrphanedRuns() {
   // finished by anything — whether the run was interrupted just now, or ended earlier
   // and leaked the row. Rows leaked by an older build have exactly that shape: their
   // parent run completed normally, so scanning only orphaned runs would never see them.
+  //
+  // Note that by this point the sweep's own `status <> 'running'` filter matches every
+  // row, because the loop above just force-failed every running run. The filter is not
+  // what keeps this safe; the process-start precondition on this function is.
   const retired = retireNonTerminalAttempts(now);
   if (retired > 0) {
     console.log(`[run-recovery] Retired ${retired} attempt(s) left non-terminal by a stopped run.`);

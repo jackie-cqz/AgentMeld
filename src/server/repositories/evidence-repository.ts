@@ -196,20 +196,29 @@ export function failOpenTaskAttempt(attemptId: string, error: string, now: numbe
 }
 
 /**
- * Retire attempt rows that nothing can ever finish.
+ * Retire attempt rows that no live writer will ever finish.
  *
- * An attempt row is written by the conductor and finished by the retry loop. Once its
- * conductor run is no longer running, the only writer that could have finished the row
- * is gone, so a row still sitting at 'queued'/'running' is stale by construction. The
- * paths that produce such rows are: the retry loop writing only `execution_status`
- * (fixed for the happy path, but a throw inside `runChildTask` still leaves the
- * in-flight attempt behind), the clarifying-question meta-attempt inserted as 'running'
- * with only the approval path to finish it, and any run interrupted mid-flight.
+ * CAUTION — only call this from the process-start recovery path, and only after every
+ * run still marked 'running' has been force-failed. That precondition, not the
+ * `status <> 'running'` clause below, is what keeps a live attempt from being retired:
+ * `recoverOrphanedRuns` marks every 'running' run interrupted before calling this, so by
+ * then the clause matches every row regardless. In a single process `ensureDatabase` is
+ * memoized and its first call necessarily precedes any run, so this only ever sees rows
+ * whose owner is genuinely gone. A second caller — a periodic sweep, or another process
+ * sharing the data directory — must pass the run ids to retire explicitly rather than
+ * re-deriving "not running", or it will retire attempts that are still in flight.
  *
- * A conductor meta-attempt (`task_id = 'conductor'`) is a pure evidence container, not
- * an in-flight attempt: `reported_complete` is its success token (what
- * `finishTaskAttempt` writes) and it never gets verdicts, so its verification status is
- * left as it is. A child attempt that never finished is genuinely failed.
+ * Rows of this shape have three sources: the retry loop writing only `execution_status`
+ * (fixed for the happy path, but a throw inside `runChildTask` leaves the in-flight
+ * attempt behind), a clarifying-question meta-attempt written as 'running' by builds
+ * older than the terminal-write fix, and any run interrupted mid-flight.
+ *
+ * A conductor meta-attempt is a pure evidence container, not an in-flight attempt:
+ * `reported_complete` is its success token (what `finishTaskAttempt` writes) and it never
+ * gets verdicts, so its verification status is left as it is. It is identified by
+ * `task_id = 'conductor' AND attempt = 0` — the id alone is not sufficient, because plan
+ * task ids come from the model and `validatePlan` does not reserve that word. A child
+ * attempt that never finished is genuinely failed.
  *
  * `finished_at` is only filled when absent — an already-finished row must not be
  * re-timestamped by a repair pass.
@@ -218,10 +227,10 @@ export function retireNonTerminalAttempts(now: number): number {
   const result = getDatabase()
     .prepare(`
       UPDATE task_attempts
-      SET execution_status = CASE WHEN task_id = 'conductor' THEN 'reported_complete' ELSE 'failed' END,
-          verification_status = CASE WHEN task_id = 'conductor' THEN verification_status ELSE 'rejected' END,
+      SET execution_status = CASE WHEN task_id = 'conductor' AND attempt = 0 THEN 'reported_complete' ELSE 'failed' END,
+          verification_status = CASE WHEN task_id = 'conductor' AND attempt = 0 THEN verification_status ELSE 'rejected' END,
           failure_context_json = CASE
-            WHEN task_id = 'conductor' THEN failure_context_json
+            WHEN task_id = 'conductor' AND attempt = 0 THEN failure_context_json
             ELSE COALESCE(failure_context_json, '{"error":"attempt was left non-terminal by a run that had already stopped"}')
           END,
           finished_at = COALESCE(finished_at, ?),

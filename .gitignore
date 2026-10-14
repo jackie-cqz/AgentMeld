@@ -16,10 +16,11 @@ coverage/
 
 # pnpm falls back to a project-local store when it cannot write the global one
 # (e.g. a sandboxed shell). Recreated by any `pnpm dev` / `pnpm test` / `pnpm exec`.
-.pnpm-store/
+/.pnpm-store/
 
-# Local scratch drivers and their output (e.g. the CDP task-matrix driver)
-.tmp-*
+# Local scratch drivers and their output (e.g. the CDP task-matrix driver).
+# Anchored to the root so a checked-in `.tmp-*` deeper in the tree is not silently ignored.
+/.tmp-*
 
 # Logs
 *.log

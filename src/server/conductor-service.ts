@@ -1211,11 +1211,21 @@ async function runChildTask(
     // error propagate so the failure is still visible and the run is not silently
     // declared healthy.
     if (currentAttemptId) {
-      failOpenTaskAttempt(
-        currentAttemptId,
-        err instanceof Error ? err.message : String(err),
-        Date.now()
-      );
+      // Best-effort: never let the repair replace the real failure. If this write
+      // throws, the original error is what the run must record, so it is logged and
+      // swallowed rather than substituted for `err` below.
+      try {
+        failOpenTaskAttempt(
+          currentAttemptId,
+          err instanceof Error ? err.message : String(err),
+          Date.now()
+        );
+      } catch (repairError) {
+        console.error(
+          `[conductor] failed to finish in-flight attempt ${currentAttemptId} after an error:`,
+          repairError
+        );
+      }
     }
     throw err;
   } finally {

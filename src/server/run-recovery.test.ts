@@ -98,6 +98,7 @@ describe("run-recovery", () => {
     id: string;
     conductorRunId: string;
     taskId?: string;
+    attempt?: number;
     executionStatus: string;
     verificationStatus?: string;
     finishedAt?: number | null;
@@ -108,7 +109,7 @@ describe("run-recovery", () => {
         `INSERT INTO task_attempts (
            id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id,
            attempt, execution_status, verification_status, finished_at, created_at, updated_at
-         ) VALUES (?, ?, ?, 'plan_x', 0, ?, ?, 1, ?, ?, ?, ?, ?)`
+         ) VALUES (?, ?, ?, 'plan_x', 0, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.id,
@@ -116,12 +117,24 @@ describe("run-recovery", () => {
         convId,
         input.taskId ?? "t1",
         agentId,
+        input.attempt ?? 1,
         input.executionStatus,
         input.verificationStatus ?? "not_started",
         input.finishedAt ?? null,
         now,
         now
       );
+  }
+
+  /** The recorded reason, whichever wording the production message happens to use. */
+  function failureReason(json: string | null | undefined): string | null {
+    if (!json) return null;
+    try {
+      const parsed = JSON.parse(json) as { error?: unknown };
+      return typeof parsed.error === "string" && parsed.error.length > 0 ? parsed.error : null;
+    } catch {
+      return null;
+    }
   }
 
   function attemptState(id: string) {
@@ -161,18 +174,23 @@ describe("run-recovery", () => {
     const row = attemptState("ta_stale_1");
     expect(row?.execution_status).toBe("failed");
     expect(row?.verification_status).toBe("rejected");
-    expect(row?.failure_context_json).toContain("non-terminal");
+    // Assert the SHAPE of the recorded reason, not a substring of the production
+    // wording: matching the message makes any rewording a red test with no behaviour
+    // change, and hides whether a reason was recorded at all.
+    expect(failureReason(row?.failure_context_json)).toBeTruthy();
     expect(row?.finished_at).not.toBeNull();
   });
 
   it("retires a conductor meta-attempt as complete rather than failed", () => {
     // The meta-attempt is a pure evidence container, not a failed worker task: every
-    // reader already filters `task_id = 'conductor'` out of task statistics.
+    // reader already filters `task_id = 'conductor'` out of task statistics. It is
+    // identified by attempt 0 — a real attempt starts at 1.
     createFinishedRun("run_done_2");
     insertAttempt({
       id: "ta_meta_1",
       conductorRunId: "run_done_2",
       taskId: "conductor",
+      attempt: 0,
       executionStatus: "running"
     });
 
@@ -182,6 +200,26 @@ describe("run-recovery", () => {
     expect(row?.execution_status).toBe("reported_complete");
     expect(row?.verification_status).toBe("not_started");
     expect(row?.finished_at).not.toBeNull();
+  });
+
+  it("treats a plan task merely NAMED conductor as a normal failed attempt", () => {
+    // Plan task ids come from the model and validatePlan does not reserve the word, so
+    // the id alone cannot classify a row: repairing a real task to the success token
+    // would hide a genuine failure.
+    createFinishedRun("run_done_5");
+    insertAttempt({
+      id: "ta_named_conductor",
+      conductorRunId: "run_done_5",
+      taskId: "conductor",
+      attempt: 1,
+      executionStatus: "running"
+    });
+
+    recoverOrphanedRuns();
+
+    const row = attemptState("ta_named_conductor");
+    expect(row?.execution_status).toBe("failed");
+    expect(row?.verification_status).toBe("rejected");
   });
 
   it("leaves a terminal attempt untouched, including its finished_at", () => {
@@ -202,9 +240,31 @@ describe("run-recovery", () => {
     expect(row?.finished_at).toBe(12345);
   });
 
-  it("does not touch an attempt whose run is still running", () => {
-    // Asserted against the repository directly: recoverOrphanedRuns interrupts every
-    // running run first, which would make this state unreachable through it.
+  it("keeps an existing finished_at when retiring a row", () => {
+    // A non-terminal row that already carries finished_at is the only way to reach the
+    // COALESCE; without it a repair pass would re-timestamp an already-finished row.
+    createFinishedRun("run_done_4");
+    insertAttempt({
+      id: "ta_partial_1",
+      conductorRunId: "run_done_4",
+      executionStatus: "running",
+      finishedAt: 12345
+    });
+
+    recoverOrphanedRuns();
+
+    const row = attemptState("ta_partial_1");
+    expect(row?.execution_status).toBe("failed");
+    expect(row?.finished_at).toBe(12345);
+  });
+
+  // The contract at the only production call site. recoverOrphanedRuns force-fails EVERY
+  // running run before the sweep, so a live run and its in-flight attempt are both marked
+  // failed. That is correct at process start — nothing can be in flight — but it means the
+  // sweep's `status <> 'running'` filter is NOT what protects a live attempt; the
+  // precondition documented on recoverOrphanedRuns is. Pinning the real behaviour here
+  // stops that filter from being mistaken for a safety net.
+  it("force-fails a running run and its in-flight attempt through the entry point", () => {
     createRun({
       id: "run_live_1",
       conversationId: convId,
@@ -216,7 +276,30 @@ describe("run-recovery", () => {
     });
     insertAttempt({ id: "ta_live_1", conductorRunId: "run_live_1", executionStatus: "running" });
 
+    recoverOrphanedRuns();
+
+    expect(getRun("run_live_1")?.status).toBe("failed");
+    expect(getRun("run_live_1")?.interrupted).toBe(true);
+    expect(attemptState("ta_live_1")?.execution_status).toBe("failed");
+  });
+
+  // Called directly, the sweep does skip a run that is still running. The entry point
+  // never reaches this state, so this documents the function's isolated behaviour — and
+  // the gap between it and the contract above is exactly why a second caller would need
+  // to pass run ids explicitly instead of relying on the filter.
+  it("skips an attempt whose run is still running, when called directly", () => {
+    createRun({
+      id: "run_live_2",
+      conversationId: convId,
+      agentId,
+      triggerMessageId: null,
+      parentRunId: null,
+      status: "running",
+      now: Date.now()
+    });
+    insertAttempt({ id: "ta_live_2", conductorRunId: "run_live_2", executionStatus: "running" });
+
     expect(retireNonTerminalAttempts(Date.now())).toBe(0);
-    expect(attemptState("ta_live_1")?.execution_status).toBe("running");
+    expect(attemptState("ta_live_2")?.execution_status).toBe("running");
   });
 });
