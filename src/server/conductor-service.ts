@@ -1866,9 +1866,16 @@ async function runConductorAssess(
   }
 
   const settings = getSettings();
-  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  const provider = agent.modelProvider ?? "deepseek";
+  const apiKey = resolveApiKey(provider, agent.apiKey, settings);
   if (!apiKey) {
-    createSystemMessage(input.conversationId, "⚠️ 缺少 DeepSeek API Key，请在设置中配置。");
+    // Name the provider the agent is actually configured with: the Conductor is
+    // not necessarily on DeepSeek, and a message that says otherwise sends the
+    // user to the wrong settings field.
+    createSystemMessage(
+      input.conversationId,
+      `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
+    );
     publishConductorFailed(input, "No API key configured.");
     return { mode: "direct" };
   }
