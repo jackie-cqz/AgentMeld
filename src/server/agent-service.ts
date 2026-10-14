@@ -1,3 +1,4 @@
+import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
@@ -43,6 +44,10 @@ export function getAgentById(agentId: string): Agent | null {
 }
 
 export function getAllAgents(): Agent[] {
+  // Services own bootstrapping in this repository. Reaching the repository
+  // directly answered 500 with "no such table: agents" on a database that had
+  // not been bootstrapped yet.
+  ensureDatabase();
   return listAgents();
 }
 

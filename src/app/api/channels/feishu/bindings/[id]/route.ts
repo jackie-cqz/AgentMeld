@@ -1,6 +1,5 @@
 import { notFound, ok } from "@/server/api-utils";
-import { unbindAgent } from "@/server/channels/feishu/binding";
-import { listChannelBindings } from "@/server/repositories";
+import { listFeishuBindings, unbindAgent } from "@/server/channels/feishu/binding";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +9,9 @@ export const dynamic = "force-dynamic";
  */
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const binding = listChannelBindings().find((item) => item.id === id);
+  // Through the service, not the repository: this read needs the database to
+  // exist, and reaching the repository directly skipped that on a fresh one.
+  const binding = listFeishuBindings().find((item) => item.id === id);
   if (!binding) return notFound("Channel binding not found.");
 
   if (!unbindAgent(binding.agentId)) return notFound("Channel binding not found.");

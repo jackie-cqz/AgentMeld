@@ -5,6 +5,7 @@ import {
   deleteChannelBinding,
   getAgent,
   getChannelBindingForAgent,
+  listChannelBindings,
   upsertChannelBinding
 } from "@/server/repositories";
 import { newChannelBindingId, newChannelBindingSessionId } from "@/shared/ids";
@@ -260,6 +261,21 @@ export function getBindingSession(id: string): ChannelBindingSession | undefined
   const now = Date.now();
   sweep(now);
   return getSessions().get(id)?.session;
+}
+
+/**
+ * Stored bindings, with the database guaranteed to exist.
+ *
+ * Bootstrapping belongs on the service side, which is where the rest of this
+ * repository puts it. A route that reached `listChannelBindings` directly got
+ * "no such table: channel_bindings" on a database that had not been
+ * bootstrapped yet — and then appeared to fix itself once another request
+ * happened to bootstrap it. Routing every read through here means a new read
+ * path cannot reintroduce that; fixing only the GET left the DELETE broken.
+ */
+export function listFeishuBindings(): ChannelBinding[] {
+  ensureDatabase();
+  return listChannelBindings();
 }
 
 /**
