@@ -17,6 +17,11 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const { startFeishuChannels } = await import("@/server/channels/feishu/connection");
+  const { startChannelRouter } = await import("@/server/channels/feishu/router");
+
+  // Subscribe before connecting: a message that arrives in the window between
+  // the two would otherwise be published with nobody listening for it.
+  startChannelRouter();
 
   // Deliberately not awaited. A slow or unreachable platform must never delay
   // or fail server startup; each app's outcome is reported through a

@@ -767,6 +767,31 @@ export function getChannelBindingSecret(id: string): string | undefined {
   return row?.app_secret;
 }
 
+/**
+ * Remember which bot an app speaks as. Written once a connection resolves its
+ * identity, so a mentioned open id can later be mapped back to the agent that
+ * owns it without a live connection being present.
+ */
+export function setChannelBindingBotOpenId(id: string, botOpenId: string): void {
+  getDatabase()
+    .prepare("UPDATE channel_bindings SET bot_open_id = ?, updated_at = ? WHERE id = ?")
+    .run(botOpenId, Date.now(), id);
+}
+
+/**
+ * The agent whose bot is this open id, if any.
+ *
+ * Deliberately returns null rather than guessing: a mention of something that
+ * is not one of our bound agents (a person, or a bot we do not manage) must not
+ * be routed to an arbitrary agent.
+ */
+export function findAgentIdByBotOpenId(channel: string, botOpenId: string): string | null {
+  const row = getDatabase()
+    .prepare("SELECT agent_id FROM channel_bindings WHERE channel = ? AND bot_open_id = ?")
+    .get(channel, botOpenId) as { agent_id: string } | undefined;
+  return row?.agent_id ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Channel conversations (external chat <-> AgentMeld conversation)
 // ---------------------------------------------------------------------------

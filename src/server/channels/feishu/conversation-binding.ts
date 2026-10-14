@@ -46,13 +46,26 @@ export function resolveChannelConversation(input: {
     now: input.now
   });
 
-  const channelConversation = createChannelConversation({
-    id: newChannelConversationId(),
-    channel: input.channel,
-    chatId: input.chatId,
-    conversationId: conversation.id,
-    now: input.now
-  });
+  let channelConversation: ChannelConversation;
+  try {
+    channelConversation = createChannelConversation({
+      id: newChannelConversationId(),
+      channel: input.channel,
+      chatId: input.chatId,
+      conversationId: conversation.id,
+      now: input.now
+    });
+  } catch (error) {
+    // Two deliveries for a chat can arrive together, and the unique index on
+    // (channel, chat_id) is what makes that safe — but one of them loses. It
+    // adopts the winner's mapping rather than failing: the conversation the
+    // loser just created is left with no chat pointing at it, which is untidy
+    // but harmless, whereas throwing would drop a real message.
+    const winner = getChannelConversationByChat(input.channel, input.chatId);
+    if (!winner) throw error;
+    joinChannelConversation(winner, input.receivingAgentId, input.now);
+    return { channelConversation: winner, created: false };
+  }
 
   addChannelConversationMember({
     channelConversationId: channelConversation.id,

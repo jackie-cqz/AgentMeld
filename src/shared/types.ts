@@ -61,6 +61,16 @@ export interface ChannelInboundMessage {
   senderType: string | null;
   senderIsBot: boolean | null;
   mentionedBot: boolean;
+  /**
+   * open ids of everyone the message @-mentioned.
+   *
+   * Carried explicitly rather than parsed out of `content`: the text form
+   * differs by message type and can retain or drop the mention depending on how
+   * it was sent. A message that mentions two bots is delivered once per bot, so
+   * this is also how the full set of addressees is known from any one of those
+   * deliveries — without it, a second addressee would be dropped as a duplicate.
+   */
+  mentionOpenIds: string[];
   content: string;
   threadId: string | null;
   createTime: number;
