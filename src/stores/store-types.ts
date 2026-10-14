@@ -5,6 +5,7 @@ import type {
   Attachment,
   ChannelBinding,
   ChannelBindingSession,
+  ChannelConnectionInfo,
   Conversation,
   Message,
   PendingBashCommand,
@@ -114,6 +115,12 @@ export interface AppState {
   channelBindings: Record<string, ChannelBinding>;
   /** In-flight scan-to-bind attempts, keyed by session id. */
   channelBindingSessions: Record<string, ChannelBindingSession>;
+  /**
+   * Long-connection health, keyed by agent id. Kept beside the bindings so
+   * "bound but not connected" is visible — otherwise a bot that cannot receive
+   * anything looks identical to one that is merely quiet.
+   */
+  channelConnections: Record<string, ChannelConnectionInfo>;
   channelBindingError: string | null;
   channelBindingsLoaded: boolean;
 
@@ -173,6 +180,8 @@ export interface AppState {
    * message the user still needs to see from an action that just failed.
    */
   loadChannelBindings: (options?: { preserveError?: boolean }) => Promise<void>;
+  /** Reads the connection health endpoint; also (re)starts anything missing. */
+  loadChannelConnections: () => Promise<void>;
   startFeishuBinding: (agentId: string) => Promise<void>;
   cancelChannelBindingSession: (sessionId: string) => Promise<void>;
   unbindFeishu: (agentId: string) => Promise<void>;

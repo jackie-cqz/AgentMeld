@@ -16,7 +16,13 @@ import type {
   SearchState,
   SidebarTab
 } from "@/stores/store-types";
-import type { ChannelBinding, ChannelBindingSession, Message, SearchHit } from "@/shared/types";
+import type {
+  ChannelBinding,
+  ChannelBindingSession,
+  ChannelConnectionInfo,
+  Message,
+  SearchHit
+} from "@/shared/types";
 
 export type { AppState, CompactionState, DispatchState, SearchState, SidebarTab };
 
@@ -48,6 +54,7 @@ export const useAppStore = create<AppState>()(
     searchState: createDefaultSearchState(),
     channelBindings: {},
     channelBindingSessions: {},
+    channelConnections: {},
     channelBindingError: null,
     channelBindingsLoaded: false,
     openFilesByConversation: {},
@@ -488,6 +495,38 @@ export const useAppStore = create<AppState>()(
           state.channelBindingsLoaded = true;
         });
         throw error;
+      }
+    },
+
+    async loadChannelConnections() {
+      try {
+        const payload = await requestJson<{ data: { connections: ChannelConnectionInfo[] } }>(
+          "/api/channels/feishu/connections",
+          { cache: "no-store" }
+        );
+        set((state) => {
+          // Merge, not replace. This response and the event stream race, and a
+          // wholesale assignment dropped entries the stream had just written —
+          // including the `error` rows that are the whole reason to look here.
+          // A read that makes a failure invisible is worse than no read.
+          for (const connection of payload.data.connections) {
+            const previous = state.channelConnections[connection.agentId];
+            // A row the stream already holds is at least as fresh as this
+            // snapshot; keep whichever reports a problem rather than letting a
+            // later "connected" silently erase a reason we have not shown yet.
+            if (previous && previous.lastError && !connection.lastError) {
+              state.channelConnections[connection.agentId] = { ...connection, lastError: previous.lastError };
+              continue;
+            }
+            state.channelConnections[connection.agentId] = connection;
+          }
+        });
+      } catch (error) {
+        // Connection health is diagnostic: a failure to read it must not
+        // overwrite a real binding error the user needs to act on.
+        set((state) => {
+          state.channelBindingError = state.channelBindingError ?? describeError(error);
+        });
       }
     },
 

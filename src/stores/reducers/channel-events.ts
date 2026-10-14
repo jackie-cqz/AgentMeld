@@ -60,6 +60,29 @@ export function mergeSessions(
  * finished attempt would keep offering a spent QR code.
  */
 export function applyChannelEvent(state: StoreDraft, event: StreamEvent): boolean {
+  // Connection health is per agent and carries no session: the panel shows it
+  // beside the binding so "bound but not connected" is visible rather than
+  // looking like a working bot that happens to be silent.
+  if (event.type === "channel.connection") {
+    const previous = state.channelConnections[event.agentId];
+    state.channelConnections[event.agentId] = {
+      agentId: event.agentId,
+      appId: event.appId,
+      status: event.status,
+      // The event reports transitions, not the whole record, so anything the
+      // client already knows about identity is kept.
+      botOpenId: previous?.botOpenId ?? null,
+      botName: previous?.botName ?? null,
+      // A reason always wins: that is how a guard trip stays visible. A
+      // successful reconnect clears whatever was there; anything else keeps it.
+      // (An earlier version cleared on `error`, which is exactly backwards —
+      // the one status that most needs its reason.)
+      lastError: event.reason ?? (event.status === "reconnected" ? null : previous?.lastError ?? null),
+      connectedAt: event.status === "connected" ? event.timestamp : previous?.connectedAt ?? null
+    };
+    return true;
+  }
+
   if (event.type !== "channel.binding.updated") return false;
 
   const existing = state.channelBindingSessions[event.sessionId];

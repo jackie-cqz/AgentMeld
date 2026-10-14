@@ -4,7 +4,11 @@ import { CheckCircle2, Loader2, QrCode, Unlink, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAppStore } from "@/stores/app-store";
-import type { ChannelBinding, ChannelBindingSession } from "@/shared/types";
+import type {
+  ChannelBinding,
+  ChannelBindingSession,
+  ChannelConnectionInfo
+} from "@/shared/types";
 
 /**
  * What the UI should show for one agent. Extracted as a pure function so the
@@ -104,11 +108,43 @@ export function shouldRefreshBindings(
   );
 }
 
+/**
+ * How to describe a connection, or `null` when there is nothing to say.
+ *
+ * `null` matters: a connection the client has not heard about yet must not be
+ * rendered as broken. "Bound but not connected" is a real and confusing state
+ * — the bot exists in the group but cannot receive anything — so it is shown
+ * distinctly rather than folded into "unbound".
+ */
+export function describeConnection(
+  info: ChannelConnectionInfo | undefined
+): { tone: "ok" | "warn" | "muted"; text: string } | null {
+  if (!info) return null;
+  switch (info.status) {
+    case "connected":
+      // A reason can be present while connected: a `bot_loop` guard trip is
+      // reported against the current status. Dropping it here is what made the
+      // guard look silent even after it had fired.
+      return info.lastError
+        ? { tone: "warn", text: `已连接，但最近有事件被拒：${info.lastError}` }
+        : { tone: "ok", text: info.botName ? `已连接 · ${info.botName}` : "已连接" };
+    case "reconnected":
+      return { tone: "ok", text: "已重连" };
+    case "reconnecting":
+      return { tone: "warn", text: "连接中断，重连中" };
+    case "disconnected":
+      return { tone: "muted", text: "已断开" };
+    case "error":
+      return { tone: "warn", text: info.lastError ? `连接失败：${info.lastError}` : "连接失败" };
+  }
+}
+
 export function ChannelBindingsPanel() {
   const agents = useAppStore((state) => state.agents);
   const agentIds = useAppStore((state) => state.agentIds);
   const bindings = useAppStore((state) => state.channelBindings);
   const sessions = useAppStore((state) => state.channelBindingSessions);
+  const connections = useAppStore((state) => state.channelConnections);
   const error = useAppStore((state) => state.channelBindingError);
   const loaded = useAppStore((state) => state.channelBindingsLoaded);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
@@ -117,6 +153,10 @@ export function ChannelBindingsPanel() {
   useEffect(() => {
     // Passive read: it must not erase a message from an action that just failed.
     void useAppStore.getState().loadChannelBindings({ preserveError: true }).catch(() => {});
+    // Connection health is a separate read. It also (re)starts anything missing,
+    // so a binding created while the server was already running comes up without
+    // a restart.
+    void useAppStore.getState().loadChannelConnections();
   }, []);
 
   // A scan that finished on the server arrives as an event naming the app id but
@@ -199,7 +239,7 @@ export function ChannelBindingsPanel() {
                 {agent?.name ?? agentId}
                 <span className="ml-2 text-xs text-stone-400">{agentId}</span>
               </div>
-              <BindingStatusLine state={state} now={now} />
+              <BindingStatusLine state={state} now={now} connection={connections[agentId]} />
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
@@ -260,12 +300,36 @@ export function ChannelBindingsPanel() {
   );
 }
 
-function BindingStatusLine({ state, now }: { state: AgentBindingState; now: number }) {
+function BindingStatusLine({
+  state,
+  now,
+  connection
+}: {
+  state: AgentBindingState;
+  now: number;
+  connection: ChannelConnectionInfo | undefined;
+}) {
   if (state.kind === "bound") {
+    const described = describeConnection(connection);
+    const tone =
+      described?.tone === "warn"
+        ? "text-amber-700"
+        : described?.tone === "muted"
+          ? "text-stone-400"
+          : "text-emerald-700";
     return (
-      <div className="flex items-center gap-1 text-xs text-emerald-700">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        已绑定 · {state.appId}
+      <div className="space-y-0.5">
+        <div className="flex items-center gap-1 text-xs text-emerald-700">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          已绑定 · {state.appId}
+        </div>
+        {described ? (
+          <div className={`text-xs ${tone}`}>{described.text}</div>
+        ) : (
+          // Deliberately not "未连接": the client may simply not have read the
+          // health endpoint yet, and claiming a fault would be wrong.
+          <div className="text-xs text-stone-400">连接状态未知</div>
+        )}
       </div>
     );
   }

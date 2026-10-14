@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveAgentBindingState,
+  describeConnection,
   describeLauncherWindow,
   formatRemainingMs,
   isSafeLauncherUrl,
@@ -181,6 +182,64 @@ describe("shouldRefreshBindings", () => {
     expect(shouldRefreshBindings({ s1: session("ag_1", "failed") }, {})).toBe(false);
     // No row id means nothing to compare against.
     expect(shouldRefreshBindings({ s1: session("ag_1", "succeeded") }, {})).toBe(false);
+  });
+});
+
+describe("describeConnection", () => {
+  const base = {
+    agentId: "ag_1",
+    appId: "cli_1",
+    botOpenId: "ou_1",
+    botName: "PM 小灰",
+    lastError: null,
+    connectedAt: 1
+  };
+
+  it("says nothing until the client has actually read the health endpoint", () => {
+    // Rendering "not connected" for a connection we have not heard about would
+    // report a fault that may not exist.
+    expect(describeConnection(undefined)).toBeNull();
+  });
+
+  it("names the bot once connected", () => {
+    expect(describeConnection({ ...base, status: "connected" })).toEqual({
+      tone: "ok",
+      text: "已连接 · PM 小灰"
+    });
+  });
+
+  it("copes with a connection that has no identity yet", () => {
+    expect(describeConnection({ ...base, status: "connected", botName: null })?.text).toBe("已连接");
+  });
+
+  it("flags the states that mean the bot cannot receive anything", () => {
+    // This is the whole point of showing connection health: bound is not the
+    // same as working.
+    expect(describeConnection({ ...base, status: "reconnecting" })?.tone).toBe("warn");
+    expect(describeConnection({ ...base, status: "error", lastError: "connect refused" })).toEqual({
+      tone: "warn",
+      text: "连接失败：connect refused"
+    });
+  });
+
+  it("surfaces a rejection even while the connection is up", () => {
+    // A bot_loop guard trip is reported against the CURRENT status, so ignoring
+    // lastError on "connected" made the guard look silent after it had fired.
+    const described = describeConnection({
+      ...base,
+      status: "connected",
+      lastError: "rejected:bot_loop"
+    });
+    expect(described?.tone).toBe("warn");
+    expect(described?.text).toContain("rejected:bot_loop");
+  });
+
+  it("treats a disconnect as muted rather than alarming", () => {
+    expect(describeConnection({ ...base, status: "disconnected" })?.tone).toBe("muted");
+  });
+
+  it("reports a successful reconnect as healthy", () => {
+    expect(describeConnection({ ...base, status: "reconnected" })?.tone).toBe("ok");
   });
 });
 
