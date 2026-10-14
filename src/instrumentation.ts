@@ -24,8 +24,14 @@ export async function register(): Promise<void> {
   // the two would otherwise be published with nobody listening for it. The
   // projection has no such race — it only reads what the app already produced —
   // but subscribing both here keeps the wiring in one place.
+  const { startChannelInteractions } = await import("@/server/channels/feishu/interaction");
+
   startChannelRouter();
   startChannelProjection();
+  // Questions get their own subscription: they are a different kind of outbound
+  // (it expects a reply) and they resolve through a callback rather than by
+  // projecting state.
+  startChannelInteractions();
 
   // Deliberately not awaited. A slow or unreachable platform must never delay
   // or fail server startup; each app's outcome is reported through a

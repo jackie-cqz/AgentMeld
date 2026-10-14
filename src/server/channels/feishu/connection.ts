@@ -7,6 +7,7 @@ import {
 } from "@larksuite/channel";
 import { ensureDatabase } from "@/db/bootstrap";
 import { createPersistentCache, type SdkCache } from "@/server/channels/feishu/cache";
+import { handleCardAction } from "@/server/channels/feishu/interaction";
 import { eventBus } from "@/server/event-bus";
 import { listFeishuBindings } from "@/server/channels/feishu/binding";
 import { getChannelBindingSecret, setChannelBindingBotOpenId } from "@/server/repositories";
@@ -162,6 +163,17 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
       conversationId: "",
       timestamp: Date.now(),
       message: toInbound(binding.agentId, message)
+    });
+  });
+
+  channel.on("cardAction", (event) => {
+    // Returned to the platform so the click gets immediate feedback and the card
+    // updates in place. Deliberately NOT awaited on anything that runs an agent:
+    // §5.4 — the SDK serialises per chat, so awaiting a run here would leave the
+    // click waiting behind the very work it just unblocked.
+    return handleCardAction(event).catch((error: unknown) => {
+      console.error("[feishu] failed to handle a card action:", error);
+      return { toast: { type: "error", content: "处理失败，请在 AgentMeld 网页操作。" } };
     });
   });
 
