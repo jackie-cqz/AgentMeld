@@ -4,6 +4,7 @@ import { getDatabase } from "@/db/client";
 import { getWorkspaceForConversation } from "@/server/repositories";
 import { newAttachmentId } from "@/shared/ids";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
+import { safeFileName } from "@/server/channels/feishu/file-name";
 
 /**
  * Bring files a person attached in the chat into the conversation.
@@ -35,23 +36,6 @@ export type ResourceImportOutcome =
   | { status: "skipped"; reason: string };
 
 /** A filename a filesystem can take, without letting a name suggest a path. */
-export function safeAttachmentName(fileName: string | null, fallback: string): string {
-  const cleaned = (fileName ?? "")
-    .replace(/[/\\]/g, "-")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f<>:"|?*]/g, "")
-    .trim();
-
-  // Truncated by CODE POINT, not by UTF-16 unit. Slicing a surrogate pair in
-  // half leaves a lone surrogate that the filesystem turns into U+FFFD, so the
-  // name in the database and the name on disk stop matching.
-  const points = [...cleaned];
-  const base = points.length > 120 ? points.slice(0, 120).join("") : cleaned;
-
-  if (!base || base === "." || base === "..") return fallback;
-  return base;
-}
-
 /**
  * The type the SDK will accept.
  *
@@ -136,7 +120,7 @@ export async function importInboundResources(input: {
   const skipped: string[] = [];
 
   for (const [index, resource] of input.resources.slice(0, MAX_RESOURCES).entries()) {
-    const provisional = safeAttachmentName(resource.fileName, `attachment-${index + 1}`);
+    const provisional = safeFileName(resource.fileName, `attachment-${index + 1}`);
 
     const sdkType = sdkResourceType(resource.type);
     if (!sdkType) {
@@ -173,7 +157,7 @@ export async function importInboundResources(input: {
         path.extname(provisional) === ""
           ? `${provisional}${extensionForContentType(contentType)}`
           : provisional;
-      const fileName = safeAttachmentName(withExtension, `attachment-${index + 1}`);
+      const fileName = safeFileName(withExtension, `attachment-${index + 1}`);
       const filePath = path.join(attachDir, `${id}-${fileName}`);
       fs.renameSync(partPath, filePath);
 

@@ -8,6 +8,7 @@ import {
   withinSendBudget
 } from "@/server/channels/feishu/projection";
 import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/workspace-utils";
+import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
 
 /**
@@ -31,17 +32,6 @@ import type { Artifact, Workspace } from "@/shared/types";
 export interface ArtifactFile {
   name: string;
   content: Buffer;
-}
-
-/** A filename a chat can display safely. */
-function safeFileName(title: string, fallback: string, extension: string): string {
-  const base = (title || fallback)
-    .replace(/[/\\]/g, "-")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f<>:"|?*]/g, "")
-    .trim()
-    .slice(0, 80);
-  return `${base || fallback}${extension}`;
 }
 
 /**

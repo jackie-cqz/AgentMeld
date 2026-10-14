@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestDatabase } from "@/test/test-database";
 import {
   describeSkippedResources,
-  importInboundResources,
-  safeAttachmentName
+  importInboundResources
 } from "@/server/channels/feishu/attachment-import";
+import { safeFileName } from "@/server/channels/feishu/file-name";
 import { getDatabase } from "@/db/client";
 import { createConversation, getWorkspaceForConversation } from "@/server/repositories";
 import { createWorkspace } from "@/server/conversation-service";
@@ -64,19 +64,19 @@ const AGENT = "ag_pm";
 
 describe("safeAttachmentName", () => {
   it("keeps an ordinary name", () => {
-    expect(safeAttachmentName("report.md", "fallback")).toBe("report.md");
+    expect(safeFileName("report.md", "fallback")).toBe("report.md");
   });
 
   it("strips what a filesystem must not be told", () => {
-    expect(safeAttachmentName("../../etc/passwd", "fallback")).toBe("..-..-etc-passwd");
-    expect(safeAttachmentName("a/b\\c:d.txt", "fallback")).toBe("a-b-cd.txt");
+    expect(safeFileName("../../etc/passwd", "fallback")).toBe("..-..-etc-passwd");
+    expect(safeFileName("a/b\\c:d.txt", "fallback")).toBe("a-b-cd.txt");
   });
 
   it("refuses a name that is only a traversal", () => {
-    expect(safeAttachmentName("..", "fallback")).toBe("fallback");
-    expect(safeAttachmentName(".", "fallback")).toBe("fallback");
-    expect(safeAttachmentName("", "fallback")).toBe("fallback");
-    expect(safeAttachmentName(null, "fallback")).toBe("fallback");
+    expect(safeFileName("..", "fallback")).toBe("fallback");
+    expect(safeFileName(".", "fallback")).toBe("fallback");
+    expect(safeFileName("", "fallback")).toBe("fallback");
+    expect(safeFileName(null, "fallback")).toBe("fallback");
   });
 });
 
