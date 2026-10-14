@@ -177,7 +177,7 @@ pnpm typecheck  # TypeScript 检查
 pnpm lint       # ESLint 检查
 pnpm test       # 运行 Vitest 测试
 pnpm db:push    # 用 drizzle-kit 应用 src/db/schema.ts 这份类型化镜像。仅对全新空库安全：对应用已建好的库（src/db/bootstrap.ts）它会提议删除检索（FTS）表，切勿对真实数据运行，更不要加 --force。详见 docs/schema.md
-pnpm db:seed    # 必要时创建本地数据库并打印各表行数（不会插入示例数据）
+pnpm db:seed    # 必要时创建本地数据库并打印各表行数（不会插入示例数据）。同时会触发启动恢复 —— 见命令列表下方的说明
 pnpm e2e:fixture # 评估一次已完成的运行：pnpm e2e:fixture <runId> <fixturePath>
 pnpm e2e:report  # 列出 benchmark fixture；或加 --run <runId> --fixture <path> 评估某次运行
 pnpm quality:gates # 基于已保存的 benchmark 报告运行发布质量门禁，门禁失败时以非 0 退出；全新 clone 尚无 benchmark 数据，minimum-fixtures 门禁会失败
@@ -187,9 +187,9 @@ pnpm agent:bench:smoke  # 运行标记为 smoke 的 benchmark 用例
 pnpm agent:bench:full   # 运行完整 benchmark 套件
 ```
 
-仓库中也保留了早期评估和 fixture 脚本。运行应用代码的脚本（`db:seed`、`e2e:*`、`quality:gates`、`agent:bench*`）会先读 `.env.local` 再读 `.env`（通过 `scripts/load-env.mjs`）；其中 benchmark/evaluation 脚本还要求应用已启动且配置好模型服务凭据。当前版本的核心定位仍是运行时可观测性，而不是完整 benchmark 平台。
+仓库中也保留了早期评估和 fixture 脚本。运行应用代码的脚本（`db:seed`、`e2e:*`、`quality:gates`、`agent:bench*`）会先读 `.env.local` 再读 `.env`（通过 `scripts/load-env.mjs`）。其中 `e2e:*` 与 `agent:bench --run/--compare` 通过 HTTP 访问已启动的应用，`agent:bench --case/--suite` 则在进程内驱动对话；它们都需要模型服务凭据。当前版本的核心定位仍是运行时可观测性，而不是完整 benchmark 平台。
 
-这些脚本都会调用 `ensureDatabase()`，从而触发启动恢复（`src/db/bootstrap.ts`）。该恢复会把所打开数据库中所有仍标记为 `running` 的 run 强制判为失败 —— 这在进程启动时是正确的（那时不可能有任务在飞），但从第二个进程调用并不成立。所以在 dev server 旁边执行上述任一命令、或本地驱动脚本，都会**杀掉该 server 正在执行的任务**并把它的 attempt 标记为失败，而两侧都不会报错。请先停掉 server，或让脚本指向另一份 `AGENTMELD_DATA_DIR`。
+`pnpm db:seed` 会调用 `ensureDatabase()`，从而触发启动恢复（`src/db/bootstrap.ts`）。该恢复会把所打开数据库中所有仍标记为 `running` 的 run 强制判为失败 —— 而它打开的正是应用所用的同一份数据库。所以在 dev server 旁边执行 `db:seed` **不会终止**该 server 正在执行的任务：没有任何跨进程中止，server 在任务结束时还会把 run 状态覆盖回去。但它会在此期间把这个 run 标记为失败、把它的 attempt 标记为 rejected，脚本也会明确打印出来（`[run-recovery] Marked 1 orphaned runs as interrupted.`）。请先停掉 server，或让 `db:seed` 指向另一份 `AGENTMELD_DATA_DIR`。其他脚本不受影响：`e2e:*` 与 `quality:gates` 根本不打开数据库，`agent:bench*` 则在调用 `ensureDatabase()` 之前就把 `AGENTMELD_DATA_DIR` 切到自己的 benchmark 目录。
 
 ## 本地数据
 
