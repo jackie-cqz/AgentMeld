@@ -59,8 +59,21 @@ const SOURCE_MUTATION_PATTERNS: RegExp[] = [
   /(^|[^2])>{1,2}(?!&1)/
 ];
 
+/**
+ * An `npm/pnpm/yarn/bun run <script>` invocation whose script name starts with a
+ * verification family word.
+ *
+ * The name is captured as a WHOLE shell token — the family word plus everything
+ * up to the next whitespace. A `\b` is not enough: it also ends at `.` and `/`,
+ * so `bun run build.evil` was classified as `build` while bun resolves the rest
+ * to a FILE, and the declaration check then asked about a script the shell never
+ * ran. Classification and extraction share this one pattern, so the name that is
+ * classified is by construction the name that gets looked up.
+ */
+const RUN_SCRIPT_PATTERN = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?((?:build|test|lint|typecheck|check)\b\S*)/i;
+
 const VERIFICATION_PATTERNS: RegExp[] = [
-  /\b(npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|lint|typecheck|check)\b/i,
+  RUN_SCRIPT_PATTERN,
   /\b(?:npm|pnpm|yarn|bun)\s+(?:ls|list)\b/i,
   // Tool names are matched as whole tokens (`(?![\w.-])`, not `\b`): otherwise
   // `npx eslint-foo` / `pnpm exec eslint-foo` count as verification and reach the
@@ -147,65 +160,175 @@ export function isDependencyOnlyCommand(command: string): boolean {
   return sawDependencyCommand;
 }
 
-/** Script names in the verification family: `build`, `test:unit`, `lint-fix`, … */
-const VERIFICATION_SCRIPT_NAME = /^(?:build|test|lint|typecheck|check)(?:[:_-][A-Za-z0-9:_-]+)?$/i;
-
 const DIRECTORY_CHANGE = /^(?:cd|Set-Location|Push-Location)\s+(.+)$/i;
 
+/** `npm --prefix <dir> run …`, `pnpm -C <dir>`, `yarn --cwd <dir>` … */
+const PROJECT_DIRECTORY_FLAG = /(?:^|\s)(?:-w|--workspace|--prefix|-C|--cwd)(?:[=\s]+)(\S+)/i;
+
+export interface VerificationScriptRun {
+  name: string;
+  /** Directory the script runs in, or null when it cannot be determined. */
+  cwd: string | null;
+}
+
 /**
- * The npm/pnpm/yarn/bun scripts a command asks to run, each with the directory it
- * will run in — `cd` segments are tracked in order, so `cd app && npm run build`
- * resolves against `app/package.json`.
+ * The verification-family scripts a command asks to run, each with the directory
+ * it will run in. `cd` segments are tracked in order, and an explicit project
+ * directory flag redirects the lookup the way it redirects npm.
  *
- * Only names in the verification family are reported (`npm ls` is a builtin, not
- * a script). Whether each name is actually declared is decided by the caller,
- * which has the workspace to read from.
+ * `cwd` is null when the directory cannot be resolved statically — a shell
+ * variable, `~`, or a glob. The caller must refuse those instead of assuming a
+ * directory: the shell would run somewhere this code never looked.
  */
 export function findVerificationScriptRuns(
   command: string,
   baseCwd: string
-): Array<{ name: string; cwd: string }> {
-  const runs: Array<{ name: string; cwd: string }> = [];
-  let cwd = baseCwd;
+): VerificationScriptRun[] {
+  const runs: VerificationScriptRun[] = [];
+  let cwd: string | null = baseCwd;
 
   for (const segment of splitCommandSegments(command)) {
     const cleaned = stripOutputFilter(segment);
 
-    const directoryChange = cleaned.match(DIRECTORY_CHANGE);
-    if (directoryChange) {
-      const target = directoryChange[1].trim().replace(/^["']|["']$/g, "");
-      // Flags and shell variables cannot be resolved here. Leave cwd alone so a
-      // later lookup simply misses rather than pointing at a guessed directory.
-      if (target && !target.startsWith("-") && !target.includes("$")) {
-        cwd = path.resolve(cwd, target);
-      }
+    if (isDirectoryChange(cleaned)) {
+      cwd = resolveDirectoryChange(cleaned, cwd);
       continue;
     }
 
-    if (!isVerificationSegment(cleaned)) continue;
-    const script = cleaned.match(/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?([A-Za-z0-9:_-]+)/i);
+    const script = cleaned.match(RUN_SCRIPT_PATTERN);
     if (!script) continue;
-    if (!VERIFICATION_SCRIPT_NAME.test(script[1])) continue;
-    runs.push({ name: script[1], cwd });
+    runs.push({ name: script[1], cwd: applyProjectDirectoryFlag(cleaned, cwd) });
   }
 
   return runs;
 }
 
+/** `cd [-flags] <dir>` resolved against the current directory; null when unknown. */
+function resolveDirectoryChange(segment: string, current: string | null): string | null {
+  const match = segment.match(DIRECTORY_CHANGE);
+  if (!match || current === null) return current;
+
+  const target = match[1]
+    .trim()
+    // Drop leading options — `-P`, `-L`, and the `--` separator — before the path.
+    .replace(/^(?:(?:--?[A-Za-z][A-Za-z0-9-]*|--)(?:\s+|$))+/, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+  return target && !isDynamicShellWord(target) ? path.resolve(current, target) : null;
+}
+
+function applyProjectDirectoryFlag(segment: string, current: string | null): string | null {
+  const flag = segment.match(PROJECT_DIRECTORY_FLAG);
+  if (!flag || current === null) return current;
+
+  const target = flag[1].replace(/^["']|["']$/g, "");
+  return target && !isDynamicShellWord(target) ? path.resolve(current, target) : null;
+}
+
+/** Shell words this code cannot turn into a path. */
+function isDynamicShellWord(word: string): boolean {
+  return word.includes("$") || word.startsWith("~") || /[*?[\]]/.test(word);
+}
+
 /**
- * Declared script names for a directory, or null when there is no usable
- * package.json — nothing to enforce against, so callers leave the command alone.
+ * Decide whether a verification script may run.
+ *
+ * npm resolves a script by walking up from the working directory to the nearest
+ * package.json, so that manifest is the one that decides — and it has to sit
+ * inside the workspace, otherwise the command would run the host project's
+ * script. Reusing `isPathWithin` on a realpath keeps symlinks from pointing out
+ * of the sandbox.
  */
-function readDeclaredScripts(directory: string): Set<string> | null {
+function checkDeclaredScript(
+  run: VerificationScriptRun,
+  workspaceRoot: string
+): { ok: true } | { ok: false; code: string; error: string } {
+  if (run.cwd === null) {
+    return {
+      ok: false,
+      code: "BASH_SCRIPT_DIRECTORY_UNKNOWN",
+      error:
+        `Cannot tell which directory "${run.name}" would run in (a shell variable, ~, or a glob is involved), ` +
+        `so it cannot be checked against a package.json. Use a literal path.`,
+    };
+  }
+
+  const directory = realPathOrNull(run.cwd);
+  if (!directory || !isPathWithin(directory, workspaceRoot)) {
+    return {
+      ok: false,
+      code: "BASH_SCRIPT_OUTSIDE_WORKSPACE",
+      error:
+        `"${run.name}" would run outside the workspace (${run.cwd}). ` +
+        `bash only verifies scripts declared inside it.`,
+    };
+  }
+
+  const manifest = findApplicableManifest(directory);
+  if (!manifest) {
+    // No package.json anywhere above: npm cannot run a script either, so let its
+    // own error be the feedback.
+    return { ok: true };
+  }
+
+  if (!isPathWithin(manifest.directory, workspaceRoot)) {
+    return {
+      ok: false,
+      code: "BASH_SCRIPT_MANIFEST_OUTSIDE_WORKSPACE",
+      error:
+        `"${run.name}" would resolve to ${path.join(manifest.directory, "package.json")}, which is outside ` +
+        `the workspace. bash only verifies scripts declared inside it.`,
+    };
+  }
+
+  if (!manifest.scripts.has(run.name)) {
+    return {
+      ok: false,
+      code: "BASH_UNDECLARED_SCRIPT",
+      error:
+        `Script "${run.name}" is not declared in ${path.join(manifest.directory, "package.json")}. ` +
+        `bash only runs build/test/lint/typecheck/check scripts the workspace declares.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+function realPathOrNull(target: string): string | null {
   try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(directory, "package.json"), "utf-8")
-    ) as { scripts?: Record<string, unknown> };
-    if (!parsed || typeof parsed !== "object") return null;
-    if (!parsed.scripts || typeof parsed.scripts !== "object") return null;
-    return new Set(Object.keys(parsed.scripts));
+    return fs.realpathSync(target);
   } catch {
     return null;
+  }
+}
+
+/** The package.json npm would use for a directory: the nearest one at or above it. */
+function findApplicableManifest(
+  directory: string
+): { directory: string; scripts: Set<string> } | null {
+  let current = directory;
+
+  for (;;) {
+    const manifestPath = path.join(current, "package.json");
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+          scripts?: Record<string, unknown>;
+        };
+        const scripts =
+          parsed && typeof parsed === "object" && parsed.scripts && typeof parsed.scripts === "object"
+            ? new Set(Object.keys(parsed.scripts))
+            : new Set<string>();
+        return { directory: current, scripts };
+      } catch {
+        // A manifest npm cannot parse is one it cannot run a script from either.
+        return { directory: current, scripts: new Set<string>() };
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
   }
 }
 
@@ -347,28 +470,21 @@ export const bashTool: ToolDef = {
       };
     }
 
-    // 3. `npm run <script>` executes whatever the project declares, so only run
-    // scripts that are actually declared in the package.json of the directory the
-    // command runs in. The verification patterns match by name prefix, which on
-    // its own also accepted names no project declares (`npm run build-evil`) —
-    // and a script nobody declared is not a verification command. Scripts a
-    // project genuinely declares (`build`, `test:unit`, …) are unaffected, and a
-    // directory without a usable package.json is left alone as before.
+    // 3. `npm run <script>` executes whatever the project declares, so run only
+    // scripts the workspace actually declares. The verification patterns match by
+    // name family, which on its own also accepted names no project declares
+    // (`npm run build-evil`) — and a script nobody declared is arbitrary code
+    // execution wearing a build step's name.
+    //
+    // A script that cannot be located inside the workspace is refused rather than
+    // waved through: `cd` moves the shell (the sandbox only fixes the initial
+    // directory), and npm walks up to the nearest package.json, so "I could not
+    // find it" must not mean "allow it".
+    const workspaceRoot = realPathOrNull(cwd) ?? cwd;
     for (const scriptRun of findVerificationScriptRuns(command, cwd)) {
-      // Never read a package.json outside the workspace: `cd` inside the command
-      // moves the shell, and the sandbox only fixes the initial directory.
-      if (!isPathWithin(scriptRun.cwd, cwd)) continue;
-      const declared = readDeclaredScripts(scriptRun.cwd);
-      if (declared && !declared.has(scriptRun.name)) {
-        return {
-          ok: false,
-          code: "BASH_UNDECLARED_SCRIPT",
-          category: "security_policy",
-          error:
-            `Script "${scriptRun.name}" is not declared in ${path.join(scriptRun.cwd, "package.json")}. ` +
-            `bash only runs build/test/lint/typecheck/check scripts the workspace declares. ` +
-            `Declare it with fs_write/fs_patch first, or run a script that is declared.`,
-        };
+      const check = checkDeclaredScript(scriptRun, workspaceRoot);
+      if (!check.ok) {
+        return { ok: false, code: check.code, category: "security_policy", error: check.error };
       }
     }
 

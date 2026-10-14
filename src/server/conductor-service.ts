@@ -1871,10 +1871,14 @@ async function runConductorAssess(
   if (!apiKey) {
     // Name the provider the agent is actually configured with: the Conductor is
     // not necessarily on DeepSeek, and a message that says otherwise sends the
-    // user to the wrong settings field.
+    // user to the wrong settings field. `openai-compatible` is per-agent only —
+    // resolveApiKey deliberately never falls back to settings or the environment
+    // for it — so pointing at the settings panel would be wrong outright.
     createSystemMessage(
       input.conversationId,
-      `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
+      provider === "openai-compatible"
+        ? `⚠️ 该 Conductor 使用 provider "openai-compatible"，其 API Key 只能配置在 Agent 上（不会读取全局设置或环境变量）。请编辑该 Agent 填入 Key。`
+        : `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
     );
     publishConductorFailed(input, "No API key configured.");
     return { mode: "direct" };

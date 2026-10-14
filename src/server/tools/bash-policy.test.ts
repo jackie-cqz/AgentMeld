@@ -162,6 +162,18 @@ describe("verification script extraction", () => {
       .toEqual([{ name: "build-evil", cwd: base }]);
   });
 
+  it("takes the whole script token, not the part before a dot or slash", () => {
+    // Regression: the name class stopped at `.`/`/`, so `bun run build.evil`
+    // extracted `build` — a declared script — while bun resolved the rest to a
+    // FILE and ran it. The classified name must be the name the shell uses.
+    expect(findVerificationScriptRuns("bun run build.evil", base))
+      .toEqual([{ name: "build.evil", cwd: base }]);
+    expect(findVerificationScriptRuns("bun run build/evil.js", base))
+      .toEqual([{ name: "build/evil.js", cwd: base }]);
+    expect(findVerificationScriptRuns("bun run build-中文", base))
+      .toEqual([{ name: "build-中文", cwd: base }]);
+  });
+
   it("ignores commands that are not project scripts", () => {
     // The extraction is per segment and only consulted after the whole command
     // has passed the verification gate, so a piped `npm run build | tee …` is
@@ -171,14 +183,38 @@ describe("verification script extraction", () => {
     }
   });
 
-  it("leaves the directory unresolved rather than guessing", () => {
-    // A shell variable cannot be resolved here, so the base directory is kept —
-    // the caller then reads the wrong (but existing) package.json rather than a
-    // path the agent chose indirectly.
+  it("reports an unknown directory as null so the caller can refuse it", () => {
+    // A shell variable or `~` cannot be resolved here. Guessing would check one
+    // directory while the shell runs in another, so the caller must refuse.
     expect(findVerificationScriptRuns("cd $DIR && npm run build", base))
-      .toEqual([{ name: "build", cwd: base }]);
-    // An absolute target outside the workspace is reported but the caller skips
-    // it, so package.json is never read from outside the sandbox.
+      .toEqual([{ name: "build", cwd: null }]);
+    expect(findVerificationScriptRuns("cd ~ && npm run build", base))
+      .toEqual([{ name: "build", cwd: null }]);
+    expect(findVerificationScriptRuns("cd $DIR && npm test", base))
+      .toEqual([{ name: "test", cwd: null }]);
+  });
+
+  it("strips cd options before the target", () => {
+    // `cd -P app` and `cd -- app` both land in app; treating the option as the
+    // path made the caller check the parent's package.json instead.
+    expect(findVerificationScriptRuns("cd -P app && npm run build", base))
+      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+    expect(findVerificationScriptRuns("cd -- app && npm run build", base))
+      .toEqual([{ name: "build", cwd: "/ws/app" }]);
+  });
+
+  it("follows an explicit project directory flag", () => {
+    expect(findVerificationScriptRuns("npm run build -w web", base))
+      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+    expect(findVerificationScriptRuns("npm run build --workspace web", base))
+      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+    expect(findVerificationScriptRuns("npm run build --prefix web", base))
+      .toEqual([{ name: "build", cwd: "/ws/web" }]);
+  });
+
+  it("still reports an absolute target outside the workspace", () => {
+    // Reported with its real directory; the caller refuses it rather than reading
+    // a package.json from outside the sandbox.
     expect(findVerificationScriptRuns("cd /etc && npm run build", base))
       .toEqual([{ name: "build", cwd: "/etc" }]);
   });
