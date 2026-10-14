@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Local-first multi-agent collaboration workspace.",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,14 +12,14 @@
     "lint": "eslint .",
     "test": "vitest run",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx src/db/seed.ts",
-    "e2e:fixture": "tsx tests/e2e-runner/evaluate-run.ts",
-    "e2e:report": "tsx tests/e2e-runner/report.ts",
-    "agent:bench": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts",
-    "agent:bench:all": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --all",
-    "agent:bench:smoke": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --suite smoke",
-    "agent:bench:full": "node --env-file=.env --import tsx tests/e2e-runner/benchmark.ts --suite full",
-    "quality:gates": "tsx tests/e2e-runner/quality-gates.ts"
+    "db:seed": "node --import ./scripts/load-env.mjs --import tsx src/db/seed.ts",
+    "e2e:fixture": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/evaluate-run.ts",
+    "e2e:report": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/report.ts",
+    "agent:bench": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/benchmark.ts",
+    "agent:bench:all": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/benchmark.ts --all",
+    "agent:bench:smoke": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/benchmark.ts --suite smoke",
+    "agent:bench:full": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/benchmark.ts --suite full",
+    "quality:gates": "node --import ./scripts/load-env.mjs --import tsx tests/e2e-runner/quality-gates.ts"
   },
   "engines": {
     "node": ">=20"

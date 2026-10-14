@@ -156,7 +156,7 @@ You can also enter API keys in the AgentMeld settings panel after startup.
 
 ## Configuration
 
-Common environment variables:
+Common environment variables (`.env.example` lists all of them, including benchmark-only ones):
 
 ```env
 AGENTMELD_DATA_DIR=.agentmeld-data
@@ -176,10 +176,18 @@ pnpm start      # Run the production server
 pnpm typecheck  # Check TypeScript
 pnpm lint       # Run ESLint
 pnpm test       # Run the Vitest suite
-pnpm db:push    # Apply the Drizzle schema when developing schema changes
+pnpm db:push    # Apply the typed Drizzle mirror in src/db/schema.ts via drizzle-kit (schema-change development only; src/db/bootstrap.ts is the runtime DDL authority — see docs/schema.md)
+pnpm db:seed    # Create the local database if needed, then print row counts (it does not insert sample data)
+pnpm e2e:fixture # Evaluate one completed run: pnpm e2e:fixture <runId> <fixturePath>
+pnpm e2e:report  # List benchmark fixtures, or evaluate one run with --run <runId> --fixture <path>
+pnpm quality:gates # Run the release quality gates over saved benchmark reports; exits non-zero when a gate fails. On a fresh clone there is no benchmark data yet, so the minimum-fixtures gate fails
+pnpm agent:bench        # Benchmark CLI; requires arguments (see: pnpm agent:bench:all). With none it prints usage and exits 1
+pnpm agent:bench:all    # List all benchmark fixtures and usage examples (it does not run them)
+pnpm agent:bench:smoke  # Run the benchmark cases tagged "smoke"
+pnpm agent:bench:full   # Run the full benchmark suite
 ```
 
-The repository also contains early evaluation and fixture scripts, but the current release is positioned around runtime observability rather than a complete benchmark platform.
+The repository also contains early evaluation and fixture scripts. The scripts that run app code (`db:seed`, `e2e:*`, `quality:gates`, `agent:bench*`) load `.env.local` first and then `.env` via `scripts/load-env.mjs`; the benchmark/evaluation ones also expect a running app plus provider credentials. The current release is positioned around runtime observability rather than a complete benchmark platform.
 
 ## Local Data
 
