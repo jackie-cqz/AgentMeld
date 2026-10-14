@@ -15,7 +15,7 @@ import type {
   SearchState,
   SidebarTab
 } from "@/stores/store-types";
-import type { Message, SearchHit } from "@/shared/types";
+import type { ChannelBinding, ChannelBindingSession, Message, SearchHit } from "@/shared/types";
 
 export type { AppState, CompactionState, DispatchState, SearchState, SidebarTab };
 
@@ -23,7 +23,7 @@ const DEFAULT_ARTIFACT_PANEL_WIDTH = 640;
 let searchRequestId = 0;
 
 export const useAppStore = create<AppState>()(
-  immer((set) => ({
+  immer((set, get) => ({
     agents: {},
     agentIds: [],
     conversations: {},
@@ -45,6 +45,10 @@ export const useAppStore = create<AppState>()(
     dispatchesByRunId: {},
     compactionByConversation: {},
     searchState: createDefaultSearchState(),
+    channelBindings: {},
+    channelBindingSessions: {},
+    channelBindingError: null,
+    channelBindingsLoaded: false,
     openFilesByConversation: {},
     openDiffsByConversation: {},
     activeTabByConversation: {},
@@ -457,6 +461,92 @@ export const useAppStore = create<AppState>()(
       });
     },
 
+    async loadChannelBindings() {
+      try {
+        const payload = await requestJson<{
+          data: { bindings: ChannelBinding[]; sessions: ChannelBindingSession[] };
+        }>("/api/channels/feishu/bindings", { cache: "no-store" });
+
+        set((state) => {
+          state.channelBindings = Object.fromEntries(
+            payload.data.bindings.map((binding) => [binding.agentId, binding])
+          );
+          state.channelBindingSessions = Object.fromEntries(
+            payload.data.sessions.map((session) => [session.id, session])
+          );
+          state.channelBindingError = null;
+          state.channelBindingsLoaded = true;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+          state.channelBindingsLoaded = true;
+        });
+        throw error;
+      }
+    },
+
+    async startFeishuBinding(agentId) {
+      try {
+        const payload = await requestJson<{ data: { session: ChannelBindingSession } }>(
+          "/api/channels/feishu/bindings",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agentId })
+          }
+        );
+        set((state) => {
+          state.channelBindingSessions[payload.data.session.id] = payload.data.session;
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        // A 409 can mean an attempt is already running for this agent, and the
+        // attempt's id only exists on the server. Refresh so the UI can show the
+        // QR that is already waiting instead of just an error.
+        await get().loadChannelBindings().catch(() => {});
+        throw error;
+      }
+    },
+
+    async cancelChannelBindingSession(sessionId) {
+      try {
+        const payload = await requestJson<{ data: { session: ChannelBindingSession } }>(
+          `/api/channels/feishu/bindings/sessions/${sessionId}/cancel`,
+          { method: "POST" }
+        );
+        set((state) => {
+          state.channelBindingSessions[payload.data.session.id] = payload.data.session;
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        throw error;
+      }
+    },
+
+    async unbindFeishu(agentId) {
+      const binding = get().channelBindings[agentId];
+      if (!binding) return;
+      try {
+        await requestJson(`/api/channels/feishu/bindings/${binding.id}`, { method: "DELETE" });
+        set((state) => {
+          delete state.channelBindings[agentId];
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        throw error;
+      }
+    },
+
     applyEvent(event) {
       if (event.type === "heartbeat") {
         set((state) => {
@@ -470,6 +560,10 @@ export const useAppStore = create<AppState>()(
     }
   }))
 );
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : "请求失败";
+}
 
 function createDefaultSearchState(): SearchState {
   return {

@@ -51,6 +51,10 @@ beforeEach(() => {
     openFilesByConversation: {},
     openDiffsByConversation: {},
     activeTabByConversation: {},
+    channelBindings: {},
+    channelBindingSessions: {},
+    channelBindingError: null,
+    channelBindingsLoaded: false,
     replyTargetByConversation: {},
     pendingAttachmentsByConversation: {},
     fileRevisionByConversation: {},
@@ -587,6 +591,93 @@ describe("non-conversation events", () => {
     expect(state.pendingBashCommandIdsByConversation[""]).toBeUndefined();
     expect(state.pendingDispatchPlanIdsByConversation[""]).toBeUndefined();
     expect(state.pendingQuestionIdsByConversation[""]).toBeUndefined();
+  });
+});
+
+describe("channel binding state", () => {
+  it("upserts a session from a stream event", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 1,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "awaiting_scan"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_1"];
+    expect(session?.agentId).toBe("ag_1");
+    expect(session?.status).toBe("awaiting_scan");
+  });
+
+  it("drops the launcher URL once the attempt settles", () => {
+    // The event never carries the URL, so a settled session must lose the one
+    // the start response supplied — otherwise the UI keeps showing a spent QR.
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1",
+        agentId: "ag_1",
+        status: "awaiting_scan",
+        expiresAt: 9999,
+        qrUrl: "https://example.test/launcher"
+      };
+    });
+
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 2,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_1",
+      appId: "cli_1"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_1"];
+    expect(session?.status).toBe("succeeded");
+    expect(session?.qrUrl).toBeUndefined();
+    // The expiry is not carried by the event, so the known one is kept.
+    expect(session?.expiresAt).toBe(9999);
+  });
+
+  it("keeps the launcher URL while the attempt is still waiting", () => {
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1",
+        agentId: "ag_1",
+        status: "awaiting_scan",
+        expiresAt: 9999,
+        qrUrl: "https://example.test/launcher"
+      };
+    });
+
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 2,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "awaiting_scan"
+    });
+
+    expect(useAppStore.getState().channelBindingSessions["cbs_1"]?.qrUrl).toBe(
+      "https://example.test/launcher"
+    );
+  });
+
+  it("carries the failure message through to the session", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 3,
+      sessionId: "cbs_2",
+      agentId: "ag_1",
+      status: "failed",
+      error: "access_denied"
+    });
+
+    expect(useAppStore.getState().channelBindingSessions["cbs_2"]?.error).toBe("access_denied");
   });
 });
 

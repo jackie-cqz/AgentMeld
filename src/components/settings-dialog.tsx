@@ -2,6 +2,7 @@
 
 import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, TestTube2, Trash2, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ChannelBindingsPanel } from "@/components/channel-bindings-panel";
 
 interface SettingsData {
   openaiApiKey: string | null;
@@ -306,6 +307,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               </div>
             </div>
           ) : null}
+        </div>
+
+        <div className="mt-5 border-t border-stone-200 pt-4">
+          <ChannelBindingsPanel />
         </div>
 
         </div>

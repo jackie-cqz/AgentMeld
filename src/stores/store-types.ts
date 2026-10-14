@@ -3,6 +3,8 @@ import type {
   AgentRun,
   Artifact,
   Attachment,
+  ChannelBinding,
+  ChannelBindingSession,
   Conversation,
   Message,
   PendingBashCommand,
@@ -108,6 +110,13 @@ export interface AppState {
   compactionByConversation: Record<string, CompactionState>;
   searchState: SearchState;
 
+  /** Stored Feishu bindings, keyed by agent id. Never contains an app secret. */
+  channelBindings: Record<string, ChannelBinding>;
+  /** In-flight scan-to-bind attempts, keyed by session id. */
+  channelBindingSessions: Record<string, ChannelBindingSession>;
+  channelBindingError: string | null;
+  channelBindingsLoaded: boolean;
+
   openFilesByConversation: Record<string, string[]>;
   openDiffsByConversation: Record<string, string[]>;
   activeTabByConversation: Record<string, string>;
@@ -158,4 +167,9 @@ export interface AppState {
   jumpToSearchHit: (hit: SearchHit) => void;
   clearSearchHighlight: () => void;
   applyEvent: (event: StreamEvent) => void;
+
+  loadChannelBindings: () => Promise<void>;
+  startFeishuBinding: (agentId: string) => Promise<void>;
+  cancelChannelBindingSession: (sessionId: string) => Promise<void>;
+  unbindFeishu: (agentId: string) => Promise<void>;
 }

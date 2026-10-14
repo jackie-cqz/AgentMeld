@@ -1,5 +1,6 @@
 import type { StreamEvent } from "@/shared/types";
 import { applyArtifactEvent } from "@/stores/reducers/artifact-events";
+import { applyChannelEvent } from "@/stores/reducers/channel-events";
 import { applyCompactionEvent } from "@/stores/reducers/compaction-events";
 import { applyDispatchEvent } from "@/stores/reducers/dispatch-events";
 import { applyMessageEvent } from "@/stores/reducers/message-events";
@@ -19,5 +20,6 @@ export function applyStreamEvent(state: StoreDraft, event: StreamEvent) {
   if (applyArtifactEvent(state, event)) return;
   if (applyDispatchEvent(state, event)) return;
   if (applyPendingEvent(state, event)) return;
+  if (applyChannelEvent(state, event)) return;
   applyCompactionEvent(state, event);
 }
