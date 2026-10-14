@@ -4,12 +4,17 @@ import {
   buildQuestionCard,
   decodeCardActionValue,
   handleCardAction,
+  isAuthorisedOperator,
   projectPendingQuestion,
   startChannelInteractions,
   stopChannelInteractionsForTests
 } from "@/server/channels/feishu/interaction";
 import { registerPendingQuestion, clearPendingQuestionsForTests } from "@/server/pending-questions";
-import { createChannelConversation, createConversation } from "@/server/repositories";
+import {
+  createChannelConversation,
+  createConversation,
+  upsertChannelBinding
+} from "@/server/repositories";
 import type { CardActionEvent } from "@larksuite/channel";
 import type { PendingQuestion } from "@/shared/types";
 
@@ -58,6 +63,48 @@ describe("decodeCardActionValue", () => {
     expect(decodeCardActionValue({ kind: "ask_user", pendingId: "", questionIndex: 0, answer: "x" })).toBeNull();
     expect(decodeCardActionValue({ kind: "ask_user", pendingId: "pq_1", questionIndex: 1.5, answer: "x" })).toBeNull();
     expect(decodeCardActionValue({ kind: "ask_user", pendingId: "pq_1", questionIndex: 0, answer: 42 })).toBeNull();
+  });
+});
+
+describe("isAuthorisedOperator", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-channel-authorised-");
+  });
+
+  afterEach(() => {
+    teardown();
+  });
+
+  it("allows the account that bound the app", () => {
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
+      boundByOpenId: "ou_owner", now: 1
+    });
+    expect(isAuthorisedOperator(AGENT, "ou_owner")).toBe(true);
+  });
+
+  it("refuses anyone else", () => {
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
+      boundByOpenId: "ou_owner", now: 1
+    });
+    expect(isAuthorisedOperator(AGENT, "ou_other")).toBe(false);
+    expect(isAuthorisedOperator(AGENT, undefined)).toBe(false);
+  });
+
+  it("fails closed when the owner is not recorded", () => {
+    // Not knowing who owns the app is not a reason to accept everyone.
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
+      boundByOpenId: null, now: 1
+    });
+    expect(isAuthorisedOperator(AGENT, "ou_anyone")).toBe(false);
+  });
+
+  it("refuses an agent that is not bound at all", () => {
+    expect(isAuthorisedOperator("ag_not_bound", "ou_owner")).toBe(false);
   });
 });
 
@@ -121,6 +168,18 @@ describe("handleCardAction", () => {
     stopChannelInteractionsForTests();
     clearPendingQuestionsForTests();
     channelsByAgent.set(AGENT, {});
+
+    // The single-owner model: answers are only taken from the account that
+    // bound the app, which is the open id `click()` uses by default.
+    upsertChannelBinding({
+      id: "cb_pm",
+      agentId: AGENT,
+      channel: "feishu",
+      appId: "cli_pm",
+      appSecret: "s",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
   });
 
   afterEach(() => {
@@ -191,6 +250,36 @@ describe("handleCardAction", () => {
     expect(response).toMatchObject({ toast: { type: "info" } });
   });
 
+  it("refuses an answer from someone other than the owner", async () => {
+    // A group is exactly where people who are not the owner are present. Without
+    // this, anyone who can see the card can answer a question the run is
+    // waiting on.
+    const { pending, pendingId } = ask();
+
+    const response = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_stranger", name: "别人" })
+    );
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    // Still unanswered, and nothing buffered for it under the stranger.
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+  });
+
+  it("refuses a click that carries no operator at all", async () => {
+    const { pendingId } = ask();
+    const response = await handleCardAction(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { messageId: "om", chatId: "oc_1", action: { value: { kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, tag: "button" } } as any
+    );
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+  });
+
   it("ignores a click it cannot attribute to one of its own cards", async () => {
     expect(await handleCardAction(click({ kind: "something_else" }))).toBeUndefined();
     expect(await handleCardAction(click(null))).toBeUndefined();
@@ -215,6 +304,15 @@ describe("projectPendingQuestion", () => {
       now: 1
     });
     channelsByAgent.set(AGENT, {});
+    upsertChannelBinding({
+      id: "cb_pm",
+      agentId: AGENT,
+      channel: "feishu",
+      appId: "cli_pm",
+      appSecret: "s",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
   });
 
   afterEach(() => {

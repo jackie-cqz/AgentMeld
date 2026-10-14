@@ -1,7 +1,7 @@
 import type { CardActionEvent } from "@larksuite/channel";
 import { eventBus } from "@/server/event-bus";
 import { answerQuestion, getPendingQuestion } from "@/server/pending-questions";
-import { getChannelConversationByConversationId } from "@/server/repositories";
+import { getChannelBindingForAgent, getChannelConversationByConversationId } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/connection";
 import type { PendingQuestion } from "@/shared/types";
 
@@ -98,6 +98,25 @@ export function buildQuestionCard(
   };
 }
 
+/**
+ * Whether this person may answer for this agent.
+ *
+ * The single-owner model the rest of the app uses: the account that scanned the
+ * app is the one that speaks for it. Without a check here, anyone who can see
+ * the card can answer a question the run is waiting on — and a group is exactly
+ * where people who are not the owner are present.
+ *
+ * A binding with no recorded owner denies everyone rather than allowing
+ * everyone. That state should not exist, and failing closed is the only safe
+ * reading of "we do not know who owns this".
+ */
+export function isAuthorisedOperator(agentId: string, openId: string | undefined): boolean {
+  if (!openId) return false;
+  const binding = getChannelBindingForAgent(agentId, "feishu");
+  if (!binding?.boundByOpenId) return false;
+  return binding.boundByOpenId === openId;
+}
+
 declare global {
   var __agentMeldChannelAnswers: Map<string, Record<string, string>> | undefined;
   var __agentMeldChannelInteractionStop: (() => void) | undefined;
@@ -112,9 +131,10 @@ function getAnswerBuffer(): Map<string, Record<string, string>> {
  * Take a button click. Returns the card to show in its place, or a toast when
  * the click did not complete the question.
  *
- * The operator's name is recorded as the resolver, because "who approved this"
- * is the question the record exists to answer — and it comes from the platform's
- * callback identity, not from anything the caller can type.
+ * The operator is resolved from the platform's callback identity AND checked
+ * against the account that bound the app, because "who answered" is the question
+ * the record exists to answer. The display name is also recorded, but only ever
+ * alongside — a display name is set by its owner and cannot be an identity.
  */
 export async function handleCardAction(
   event: CardActionEvent
@@ -125,6 +145,10 @@ export async function handleCardAction(
   const entry = getPendingQuestion(value.pendingId);
   if (!entry) {
     return { toast: { type: "info", content: "这个问题已经处理过了。" } };
+  }
+
+  if (!isAuthorisedOperator(entry.question.agentId, event.operator?.openId)) {
+    return { toast: { type: "error", content: "只有绑定这个应用的账号可以回答。" } };
   }
 
   const question = entry.question;
