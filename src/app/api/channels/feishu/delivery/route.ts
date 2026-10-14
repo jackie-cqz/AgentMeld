@@ -1,0 +1,20 @@
+import { ok } from "@/server/api-utils";
+import { getDeliveryHealth } from "@/server/channels/feishu/delivery";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Whether anything the channel sent actually went out.
+ *
+ * This exists because there is nowhere else to ask. A failed send was only a
+ * `console.error`, and the platform cannot be queried for the truth: the scopes
+ * a one-click app is granted cannot read group messages back, so there is no
+ * delivery receipt to consult.
+ *
+ * Rows appear for every conversation an attempt was made for, not only the
+ * failures — "nothing has ever failed" and "nothing has ever been tried" are
+ * different answers, and a list of failures cannot tell them apart.
+ */
+export async function GET() {
+  return ok({ delivery: getDeliveryHealth() });
+}

@@ -10,6 +10,7 @@ import {
 import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/workspace-utils";
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
+import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 
 /**
  * Deliver an artifact into the room as a file.
@@ -147,9 +148,13 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
     return { status: "skipped", reason: "send budget exhausted" };
   }
 
-  const sent = await channel.send(channelConversation.chatId, {
-    file: { source: file.content, fileName: file.name }
-  });
+  const sent = await deliverSend<{ messageId: string }>(
+    channel,
+    artifact.conversationId,
+    agentId,
+    channelConversation.chatId,
+    { file: { source: file.content, fileName: file.name } }
+  );
   recordSend(artifact.conversationId, now);
   delivered.add(artifact.id);
   console.info(
