@@ -11,6 +11,7 @@ import {
   type FactDefinition,
 } from "@/shared/builtin-fact-definitions";
 import type { EvidenceTrustLevel } from "@/shared/evidence-types";
+import { newFactId } from "@/shared/ids";
 import type {
   CandidateFactUpdate,
   CandidateFactDefinition,
@@ -246,7 +247,11 @@ export function resolveFacts(
 
       // Insert new fact with validated/normalized value
       const finalValueJson = JSON.stringify(finalValue);
-      const factId = `fact_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}_${now}`;
+      // The id must not be derived from the timestamp alone: two candidates that
+      // resolve the same canonical key within the same millisecond (or in two
+      // different conversations) would otherwise collide on the primary key and
+      // abort the whole resolution transaction.
+      const factId = newFactId();
       const trustLevel: EvidenceTrustLevel =
         sourceType === "evidence" ? "verified" :
         sourceType === "user_answer" ? "authoritative" : "reported";
@@ -470,7 +475,8 @@ export function approveDefinition(
   }
 
   const finalValue = validation.normalized ?? value;
-  const factId = `fact_${canonicalKey.replace(/[^a-zA-Z0-9]/g, "_")}_${now}`;
+  // Same reasoning as in resolveFacts: never key the row on the timestamp alone.
+  const factId = newFactId();
 
   const run = db.transaction
     ? db.transaction(() => applyApproval())
