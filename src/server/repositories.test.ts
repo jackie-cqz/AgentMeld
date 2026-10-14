@@ -12,8 +12,11 @@ import {
   createConversation,
   createMessage,
   createRun,
+  getChannelBindingForAgent,
+  getChannelBindingSecret,
   getMessage,
-  persistConductorTask
+  persistConductorTask,
+  upsertChannelBinding
 } from "@/server/repositories";
 import { setupTestDatabase } from "@/test/test-database";
 
@@ -208,6 +211,65 @@ describe("message origin", () => {
         .prepare("SELECT origin FROM messages WHERE id = ?")
         .get("msg_bogus") as { origin: string };
       expect(row.origin).toBe("nonsense");
+    } finally {
+      teardown();
+    }
+  });
+});
+
+describe("channel bindings", () => {
+  it("stores the app secret but never returns it on a binding", () => {
+    // mapChannelBinding is the boundary that keeps the secret inside the
+    // server. Pinned directly so widening its return type fails here.
+    const teardown = setupTestDatabase("agentmeld-repo-binding-");
+    try {
+      const now = Date.now();
+      const binding = upsertChannelBinding({
+        id: "cb_test",
+        agentId: "ag_pm",
+        channel: "feishu",
+        appId: "cli_stored",
+        appSecret: "top_secret_value",
+        tenantBrand: "feishu",
+        botOpenId: "ou_bot",
+        boundByOpenId: "ou_owner",
+        now
+      });
+
+      expect(binding.appId).toBe("cli_stored");
+      expect(binding.botOpenId).toBe("ou_bot");
+      expect("appSecret" in binding).toBe(false);
+      expect(JSON.stringify(binding)).not.toContain("top_secret_value");
+      expect(Object.keys(binding)).not.toContain("appSecret");
+
+      // It is nevertheless persisted, and readable only through the one accessor.
+      expect(getChannelBindingSecret("cb_test")).toBe("top_secret_value");
+    } finally {
+      teardown();
+    }
+  });
+
+  it("replaces the binding on re-scan instead of accumulating rows", () => {
+    const teardown = setupTestDatabase("agentmeld-repo-binding-");
+    try {
+      const now = Date.now();
+      upsertChannelBinding({
+        id: "cb_first", agentId: "ag_pm", channel: "feishu",
+        appId: "cli_first", appSecret: "secret_one", now
+      });
+      upsertChannelBinding({
+        id: "cb_second", agentId: "ag_pm", channel: "feishu",
+        appId: "cli_second", appSecret: "secret_two", now: now + 1
+      });
+
+      const binding = getChannelBindingForAgent("ag_pm", "feishu");
+      expect(binding?.appId).toBe("cli_second");
+      expect(getChannelBindingSecret(binding!.id)).toBe("secret_two");
+
+      const count = getDatabase()
+        .prepare("SELECT COUNT(*) AS count FROM channel_bindings WHERE agent_id = ?")
+        .get("ag_pm") as { count: number };
+      expect(count.count).toBe(1);
     } finally {
       teardown();
     }

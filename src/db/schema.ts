@@ -532,3 +532,33 @@ export const conversationFactSources = sqliteTable(
     uniqueIndex("idx_conversation_fact_sources_unique").on(table.factId, table.sourceType, table.sourceId)
   ]
 );
+
+// ── Channel bindings ───────────────────────────────────────────────────────
+
+/**
+ * One agent speaking through one external app identity. `appSecret` lives here
+ * and only here: no API returns it, and `mapChannelBinding` deliberately drops
+ * it so the in-memory `ChannelBinding` type cannot carry it out of the server.
+ */
+export const channelBindings = sqliteTable(
+  "channel_bindings",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull(),
+    appId: text("app_id").notNull(),
+    appSecret: text("app_secret").notNull(),
+    tenantBrand: text("tenant_brand"),
+    botOpenId: text("bot_open_id"),
+    boundByOpenId: text("bound_by_open_id"),
+    chatId: text("chat_id"),
+    conversationId: text("conversation_id"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull()
+  },
+  (table) => [
+    uniqueIndex("idx_channel_bindings_agent_channel").on(table.agentId, table.channel)
+  ]
+);

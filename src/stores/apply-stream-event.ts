@@ -1,5 +1,6 @@
 import type { StreamEvent } from "@/shared/types";
 import { applyArtifactEvent } from "@/stores/reducers/artifact-events";
+import { applyChannelEvent } from "@/stores/reducers/channel-events";
 import { applyCompactionEvent } from "@/stores/reducers/compaction-events";
 import { applyDispatchEvent } from "@/stores/reducers/dispatch-events";
 import { applyMessageEvent } from "@/stores/reducers/message-events";
@@ -9,12 +10,16 @@ import { applyToolEvent } from "@/stores/reducers/tool-events";
 import { ensureConversationBuckets, type StoreDraft } from "@/stores/store-helpers";
 
 export function applyStreamEvent(state: StoreDraft, event: StreamEvent) {
-  ensureConversationBuckets(state, event.conversationId);
+  // Channel-binding events are not conversation-scoped and carry an empty id.
+  // Creating buckets for "" would leave seven permanent empty arrays for a
+  // conversation that can never exist, so only real ids get buckets.
+  if (event.conversationId) ensureConversationBuckets(state, event.conversationId);
   if (applyRunEvent(state, event)) return;
   if (applyMessageEvent(state, event)) return;
   if (applyToolEvent(state, event)) return;
   if (applyArtifactEvent(state, event)) return;
   if (applyDispatchEvent(state, event)) return;
   if (applyPendingEvent(state, event)) return;
+  if (applyChannelEvent(state, event)) return;
   applyCompactionEvent(state, event);
 }

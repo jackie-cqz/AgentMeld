@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/stores/app-store";
+import { mergeSession } from "@/stores/reducers/channel-events";
 import type { AgentRun, Artifact, Message, PendingQuestion } from "@/shared/types";
 
 const conversationId = "conv_123456789abc";
@@ -51,6 +52,10 @@ beforeEach(() => {
     openFilesByConversation: {},
     openDiffsByConversation: {},
     activeTabByConversation: {},
+    channelBindings: {},
+    channelBindingSessions: {},
+    channelBindingError: null,
+    channelBindingsLoaded: false,
     replyTargetByConversation: {},
     pendingAttachmentsByConversation: {},
     fileRevisionByConversation: {},
@@ -564,6 +569,393 @@ describe("app-store bootstrap and UI state", () => {
     expect(useAppStore.getState().activeTabByConversation[conversationId]).toBe("file:src/app.ts");
   });
 });
+
+describe("non-conversation events", () => {
+  it("does not create conversation buckets for an event with an empty conversation id", () => {
+    // Channel-binding events are not conversation-scoped. Bucketing "" would
+    // leave seven permanent empty arrays for a conversation that cannot exist.
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 1,
+      sessionId: "cbs_test",
+      agentId: "ag_mock_builder",
+      status: "succeeded",
+      appId: "cli_test"
+    });
+
+    const state = useAppStore.getState();
+    expect(state.messageIdsByConversation[""]).toBeUndefined();
+    expect(state.runIdsByConversation[""]).toBeUndefined();
+    expect(state.artifactIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingWriteIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingBashCommandIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingDispatchPlanIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingQuestionIdsByConversation[""]).toBeUndefined();
+  });
+});
+
+describe("channel binding state", () => {
+  it("upserts a session from a stream event", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 1,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "awaiting_scan"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_1"];
+    expect(session?.agentId).toBe("ag_1");
+    expect(session?.status).toBe("awaiting_scan");
+  });
+
+  it("drops the launcher URL once the attempt settles", () => {
+    // The event never carries the URL, so a settled session must lose the one
+    // the start response supplied — otherwise the UI keeps showing a spent QR.
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1",
+        agentId: "ag_1",
+        status: "awaiting_scan",
+        expiresAt: 9999,
+        qrUrl: "https://example.test/launcher"
+      };
+    });
+
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 2,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_1",
+      appId: "cli_1"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_1"];
+    expect(session?.status).toBe("succeeded");
+    expect(session?.qrUrl).toBeUndefined();
+    // The expiry is not carried by the event, so the known one is kept.
+    expect(session?.expiresAt).toBe(9999);
+  });
+
+  it("keeps the launcher URL while the attempt is still waiting", () => {
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1",
+        agentId: "ag_1",
+        status: "awaiting_scan",
+        expiresAt: 9999,
+        qrUrl: "https://example.test/launcher"
+      };
+    });
+
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 2,
+      sessionId: "cbs_1",
+      agentId: "ag_1",
+      status: "awaiting_scan"
+    });
+
+    expect(useAppStore.getState().channelBindingSessions["cbs_1"]?.qrUrl).toBe(
+      "https://example.test/launcher"
+    );
+  });
+
+  it("carries the failure message through to the session", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 3,
+      sessionId: "cbs_2",
+      agentId: "ag_1",
+      status: "failed",
+      error: "access_denied"
+    });
+
+    expect(useAppStore.getState().channelBindingSessions["cbs_2"]?.error).toBe("access_denied");
+  });
+
+  it("records the app id and row id a success event carries", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 4,
+      sessionId: "cbs_3",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_3",
+      appId: "cli_3"
+    });
+
+    const session = useAppStore.getState().channelBindingSessions["cbs_3"];
+    expect(session?.appId).toBe("cli_3");
+    expect(session?.bindingId).toBe("cb_3");
+  });
+});
+
+describe("channel binding actions", () => {
+  const originalFetch = globalThis.fetch;
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("keeps the failure message and does not refresh when the start fails for another reason", async () => {
+    // The refresh used to run unconditionally and its success path cleared the
+    // error, so a 502 reached the user as no message at all.
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(502, { error: "upstream exploded", sessionId: "cbs_9" });
+    }) as typeof fetch;
+
+    await expect(useAppStore.getState().startFeishuBinding("ag_1")).rejects.toThrow();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindingError).toContain("upstream exploded");
+    expect(urls).toHaveLength(1);
+  });
+
+  it("refreshes on a conflict so the waiting QR code becomes visible", async () => {
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      if (call === 1) return json(409, { error: "already in progress", sessionId: "cbs_9" });
+      return json(200, {
+        data: {
+          bindings: [],
+          sessions: [
+            {
+              id: "cbs_9",
+              agentId: "ag_1",
+              status: "awaiting_scan",
+              expiresAt: 5000,
+              qrUrl: "https://open.feishu.cn/page/launcher?user_code=WAITING"
+            }
+          ]
+        }
+      });
+    }) as typeof fetch;
+
+    await expect(useAppStore.getState().startFeishuBinding("ag_1")).rejects.toThrow();
+
+    const state = useAppStore.getState();
+    // The refresh reveals the attempt that is already waiting — including its
+    // URL, which is the whole point: without it the dialog has no QR to show.
+    expect(state.channelBindingSessions["cbs_9"]?.qrUrl).toContain("user_code=WAITING");
+    // …and the conflict is still surfaced rather than being cleared by it.
+    expect(state.channelBindingError).toContain("already in progress");
+  });
+
+  it("loads bindings and sessions and clears the previous error", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindingError = "stale";
+    });
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          bindings: [
+            {
+              id: "cb_1",
+              agentId: "ag_1",
+              channel: "feishu",
+              appId: "cli_1",
+              tenantBrand: "feishu",
+              botOpenId: null,
+              boundByOpenId: null,
+              chatId: null,
+              conversationId: null,
+              createdAt: 1,
+              updatedAt: 1
+            }
+          ],
+          sessions: []
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindings["ag_1"]?.appId).toBe("cli_1");
+    expect(state.channelBindingError).toBeNull();
+    expect(state.channelBindingsLoaded).toBe(true);
+  });
+
+  it("unbinds using the row id carried by a success event, without a prior load", async () => {
+    // The button used to do nothing at all when the local map was stale: no
+    // request, no error, no feedback.
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 5,
+      sessionId: "cbs_5",
+      agentId: "ag_1",
+      status: "succeeded",
+      bindingId: "cb_5",
+      appId: "cli_5"
+    });
+
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(200, { data: { removed: "cb_5", appLeftBehind: "cli_5" } });
+    }) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    expect(urls[0]).toContain("/api/channels/feishu/bindings/cb_5");
+    // The binding is gone, so nothing should still render that agent as bound.
+    expect(useAppStore.getState().channelBindingSessions["cbs_5"]).toBeUndefined();
+  });
+
+  it("keeps the same agent's live attempt when unbinding, and drops its finished one", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindings["ag_1"] = {
+        id: "cb_1", agentId: "ag_1", channel: "feishu", appId: "cli_1",
+        tenantBrand: null, botOpenId: null, boundByOpenId: null,
+        chatId: null, conversationId: null, createdAt: 1, updatedAt: 1
+      };
+      // Both belong to the agent being unbound, so a blanket delete of that
+      // agent's sessions would take the live attempt with it.
+      state.channelBindingSessions["cbs_live"] = sessionFor("ag_1", "awaiting_scan");
+      state.channelBindingSessions["cbs_done"] = sessionFor("ag_1", "succeeded");
+    });
+    globalThis.fetch = (async () => json(200, { data: { removed: "cb_1", appLeftBehind: "cli_1" } })) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    const state = useAppStore.getState();
+    // The terminal session described a binding that no longer exists…
+    expect(state.channelBindingSessions["cbs_done"]).toBeUndefined();
+    // …but a live attempt must survive, or it becomes invisible and
+    // uncancellable from this client.
+    expect(state.channelBindingSessions["cbs_live"]).toBeDefined();
+  });
+
+  it("deletes the row a success event named, not a stale local row", async () => {
+    useAppStore.setState((state) => {
+      state.channelBindings["ag_1"] = {
+        id: "cb_old", agentId: "ag_1", channel: "feishu", appId: "cli_old",
+        tenantBrand: null, botOpenId: null, boundByOpenId: null,
+        chatId: null, conversationId: null, createdAt: 1, updatedAt: 1
+      };
+      state.channelBindingSessions["cbs_new"] = {
+        id: "cbs_new", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_new"
+      };
+    });
+
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return json(200, { data: { removed: "cb_new", appLeftBehind: "cli_new" } });
+    }) as typeof fetch;
+
+    await useAppStore.getState().unbindFeishu("ag_1");
+
+    // The stale row would delete a binding that is already gone and leave the
+    // current one in place.
+    expect(urls[0]).toContain("/api/channels/feishu/bindings/cb_new");
+  });
+
+  it("merges a list snapshot into the sessions already held", async () => {
+    // The pure merge is tested directly, but the wiring is what decides whether
+    // it is used at all — replacing it with a blind copy must fail something.
+    useAppStore.setState((state) => {
+      state.channelBindingSessions["cbs_1"] = {
+        id: "cbs_1", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_1"
+      };
+      state.channelBindingSessions["cbs_2"] = {
+        id: "cbs_2", agentId: "ag_2", status: "awaiting_scan", expiresAt: 10,
+        qrUrl: "https://open.feishu.cn/page/launcher?user_code=KEEP"
+      };
+    });
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          bindings: [],
+          sessions: [
+            // A snapshot taken before cbs_1 finished.
+            { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 },
+            // …and one for cbs_2 that carries no URL.
+            { id: "cbs_2", agentId: "ag_2", status: "awaiting_scan", expiresAt: 20 }
+          ]
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings();
+
+    const state = useAppStore.getState();
+    expect(state.channelBindingSessions["cbs_1"]?.status).toBe("succeeded");
+    expect(state.channelBindingSessions["cbs_2"]?.qrUrl).toContain("user_code=KEEP");
+  });
+
+  it("does not clear a real error when a passive refresh succeeds", async () => {
+    // The refetch effect runs mid-flow; without this flag it erased a message
+    // from an action that had just failed.
+    useAppStore.setState((state) => {
+      state.channelBindingError = "解绑失败：404";
+    });
+    globalThis.fetch = (async () => json(200, { data: { bindings: [], sessions: [] } })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelBindings({ preserveError: true });
+
+    expect(useAppStore.getState().channelBindingError).toBe("解绑失败：404");
+    // An explicit load is still allowed to clear it.
+    await useAppStore.getState().loadChannelBindings();
+    expect(useAppStore.getState().channelBindingError).toBeNull();
+  });
+});
+
+describe("channel session merging", () => {
+  it("does not let a pre-success snapshot undo a terminal status", () => {
+    // The list and the event stream race; a snapshot taken before the attempt
+    // finished used to send a succeeded row back to "waiting to scan".
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "succeeded", expiresAt: 10, bindingId: "cb_1" },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 }
+    );
+    expect(merged.status).toBe("succeeded");
+    expect(merged.bindingId).toBe("cb_1");
+  });
+
+  it("does not drop a launcher URL the client already holds", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 10, qrUrl: "https://x/y" },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 20 }
+    );
+    expect(merged.qrUrl).toBe("https://x/y");
+    expect(merged.expiresAt).toBe(20);
+  });
+
+  it("lets a genuinely terminal snapshot win over an older live one", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 10, qrUrl: "https://x/y" },
+      { id: "cbs_1", agentId: "ag_1", status: "failed", expiresAt: 10, error: "expired" }
+    );
+    expect(merged.status).toBe("failed");
+    expect(merged.error).toBe("expired");
+  });
+
+  it("keeps a known expiry when the snapshot does not report one", () => {
+    const merged = mergeSession(
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 500 },
+      { id: "cbs_1", agentId: "ag_1", status: "awaiting_scan", expiresAt: 0 }
+    );
+    expect(merged.expiresAt).toBe(500);
+  });
+});
+
+function sessionFor(agentId: string, status: "awaiting_scan" | "succeeded") {
+  return { id: `cbs_${agentId}_${status}`, agentId, status, expiresAt: 1000 };
+}
 
 function createArtifact(): Artifact {
   return {

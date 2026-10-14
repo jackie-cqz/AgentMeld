@@ -27,6 +27,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
     "@anthropic-ai/sdk": "latest",
+    "@larksuite/channel": "^0.7.1",
     "@openai/codex-sdk": "latest",
     "@tailwindcss/postcss": "latest",
     "better-sqlite3": "latest",
@@ -38,6 +39,7 @@
     "nanoid": "latest",
     "next": "16.2.6",
     "openai": "latest",
+    "qrcode.react": "^4.2.0",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "latest",

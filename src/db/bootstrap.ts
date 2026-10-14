@@ -378,6 +378,22 @@ export function ensureDatabase() {
       created_at INTEGER NOT NULL,
       UNIQUE(fact_id, source_type, source_id)
     );
+
+    CREATE TABLE IF NOT EXISTS channel_bindings (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      app_secret TEXT NOT NULL,
+      tenant_brand TEXT,
+      bot_open_id TEXT,
+      bound_by_open_id TEXT,
+      chat_id TEXT,
+      conversation_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(agent_id, channel)
+    );
   `);
 
   migrateLegacyTables();

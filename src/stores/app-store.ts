@@ -2,8 +2,9 @@
 
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { requestJson } from "@/lib/request-json";
+import { ApiRequestError, requestJson } from "@/lib/request-json";
 import { applyStreamEvent } from "@/stores/apply-stream-event";
+import { mergeSessions } from "@/stores/reducers/channel-events";
 import { normalizeBootstrap } from "@/stores/normalize-bootstrap";
 import { ensureConversationBuckets } from "@/stores/store-helpers";
 import { RIGHT_PANEL_WIDTH_STORAGE_KEY } from "@/shared/constants";
@@ -15,7 +16,7 @@ import type {
   SearchState,
   SidebarTab
 } from "@/stores/store-types";
-import type { Message, SearchHit } from "@/shared/types";
+import type { ChannelBinding, ChannelBindingSession, Message, SearchHit } from "@/shared/types";
 
 export type { AppState, CompactionState, DispatchState, SearchState, SidebarTab };
 
@@ -23,7 +24,7 @@ const DEFAULT_ARTIFACT_PANEL_WIDTH = 640;
 let searchRequestId = 0;
 
 export const useAppStore = create<AppState>()(
-  immer((set) => ({
+  immer((set, get) => ({
     agents: {},
     agentIds: [],
     conversations: {},
@@ -45,6 +46,10 @@ export const useAppStore = create<AppState>()(
     dispatchesByRunId: {},
     compactionByConversation: {},
     searchState: createDefaultSearchState(),
+    channelBindings: {},
+    channelBindingSessions: {},
+    channelBindingError: null,
+    channelBindingsLoaded: false,
     openFilesByConversation: {},
     openDiffsByConversation: {},
     activeTabByConversation: {},
@@ -457,6 +462,127 @@ export const useAppStore = create<AppState>()(
       });
     },
 
+    async loadChannelBindings(options) {
+      try {
+        const payload = await requestJson<{
+          data: { bindings: ChannelBinding[]; sessions: ChannelBindingSession[] };
+        }>("/api/channels/feishu/bindings", { cache: "no-store" });
+
+        set((state) => {
+          state.channelBindings = Object.fromEntries(
+            payload.data.bindings.map((binding) => [binding.agentId, binding])
+          );
+          // Merge rather than replace: this response and the event stream race,
+          // and a snapshot taken before an attempt finished would otherwise undo
+          // a terminal status or drop a launcher URL the dialog still needs.
+          state.channelBindingSessions = mergeSessions(
+            state.channelBindingSessions,
+            payload.data.sessions
+          );
+          if (!options?.preserveError) state.channelBindingError = null;
+          state.channelBindingsLoaded = true;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+          state.channelBindingsLoaded = true;
+        });
+        throw error;
+      }
+    },
+
+    async startFeishuBinding(agentId) {
+      try {
+        const payload = await requestJson<{ data: { session: ChannelBindingSession } }>(
+          "/api/channels/feishu/bindings",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ agentId })
+          }
+        );
+        set((state) => {
+          state.channelBindingSessions[payload.data.session.id] = payload.data.session;
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        // Only a conflict means "an attempt is already running for this agent",
+        // and that attempt's id exists only on the server — so refresh to reveal
+        // the QR code that is already waiting. Every other failure is reported
+        // as it is; refreshing on those was both pointless and harmful.
+        if (error instanceof ApiRequestError && error.status === 409) {
+          await get().loadChannelBindings().catch(() => {});
+        }
+        // Set the message AFTER any refresh. A successful refresh clears the
+        // error, which previously erased the very failure the user needed to
+        // see — a 502 came back with no message at all.
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        throw error;
+      }
+    },
+
+    async cancelChannelBindingSession(sessionId) {
+      try {
+        const payload = await requestJson<{ data: { session: ChannelBindingSession } }>(
+          `/api/channels/feishu/bindings/sessions/${sessionId}/cancel`,
+          { method: "POST" }
+        );
+        set((state) => {
+          state.channelBindingSessions[payload.data.session.id] = payload.data.session;
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        throw error;
+      }
+    },
+
+    async unbindFeishu(agentId) {
+      const local = get().channelBindings[agentId];
+      const fromSession = Object.values(get().channelBindingSessions).find(
+        (session) => session.agentId === agentId && session.bindingId
+      )?.bindingId;
+      // The session's id comes from the most recent success event, so it is
+      // newer than a list row. Preferring the row instead would delete a stale
+      // binding — the wrong one, after a rebind — and leave the current one in
+      // place with a 404 to show for it.
+      const bindingId = fromSession ?? local?.id;
+      if (!bindingId) {
+        // Nothing to delete locally; re-read in case this client is simply out
+        // of date rather than the agent being genuinely unbound.
+        await get().loadChannelBindings({ preserveError: true }).catch(() => {});
+        return;
+      }
+      try {
+        await requestJson(`/api/channels/feishu/bindings/${bindingId}`, { method: "DELETE" });
+        set((state) => {
+          delete state.channelBindings[agentId];
+          // Drop only the *terminal* sessions: they describe a binding that no
+          // longer exists. An attempt still awaiting a scan is a different, live
+          // attempt, and removing it here would make it invisible and
+          // uncancellable from this client.
+          for (const [id, session] of Object.entries(state.channelBindingSessions)) {
+            if (session.agentId === agentId && session.status !== "awaiting_scan") {
+              delete state.channelBindingSessions[id];
+            }
+          }
+          state.channelBindingError = null;
+        });
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        // A 404 means the row was already gone; re-read so the UI stops showing
+        // it as bound instead of leaving the user with a dead button.
+        await get().loadChannelBindings({ preserveError: true }).catch(() => {});
+        throw error;
+      }
+    },
+
     applyEvent(event) {
       if (event.type === "heartbeat") {
         set((state) => {
@@ -470,6 +596,10 @@ export const useAppStore = create<AppState>()(
     }
   }))
 );
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : "请求失败";
+}
 
 function createDefaultSearchState(): SearchState {
   return {
