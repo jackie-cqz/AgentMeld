@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { badRequest, ok } from "@/server/api-utils";
-import { listBindingSessions, startFeishuBinding } from "@/server/channels/feishu/binding";
-import { listChannelBindings } from "@/server/repositories";
+import {
+  listBindingSessions,
+  listFeishuBindings,
+  startFeishuBinding
+} from "@/server/channels/feishu/binding";
 
 export const dynamic = "force-dynamic";
 
@@ -41,5 +44,7 @@ export async function POST(request: Request) {
 
 /** Stored bindings (never containing an app secret) plus any in-flight sessions. */
 export async function GET() {
-  return ok({ bindings: listChannelBindings(), sessions: listBindingSessions() });
+  // Through the service, which bootstraps. Reaching the repository from here
+  // used to answer 500 on a database that had not been bootstrapped yet.
+  return ok({ bindings: listFeishuBindings(), sessions: listBindingSessions() });
 }

@@ -1,3 +1,4 @@
+import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import type { AppSettings, CompanionMode } from "@/shared/types";
 
@@ -11,6 +12,10 @@ export interface ApiKeySources {
 }
 
 export function getSettings(): AppSettings {
+  // Services own bootstrapping in this repository. Reaching the database
+  // directly here answered 500 with "no such table: app_settings" on a database
+  // that had not been bootstrapped yet.
+  ensureDatabase();
   const db = getDatabase();
   const row = db.prepare("SELECT * FROM app_settings WHERE id = 'singleton'").get() as Record<string, unknown> | undefined;
 
