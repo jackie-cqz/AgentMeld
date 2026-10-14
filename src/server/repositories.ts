@@ -3,11 +3,13 @@ import {
   type AgentRow,
   type AgentRunRow,
   type ArtifactRow,
+  type ChannelBindingRow,
   type ConversationRow,
   type MessageRow,
   type WorkspaceRow,
   mapAgent,
   mapArtifact,
+  mapChannelBinding,
   mapConversation,
   mapMessage,
   mapRun,
@@ -20,6 +22,7 @@ import type {
   Artifact,
   ArtifactContent,
   ArtifactType,
+  ChannelBinding,
   Conversation,
   ConversationMode,
   FsWriteApprovalMode,
@@ -674,4 +677,90 @@ export function listConductorConflicts(conductorRunId: string): Array<Record<str
   return getDatabase().prepare(
     "SELECT * FROM conductor_conflicts WHERE conductor_run_id = ?"
   ).all(conductorRunId) as Array<Record<string, unknown>>;
+}
+
+// ── Channel bindings ───────────────────────────────────────────────────────
+
+/**
+ * Create or replace the binding for one agent on one channel, so a re-scan
+ * updates the identity instead of accumulating rows.
+ */
+export function upsertChannelBinding(input: {
+  id: string;
+  agentId: string;
+  channel: ChannelBinding["channel"];
+  appId: string;
+  appSecret: string;
+  tenantBrand?: string | null;
+  botOpenId?: string | null;
+  boundByOpenId?: string | null;
+  now: number;
+}): ChannelBinding {
+  getDatabase()
+    .prepare(`
+      INSERT INTO channel_bindings (
+        id, agent_id, channel, app_id, app_secret, tenant_brand,
+        bot_open_id, bound_by_open_id, chat_id, conversation_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+      ON CONFLICT(agent_id, channel) DO UPDATE SET
+        app_id = excluded.app_id,
+        app_secret = excluded.app_secret,
+        tenant_brand = excluded.tenant_brand,
+        bot_open_id = excluded.bot_open_id,
+        bound_by_open_id = excluded.bound_by_open_id,
+        updated_at = excluded.updated_at
+    `)
+    .run(
+      input.id,
+      input.agentId,
+      input.channel,
+      input.appId,
+      input.appSecret,
+      input.tenantBrand ?? null,
+      input.botOpenId ?? null,
+      input.boundByOpenId ?? null,
+      input.now,
+      input.now
+    );
+
+  const binding = getChannelBindingForAgent(input.agentId, input.channel);
+  if (!binding) throw new Error("Channel binding insert failed.");
+  return binding;
+}
+
+/** Bindings with the app secret already removed by `mapChannelBinding`. */
+export function listChannelBindings(): ChannelBinding[] {
+  const rows = getDatabase()
+    .prepare("SELECT * FROM channel_bindings ORDER BY created_at ASC")
+    .all() as ChannelBindingRow[];
+  return rows.map(mapChannelBinding);
+}
+
+export function getChannelBindingForAgent(
+  agentId: string,
+  channel: ChannelBinding["channel"]
+): ChannelBinding | undefined {
+  const row = getDatabase()
+    .prepare("SELECT * FROM channel_bindings WHERE agent_id = ? AND channel = ?")
+    .get(agentId, channel) as ChannelBindingRow | undefined;
+  return row ? mapChannelBinding(row) : undefined;
+}
+
+export function deleteChannelBinding(id: string): boolean {
+  const result = getDatabase()
+    .prepare("DELETE FROM channel_bindings WHERE id = ?")
+    .run(id) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/**
+ * The only way to read an app secret back. Kept as a narrow, explicitly named
+ * accessor so the secret cannot ride along on an ordinary binding read — and so
+ * a grep for `app_secret` finds exactly one intended caller.
+ */
+export function getChannelBindingSecret(id: string): string | undefined {
+  const row = getDatabase()
+    .prepare("SELECT app_secret FROM channel_bindings WHERE id = ?")
+    .get(id) as { app_secret: string } | undefined;
+  return row?.app_secret;
 }

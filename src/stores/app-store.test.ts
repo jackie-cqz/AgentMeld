@@ -565,6 +565,31 @@ describe("app-store bootstrap and UI state", () => {
   });
 });
 
+describe("non-conversation events", () => {
+  it("does not create conversation buckets for an event with an empty conversation id", () => {
+    // Channel-binding events are not conversation-scoped. Bucketing "" would
+    // leave seven permanent empty arrays for a conversation that cannot exist.
+    useAppStore.getState().applyEvent({
+      type: "channel.binding.updated",
+      conversationId: "",
+      timestamp: 1,
+      sessionId: "cbs_test",
+      agentId: "ag_mock_builder",
+      status: "succeeded",
+      appId: "cli_test"
+    });
+
+    const state = useAppStore.getState();
+    expect(state.messageIdsByConversation[""]).toBeUndefined();
+    expect(state.runIdsByConversation[""]).toBeUndefined();
+    expect(state.artifactIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingWriteIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingBashCommandIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingDispatchPlanIdsByConversation[""]).toBeUndefined();
+    expect(state.pendingQuestionIdsByConversation[""]).toBeUndefined();
+  });
+});
+
 function createArtifact(): Artifact {
   return {
     id: "art_123456789abc",

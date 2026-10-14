@@ -26,6 +26,45 @@ export type WorkspaceMode = "sandbox" | "local";
 export type AttachmentKind = "image" | "file";
 export type CompanionMode = "off" | "lan" | "tailnet";
 
+/** Lifecycle of an in-flight "scan to bind" attempt. */
+export type ChannelBindingStatus = "awaiting_scan" | "succeeded" | "failed" | "cancelled";
+
+/**
+ * A stored channel binding: one agent speaking through one external app
+ * identity. Deliberately does NOT carry the app secret — that value never
+ * leaves the server, and only `getChannelBindingSecret` in repositories.ts can
+ * read it.
+ */
+export interface ChannelBinding {
+  id: string;
+  agentId: string;
+  channel: "feishu";
+  appId: string;
+  tenantBrand: string | null;
+  botOpenId: string | null;
+  boundByOpenId: string | null;
+  chatId: string | null;
+  conversationId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * An in-flight binding attempt. The QR/launcher URL is present only on the
+ * response that starts the attempt; it is deliberately kept out of the
+ * broadcast event, because whoever holds that URL first can create the app.
+ */
+export interface ChannelBindingSession {
+  id: string;
+  agentId: string;
+  status: ChannelBindingStatus;
+  /** When the launcher URL stops being usable, from the SDK's own `expireIn`. */
+  expiresAt: number;
+  qrUrl?: string;
+  error?: string;
+}
+
+
 export interface DeployStatusRecord {
   id: string;
   artifactId: string;
@@ -522,4 +561,16 @@ export type StreamEvent =
       attemptId: string;
       childRunId: string;
       evidenceCount: number;
+    })
+  // ── Channel bindings ─────────────────────────────────────────────────────
+  | (BaseEvent & {
+      type: "channel.binding.updated";
+      /** The attempt. Always present. */
+      sessionId: string;
+      agentId: string;
+      status: ChannelBindingStatus;
+      /** The persisted row, present only once the scan succeeded. */
+      bindingId?: string;
+      appId?: string;
+      error?: string;
     });

@@ -61,3 +61,11 @@ export function newVerdictId() {
 export function newFactId() {
   return `fact_${nanoid(ID_SIZE)}`;
 }
+
+export function newChannelBindingId() {
+  return `cb_${nanoid(ID_SIZE)}`;
+}
+
+export function newChannelBindingSessionId() {
+  return `cbs_${nanoid(ID_SIZE)}`;
+}

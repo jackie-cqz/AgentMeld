@@ -9,7 +9,10 @@ import { applyToolEvent } from "@/stores/reducers/tool-events";
 import { ensureConversationBuckets, type StoreDraft } from "@/stores/store-helpers";
 
 export function applyStreamEvent(state: StoreDraft, event: StreamEvent) {
-  ensureConversationBuckets(state, event.conversationId);
+  // Channel-binding events are not conversation-scoped and carry an empty id.
+  // Creating buckets for "" would leave seven permanent empty arrays for a
+  // conversation that can never exist, so only real ids get buckets.
+  if (event.conversationId) ensureConversationBuckets(state, event.conversationId);
   if (applyRunEvent(state, event)) return;
   if (applyMessageEvent(state, event)) return;
   if (applyToolEvent(state, event)) return;

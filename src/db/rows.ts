@@ -5,6 +5,7 @@ import type {
   Artifact,
   ArtifactContent,
   Attachment,
+  ChannelBinding,
   Conversation,
   ConversationContextSummary,
   Message,
@@ -312,6 +313,43 @@ export function mapAppSettings(row: AppSettingsRow): AppSettings {
     deploymentPublishEnabled: row.deployment_publish_enabled === 1,
     deploymentPublishDir: row.deployment_publish_dir,
     deploymentPublicBaseUrl: row.deployment_public_base_url,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export interface ChannelBindingRow {
+  id: string;
+  agent_id: string;
+  channel: string;
+  app_id: string;
+  /** Present on the row, and deliberately absent from `ChannelBinding`. */
+  app_secret: string;
+  tenant_brand: string | null;
+  bot_open_id: string | null;
+  bound_by_open_id: string | null;
+  chat_id: string | null;
+  conversation_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Map a binding row for use outside the server. The app secret is dropped
+ * here, on purpose: this is the boundary that keeps it from reaching a client,
+ * so never widen this function's return type to include it.
+ */
+export function mapChannelBinding(row: ChannelBindingRow): ChannelBinding {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    channel: row.channel as ChannelBinding["channel"],
+    appId: row.app_id,
+    tenantBrand: row.tenant_brand,
+    botOpenId: row.bot_open_id,
+    boundByOpenId: row.bound_by_open_id,
+    chatId: row.chat_id,
+    conversationId: row.conversation_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

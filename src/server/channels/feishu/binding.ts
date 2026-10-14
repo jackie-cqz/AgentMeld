@@ -1,0 +1,304 @@
+import { registerApp, type QRCodeInfo, type RegisterAppResult } from "@larksuite/channel";
+import { ensureDatabase } from "@/db/bootstrap";
+import { eventBus } from "@/server/event-bus";
+import {
+  deleteChannelBinding,
+  getAgent,
+  getChannelBindingForAgent,
+  upsertChannelBinding
+} from "@/server/repositories";
+import { newChannelBindingId, newChannelBindingSessionId } from "@/shared/ids";
+import type { ChannelBinding, ChannelBindingSession, ChannelBindingStatus } from "@/shared/types";
+
+const CHANNEL = "feishu" as const;
+
+/** How long the launcher URL is given to appear before we give up on it. */
+const QR_READY_TIMEOUT_MS = 20_000;
+
+/** How long a settled session stays readable, so a client can observe the outcome. */
+const TERMINAL_SESSION_TTL_MS = 5 * 60_000;
+
+interface SessionEntry {
+  session: ChannelBindingSession;
+  abort: AbortController;
+  /** Set when the status becomes terminal, so the entry can eventually be swept. */
+  settledAt?: number;
+}
+
+declare global {
+  var __agentMeldChannelBindingSessions: Map<string, SessionEntry> | undefined;
+}
+
+function getSessions(): Map<string, SessionEntry> {
+  if (!globalThis.__agentMeldChannelBindingSessions) {
+    globalThis.__agentMeldChannelBindingSessions = new Map();
+  }
+  return globalThis.__agentMeldChannelBindingSessions;
+}
+
+/**
+ * Retire sessions that can no longer progress.
+ *
+ * An attempt whose launcher URL has expired is **aborted and marked failed, not
+ * deleted**: its registration may still be in flight, and dropping the entry
+ * would let that registration write a result into a session nobody can read.
+ * Only settled sessions are dropped, once their grace period has passed.
+ */
+function sweep(now: number): void {
+  for (const [id, entry] of getSessions()) {
+    const { session, settledAt } = entry;
+    if (session.status === "awaiting_scan") {
+      if (session.expiresAt <= now) {
+        entry.abort.abort();
+        settle(entry, "failed", "The launcher URL expired before it was used.");
+        publish(entry, { error: session.error });
+      }
+      continue;
+    }
+    if (settledAt !== undefined && now - settledAt > TERMINAL_SESSION_TTL_MS) {
+      getSessions().delete(id);
+    }
+  }
+}
+
+/**
+ * `sessionId` always identifies the attempt. `bindingId` is the persisted row,
+ * which only exists once the scan succeeded — do not conflate the two: an
+ * earlier revision published the session id under the name `bindingId`, so no
+ * consumer could have matched an event to a stored binding.
+ */
+function publish(
+  entry: SessionEntry,
+  extra: { bindingId?: string; appId?: string; error?: string } = {}
+): void {
+  eventBus.publish({
+    type: "channel.binding.updated",
+    conversationId: "",
+    timestamp: Date.now(),
+    sessionId: entry.session.id,
+    agentId: entry.session.agentId,
+    status: entry.session.status,
+    ...extra
+  });
+}
+
+function settle(entry: SessionEntry, status: ChannelBindingStatus, error?: string): void {
+  entry.session.status = status;
+  if (error) entry.session.error = error;
+  // The launcher URL is useless once the attempt is over. Dropping it here is
+  // what makes "only the start response carries it" true by construction rather
+  // than by comment.
+  delete entry.session.qrUrl;
+  entry.settledAt = Date.now();
+}
+
+function describeError(error: unknown): string {
+  const code = (error as { code?: string } | null)?.code;
+  const description = (error as { description?: string } | null)?.description;
+  if (code || description) return [code, description].filter(Boolean).join(": ");
+  return error instanceof Error ? error.message : String(error);
+}
+
+function findActiveSessionForAgent(agentId: string): ChannelBindingSession | undefined {
+  for (const entry of getSessions().values()) {
+    if (entry.session.agentId === agentId && entry.session.status === "awaiting_scan") {
+      return entry.session;
+    }
+  }
+  return undefined;
+}
+
+export type StartBindingResult =
+  | { ok: true; session: ChannelBindingSession }
+  | { ok: false; error: string; status: number; sessionId?: string };
+
+/**
+ * Begin a "scan to bind" attempt for one agent.
+ *
+ * Resolves once the launcher URL is known (the SDK reports it from
+ * `onQRCodeReady`), because the caller has to display it. The registration
+ * itself keeps running in the background — waiting for the scan can take up to
+ * the URL's whole lifetime, so it must never be awaited by a request.
+ */
+export async function startFeishuBinding(agentId: string): Promise<StartBindingResult> {
+  ensureDatabase();
+  const now = Date.now();
+  sweep(now);
+
+  const agent = getAgent(agentId);
+  if (!agent) return { ok: false, error: "Agent not found.", status: 404 };
+
+  if (getChannelBindingForAgent(agentId, CHANNEL)) {
+    return { ok: false, error: "This agent is already bound to a Feishu app.", status: 409 };
+  }
+
+  // A second attempt for the same agent must be refused, not started: both
+  // would call registerApp and create two Feishu apps, and there is no API to
+  // delete the orphan (design risk R4). A double click, a client retry, or a
+  // second tab reaches this while the first attempt is still in flight, because
+  // nothing has been persisted yet for the 409 above to catch.
+  const active = findActiveSessionForAgent(agentId);
+  if (active) {
+    return {
+      ok: false,
+      error: "A binding attempt for this agent is already in progress.",
+      status: 409,
+      sessionId: active.id
+    };
+  }
+
+  const abort = new AbortController();
+  const entry: SessionEntry = {
+    abort,
+    session: {
+      id: newChannelBindingSessionId(),
+      agentId,
+      status: "awaiting_scan",
+      // Replaced with the SDK's own `expireIn` as soon as the URL arrives.
+      expiresAt: now + QR_READY_TIMEOUT_MS
+    }
+  };
+  getSessions().set(entry.session.id, entry);
+
+  let resolveQr: ((info: QRCodeInfo) => void) | undefined;
+  let rejectQr: ((error: Error) => void) | undefined;
+  const qrReady = new Promise<QRCodeInfo>((resolve, reject) => {
+    resolveQr = resolve;
+    rejectQr = reject;
+  });
+
+  void registerApp({
+    // Never allow the confirm page to pick an existing app: that would let one
+    // agent's scan overwrite another agent's configuration.
+    createOnly: true,
+    signal: abort.signal,
+    // Name and description are inherited from the agent so the bot the user
+    // confirms already looks like the agent it belongs to. The avatar is
+    // deliberately omitted: `appPreset.avatar` requires an image URL and agents
+    // store an emoji, so promising a matching avatar is not something this can
+    // deliver yet.
+    appPreset: { name: agent.name, desc: agent.description },
+    onQRCodeReady(info) {
+      // The SDK can report the URL after we have already given up, and a late
+      // callback must not resurrect a failed or cancelled attempt.
+      if (entry.session.status !== "awaiting_scan") return;
+      entry.session.qrUrl = info.url;
+      // `expireIn` is seconds. The SDK falls back to 600 — ten minutes — when
+      // the response omits the field, which is where the figure in the public
+      // docs comes from; a real response reports its own value.
+      entry.session.expiresAt = Date.now() + info.expireIn * 1000;
+      resolveQr?.(info);
+    },
+    onStatusChange(info) {
+      // 'polling' | 'slow_down' | 'domain_switched' — informational; the
+      // terminal outcome arrives through the resolved/rejected promise.
+      void info;
+    }
+  })
+    .then((result: RegisterAppResult) => {
+      // Cancellation can land after the SDK has already resolved. Do not
+      // persist an identity the user asked us to stop creating.
+      if (abort.signal.aborted || entry.session.status !== "awaiting_scan") {
+        if (entry.session.status === "awaiting_scan") {
+          settle(entry, "cancelled");
+          publish(entry);
+        }
+        return;
+      }
+      const binding: ChannelBinding = upsertChannelBinding({
+        id: newChannelBindingId(),
+        agentId,
+        channel: CHANNEL,
+        appId: result.client_id,
+        appSecret: result.client_secret,
+        tenantBrand: result.user_info?.tenant_brand ?? null,
+        boundByOpenId: result.user_info?.open_id ?? null,
+        now: Date.now()
+      });
+      settle(entry, "succeeded");
+      publish(entry, { bindingId: binding.id, appId: binding.appId });
+    })
+    .catch((error: unknown) => {
+      if (abort.signal.aborted) {
+        settle(entry, "cancelled");
+        publish(entry);
+        return;
+      }
+      const description = describeError(error);
+      settle(entry, "failed", description);
+      publish(entry, { error: description });
+      // Unblock the start request if the flow failed before a URL appeared.
+      rejectQr?.(new Error(description));
+    });
+
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Timed out waiting for the launcher URL.")), QR_READY_TIMEOUT_MS)
+        .unref?.();
+    });
+    await Promise.race([qrReady, timeout]);
+  } catch (error) {
+    if (entry.session.status === "awaiting_scan") {
+      abort.abort();
+      settle(entry, "failed", describeError(error));
+      publish(entry, { error: entry.session.error });
+    }
+    // The session id comes back even on failure, so the client can watch the
+    // attempt it just started rather than only hearing about it on the stream.
+    return {
+      ok: false,
+      error: entry.session.error ?? "Binding could not be started.",
+      status: 502,
+      sessionId: entry.session.id
+    };
+  }
+
+  return { ok: true, session: entry.session };
+}
+
+export function getBindingSession(id: string): ChannelBindingSession | undefined {
+  const now = Date.now();
+  sweep(now);
+  return getSessions().get(id)?.session;
+}
+
+export function listBindingSessions(): ChannelBindingSession[] {
+  const now = Date.now();
+  sweep(now);
+  return Array.from(getSessions().values()).map((entry) => entry.session);
+}
+
+/**
+ * Cancel an in-flight attempt and report the resulting state. Cancelling an
+ * already-settled attempt is a no-op that still returns its real status, so a
+ * caller is never told "cancelled" about an attempt that actually succeeded.
+ */
+export function cancelBindingSession(id: string): ChannelBindingSession | undefined {
+  const entry = getSessions().get(id);
+  if (!entry) return undefined;
+  if (entry.session.status === "awaiting_scan") {
+    entry.abort.abort();
+    settle(entry, "cancelled");
+    publish(entry);
+  }
+  return entry.session;
+}
+
+/**
+ * Remove the local binding. This does not delete the Feishu app: there is no
+ * confirmed API for that (design risk R4), so the UI must say the app is left
+ * behind rather than implying it is cleaned up.
+ */
+export function unbindAgent(agentId: string): boolean {
+  ensureDatabase();
+  const binding = getChannelBindingForAgent(agentId, CHANNEL);
+  if (!binding) return false;
+  return deleteChannelBinding(binding.id);
+}
+
+export function clearBindingSessionsForTests(): void {
+  for (const entry of getSessions().values()) {
+    if (entry.session.status === "awaiting_scan") entry.abort.abort();
+  }
+  getSessions().clear();
+}
