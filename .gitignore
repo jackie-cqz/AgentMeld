@@ -14,6 +14,13 @@ coverage/
 # Local app data
 .agent*-data/
 
+# pnpm falls back to a project-local store when it cannot write the global one
+# (e.g. a sandboxed shell). Recreated by any `pnpm dev` / `pnpm test` / `pnpm exec`.
+.pnpm-store/
+
+# Local scratch drivers and their output (e.g. the CDP task-matrix driver)
+.tmp-*
+
 # Logs
 *.log
 !tests/e2e-assets/**/*.log
@@ -39,7 +46,6 @@ AGENT_BACKEND.md
 BACKEND_REMAINING_PRIORITY_PLAN.md
 CLAUDE.md
 DEEP-OVERVIEW.md
-README.zh-CN.md
 api-key-management.md
 conversation-log.md
 llm-prompts.md
