@@ -177,7 +177,7 @@ pnpm typecheck  # Check TypeScript
 pnpm lint       # Run ESLint
 pnpm test       # Run the Vitest suite
 pnpm db:push    # Apply the typed Drizzle mirror in src/db/schema.ts via drizzle-kit. Safe ONLY on a fresh empty database: on a database the app already created (src/db/bootstrap.ts) it proposes dropping the search (FTS) tables, so never run it against real data — and never with --force. See docs/schema.md
-pnpm db:seed    # Create the local database if needed, then print row counts (it does not insert sample data)
+pnpm db:seed    # Create the local database if needed, then print row counts (it does not insert sample data). Also runs the startup recovery pass — see the note below the command list
 pnpm e2e:fixture # Evaluate one completed run: pnpm e2e:fixture <runId> <fixturePath>
 pnpm e2e:report  # List benchmark fixtures, or evaluate one run with --run <runId> --fixture <path>
 pnpm quality:gates # Run the release quality gates over saved benchmark reports; exits non-zero when a gate fails. On a fresh clone there is no benchmark data yet, so the minimum-fixtures gate fails
@@ -187,9 +187,9 @@ pnpm agent:bench:smoke  # Run the benchmark cases tagged "smoke"
 pnpm agent:bench:full   # Run the full benchmark suite
 ```
 
-The repository also contains early evaluation and fixture scripts. The scripts that run app code (`db:seed`, `e2e:*`, `quality:gates`, `agent:bench*`) load `.env.local` first and then `.env` via `scripts/load-env.mjs`; the benchmark/evaluation ones also expect a running app plus provider credentials. The current release is positioned around runtime observability rather than a complete benchmark platform.
+The repository also contains early evaluation and fixture scripts. The scripts that run app code (`db:seed`, `e2e:*`, `quality:gates`, `agent:bench*`) load `.env.local` first and then `.env` via `scripts/load-env.mjs`. Of those, `e2e:*` and `agent:bench --run/--compare` reach a running app over HTTP, while `agent:bench --case/--suite` drives the conversation in-process; all of them need provider credentials. The current release is positioned around runtime observability rather than a complete benchmark platform.
 
-Those same scripts call `ensureDatabase()`, which runs the startup recovery pass (`src/db/bootstrap.ts`). That pass force-fails every run still marked `running` in the database it opens — correct at process start, where nothing can legitimately be in flight, but not from a second process. Any of these commands, or a local driving script, started next to a live dev server therefore kills the task that server is executing and marks its attempts failed, with no error on either side. Stop the server first, or point the script at a different `AGENTMELD_DATA_DIR`.
+`pnpm db:seed` calls `ensureDatabase()`, which runs the startup recovery pass (`src/db/bootstrap.ts`). That pass force-fails every run still marked `running` in the database it opens — and it opens the same database the app uses. Running `db:seed` next to a live dev server therefore does *not* stop the run that server is executing: nothing aborts it across processes, and the server overwrites the run status again once it finishes. It does, however, mark that run failed and its attempts rejected in the meantime, and the script reports exactly that (`[run-recovery] Marked 1 orphaned runs as interrupted.`). Stop the server first, or point `db:seed` at a different `AGENTMELD_DATA_DIR`. The other scripts are not affected: `e2e:*` and `quality:gates` never open the database, and `agent:bench*` switches `AGENTMELD_DATA_DIR` to its own benchmark directory before it calls `ensureDatabase()`.
 
 ## Local Data
 
