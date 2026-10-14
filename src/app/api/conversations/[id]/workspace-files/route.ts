@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getWorkspaceForConversation } from "@/server/repositories";
 import { resolveStaticFilePath } from "@/server/static-file-utils";
-import { isPathWithin } from "@/server/workspace-utils";
+import { resolveWorkspaceRealPath } from "@/server/workspace-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -57,26 +57,22 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return Response.json({ entries: [] });
   }
 
-  // P0: realpath verification on workspace root
-  let realRoot: string;
-  try { realRoot = fs.realpathSync(rootPath); } catch {
-    return Response.json({ error: "Workspace root not accessible." }, { status: 500 });
-  }
-
   try {
     const logicalPath = dirPath === "." ? rootPath : resolveStaticFilePath(rootPath, dirPath);
     if (!logicalPath) {
       return Response.json({ error: "Invalid path format." }, { status: 400 });
     }
 
-    // P0: realpath verification on target
-    let realTarget: string;
-    try { realTarget = fs.realpathSync(logicalPath); } catch {
-      return Response.json({ error: "Path not found." }, { status: 404 });
+    // The SAME resolver the artifact delivery uses. It was extracted from here
+    // precisely so the two cannot drift — a claim made once before while both
+    // sides kept their own copy, and a symlink escaped through the other one.
+    const resolved = resolveWorkspaceRealPath(workspace, dirPath === "." ? "." : dirPath);
+    if (!resolved.ok) {
+      const status = resolved.code === "escape" ? 403 : resolved.code === "malformed" ? 400 : 404;
+      return Response.json({ error: resolved.reason }, { status });
     }
-    if (!isPathWithin(realTarget, realRoot)) {
-      return Response.json({ error: "Path escapes workspace boundary." }, { status: 403 });
-    }
+    const realTarget = resolved.realPath;
+    const realRoot = resolved.rootPath;
 
     if (readFile) {
       // P0.3: Read file with size limits and binary detection

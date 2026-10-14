@@ -119,9 +119,13 @@ export const MAX_FILE_READ_BYTES = 1_048_576; // 1 MB
 /**
  * Resolve a workspace-relative path for READING, the way the file browser does.
  *
- * Extracted so the two callers cannot drift, which is exactly what happened: the
- * artifact delivery claimed to use "the same guard as the file browser" and used
- * a purely lexical check instead. That check is defeated by a symlink — a path
+ * Shared with the file browser, which used to keep its own copy of these steps.
+ * The two are not identical in what they ACCEPT — the browser rejects an
+ * absolute path inside the workspace that this one resolves, because it
+ * pre-filters the path format — so the honest description is that they share
+ * the resolution and the browser is the stricter of the two. What they must not
+ * share is a difference in what they REFUSE, and a symlink leaving the
+ * workspace is refused by both. That check is defeated by a symlink — a path
  * inside the workspace whose target is not — and the target's contents are then
  * read and sent wherever the caller sends things.
  *
@@ -138,36 +142,49 @@ export const MAX_FILE_READ_BYTES = 1_048_576; // 1 MB
  * 4. It must be a regular file: a directory, a FIFO or a device is not something
  *    to read, and a FIFO would block forever.
  */
-export function resolveWorkspaceFileForRead(
+export function resolveWorkspaceRealPath(
   workspace: Workspace,
   targetPath: string
-): { ok: true; realPath: string; size: number } | { ok: false; reason: string } {
+): { ok: true; realPath: string; rootPath: string } | { ok: false; reason: string; code: string } {
   const root = workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath;
 
   let realRoot: string;
   try {
     realRoot = fs.realpathSync(root);
   } catch {
-    return { ok: false, reason: "the workspace root is not accessible" };
+    return { ok: false, reason: "the workspace root is not accessible", code: "root" };
   }
 
   let logical: string;
   try {
     logical = resolveSafePath(root, targetPath);
   } catch {
-    return { ok: false, reason: "the path is not inside the workspace" };
+    return { ok: false, reason: "the path is not inside the workspace", code: "malformed" };
   }
 
   let realTarget: string;
   try {
     realTarget = fs.realpathSync(logical);
   } catch {
-    return { ok: false, reason: "the file is no longer on disk" };
+    return { ok: false, reason: "the file is no longer on disk", code: "missing" };
   }
 
+  // After realpath, not before: a symlink passes a lexical check while pointing
+  // anywhere, and its target is what would be read.
   if (!isPathWithin(realTarget, realRoot)) {
-    return { ok: false, reason: "the path escapes the workspace" };
+    return { ok: false, reason: "the path escapes the workspace", code: "escape" };
   }
+
+  return { ok: true, realPath: realTarget, rootPath: realRoot };
+}
+
+export function resolveWorkspaceFileForRead(
+  workspace: Workspace,
+  targetPath: string
+): { ok: true; realPath: string; size: number } | { ok: false; reason: string } {
+  const resolved = resolveWorkspaceRealPath(workspace, targetPath);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  const realTarget = resolved.realPath;
 
   let stat: fs.Stats;
   try {

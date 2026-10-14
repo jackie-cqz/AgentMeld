@@ -240,6 +240,7 @@ describe("feishu connection layer", () => {
       // Only open ids are carried forward: a mention's display name is set by
       // whoever sent it and is not identity.
       mentionOpenIds: ["ou_x"],
+      resources: [],
       content: "hello",
       threadId: "omt_1",
       createTime: 1_700_000_000_000

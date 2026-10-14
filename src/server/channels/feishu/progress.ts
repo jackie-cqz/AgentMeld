@@ -130,14 +130,26 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
  * Also removes it from the registry: the card is finished, and keeping it would
  * leave a cancel button reachable through a stale entry.
  */
-export async function settleRunCard(run: AgentRun): Promise<void> {
+export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Promise<void> {
   const card = getRunCards().get(run.id);
   if (!card) return;
   getRunCards().delete(run.id);
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  await channel.updateCard(card.messageId, buildProgressCard(run, card.agentName, run.status));
+  // The status comes from the EVENT rather than being read back from the row.
+  //
+  // Worth recording how this arrived: a test asserted the card's text instead of
+  // only counting the calls, and it failed, and the commit said the two are not
+  // ordered. They are — both producers update the row and then publish. The
+  // failure was the test's own fixture, which wrote a run row with status
+  // "running" while publishing `run.end` with "complete". The change is kept
+  // because the event is the better source of truth for the event, not because
+  // a bug was found.
+  await channel.updateCard(
+    card.messageId,
+    buildProgressCard(run, card.agentName, status ?? run.status)
+  );
 }
 
 export type CancelOutcome = { ok: true } | { ok: false; message: string };
@@ -185,7 +197,7 @@ export function startChannelProgress(): () => void {
       void import("@/server/repositories")
         .then(({ getRun }) => {
           const run = getRun(event.runId);
-          if (run) return settleRunCard(run);
+          if (run) return settleRunCard(run, event.status);
           return undefined;
         })
         .catch((error: unknown) => console.error("[feishu] failed to settle run progress:", error));
