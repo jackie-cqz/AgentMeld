@@ -134,6 +134,10 @@ export async function importInboundResources(input: {
     // the bytes into memory. The SDK's own docs say to prefer this path for
     // anything headed for disk.
     const partPath = path.join(attachDir, `${id}.part`);
+    // Declared out here so the catch can remove it. The rename happens before
+    // the insert, so a failure after the rename used to leave the file on disk
+    // with no row pointing at it — a leak, and a file the web would never show.
+    let filePath: string | null = null;
 
     try {
       const { contentType, bytesWritten } = await channel.downloadResourceToFile(
@@ -158,7 +162,7 @@ export async function importInboundResources(input: {
           ? `${provisional}${extensionForContentType(contentType)}`
           : provisional;
       const fileName = safeFileName(withExtension, `attachment-${index + 1}`);
-      const filePath = path.join(attachDir, `${id}-${fileName}`);
+      filePath = path.join(attachDir, `${id}-${fileName}`);
       fs.renameSync(partPath, filePath);
 
       getDatabase()
@@ -180,6 +184,7 @@ export async function importInboundResources(input: {
       attachmentIds.push(id);
     } catch (error) {
       fs.rmSync(partPath, { force: true });
+      if (filePath) fs.rmSync(filePath, { force: true });
       skipped.push(`${provisional}（下载失败）`);
       console.error(`[feishu] failed to fetch an attachment: ${provisional}`, error);
     }

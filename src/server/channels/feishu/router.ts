@@ -32,13 +32,18 @@ import type { ChannelInboundMessage, MessageOrigin } from "@/shared/types";
  *
  * Known limitation, from review: the SDK batches deliveries per chat by default
  * and labels the batch with its LAST message id, so this claim is keyed on that
- * representative. A redelivery that happens to be batched differently would
- * therefore present a different id and be routed again. The SDK's own dedup
- * would catch that, but it is in-memory unless a persistent Cache is injected —
- * which this does not do. Narrow (it needs both a redelivery and a different
- * batch grouping) but real, and it is the reason §5.1's "inject the cache"
- * recommendation still stands as work to do rather than a decision already
- * taken.
+ * representative. A redelivery batched differently presents a different id and
+ * reaches this table as a new message.
+ *
+ * What stops that is not this table but the persistent Cache injected into the
+ * channel in `connection.ts` — the SDK marks every message id in a batch as
+ * seen, and ours survives a restart. A test that feeds the same id twice proves
+ * only that the table works for the case the table handles; the case that
+ * matters is the differently-batched redelivery, and that one is the cache's.
+ *
+ * An earlier version of this comment said the cache was not injected. It is,
+ * and has been since the cache work landed; the comment outlived the fact and
+ * denied the mechanism its own paragraph depends on.
  */
 export type RouteOutcome =
   | { status: "duplicate" }
@@ -174,7 +179,7 @@ export async function routeChannelInbound(
         // the agent has no live channel there is no bot to deliver a complaint,
         // and "no attachments" is not news.
         imported.reason === "the conversation has no workspace"
-        ? `⚠️ 有附件没能导入：${imported.reason}`
+        ? "⚠️ 有附件没能导入：这个会话还没有工作区，Agent 没有地方存放文件。"
         : null;
 
   const result = await sendMessage({
@@ -191,7 +196,7 @@ export async function routeChannelInbound(
     // agent answers and system notices — so the notice this used to write was
     // recorded on the web and never left AgentMeld. The person who sent the
     // file is in the room, and that is where they need to be told.
-    recordChannelNotice(channelConversation.conversationId, inbound.agentId, skippedNote);
+    recordChannelNotice(channelConversation.conversationId, inbound.agentId, skippedNote, now);
   }
 
   setChannelInboundMessageId(claimId, result.message.id);
@@ -212,18 +217,24 @@ export async function routeChannelInbound(
  * takes: a room's bot is per-agent, so a notice with no agent has no bot to
  * deliver it.
  */
-function recordChannelNotice(conversationId: string, agentId: string, text: string): void {
-  const now = Date.now();
-  const message = createMessage({
-    id: newMessageId(),
-    conversationId,
-    agentId,
-    role: "system",
-    parts: [{ type: "text", content: text }],
-    status: "complete",
-    now
-  });
-  eventBus.publish({ type: "message.added", conversationId, timestamp: now, message });
+function recordChannelNotice(conversationId: string, agentId: string, text: string, now: number): void {
+  // A notice is a courtesy about a message that is already recorded. Throwing
+  // here would reject the whole routing call and skip the bookkeeping that
+  // follows it, so a failure to say something must not cost the record.
+  try {
+    const message = createMessage({
+      id: newMessageId(),
+      conversationId,
+      agentId,
+      role: "system",
+      parts: [{ type: "text", content: text }],
+      status: "complete",
+      now
+    });
+    eventBus.publish({ type: "message.added", conversationId, timestamp: now, message });
+  } catch (error) {
+    console.error("[feishu] failed to record a channel notice:", error);
+  }
 }
 
 declare global {

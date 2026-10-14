@@ -258,6 +258,32 @@ describe("importing attachments a person sent", () => {
     expect(outcome.skipped.join()).toContain("另有 2 个");
   });
 
+  it("leaves no file behind when the record cannot be written", async () => {
+    // The rename happens before the insert, so a failure after it used to leave
+    // a file on disk with no row pointing at it — a leak, and a file the web
+    // would never show. Forced with a trigger, because that is the only way to
+    // fail the insert while everything before it succeeds.
+    getDatabase().exec(`
+      CREATE TRIGGER refuse_attachment BEFORE INSERT ON attachments
+      BEGIN SELECT RAISE(ABORT, 'refused for the test'); END;
+    `);
+    try {
+      const outcome = await importOnce([
+        { type: "file", fileKey: "fk_1", fileName: "报告.md" }
+      ]);
+
+      if (outcome.status !== "imported") throw new Error("expected imported");
+      expect(outcome.attachmentIds).toEqual([]);
+      expect(outcome.skipped.join()).toContain("下载失败");
+
+      const workspace = getWorkspaceForConversation("conv_1")!;
+      expect(fs.readdirSync(`${workspace.rootPath}/attachments`)).toEqual([]);
+      expect(storedAttachments("conv_1")).toHaveLength(0);
+    } finally {
+      getDatabase().exec("DROP TRIGGER refuse_attachment");
+    }
+  });
+
   it("has nothing to do without attachments", async () => {
     expect(await importOnce([])).toEqual({ status: "skipped", reason: "no attachments" });
     expect(downloads).toHaveLength(0);

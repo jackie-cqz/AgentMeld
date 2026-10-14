@@ -40,6 +40,15 @@ describe("safeFileName", () => {
     expect(name.endsWith(".md")).toBe(true);
   });
 
+  it("keeps a supplied extension on a name that is already at the cap", () => {
+    // The bug: the name was cut to the cap and THEN had the extension appended,
+    // so a long stem ate the .png and the image was stored as a generic file.
+    const long = "a".repeat(200);
+    const name = safeFileName(`${long}.png`, "fallback", ".png");
+    expect(name.endsWith(".png")).toBe(true);
+    expect(Buffer.byteLength(name, "utf-8")).toBeLessThanOrEqual(255);
+  });
+
   it("applies a supplied extension only when the name has none", () => {
     expect(safeFileName("attachment-1", "fallback", ".png")).toBe("attachment-1.png");
     expect(safeFileName("shot.jpg", "fallback", ".png")).toBe("shot.jpg");

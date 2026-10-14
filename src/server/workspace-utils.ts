@@ -119,9 +119,13 @@ export const MAX_FILE_READ_BYTES = 1_048_576; // 1 MB
 /**
  * Resolve a workspace-relative path for READING, the way the file browser does.
  *
- * Extracted so the two callers cannot drift, which is exactly what happened: the
- * artifact delivery claimed to use "the same guard as the file browser" and used
- * a purely lexical check instead. That check is defeated by a symlink — a path
+ * Shared with the file browser, which used to keep its own copy of these steps.
+ * The two are not identical in what they ACCEPT — the browser rejects an
+ * absolute path inside the workspace that this one resolves, because it
+ * pre-filters the path format — so the honest description is that they share
+ * the resolution and the browser is the stricter of the two. What they must not
+ * share is a difference in what they REFUSE, and a symlink leaving the
+ * workspace is refused by both. That check is defeated by a symlink — a path
  * inside the workspace whose target is not — and the target's contents are then
  * read and sent wherever the caller sends things.
  *

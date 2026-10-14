@@ -137,10 +137,15 @@ export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Pro
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  // The status comes from the EVENT, not from the row. `run.end` and the row
-  // update are not ordered, so reading it back could settle the card with
-  // "still running" — which is what a test caught when it asserted the card's
-  // text instead of only counting the calls.
+  // The status comes from the EVENT rather than being read back from the row.
+  //
+  // Worth recording how this arrived: a test asserted the card's text instead of
+  // only counting the calls, and it failed, and the commit said the two are not
+  // ordered. They are — both producers update the row and then publish. The
+  // failure was the test's own fixture, which wrote a run row with status
+  // "running" while publishing `run.end` with "complete". The change is kept
+  // because the event is the better source of truth for the event, not because
+  // a bug was found.
   await channel.updateCard(
     card.messageId,
     buildProgressCard(run, card.agentName, status ?? run.status)
