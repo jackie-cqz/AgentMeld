@@ -2,6 +2,7 @@ import { getConversation, listArtifacts, listMessages } from "@/server/repositor
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
+import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import { estimateTokens } from "@/shared/token-estimate";
 import { getLatestSummary, validateSummaryBoundary } from "@/server/context-compaction-service";
 import { newContextSummaryId } from "@/shared/ids";
@@ -505,19 +506,9 @@ function publishCompactionError(conversationId: string, error: string) {
 }
 
 function resolveBaseUrl(provider: string, override?: string | null): string {
-  if (override?.trim()) {
-    return override.trim().replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1";
-  }
-  switch (provider) {
-    case "deepseek":
-      return (process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com").replace(/\/+$/, "") + "/v1";
-    case "openai":
-      return (process.env.OPENAI_BASE_URL ?? "https://api.openai.com").replace(/\/+$/, "") + "/v1";
-    case "anthropic":
-      return (process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/+$/, "") + "/v1";
-    default:
-      return "https://api.deepseek.com/v1";
-  }
+  // Shared with the agent adapter so a summariser call can never land on a
+  // different endpoint than the agents themselves.
+  return resolveProviderBaseUrl(provider, override) ?? "https://api.deepseek.com/v1";
 }
 
 function renderSearchableText(parts: MessagePart[]): string {
