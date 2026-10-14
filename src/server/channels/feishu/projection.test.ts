@@ -498,6 +498,46 @@ describe("startChannelProjection", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("posts a system notice that names an agent", async () => {
+    // The bug this pins: the runner's three pre-run failures (no agent, no
+    // conversation, no WORKSPACE) return before any run row exists, so
+    // `run.end` cannot cover them — and they were published as `message.added`,
+    // which this subscription deliberately ignored. A user @-mentioned an agent
+    // in the group and heard nothing at all.
+    startChannelProjection();
+    eventBus.publish({
+      type: "message.added",
+      conversationId: "conv_1",
+      timestamp: 1,
+      message: agentMessage({
+        role: "system",
+        agentId: "ag_pm",
+        parts: [{ type: "text", content: "⚠️ Workspace not found." }]
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(1);
+    expect(JSON.stringify(sent[0].input)).toContain("Workspace not found");
+  });
+
+  it("does not post a notice with no agent, because no bot could say it", async () => {
+    startChannelProjection();
+    eventBus.publish({
+      type: "message.added",
+      conversationId: "conv_1",
+      timestamp: 1,
+      message: agentMessage({
+        role: "system",
+        agentId: null,
+        parts: [{ type: "text", content: "⚠️ Agent \"nope\" not found." }]
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(0);
+  });
+
   it("does not post a reply that ended badly", async () => {
     startChannelProjection();
     finishedMessage({ role: "agent", agentId: "ag_pm", status: "error" });

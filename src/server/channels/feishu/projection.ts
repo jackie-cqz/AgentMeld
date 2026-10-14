@@ -181,10 +181,17 @@ export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcom
 export async function projectMessage(message: Message, now = Date.now()): Promise<ProjectionOutcome> {
   if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
 
-  // Only agent output. A human's message is already where the human put it, and
-  // there is no bot that could deliver it as itself.
-  if (message.role !== "agent" || !message.agentId) {
-    return { status: "skipped", reason: "not agent output" };
+  // Agent output, and system notices about an agent's run. A human's message is
+  // already where the human put it, and there is no bot that could deliver it
+  // as itself.
+  //
+  // System notices are included because the runner's three pre-run failures —
+  // no agent, no conversation, no WORKSPACE — return before any run row exists,
+  // so `run.end` cannot cover them and they were reaching the web only. A group
+  // where the agent silently says nothing is the worst of the available
+  // outcomes: it is indistinguishable from being ignored.
+  if ((message.role !== "agent" && message.role !== "system") || !message.agentId) {
+    return { status: "skipped", reason: "nothing that a bot could say" };
   }
 
   const channelConversation = getChannelConversationByConversationId(message.conversationId);
@@ -260,6 +267,18 @@ export function startChannelProjection(): () => void {
       if (!run) return;
       void projectRunFailure(run).catch((error: unknown) => {
         console.error("[feishu] failed to announce a run failure:", error);
+      });
+      return;
+    }
+
+    // The runner publishes its failure notice as `message.added`, not
+    // `message.end`, because it is not the end of a streamed answer. Handling
+    // only `message.end` is why "Workspace not found" was visible on the web
+    // and absent from the group.
+    if (event.type === "message.added") {
+      if (event.message.role !== "system" || !event.message.agentId) return;
+      void projectMessage(event.message).catch((error: unknown) => {
+        console.error("[feishu] failed to project a system notice:", error);
       });
       return;
     }
