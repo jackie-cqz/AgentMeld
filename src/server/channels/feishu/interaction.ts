@@ -12,6 +12,7 @@ import {
   getRun
 } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
+import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 import type {
   DispatchPlanItem,
   PendingBashCommand,
@@ -566,9 +567,13 @@ export async function projectPendingQuestion(
   const channel = getFeishuChannelForAgent(question.agentId);
   if (!channel) return { status: "skipped", reason: "agent has no live channel" };
 
-  const sent = await channel.send(channelConversation.chatId, {
-    card: buildQuestionCard(question)
-  });
+  const sent = await deliverSend<{ messageId: string }>(
+    channel,
+    question.conversationId,
+    question.agentId,
+    channelConversation.chatId,
+    { card: buildQuestionCard(question) }
+  );
   // Kept so the card can be settled in place when the question is answered from
   // the web or abandoned. Without it the room keeps a card whose buttons only
   // say "already handled" once pressed.
@@ -605,9 +610,13 @@ export async function projectPendingApproval(
   const channel = getFeishuChannelForAgent(agentId);
   if (!channel) return { status: "skipped", reason: "agent has no live channel" };
 
-  const sent = await channel.send(channelConversation.chatId, {
-    card: buildApprovalCard(kind, item)
-  });
+  const sent = await deliverSend<{ messageId: string }>(
+    channel,
+    item.conversationId,
+    agentId,
+    channelConversation.chatId,
+    { card: buildApprovalCard(kind, item) }
+  );
   // Registered so the card can be settled when the decision is taken somewhere
   // else — on the web. Without it the room keeps a card whose buttons only say
   // "already handled" once pressed, which is the same defect the question card
@@ -643,7 +652,10 @@ async function settlePostedCard(
   pendingId: string,
   state: { answered?: Record<string, string>; cancelled?: boolean }
 ): Promise<void> {
+  // The buffer is always cleared, paused or not: it is local state, and holding
+  // it would leak. Only the outbound half is subject to the pause.
   getAnswerBuffer().delete(pendingId);
+  if (isChannelProjectionPaused()) return;
 
   const card = getPostedCards().get(pendingId);
   if (!card) return;
@@ -651,7 +663,10 @@ async function settlePostedCard(
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  await channel.updateCard(
+  await deliverCardUpdate(
+    channel,
+    card.question.conversationId,
+    card.agentId,
     card.messageId,
     buildQuestionCard(card.question, {
       answered: state.answered ?? {},
@@ -665,13 +680,21 @@ async function settlePostedApproval(
   pendingId: string,
   decision: "approve" | "reject"
 ): Promise<void> {
+  if (isChannelProjectionPaused()) return;
+
   const card = getPostedApprovals().get(pendingId);
   if (!card) return;
   getPostedApprovals().delete(pendingId);
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  await channel.updateCard(card.messageId, buildApprovalCard(card.kind, card.item, { decision }));
+  await deliverCardUpdate(
+    channel,
+    card.item.conversationId,
+    card.agentId,
+    card.messageId,
+    buildApprovalCard(card.kind, card.item, { decision })
+  );
 }
 
 export function startChannelInteractions(): () => void {

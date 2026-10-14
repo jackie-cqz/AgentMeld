@@ -1,7 +1,9 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import { getChannelConversationByConversationId, getMessage, getRun } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
+import type { SendResult } from "@larksuite/channel";
 import type { AgentRun, Message, MessagePart } from "@/shared/types";
+import { deliverSend } from "@/server/channels/feishu/delivery";
 
 /**
  * Outbound projection: what an agent produced in a conversation also appears in
@@ -169,9 +171,13 @@ export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcom
   if (notices.has(key)) return { status: "skipped", reason: "already announced" };
   notices.add(key);
 
-  const result = await channel.send(channelConversation.chatId, {
-    text: "⚠️ 这次任务没能完成。详情请在 AgentMeld 网页查看。"
-  });
+  const result = await deliverSend<SendResult>(
+    channel,
+    run.conversationId,
+    run.agentId,
+    channelConversation.chatId,
+    { text: "⚠️ 这次任务没能完成。详情请在 AgentMeld 网页查看。" }
+  );
   console.info(
     `[feishu] announced failure of ${run.id} -> ${channelConversation.chatId} (${result.messageId})`
   );
@@ -209,6 +215,10 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
   const text = projectableText(message.parts);
   if (!text) return { status: "skipped", reason: "nothing projectable" };
 
+  // Held in a local because the narrowing above does not reach into a closure,
+  // and the delivery record is keyed by agent.
+  const agentId = message.agentId;
+
   // One post per message. `message.end` is not guaranteed to be seen exactly
   // once, and until this existed the only thing standing between a repeat and a
   // duplicate post in the room was that nothing happened to repeat it.
@@ -220,7 +230,7 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
     // The budget is the backstop for a runaway, so it must be visible rather
     // than silently swallowing output.
     await noticeOnce(`${channelConversation.id}:budget`, () =>
-      channel.send(channelConversation.chatId, {
+      deliverSend(channel, message.conversationId, agentId, channelConversation.chatId, {
         // Not "paused": the window rolls and sending resumes on its own.
         text: "本会话短时间内的消息过多，部分内容未发送。详情请在 AgentMeld 网页查看。"
       })
@@ -228,7 +238,13 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
     return { status: "skipped", reason: "send budget exhausted" };
   }
 
-  const result = await channel.send(channelConversation.chatId, { text });
+  const result = await deliverSend<SendResult>(
+    channel,
+    message.conversationId,
+    agentId,
+    channelConversation.chatId,
+    { text }
+  );
   recordSend(message.conversationId, now);
   // Logged because this is the one place in the channel that has an effect
   // outside the process. "Did it actually post?" has to be answerable from the

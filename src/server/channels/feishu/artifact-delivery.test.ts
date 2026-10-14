@@ -269,6 +269,19 @@ describe("delivering an artifact into the room", () => {
     expect(input.file.source.toString("utf-8")).toContain("# 说明");
   });
 
+  it("files the file delivery under the artifact's conversation and agent", async () => {
+    const { clearDeliveryHealthForTests, getDeliveryHealth } = await import(
+      "@/server/channels/feishu/delivery"
+    );
+    clearDeliveryHealthForTests();
+
+    await projectArtifact(artifact());
+
+    const [entry] = getDeliveryHealth();
+    expect(entry).toMatchObject({ conversationId: "conv_1", agentId: AGENT, sent: 1 });
+    clearDeliveryHealthForTests();
+  });
+
   it("stays silent for a conversation that is not on a channel", async () => {
     const outcome = await projectArtifact(artifact({ conversationId: "conv_other" }));
     expect(outcome).toMatchObject({ status: "skipped" });

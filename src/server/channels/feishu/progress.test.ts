@@ -154,6 +154,20 @@ describe("run progress in a room", () => {
     expect(sent[0].chatId).toBe("oc_1");
   });
 
+  it("files the progress card under the run's conversation and agent", async () => {
+    const { clearDeliveryHealthForTests, getDeliveryHealth } = await import(
+      "@/server/channels/feishu/delivery"
+    );
+    clearDeliveryHealthForTests();
+    const run = seedRun();
+
+    await projectRunStarted(run);
+
+    const [entry] = getDeliveryHealth();
+    expect(entry).toMatchObject({ conversationId: "conv_1", agentId: AGENT, sent: 1 });
+    clearDeliveryHealthForTests();
+  });
+
   it("posts nothing for a child run", async () => {
     // A five-task plan would otherwise put six cards in the room.
     const run = seedRun({ parentRunId: "run_parent" });
@@ -195,6 +209,21 @@ describe("run progress in a room", () => {
     updated.length = 0;
     await settleRunCard({ ...run, status: "complete" });
     expect(updated).toHaveLength(0);
+  });
+
+  it("does not settle a card while outbound is paused", async () => {
+    // Settling is outbound too, and nothing pinned that — removing the check
+    // from `settleRunCard` left every test passing, so a paused channel would
+    // have kept editing cards in the room.
+    const run = seedRun();
+    await projectRunStarted(run);
+    updated.length = 0;
+    setChannelProjectionPaused(true);
+
+    await settleRunCard({ ...run, status: "complete" }, "complete");
+
+    expect(updated).toHaveLength(0);
+    setChannelProjectionPaused(false);
   });
 
   it("has nothing to settle for a run it never posted", async () => {

@@ -10,6 +10,7 @@ import {
 } from "@/server/channels/feishu/registry";
 import { isChannelProjectionPaused, withinSendBudget } from "@/server/channels/feishu/projection";
 import type { AgentRun, AgentRunStatus } from "@/shared/types";
+import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 
 /**
  * A run's progress in the room, as one card that is updated in place.
@@ -112,7 +113,11 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
   }
 
   const agentName = agentNameFor(run.agentId);
-  const sent = await channel.send(channelConversation.chatId, {
+  const sent = await deliverSend<{ messageId: string }>(
+    channel,
+    run.conversationId,
+    run.agentId,
+    channelConversation.chatId, {
     card: buildProgressCard(run, agentName)
   });
   getRunCards().set(run.id, {
@@ -131,6 +136,11 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
  * leave a cancel button reachable through a stale entry.
  */
 export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Promise<void> {
+  // Updating a card is outbound, so the pause switch applies to it like
+  // anything else. A card left unsettled while paused is the correct outcome:
+  // the room is meant to stop changing.
+  if (isChannelProjectionPaused()) return;
+
   const card = getRunCards().get(run.id);
   if (!card) return;
   getRunCards().delete(run.id);
@@ -146,7 +156,10 @@ export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Pro
   // "running" while publishing `run.end` with "complete". The change is kept
   // because the event is the better source of truth for the event, not because
   // a bug was found.
-  await channel.updateCard(
+  await deliverCardUpdate(
+    channel,
+    run.conversationId,
+    run.agentId,
     card.messageId,
     buildProgressCard(run, card.agentName, status ?? run.status)
   );
