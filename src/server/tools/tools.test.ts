@@ -434,6 +434,144 @@ describe("bash", () => {
     expect(getAllPendingBashCommands()).toHaveLength(0);
   }, 10000);
 
+  it("rejects a run-script the workspace does not declare", async () => {
+    // Regression: the allowlist matched script names by prefix, so every
+    // `npm run build-…` counted as verification. A name no project declares is
+    // not a verification command, and running it is arbitrary code execution.
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build-evil" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("is not declared");
+      expect(result.error).toContain("build-evil");
+    }
+    expect(getAllPendingBashCommands()).toHaveLength(0);
+  }, 10000);
+
+  it("still accepts scripts the project declares, including suffixed names", async () => {
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { "build:prod": "node -e \"console.log('prod-ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build:prod" }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.value as { output: string }).output).toContain("prod-ok");
+    }
+  }, 10000);
+
+  it("resolves the declared scripts of the directory the command changes into", async () => {
+    fs.mkdirSync(path.join(workspacePath, "app"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspacePath, "app", "package.json"),
+      JSON.stringify({ scripts: { test: "node -e \"console.log('app-test-ok')\"" } })
+    );
+
+    const declared = await toolRegistry.execute("bash", { command: "cd app && npm run test" }, ctx());
+    expect(declared.ok).toBe(true);
+
+    // The root declares nothing, so an undeclared name reached through `cd` is
+    // still rejected instead of silently allowed.
+    const undeclared = await toolRegistry.execute("bash", { command: "cd app && npm run build-evil" }, ctx());
+    expect(undeclared.ok).toBe(false);
+    if (!undeclared.ok) expect(undeclared.error).toContain("is not declared");
+  }, 20000);
+
+  it("does not claim a script is undeclared when there is no package.json", async () => {
+    // Nothing to enforce against, so the command must run and let npm's own
+    // ENOENT be the feedback — not a policy error naming an undeclared script.
+    const result = await toolRegistry.execute("bash", { command: "npm run build" }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const value = result.value as { exitCode: number };
+      expect(value.exitCode).not.toBe(0);
+    }
+  }, 20000);
+
+  it("rejects a look-alike file name even when the prefix is a declared script", async () => {
+    // `bun run build.evil` resolves to a FILE, not to the declared `build` script.
+    // The name class used to stop at the dot, so the declared `build` satisfied the
+    // check while bun ran the file.
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "bun run build.evil" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("build.evil");
+      expect(result.error).toContain("is not declared");
+    }
+  }, 10000);
+
+  it("refuses a run-script that would execute outside the workspace", async () => {
+    // `cd` moves the shell; the sandbox only fixes the initial directory. Skipping
+    // the check in that case made the whole rule trivially bypassable.
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "cd .. && npm run build" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("outside the workspace");
+  }, 10000);
+
+  it("refuses a run-script whose directory cannot be determined", async () => {
+    // `~` and `$VAR` cannot be resolved statically, so there is no directory to
+    // check — guessing one would check a manifest the shell never reads.
+    const result = await toolRegistry.execute("bash", { command: "cd ~ && npm run build" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("Cannot tell which directory");
+  }, 10000);
+
+  it("refuses when npm would resolve to a package.json outside the workspace", async () => {
+    // npm walks up to the nearest package.json, and the default data directory
+    // lives inside the user's own project — so "no manifest here" must not mean
+    // "run the host project's script".
+    fs.writeFileSync(
+      path.join(path.dirname(workspacePath), "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('ANCESTOR-BUILD-RAN')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("outside the workspace");
+  }, 10000);
+
+  it("follows an explicit workspace flag when checking declarations", async () => {
+    // `npm run build -w web` runs web's script; checking the root manifest instead
+    // rejected a command that used to work.
+    fs.writeFileSync(
+      path.join(workspacePath, "package.json"),
+      JSON.stringify({ scripts: { dev: "node -e \"console.log('dev')\"" } })
+    );
+    fs.mkdirSync(path.join(workspacePath, "web"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspacePath, "web", "package.json"),
+      JSON.stringify({ scripts: { build: "node -e \"console.log('web-build-ok')\"" } })
+    );
+
+    const result = await toolRegistry.execute("bash", { command: "npm run build -w web" }, ctx());
+
+    // The policy must not reject it; whether npm finds a configured workspace is
+    // npm's business, not the sandbox's.
+    expect(result.ok).toBe(true);
+  }, 20000);
+
   it("rejects shell inspection commands because fs_list/fs_read must be used", async () => {
     const cmd = process.platform === "win32" ? "Get-ChildItem" : "ls";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
