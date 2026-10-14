@@ -179,6 +179,16 @@ describe("handleCardAction", () => {
     clearPendingQuestionsForTests();
     channelsByAgent.set(AGENT, {});
 
+    // The question's conversation has to be mapped to a chat, because a click
+    // is refused unless it arrives in the chat the card belongs to.
+    createConversation({
+      id: "conv_1", title: "飞书群", mode: "group", agentIds: [AGENT],
+      fsWriteApprovalMode: "auto", now: 1
+    });
+    createChannelConversation({
+      id: "cc_1", channel: "feishu", chatId: "oc_1", conversationId: "conv_1", now: 1
+    });
+
     // The single-owner model: answers are only taken from the account that
     // bound the app, which is the open id `click()` uses by default.
     upsertChannelBinding({
@@ -197,6 +207,13 @@ describe("handleCardAction", () => {
     clearPendingQuestionsForTests();
     teardown();
   });
+
+  /** The newest key in the pending store, which is the one just registered. */
+  function latestKey(): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const store = (globalThis as any).__agentMeldPendingQuestions as Map<string, unknown>;
+    return [...store.keys()][store.size - 1] as string;
+  }
 
   function ask(options: { twoQuestions?: boolean } = {}) {
     const questions: PendingQuestion["questions"] = options.twoQuestions
@@ -250,6 +267,72 @@ describe("handleCardAction", () => {
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue", "部署到哪？": "预览" });
   });
 
+  it("makes a cancelled card inert, not just redrawn", async () => {
+    // The review's find: the cancel path passed `cancelled` in and never used
+    // it, so the card was rebuilt with no answers — which meant every button
+    // still carried a value and stayed clickable. The old test asserted only
+    // that updateCard was called, which is how it stayed green.
+    const { pending, pendingId } = ask();
+    void pending;
+    const settled = buildQuestionCard(
+      {
+        id: pendingId, conversationId: "conv_1", agentId: AGENT, runId: "run_1", createdAt: 1,
+        questions: [{ question: "用哪个框架？", header: "技术栈", options: [{ label: "Vue" }] }]
+      },
+      { cancelled: true }
+    ) as { elements: Array<Record<string, unknown>> };
+
+    const buttons = settled.elements
+      .filter((element) => element.tag === "action")
+      .flatMap((element) => (element.actions ?? []) as Array<{ value?: unknown }>);
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) expect(button.value).toBeUndefined();
+    expect(JSON.stringify(settled)).toContain("作废");
+  });
+
+  it("settles a cancelled card with no clickable buttons", async () => {
+    ask();
+    const pendingId = latestKey();
+    startChannelInteractions();
+    // Post a card so there is one to settle.
+    const posted = await projectPendingQuestion({
+      id: pendingId, conversationId: "conv_1", agentId: AGENT, runId: "run_1", createdAt: 1,
+      questions: [{ question: "继续吗？", header: "确认", options: [{ label: "是" }] }]
+    });
+    expect(posted.status).toBe("posted");
+    updated.length = 0;
+
+    eventBus.publish({
+      type: "ask_user.cancelled", conversationId: "conv_1", timestamp: 2,
+      pendingId, runId: "run_1"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(updated).toHaveLength(1);
+    const raw = JSON.stringify(updated[0].card);
+    expect(raw).toContain("作废");
+    expect(raw).not.toContain('"answer"');
+  });
+
+  it("still resolves when two questions carry identical text", async () => {
+    // The buffer was keyed by question TEXT, so two questions with the same
+    // words collapsed into one key and the count could never reach the number
+    // of questions — the run waited forever for an answer it already had.
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", [
+      { question: "继续吗？", header: "一", options: [{ label: "是" }] },
+      { question: "继续吗？", header: "二", options: [{ label: "否" }] }
+    ]);
+    const pendingId = latestKey();
+
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "是" }));
+    const response = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "否" })
+    );
+
+    expect(response).toMatchObject({ toast: { type: "success" } });
+    await expect(pending).resolves.toEqual({ "继续吗？": "否" });
+  });
+
   it("says so, rather than failing silently, when the question is already gone", async () => {
     // A card left in the room after the run moved on: the click must land as a
     // visible message, not as nothing happening.
@@ -301,14 +384,6 @@ describe("handleCardAction", () => {
     // A card can be forwarded, and its buttons would otherwise answer a question
     // in a room the clicker is not in.
     const { pending, pendingId } = ask();
-    // The conversation row has to exist before a channel can point at it.
-    createConversation({
-      id: "conv_1", title: "飞书群", mode: "group", agentIds: [AGENT],
-      fsWriteApprovalMode: "auto", now: 1
-    });
-    createChannelConversation({
-      id: "cc_1", channel: "feishu", chatId: "oc_1", conversationId: "conv_1", now: 1
-    });
 
     const event = click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" });
     const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
@@ -656,6 +731,52 @@ describe("approval cards", () => {
     const response = await handleCardAction(
       click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" }, { openId: "ou_stranger", name: "别人" })
     );
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+  });
+
+  it("escapes what the model wrote into an approval card", async () => {
+    // The escaping claim covered only the question card. Approval cards
+    // interpolate a command, a path, a cwd and a reason — all model- or
+    // tool-controlled — and none of it was escaped.
+    const raw = JSON.stringify(
+      buildApprovalCard("bash", {
+        ...bashItem,
+        command: "echo <at id=all></at>",
+        cwd: "/tmp/<at id=all></at>",
+        reason: "<at id=all></at>"
+      })
+    );
+
+    // The command keeps its shape — approving `echo a` when the real command is
+    // `echo a > b` would be worse than any markup risk — so only `<` goes, and
+    // a tag cannot form from half of itself.
+    expect(raw).not.toContain("<at id=all></at>");
+    expect(raw).toContain("echo");
+    expect(raw).not.toContain("at id=all></at>");
+  });
+
+  it("keeps a redirection readable, because that is what is being approved", () => {
+    const raw = JSON.stringify(
+      buildApprovalCard("bash", { ...bashItem, command: "echo done > out.txt && cat a | wc -l" })
+    );
+    expect(raw).toContain("> out.txt");
+    expect(raw).toContain("| wc -l");
+  });
+
+  it("refuses an approval click that arrived in a different chat", async () => {
+    const pending = registerPendingBash("conv_1", AGENT, "run_1", "ls", "/tmp", "看看");
+    const id = [...((globalThis as unknown as { __agentMeldPendingBash: Map<string, unknown> })
+      .__agentMeldPendingBash.keys())][0];
+
+    const event = click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" });
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     let settled = false;

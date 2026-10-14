@@ -93,7 +93,10 @@ export function decodeCardActionValue(value: unknown): CardActionValue | null {
 /** One row per task, so a person can see what they are approving. */
 function describePlan(plan: DispatchPlanItem[]): string {
   return plan
-    .map((item, index) => `${index + 1}. **${item.title ?? item.task}** — ${item.agentId}`)
+    .map(
+      (item, index) =>
+        `${index + 1}. **${escapeLarkMd(item.title ?? item.task)}** — ${escapeLarkMd(item.agentId)}`
+    )
     .join("\n");
 }
 
@@ -117,8 +120,8 @@ export function buildApprovalCard(
     kind === "plan"
       ? describePlan((item as PendingDispatchPlan).plan)
       : kind === "bash"
-        ? `\`\`\`\n${(item as PendingBashCommand).command}\n\`\`\`\n\n目录：${(item as PendingBashCommand).cwd}\n\n原因：${(item as PendingBashCommand).reason}`
-        : `路径：\`${(item as PendingWrite).path}\`\n\n新内容 ${(item as PendingWrite).newContent.length} 字符`;
+        ? `\`\`\`\n${sanitizeCommand((item as PendingBashCommand).command)}\n\`\`\`\n\n目录：${escapeLarkMd((item as PendingBashCommand).cwd)}\n\n原因：${escapeLarkMd((item as PendingBashCommand).reason)}`
+        : `路径：\`${escapeLarkMd((item as PendingWrite).path)}\``;
 
   const decided = state.decision;
   const buttons: object[] = decided
@@ -149,7 +152,7 @@ export function buildApprovalCard(
               tag: "div",
               text: {
                 tag: "lark_md",
-                content: `已${decided === "approve" ? "批准" : "拒绝"}${state.decidedBy ? `：${state.decidedBy}` : ""}`
+                content: `已${decided === "approve" ? "批准" : "拒绝"}${state.decidedBy ? `：${escapeLarkMd(state.decidedBy)}` : ""}`
               }
             }
           ]
@@ -169,9 +172,13 @@ export function buildApprovalCard(
  */
 export function buildQuestionCard(
   question: PendingQuestion,
-  state: { answered?: Record<string, string>; answeredBy?: string } = {}
+  state: { answered?: Record<string, string>; answeredBy?: string; cancelled?: boolean } = {}
 ): object {
   const answered = state.answered ?? {};
+  // Terminal means nobody may click anything any more. Deriving it from "there
+  // are answers" was wrong: a CANCELLED question has none, so every button kept
+  // its value and the card stayed live after being settled.
+  const terminal = state.cancelled === true || Object.keys(answered).length > 0;
   const elements: object[] = [];
 
   question.questions.forEach((item, index) => {
@@ -193,7 +200,7 @@ export function buildQuestionCard(
         tag: "button",
         text: { tag: "plain_text", content: option.label },
         type: chosen === option.label ? "primary" : "default",
-        ...(chosen
+        ...(terminal
           ? {}
           : {
               value: {
@@ -206,6 +213,10 @@ export function buildQuestionCard(
       }))
     });
   });
+
+  if (state.cancelled) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "这个问题已经作废。" } });
+  }
 
   if (state.answeredBy && Object.keys(answered).length > 0) {
     elements.push({
@@ -234,6 +245,18 @@ export function buildQuestionCard(
  */
 function escapeLarkMd(text: string): string {
   return text.replace(/[<>]/g, "");
+}
+
+/**
+ * Neutralise a command without misrepresenting it.
+ *
+ * A command being approved has to be shown as it is — approving `echo a` when
+ * the real command is `echo a > b` is worse than any markup risk. So only `<`
+ * goes: it is what opens a tag, while `>`, `>>` and `|` stay readable. A tag
+ * cannot form from half of itself.
+ */
+function sanitizeCommand(command: string): string {
+  return command.replace(/</g, "").replace(/```/g, "");
 }
 
 /**
@@ -315,8 +338,10 @@ async function handleQuestionAnswer(
   // The click must come from the chat this question belongs to. A card can be
   // forwarded, and without this its buttons would answer a question in a room
   // the clicker is not in.
+  // Fail closed: an unmapped conversation used to skip this check entirely, so
+  // a deleted mapping turned the guard off.
   const where = getChannelConversationByConversationId(entry.question.conversationId);
-  if (where && where.chatId !== event.chatId) {
+  if (!where || where.chatId !== event.chatId) {
     return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
   }
 
@@ -332,7 +357,10 @@ async function handleQuestionAnswer(
   }
 
   const buffer = getAnswerBuffer();
-  const answers = { ...(buffer.get(question.id) ?? {}), [asked.question]: value.answer };
+  // Keyed by the question's INDEX, not its text: two questions with identical
+  // text collapse into one key and the count can never reach the number of
+  // questions, so the run waits forever for an answer it already has.
+  const answers = { ...(buffer.get(question.id) ?? {}), [String(value.questionIndex)]: value.answer };
   buffer.set(question.id, answers);
 
   if (Object.keys(answers).length < question.questions.length) {
@@ -342,10 +370,18 @@ async function handleQuestionAnswer(
   }
 
   buffer.delete(question.id);
+  // `answerQuestion` keys its record by the question's TEXT, so the buffered
+  // indices are translated back here.
+  const byText = Object.fromEntries(
+    Object.entries(answers).map(([index, answer]) => [
+      question.questions[Number(index)]?.question ?? index,
+      answer
+    ])
+  );
   // The operator id, not their display name. A display name is chosen by its
   // owner, and this codebase says so in two other places; recording one as the
   // resolver would make the audit answer forgeable.
-  const resolved = answerQuestion(question.id, answers, event.operator?.openId ?? null);
+  const resolved = answerQuestion(question.id, byText, event.operator?.openId ?? null);
   if (!resolved) {
     return { toast: { type: "info", content: "这个问题已经处理过了。" } };
   }
@@ -421,6 +457,13 @@ async function handleApprovalDecision(
     return { toast: { type: "error", content: "只有绑定这个应用的账号可以批准。" } };
   }
 
+  // The same rule as the question card: the click must arrive where the item
+  // belongs. This path had no such check at all.
+  const where = getChannelConversationByConversationId(item.conversationId);
+  if (!where || where.chatId !== event.chatId) {
+    return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
+  }
+
   // The record's resolver is the operator id, not their display name: a display
   // name is chosen by its owner and cannot identify anyone.
   const resolvedBy = event.operator?.openId ?? null;
@@ -453,6 +496,10 @@ export type InteractionOutcome =
 export async function projectPendingQuestion(
   question: PendingQuestion
 ): Promise<InteractionOutcome> {
+  // The pause switch stops ALL outbound. The approval projector checked it and
+  // this one did not, so a paused channel kept asking questions.
+  if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
+
   const channelConversation = getChannelConversationByConversationId(question.conversationId);
   if (!channelConversation) return { status: "skipped", reason: "conversation is not on a channel" };
 
@@ -533,7 +580,13 @@ async function settlePostedCard(
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  await channel.updateCard(card.messageId, buildQuestionCard(card.question, { answered: state.answered ?? {} }));
+  await channel.updateCard(
+    card.messageId,
+    buildQuestionCard(card.question, {
+      answered: state.answered ?? {},
+      cancelled: state.cancelled === true
+    })
+  );
 }
 
 export function startChannelInteractions(): () => void {
