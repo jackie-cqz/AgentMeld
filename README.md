@@ -176,7 +176,7 @@ pnpm start      # Run the production server
 pnpm typecheck  # Check TypeScript
 pnpm lint       # Run ESLint
 pnpm test       # Run the Vitest suite
-pnpm db:push    # Apply the typed Drizzle mirror in src/db/schema.ts via drizzle-kit (schema-change development only; src/db/bootstrap.ts is the runtime DDL authority — see docs/schema.md)
+pnpm db:push    # Apply the typed Drizzle mirror in src/db/schema.ts via drizzle-kit. Safe ONLY on a fresh empty database: on a database the app already created (src/db/bootstrap.ts) it proposes dropping the search (FTS) tables, so never run it against real data — and never with --force. See docs/schema.md
 pnpm db:seed    # Create the local database if needed, then print row counts (it does not insert sample data)
 pnpm e2e:fixture # Evaluate one completed run: pnpm e2e:fixture <runId> <fixturePath>
 pnpm e2e:report  # List benchmark fixtures, or evaluate one run with --run <runId> --fixture <path>

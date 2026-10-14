@@ -176,7 +176,7 @@ pnpm start      # 启动生产服务
 pnpm typecheck  # TypeScript 检查
 pnpm lint       # ESLint 检查
 pnpm test       # 运行 Vitest 测试
-pnpm db:push    # 用 drizzle-kit 应用 src/db/schema.ts 这份类型化镜像（仅用于开发时改结构；运行时建表以 src/db/bootstrap.ts 为准，见 docs/schema.md）
+pnpm db:push    # 用 drizzle-kit 应用 src/db/schema.ts 这份类型化镜像。仅对全新空库安全：对应用已建好的库（src/db/bootstrap.ts）它会提议删除检索（FTS）表，切勿对真实数据运行，更不要加 --force。详见 docs/schema.md
 pnpm db:seed    # 必要时创建本地数据库并打印各表行数（不会插入示例数据）
 pnpm e2e:fixture # 评估一次已完成的运行：pnpm e2e:fixture <runId> <fixturePath>
 pnpm e2e:report  # 列出 benchmark fixture；或加 --run <runId> --fixture <path> 评估某次运行
