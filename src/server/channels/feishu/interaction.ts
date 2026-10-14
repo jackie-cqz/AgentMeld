@@ -11,7 +11,7 @@ import {
   getChannelConversationByConversationId,
   getRun
 } from "@/server/repositories";
-import { getFeishuChannelForAgent } from "@/server/channels/feishu/connection";
+import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import type {
   DispatchPlanItem,
   PendingBashCommand,

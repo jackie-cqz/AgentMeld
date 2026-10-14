@@ -26,7 +26,7 @@ const { channelsByAgent, sent, updated, connections, abortRunMock } = vi.hoisted
   abortRunMock: vi.fn()
 }));
 
-vi.mock("@/server/channels/feishu/connection", () => ({
+vi.mock("@/server/channels/feishu/registry", () => ({
   getFeishuChannelForAgent: (agentId: string) => {
     if (!channelsByAgent.has(agentId)) return null;
     return {

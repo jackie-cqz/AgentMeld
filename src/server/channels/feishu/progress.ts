@@ -4,7 +4,10 @@ import {
   getChannelBindingForAgent,
   getChannelConversationByConversationId
 } from "@/server/repositories";
-import { getFeishuChannelForAgent, listFeishuConnections } from "@/server/channels/feishu/connection";
+import {
+  getFeishuChannelForAgent,
+  listFeishuConnections
+} from "@/server/channels/feishu/registry";
 import { isChannelProjectionPaused, withinSendBudget } from "@/server/channels/feishu/projection";
 import type { AgentRun, AgentRunStatus } from "@/shared/types";
 
