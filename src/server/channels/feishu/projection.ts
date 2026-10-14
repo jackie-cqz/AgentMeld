@@ -136,8 +136,15 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
     return { status: "skipped", reason: "send budget exhausted" };
   }
 
-  await channel.send(channelConversation.chatId, { text });
+  const result = await channel.send(channelConversation.chatId, { text });
   recordSend(message.conversationId, now);
+  // Logged because this is the one place in the channel that has an effect
+  // outside the process. "Did it actually post?" has to be answerable from the
+  // server log, and the platform's own delivery receipts are not readable with
+  // the scopes a one-click app is granted.
+  console.info(
+    `[feishu] projected ${message.agentId} -> ${channelConversation.chatId} (${result.messageId})`
+  );
   return { status: "sent", chatId: channelConversation.chatId, agentId: message.agentId };
 }
 
