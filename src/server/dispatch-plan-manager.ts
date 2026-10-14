@@ -130,12 +130,27 @@ function resolvePlan(
     const realPlanId = planRow?.id ?? `plan_${p.runId}_init`;
     const planRevision = planRow?.revision ?? 0;
 
-    // Look up or create a conductor meta-attempt for THIS plan revision
+    // Look up or create a conductor meta-attempt for THIS plan revision.
+    //
+    // The row exists so the approval evidence below has an attempt to hang off.
+    // It has to end terminal here: nothing else ever finishes it, and leaving it
+    // 'running' made every approved plan report a permanently running attempt.
+    //
+    // Upsert rather than INSERT OR IGNORE, because `pending-questions.ts` creates
+    // the same row id first (as 'running') when the Conductor asks a clarifying
+    // question during the plan stage. With IGNORE that insert wins and the row
+    // stays running forever — for exactly the plans that asked a question.
+    // `reported_complete` is this column's success token (see finishTaskAttempt);
+    // `verification_status` stays 'not_started' because no verdicts exist for it.
     const attemptId = `ta_conductor_${realPlanId}`;
     db.prepare(`
-      INSERT OR IGNORE INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'conductor', 'conductor', 0, 'running', 'not_started', ?, ?)
-    `).run(attemptId, p.runId, p.conversationId, realPlanId, planRevision, now, now);
+      INSERT INTO task_attempts (id, conductor_run_id, conversation_id, plan_id, plan_revision, task_id, agent_id, attempt, execution_status, verification_status, started_at, finished_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'conductor', 'conductor', 0, 'reported_complete', 'not_started', ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        execution_status = 'reported_complete',
+        finished_at = COALESCE(task_attempts.finished_at, excluded.finished_at),
+        updated_at = excluded.updated_at
+    `).run(attemptId, p.runId, p.conversationId, realPlanId, planRevision, now, now, now, now);
     insertEvidence({
         id: newEvidenceId(),
         conversationId: p.conversationId,
