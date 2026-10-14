@@ -67,6 +67,7 @@ declare global {
   var __agentMeldChannelProjectionPaused: boolean | undefined;
   var __agentMeldProjectionSendLog: Map<string, number[]> | undefined;
   var __agentMeldProjectionNotices: Set<string> | undefined;
+  var __agentMeldProjectionProjectedMessages: Set<string> | undefined;
 }
 
 /**
@@ -92,6 +93,11 @@ function getSendLog(): Map<string, number[]> {
 function getNotices(): Set<string> {
   globalThis.__agentMeldProjectionNotices ??= new Set<string>();
   return globalThis.__agentMeldProjectionNotices;
+}
+
+function getProjectedMessages(): Set<string> {
+  globalThis.__agentMeldProjectionProjectedMessages ??= new Set<string>();
+  return globalThis.__agentMeldProjectionProjectedMessages;
 }
 
 /**
@@ -146,6 +152,12 @@ async function noticeOnce(
 export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcome> {
   if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
 
+  // Checked here as well as at the subscription. Without it, excluding aborts
+  // rests entirely on one line in the subscriber, and a test that removes that
+  // line stays green as long as its fixture has no run row — which is exactly
+  // what happened.
+  if (run.status !== "failed") return { status: "skipped", reason: "run did not fail" };
+
   const channelConversation = getChannelConversationByConversationId(run.conversationId);
   if (!channelConversation) return { status: "skipped", reason: "conversation is not on a channel" };
 
@@ -189,6 +201,13 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
 
   const text = projectableText(message.parts);
   if (!text) return { status: "skipped", reason: "nothing projectable" };
+
+  // One post per message. `message.end` is not guaranteed to be seen exactly
+  // once, and until this existed the only thing standing between a repeat and a
+  // duplicate post in the room was that nothing happened to repeat it.
+  const projected = getProjectedMessages();
+  if (projected.has(message.id)) return { status: "skipped", reason: "already projected" };
+  projected.add(message.id);
 
   if (!withinSendBudget(message.conversationId, now)) {
     // The budget is the backstop for a runaway, so it must be visible rather
@@ -268,4 +287,5 @@ export function stopChannelProjectionForTests(): void {
   globalThis.__agentMeldChannelProjectionPaused = undefined;
   globalThis.__agentMeldProjectionSendLog = undefined;
   globalThis.__agentMeldProjectionNotices = undefined;
+  globalThis.__agentMeldProjectionProjectedMessages = undefined;
 }

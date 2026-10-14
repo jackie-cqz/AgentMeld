@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { createMessage, getConversation, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -107,11 +107,9 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     if (typeof validationResult === "string") {
       // Plan rejected — fail the run with clear error
       createSystemMessage(input.conversationId, `❌ Plan 校验失败：${validationResult}`);
-      const errorMsg = `Plan validation failed: ${validationResult}`;
-      eventBus.publish({
-        type: "run.end", conversationId: input.conversationId, timestamp: Date.now(),
-        runId: input.conductorRunId, status: "failed", error: errorMsg
-      });
+      // Through the shared helper, so recording the failure cannot be forgotten
+      // by one call site while others do it.
+      publishConductorFailed(input, `Plan validation failed: ${validationResult}`);
       return;
     }
 
@@ -1874,11 +1872,27 @@ export function buildContinuationPrompt(
   return `${basePrompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${lastError}. Fix the issues and try again.`;
 }
 
-function publishConductorFailed(input: ConductorInput, error: string) {
+/**
+ * Announce a conductor failure — and record it.
+ *
+ * Exported because it is the seam that keeps the announcement and the record
+ * from drifting apart; a test drives it directly rather than reproducing the
+ * shape it used to have.
+ */
+export function publishConductorFailed(input: ConductorInput, error: string) {
+  const now = Date.now();
+
+  // Record it, not just announce it. Announcing a failure without writing it
+  // left the run row "running" while the channel had already told the group the
+  // task failed — and the runner, which follows this function by returning
+  // rather than throwing, then wrote "complete" over the top. The web UI and the
+  // group disagreed about the same run.
+  updateRunStatus(input.conductorRunId, "failed", null, now);
+
   eventBus.publish({
     type: "run.end",
     conversationId: input.conversationId,
-    timestamp: Date.now(),
+    timestamp: now,
     runId: input.conductorRunId,
     status: "failed",
     error

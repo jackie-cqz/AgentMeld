@@ -27,8 +27,17 @@ import type { ChannelInboundMessage } from "@/shared/types";
  * It is written as an integration test on purpose. Every layer has its own unit
  * tests with stubs, and each of those passed while the feature was broken in
  * production — because a stub lets a test supply exactly the input the code
- * expects. Here the wiring is real: the router, the projection and the event
- * bus are the actual ones, and only the platform client is fake.
+ * expects. Here the router, the projection and the event bus are the real ones.
+ * TWO things are faked, and it is worth being exact about them: the platform
+ * client, and `startAgentRun` (so a "run" is a counted event rather than a
+ * model call).
+ *
+ * Which layers this covers, stated rather than implied — the review found it
+ * was being described as covering more than it does:
+ *   - layer 1 (inbound never produces outbound): yes, in the wiring.
+ *   - layer 3 (the origin gate): yes — removing it makes this fail.
+ *   - layer 6 (botLoopGuard): NO. The connection module is mocked here, so the
+ *     policy it arms is not exercised; `connection.test.ts` asserts that.
  */
 const { channelsByAgent, sent } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
@@ -182,6 +191,80 @@ describe("a group where two bots mention each other", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("starts nothing when the sender cannot be identified", async () => {
+    // The other half of the origin decision, and the half the acceptance test
+    // was missing: an unknown sender kind must fall to `internal`, which cannot
+    // dispatch. Reading it as `human` is a real breach — the mutation
+    // `return "internal"` -> `return "human"` left this suite green before.
+    startChannelRouter();
+    startChannelProjection();
+
+    await eventBus.publish({
+      type: "channel.inbound",
+      conversationId: "",
+      timestamp: 1,
+      message: inbound({
+        messageId: "om_unknown",
+        senderId: "ou_who_knows",
+        senderType: null,
+        senderIsBot: null,
+        mentionOpenIds: ["ou_bot_pm"],
+        content: "我是谁"
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(startAgentRunMock).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not echo a person's own message back into the group", async () => {
+    // Pins the OUTCOME: a person's message is not echoed into the room.
+    //
+    // It does not pin which guard produces it. Two independent conditions stop
+    // a person's message — `role !== "agent"` and a null `agentId` — and
+    // removing either alone changes nothing observable, so no test can catch
+    // one of them being deleted. That is safe (the behaviour survives) but it
+    // does mean neither guard is individually load-bearing, and a future change
+    // should not assume a test protects it.
+    //
+    // The consequence is worth stating rather than hiding: a message typed in
+    // the web UI of a channel conversation is NOT posted to the group, so the
+    // two views differ for that one case. Messages that came from Feishu are
+    // already in the room, and posting those back would be an echo.
+    startChannelRouter();
+    startChannelProjection();
+
+    await eventBus.publish({
+      type: "channel.inbound",
+      conversationId: "",
+      timestamp: 1,
+      message: inbound({ messageId: "om_human", mentionOpenIds: ["ou_bot_pm"] })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const conversationId = getChannelConversationByChat("feishu", CHAT)!.conversationId;
+
+    const human = createMessage({
+      id: "msg_human",
+      conversationId,
+      role: "user",
+      agentId: null,
+      parts: [{ type: "text", content: "我在网页里打的这句" }],
+      status: "complete",
+      now: 2
+    });
+    eventBus.publish({
+      type: "message.end",
+      conversationId,
+      timestamp: 2,
+      messageId: human.id,
+      status: "complete"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(0);
+  });
+
   it("stops too when the group's message comes only from bots", async () => {
     // The pure bot-at-bot case, with no person involved at all.
     startChannelRouter();
@@ -207,7 +290,7 @@ describe("a group where two bots mention each other", () => {
     expect(sent).toHaveLength(0);
   });
 
-  it("posts at most one message per answer, however many times the end is seen", async () => {
+  it("posts one message per answer, however many times the end is seen", async () => {
     startChannelRouter();
     startChannelProjection();
 
@@ -232,12 +315,11 @@ describe("a group where two bots mention each other", () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // Not deduplicated today — this pins the current, bounded behaviour (one
-    // send per end event, three events) rather than claiming a guarantee that
-    // does not exist. If dedup is added, this number drops and the test must be
-    // updated deliberately.
-    expect(sent.length).toBeLessThanOrEqual(3);
-    expect(sent.every((entry) => entry.chatId === CHAT)).toBe(true);
+    // One post per message, not one per event. The earlier assertion here was
+    // `toBeLessThanOrEqual(3)`, which zero also satisfies — it could not have
+    // failed for the reason its name claimed.
+    expect(sent).toHaveLength(1);
+    expect(sent[0].chatId).toBe(CHAT);
   });
 });
 

@@ -8,6 +8,8 @@ import {
   createRun,
   getAgent,
   getConversation,
+  getRun,
+  isTerminalRunStatus,
   getWorkspaceForConversation,
   listMessages,
   listChildRunIds,
@@ -381,6 +383,15 @@ function completeRun(
   errorCategory?: string | null,
   retryable?: boolean
 ): void {
+  // A run ends once. The conductor publishes its own `run.end` when planning
+  // fails and then returns normally rather than throwing, so without this the
+  // recorded failure would be overwritten with "complete" and a SECOND
+  // `run.end` would go out — the web UI saying the run finished while the group
+  // was told it failed. Found by the channel's failure announcement, which
+  // believed the first event.
+  const current = getRun(run.id);
+  if (current && isTerminalRunStatus(current.status)) return;
+
   const now = Date.now();
 
   updateMessageStatus(message.id, status === "failed" ? "error" : "complete", now);

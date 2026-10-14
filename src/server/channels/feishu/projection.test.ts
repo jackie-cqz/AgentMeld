@@ -125,8 +125,13 @@ describe("withinSendBudget", () => {
 
   // Driven through the real send path rather than by poking the counter, so the
   // limit is exercised the way it will actually be hit.
-  const sendOnce = (conversationId: string, now: number) =>
-    projectMessage(agentMessage({ conversationId, id: `msg_${now}_${conversationId}` }), now);
+  // A distinct message each time: projection is deduplicated per message, so
+  // reusing one id would test the dedup rather than the budget.
+  let seq = 0;
+  const sendOnce = (conversationId: string, now: number) => {
+    seq += 1;
+    return projectMessage(agentMessage({ conversationId, id: `msg_${conversationId}_${seq}` }), now);
+  };
 
   it("allows sends up to the window limit and then refuses", async () => {
     const now = 1_000_000;
@@ -396,17 +401,17 @@ describe("projectRunFailure", () => {
   });
 });
 
-/** A failed run row, so `getRun` has something to read for a `run.end`. */
-function createFailedRun(runId: string): string {
+/** A terminal run row, so `getRun` has something to read for a `run.end`. */
+function createFailedRun(runId: string, status: "failed" | "aborted" = "failed"): string {
   getDatabase()
     .prepare(`
       INSERT INTO agent_runs (
         id, conversation_id, agent_id, trigger_message_id, parent_run_id, status,
         stage, error, usage, interrupted, error_category, retryable,
         started_at, finished_at, created_at, updated_at
-      ) VALUES (?, 'conv_1', 'ag_pm', NULL, NULL, 'failed', NULL, 'boom', NULL, 0, 'config', 0, 1, 2, 1, 2)
+      ) VALUES (?, 'conv_1', 'ag_pm', NULL, NULL, ?, NULL, 'boom', NULL, 0, 'config', 0, 1, 2, 1, 2)
     `)
-    .run(runId);
+    .run(runId, status);
   return runId;
 }
 
@@ -516,6 +521,11 @@ describe("startChannelProjection", () => {
     startChannelProjection();
     const failed = createFailedRun("run_failed");
 
+    // The aborted run must EXIST. An earlier version of this test published a
+    // run id with no row behind it, so `getRun` returned null and the event was
+    // dropped for the wrong reason — the test passed even with the status check
+    // removed.
+    createFailedRun("run_aborted", "aborted");
     eventBus.publish({
       type: "run.end",
       conversationId: "conv_1",
