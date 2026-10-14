@@ -381,18 +381,94 @@ export function persistApproval(record: {
       record.approvalType, record.payloadJson, record.now, record.now);
 }
 
+export interface ApprovalRecord {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  runId: string;
+  approvalType: string;
+  status: string;
+  resolvedBy: string | null;
+  resolvedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Upper bound for a caller-supplied `resolvedBy` label. */
+export const MAX_RESOLVED_BY_LENGTH = 128;
+
+/**
+ * Attribution label for approvals that reject themselves during test teardown
+ * (`clearPending*ForTests`). It is NOT used by run cancellation: that goes
+ * through `cancelApproval` / `cancelApprovalsForRun` /
+ * `interruptAllPendingApprovals`, which leave `resolved_by` NULL because
+ * nobody decided anything — the `status` carries that story instead.
+ */
+export const SYSTEM_RESOLVED_BY = "system";
+
+function mapApprovalRow(row: Record<string, unknown>): ApprovalRecord {
+  return {
+    id: row.id as string,
+    conversationId: row.conversation_id as string,
+    agentId: row.agent_id as string,
+    runId: row.run_id as string,
+    approvalType: row.approval_type as string,
+    status: row.status as string,
+    resolvedBy: (row.resolved_by as string | null) ?? null,
+    resolvedAt: (row.resolved_at as number | null) ?? null,
+    createdAt: row.created_at as number,
+    updatedAt: row.updated_at as number
+  };
+}
+
+/**
+ * Read an approval back, including who resolved it.
+ *
+ * This read path did not exist before: `resolved_by` was write-only, so the
+ * fact that it held the *status* instead of an operator went unnoticed.
+ *
+ * `resolvedAt` is when the row stopped being pending, for any reason:
+ * approved, rejected, cancelled, or interrupted. `resolvedBy` is only set when
+ * somebody decided — a cancelled or interrupted row has a timestamp and a null
+ * operator, and its `status` says which happened.
+ */
+export function getApprovalRecord(id: string): ApprovalRecord | undefined {
+  const row = getDatabase()
+    .prepare("SELECT * FROM pending_approvals WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? mapApprovalRow(row) : undefined;
+}
+
+function normalizeResolvedBy(resolvedBy: string | null | undefined): string | null {
+  const trimmed = resolvedBy?.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, MAX_RESOLVED_BY_LENGTH);
+}
+
 /**
  * Conditionally resolve an approval. Returns true only if the approval
  * was still 'pending' — prevents duplicate resolution.
+ *
+ * `resolvedBy` is a caller-declared attribution label, **not** an
+ * authenticated identity: nothing in this codebase verifies it. It exists so
+ * that an operator (a Feishu user's open_id, the web UI, the runtime itself)
+ * can be recorded for audit. Omit it — or pass null — when the operator is
+ * unknown, so the column stays NULL rather than guessing. Do not use it as an
+ * authorization control.
  */
-export function resolveApproval(id: string, approved: boolean, now: number): boolean {
+export function resolveApproval(
+  id: string,
+  approved: boolean,
+  now: number,
+  resolvedBy: string | null = null
+): boolean {
   const result = getDatabase()
     .prepare(`
       UPDATE pending_approvals
       SET status = ?, resolved_by = ?, resolved_at = ?, updated_at = ?
       WHERE id = ? AND status = 'pending'
     `)
-    .run(approved ? "approved" : "rejected", approved ? "approved" : "rejected", now, now, id) as {
+    .run(approved ? "approved" : "rejected", normalizeResolvedBy(resolvedBy), now, now, id) as {
       changes?: number;
     };
   return (result.changes ?? 0) > 0;
@@ -402,10 +478,10 @@ export function cancelApproval(id: string, now: number): boolean {
   const result = getDatabase()
     .prepare(`
       UPDATE pending_approvals
-      SET status = 'cancelled', updated_at = ?
+      SET status = 'cancelled', resolved_at = ?, updated_at = ?
       WHERE id = ? AND status = 'pending'
     `)
-    .run(now, id) as { changes?: number };
+    .run(now, now, id) as { changes?: number };
   return (result.changes ?? 0) > 0;
 }
 
@@ -414,10 +490,10 @@ export function cancelApprovalsForRun(runId: string, now: number) {
   getDatabase()
     .prepare(`
       UPDATE pending_approvals
-      SET status = 'cancelled', updated_at = ?
+      SET status = 'cancelled', resolved_at = ?, updated_at = ?
       WHERE run_id = ? AND status = 'pending'
     `)
-    .run(now, runId);
+    .run(now, now, runId);
 }
 
 /** Startup recovery: mark all pending approvals as interrupted */
@@ -425,10 +501,10 @@ export function interruptAllPendingApprovals(now: number) {
   getDatabase()
     .prepare(`
       UPDATE pending_approvals
-      SET status = 'interrupted', updated_at = ?
+      SET status = 'interrupted', resolved_at = ?, updated_at = ?
       WHERE status = 'pending'
     `)
-    .run(now);
+    .run(now, now);
 }
 
 export function listArtifacts(conversationId: string): Artifact[] {

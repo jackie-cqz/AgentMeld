@@ -1,11 +1,19 @@
 import { z } from "zod";
 import { approvePendingBash, getPendingBash, rejectPendingBash } from "@/server/pending-bash";
 import { eventBus } from "@/server/event-bus";
+import { conflictAlreadyResolved } from "@/server/api-utils";
+import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 
 export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
-  approved: z.boolean()
+  approved: z.boolean(),
+  // Caller-declared attribution label (not authenticated). Omit it, or send
+  // null, when the operator is unknown. Note the deliberate split with the
+  // server side: this boundary rejects an over-long label (400) while
+  // normalizeResolvedBy truncates, because an internal caller may hold a
+  // longer identifier than the HTTP contract allows.
+  resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional()
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -19,12 +27,22 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const entry = getPendingBash(id);
   if (!entry) {
+    // Nothing is waiting in memory. If a resolved record of *this* type exists,
+    // report who handled it: a concurrent double submit lands here too, since
+    // the losing request finds the entry gone and would otherwise never reach
+    // the 409 below. The type check keeps a resolved id from another queue from
+    // being reported as this one's. A row still 'pending' with no in-memory
+    // entry is inconsistent state, not a resolution, so it falls through to 404.
+    const record = getApprovalRecord(id);
+    if (record && record.approvalType === "bash" && record.status !== "pending") {
+      return conflictAlreadyResolved("Pending bash command was already resolved.", record);
+    }
     return Response.json({ error: "Pending bash command not found." }, { status: 404 });
   }
 
   if (parsed.data.approved) {
-    if (!approvePendingBash(id)) {
-      return Response.json({ error: "Pending bash command was already resolved." }, { status: 409 });
+    if (!approvePendingBash(id, parsed.data.resolvedBy)) {
+      return conflictAlreadyResolved("Pending bash command was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
       type: "bash_command.resolved",
@@ -36,8 +54,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, approved: true });
   }
 
-  if (!rejectPendingBash(id)) {
-    return Response.json({ error: "Pending bash command was already resolved." }, { status: 409 });
+  if (!rejectPendingBash(id, parsed.data.resolvedBy)) {
+    return conflictAlreadyResolved("Pending bash command was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({
     type: "bash_command.resolved",

@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { cancelApproval, persistApproval, resolveApproval } from "@/server/repositories";
+import { cancelApproval, persistApproval, resolveApproval, SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
 import { getDatabase } from "@/db/client";
 import { newEvidenceId } from "@/shared/ids";
@@ -74,12 +74,16 @@ export function getAllPendingQuestions(): PendingQuestion[] {
   return Array.from(getStore().values()).map((entry) => entry.question);
 }
 
-export function answerQuestion(id: string, answers: Record<string, string>): boolean {
+export function answerQuestion(
+  id: string,
+  answers: Record<string, string>,
+  resolvedBy?: string | null
+): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
   const now = Date.now();
-  if (!resolveApproval(id, true, now)) return false;
+  if (!resolveApproval(id, true, now, resolvedBy ?? null)) return false;
 
   // P1: Record user_answer evidence — must use a real task_attempt row for FK
   try {
@@ -166,7 +170,7 @@ export function cancelPendingQuestionsForRun(runId: string): void {
 export function clearPendingQuestionsForTests(): void {
   const store = getStore();
   for (const [id, entry] of store) {
-    resolveApproval(id, false, Date.now());
+    resolveApproval(id, false, Date.now(), SYSTEM_RESOLVED_BY);
     entry.resolver({});
   }
   store.clear();
