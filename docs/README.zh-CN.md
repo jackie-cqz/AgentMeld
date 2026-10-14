@@ -55,7 +55,7 @@ AgentMeld 适合本地、可检查、可追踪的多 Agent 工作流，例如：
 
 ### 工具与安全
 
-- 内置工具覆盖文件浏览、文件读取、完整写入、局部 patch、命令验证、产物生成、部署预览、用户询问、附件读取、证据读取、事实更新、任务规划和任务汇报。
+- 内置工具覆盖文件浏览与目录创建、文件读取、完整写入、局部 patch、命令验证、产物生成、部署预览、用户询问、附件读取、证据读取、事实更新、任务规划和任务汇报。
 - 已有源码文件的局部修改优先使用 `fs_patch`，新建文件或明确完整覆盖时使用 `fs_write`。
 - Shell 工具只允许验证命令和经过用户审批的依赖安装；禁止用 shell 重定向、PowerShell 写文件、`sed` 或破坏性清理命令修改源码。
 - Workspace 路径会经过沙箱校验，限制越权访问。
@@ -188,6 +188,8 @@ pnpm agent:bench:full   # 运行完整 benchmark 套件
 ```
 
 仓库中也保留了早期评估和 fixture 脚本。运行应用代码的脚本（`db:seed`、`e2e:*`、`quality:gates`、`agent:bench*`）会先读 `.env.local` 再读 `.env`（通过 `scripts/load-env.mjs`）；其中 benchmark/evaluation 脚本还要求应用已启动且配置好模型服务凭据。当前版本的核心定位仍是运行时可观测性，而不是完整 benchmark 平台。
+
+这些脚本都会调用 `ensureDatabase()`，从而触发启动恢复（`src/db/bootstrap.ts`）。该恢复会把所打开数据库中所有仍标记为 `running` 的 run 强制判为失败 —— 这在进程启动时是正确的（那时不可能有任务在飞），但从第二个进程调用并不成立。所以在 dev server 旁边执行上述任一命令、或本地驱动脚本，都会**杀掉该 server 正在执行的任务**并把它的 attempt 标记为失败，而两侧都不会报错。请先停掉 server，或让脚本指向另一份 `AGENTMELD_DATA_DIR`。
 
 ## 本地数据
 
