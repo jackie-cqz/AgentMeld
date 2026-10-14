@@ -382,7 +382,7 @@ export function persistConductorTask(record: {
     );
 }
 
-function isTerminalRunStatus(status: AgentRunStatus) {
+export function isTerminalRunStatus(status: AgentRunStatus) {
   return status === "complete" || status === "failed" || status === "aborted";
 }
 

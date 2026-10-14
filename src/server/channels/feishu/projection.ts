@@ -1,7 +1,7 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
-import { getChannelConversationByConversationId, getMessage } from "@/server/repositories";
+import { getChannelConversationByConversationId, getMessage, getRun } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/connection";
-import type { Message, MessagePart } from "@/shared/types";
+import type { AgentRun, Message, MessagePart } from "@/shared/types";
 
 /**
  * Outbound projection: what an agent produced in a conversation also appears in
@@ -67,6 +67,7 @@ declare global {
   var __agentMeldChannelProjectionPaused: boolean | undefined;
   var __agentMeldProjectionSendLog: Map<string, number[]> | undefined;
   var __agentMeldProjectionNotices: Set<string> | undefined;
+  var __agentMeldProjectionProjectedMessages: Set<string> | undefined;
 }
 
 /**
@@ -92,6 +93,11 @@ function getSendLog(): Map<string, number[]> {
 function getNotices(): Set<string> {
   globalThis.__agentMeldProjectionNotices ??= new Set<string>();
   return globalThis.__agentMeldProjectionNotices;
+}
+
+function getProjectedMessages(): Set<string> {
+  globalThis.__agentMeldProjectionProjectedMessages ??= new Set<string>();
+  return globalThis.__agentMeldProjectionProjectedMessages;
 }
 
 /**
@@ -126,6 +132,52 @@ async function noticeOnce(
   }
 }
 
+/**
+ * Tell the group a run did not finish.
+ *
+ * §5.6 and §5.8 both ask for this and neither was implemented: a failure was
+ * only visible as "no answer arrived", which in a chat is indistinguishable
+ * from being ignored.
+ *
+ * Two deliberate choices:
+ *
+ * - The reason is NOT posted. An error string routinely carries environment
+ *   variable names, file paths and provider internals — the same detail that
+ *   should not reach a room from a reply — and a group cannot act on it anyway.
+ * - The send budget does not apply. Failures are bounded by the number of runs
+ *   and announced once each, and the moment a failure notice is suppressed for
+ *   being the twenty-first message is the moment it is most needed. The pause
+ *   switch still applies, because that is an explicit instruction to stop.
+ */
+export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcome> {
+  if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
+
+  // Checked here as well as at the subscription. Without it, excluding aborts
+  // rests entirely on one line in the subscriber, and a test that removes that
+  // line stays green as long as its fixture has no run row — which is exactly
+  // what happened.
+  if (run.status !== "failed") return { status: "skipped", reason: "run did not fail" };
+
+  const channelConversation = getChannelConversationByConversationId(run.conversationId);
+  if (!channelConversation) return { status: "skipped", reason: "conversation is not on a channel" };
+
+  const channel = getFeishuChannelForAgent(run.agentId);
+  if (!channel) return { status: "skipped", reason: "agent has no live channel" };
+
+  const notices = getNotices();
+  const key = `run-failed:${run.id}`;
+  if (notices.has(key)) return { status: "skipped", reason: "already announced" };
+  notices.add(key);
+
+  const result = await channel.send(channelConversation.chatId, {
+    text: "⚠️ 这次任务没能完成。详情请在 AgentMeld 网页查看。"
+  });
+  console.info(
+    `[feishu] announced failure of ${run.id} -> ${channelConversation.chatId} (${result.messageId})`
+  );
+  return { status: "sent", chatId: channelConversation.chatId, agentId: run.agentId };
+}
+
 export async function projectMessage(message: Message, now = Date.now()): Promise<ProjectionOutcome> {
   if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
 
@@ -149,6 +201,13 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
 
   const text = projectableText(message.parts);
   if (!text) return { status: "skipped", reason: "nothing projectable" };
+
+  // One post per message. `message.end` is not guaranteed to be seen exactly
+  // once, and until this existed the only thing standing between a repeat and a
+  // duplicate post in the room was that nothing happened to repeat it.
+  const projected = getProjectedMessages();
+  if (projected.has(message.id)) return { status: "skipped", reason: "already projected" };
+  projected.add(message.id);
 
   if (!withinSendBudget(message.conversationId, now)) {
     // The budget is the backstop for a runaway, so it must be visible rather
@@ -192,12 +251,26 @@ export function startChannelProjection(): () => void {
     //
     // Waiting for the end is also what makes this aggregated rather than
     // per-token: the runner streams parts into a single message.
+    if (event.type === "run.end") {
+      // A run that failed produces no reply, so without this the group sees
+      // nothing at all and cannot tell a failure from being ignored. "aborted"
+      // is not announced: that is the user stopping it, which they know.
+      if (event.status !== "failed") return;
+      const run = getRun(event.runId);
+      if (!run) return;
+      void projectRunFailure(run).catch((error: unknown) => {
+        console.error("[feishu] failed to announce a run failure:", error);
+      });
+      return;
+    }
+
     if (event.type !== "message.end") return;
     const message = getMessage(event.messageId);
     if (!message || message.role !== "agent") return;
-    // An errored reply is not an answer worth posting. Note that an ABORTED run
-    // is normalised to "complete" downstream, so a reply the user stopped
-    // halfway IS posted and looks like a finished answer.
+    // An errored reply is not an answer worth posting; the run-level failure
+    // above is what tells the group instead. Note that an ABORTED run is
+    // normalised to "complete" downstream, so a reply the user stopped halfway
+    // IS posted and looks like a finished answer.
     if ((event.status ?? message.status) !== "complete") return;
     void projectMessage(message).catch((error: unknown) => {
       console.error("[feishu] failed to project a message:", error);
@@ -214,4 +287,5 @@ export function stopChannelProjectionForTests(): void {
   globalThis.__agentMeldChannelProjectionPaused = undefined;
   globalThis.__agentMeldProjectionSendLog = undefined;
   globalThis.__agentMeldProjectionNotices = undefined;
+  globalThis.__agentMeldProjectionProjectedMessages = undefined;
 }
