@@ -179,6 +179,24 @@ describe("feishu connection layer", () => {
     expect(policy.botLoopGuard?.onTrip).toBe("reject");
   });
 
+  it("hands the SDK a persistent cache, so dedup marks outlive the process", async () => {
+    // Without it the SDK's own dedup is in memory and every mark is lost on
+    // restart — and its marks are what cover a redelivery that happens to be
+    // batched differently. Asserting the option exists is not enough, so this
+    // also exercises the round trip through the database.
+    seedBinding("ag_pm", "cli_a");
+    await startFeishuChannels();
+
+    const cache = created[0].options.cache as {
+      set: (key: string, value: unknown, expire?: number, opts?: { namespace?: string }) => Promise<boolean>;
+      get: (key: string, opts?: { namespace?: string }) => Promise<unknown>;
+    };
+    expect(cache).toBeDefined();
+
+    await cache.set("om_seen", "1", undefined, { namespace: "channel:seen" });
+    expect(await cache.get("om_seen", { namespace: "channel:seen" })).toBe("1");
+  });
+
   it("publishes an inbound event with the trimmed shape and never replies", async () => {
     seedBinding("ag_pm", "cli_a");
     await startFeishuChannels();
