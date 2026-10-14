@@ -308,6 +308,36 @@ describe("conductor attempt bookkeeping", () => {
     expect(rows[0].verification_status).toBe("rejected");
     expect(rows[0].failure_context_json).toContain("Missing required outputs");
   });
+
+  // Regression: the attempt row is created before the child run and only finished at the
+  // end of the iteration. A throw in between used to leave the row at 'queued' forever,
+  // and — because executeConductorPlan awaits runChildTask through Promise.all with no
+  // catch of its own — it also took the whole plan down with it.
+  it("finishes the in-flight attempt when the child run throws", async () => {
+    const { conversationId, conductorRunId, messageId, triggerMessage } = seedConversationAndRun();
+    startAgentRunMock.mockImplementation(() => {
+      throw new Error("child run exploded");
+    });
+
+    await expect(
+      executeConductorPlan(
+        conversationId,
+        [taskWith()],
+        [WORKER],
+        conductorRunId,
+        `plan_${conductorRunId}_init`,
+        triggerMessage,
+        CONDUCTOR,
+        messageId
+      )
+    ).rejects.toThrow("child run exploded");
+
+    const rows = attemptRows(conversationId).filter((row) => row.task_id === "t1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].execution_status).toBe("failed");
+    expect(rows[0].verification_status).toBe("rejected");
+    expect(rows[0].failure_context_json).toContain("child run exploded");
+  });
 });
 
 describe("conductor meta-attempt created by a clarifying question", () => {

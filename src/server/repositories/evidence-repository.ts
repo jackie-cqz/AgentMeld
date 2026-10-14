@@ -174,6 +174,74 @@ export function updateTaskAttemptVerification(
     .run(verificationStatus, failureContextJson, now, attemptId);
 }
 
+/** 'queued' and 'running' are the only non-terminal execution states an attempt has. */
+function isNonTerminal(executionStatus: string): boolean {
+  return executionStatus === "queued" || executionStatus === "running";
+}
+
+/**
+ * Finish one attempt as failed, but ONLY while it is still non-terminal.
+ *
+ * Used on the error path of `runChildTask`. A throw after the attempt was already
+ * finished (output binding, FTS rebuild, the blocked-envelope branch) must not rewrite
+ * a correct terminal row as failed, so the current row is read back first and a
+ * terminal row is left alone. Returns whether a write happened.
+ */
+export function failOpenTaskAttempt(attemptId: string, error: string, now: number): boolean {
+  const row = getTaskAttempt(attemptId);
+  if (!row || !isNonTerminal(row.executionStatus)) return false;
+  finishTaskAttempt(attemptId, "failed", now);
+  updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ error }), now);
+  return true;
+}
+
+/**
+ * Retire attempt rows that no live writer will ever finish.
+ *
+ * CAUTION — only call this from the process-start recovery path, and only after every
+ * run still marked 'running' has been force-failed. That precondition, not the
+ * `status <> 'running'` clause below, is what keeps a live attempt from being retired:
+ * `recoverOrphanedRuns` marks every 'running' run interrupted before calling this, so by
+ * then the clause matches every row regardless. In a single process `ensureDatabase` is
+ * memoized and its first call necessarily precedes any run, so this only ever sees rows
+ * whose owner is genuinely gone. A second caller — a periodic sweep, or another process
+ * sharing the data directory — must pass the run ids to retire explicitly rather than
+ * re-deriving "not running", or it will retire attempts that are still in flight.
+ *
+ * Rows of this shape have three sources: the retry loop writing only `execution_status`
+ * (fixed for the happy path, but a throw inside `runChildTask` leaves the in-flight
+ * attempt behind), a clarifying-question meta-attempt written as 'running' by builds
+ * older than the terminal-write fix, and any run interrupted mid-flight.
+ *
+ * A conductor meta-attempt is a pure evidence container, not an in-flight attempt:
+ * `reported_complete` is its success token (what `finishTaskAttempt` writes) and it never
+ * gets verdicts, so its verification status is left as it is. It is identified by
+ * `task_id = 'conductor' AND attempt = 0` — the id alone is not sufficient, because plan
+ * task ids come from the model and `validatePlan` does not reserve that word. A child
+ * attempt that never finished is genuinely failed.
+ *
+ * `finished_at` is only filled when absent — an already-finished row must not be
+ * re-timestamped by a repair pass.
+ */
+export function retireNonTerminalAttempts(now: number): number {
+  const result = getDatabase()
+    .prepare(`
+      UPDATE task_attempts
+      SET execution_status = CASE WHEN task_id = 'conductor' AND attempt = 0 THEN 'reported_complete' ELSE 'failed' END,
+          verification_status = CASE WHEN task_id = 'conductor' AND attempt = 0 THEN verification_status ELSE 'rejected' END,
+          failure_context_json = CASE
+            WHEN task_id = 'conductor' AND attempt = 0 THEN failure_context_json
+            ELSE COALESCE(failure_context_json, '{"error":"attempt was left non-terminal by a run that had already stopped"}')
+          END,
+          finished_at = COALESCE(finished_at, ?),
+          updated_at = ?
+      WHERE execution_status IN ('queued', 'running')
+        AND conductor_run_id IN (SELECT id FROM agent_runs WHERE status <> 'running')
+    `)
+    .run(now, now) as { changes?: number };
+  return result.changes ?? 0;
+}
+
 export function getTaskAttempt(attemptId: string): TaskAttemptRecord | undefined {
   const row = getDatabase()
     .prepare("SELECT * FROM task_attempts WHERE id = ?")
