@@ -69,3 +69,11 @@ export function newChannelBindingId() {
 export function newChannelBindingSessionId() {
   return `cbs_${nanoid(ID_SIZE)}`;
 }
+
+export function newChannelConversationId() {
+  return `cc_${nanoid(ID_SIZE)}`;
+}
+
+export function newChannelInboundMessageId() {
+  return `cim_${nanoid(ID_SIZE)}`;
+}
