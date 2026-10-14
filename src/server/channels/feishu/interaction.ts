@@ -1,6 +1,7 @@
 import type { CardActionEvent } from "@larksuite/channel";
 import { eventBus } from "@/server/event-bus";
 import { isChannelProjectionPaused } from "@/server/channels/feishu/projection";
+import { cancelRunFromCard } from "@/server/channels/feishu/progress";
 import { answerQuestion, getPendingQuestion } from "@/server/pending-questions";
 import { approvePlan, getPendingPlan, rejectPlan } from "@/server/dispatch-plan-manager";
 import { approvePendingBash, getPendingBash, rejectPendingBash } from "@/server/pending-bash";
@@ -49,7 +50,8 @@ export type CardActionValue =
       pendingType: ApprovalKind;
       pendingId: string;
       decision: "approve" | "reject";
-    };
+    }
+  | { kind: "cancel_run"; runId: string };
 
 const APPROVAL_KINDS: ApprovalKind[] = ["plan", "bash", "write"];
 
@@ -67,6 +69,11 @@ export function decodeCardActionValue(value: unknown): CardActionValue | null {
       questionIndex: raw.questionIndex,
       answer: raw.answer
     };
+  }
+
+  if (raw.kind === "cancel_run") {
+    if (typeof raw.runId !== "string" || !raw.runId) return null;
+    return { kind: "cancel_run", runId: raw.runId };
   }
 
   if (raw.kind === "approval") {
@@ -287,9 +294,9 @@ export async function handleCardAction(
   const value = decodeCardActionValue(event.action?.value);
   if (!value) return undefined;
 
-  return value.kind === "ask_user"
-    ? handleQuestionAnswer(value, event)
-    : handleApprovalDecision(value, event);
+  if (value.kind === "ask_user") return handleQuestionAnswer(value, event);
+  if (value.kind === "approval") return handleApprovalDecision(value, event);
+  return handleCancelRun(value, event);
 }
 
 async function handleQuestionAnswer(
@@ -350,6 +357,22 @@ async function handleQuestionAnswer(
     },
     toast: { type: "success", content: "已回答。" }
   };
+}
+
+async function handleCancelRun(
+  value: Extract<CardActionValue, { kind: "cancel_run" }>,
+  event: CardActionEvent
+): Promise<Record<string, unknown> | undefined> {
+  const run = getRun(value.runId);
+  if (!run) return { toast: { type: "info", content: "这次运行已经结束了。" } };
+
+  const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId);
+  if (!outcome.ok) {
+    // Not an error tone for a finished run — nothing went wrong, the moment
+    // passed.
+    return { toast: { type: outcome.message.includes("结束") ? "info" : "error", content: outcome.message } };
+  }
+  return { toast: { type: "success", content: "已取消。" } };
 }
 
 /** The pending item, or undefined when it is gone. */

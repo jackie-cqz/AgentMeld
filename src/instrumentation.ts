@@ -33,6 +33,11 @@ export async function register(): Promise<void> {
   // projecting state.
   startChannelInteractions();
 
+  const { startChannelProgress } = await import("@/server/channels/feishu/progress");
+  // Progress cards are their own subscription: they follow runs, not messages,
+  // and they are the noisiest thing the channel does.
+  startChannelProgress();
+
   // Deliberately not awaited. A slow or unreachable platform must never delay
   // or fail server startup; each app's outcome is reported through a
   // `channel.connection` event, which the settings panel renders.
