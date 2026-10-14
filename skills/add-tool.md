@@ -1,22 +1,22 @@
 # Skill：新增一个工具
 
 > **目的**:给 Agent 加一个内置工具(LLM 可调用的 function),如 `read_artifact`、`fs_write`、`bash`。
-> **契约文档**:`specs/07-tools.md`。
-> *行号基线:commit `b60c4f8`。对不上时按符号名搜索。*
+> ⚠️ 本文原引用的 `specs/07-tools.md`、`CLAUDE.md` 等文档**不在本仓库中**,无法解析;这些引用已在文中标出,请以 `src/` 下的实际符号名为准。
+> *文中 `file:line` 是写作时的快照,可能漂移;对不上时按符号名搜索。*
 
 ---
 
 ## 何时用 / 何时不用
 
 - ✅ 想让 Agent 具备一种新的「动作」(读写某资源、调外部能力、向用户提问)。
-- ❌ 想改某个工具的行为 / 参数——直接改那个工具文件 + 同步 spec 07,不用走「新增」。
+- ❌ 想改某个工具的行为 / 参数——直接改那个工具文件即可,不用走「新增」。
 - ❌ Claude Code agent 想要的能力 SDK 已自带(它走 SDK 预置工具,不读本项目工具表,见 §坑 5)。
 
 ---
 
 ## 前置阅读
 
-1. `specs/07-tools.md` —— 工具清单、签名约定、命名规则、错误契约。
+1. `src/server/tools/` 下现有工具实现 —— 工具清单、签名约定、命名规则、错误契约(原参考文档 `specs/07-tools.md` 不在本仓库中,无法解析)。
 2. `src/server/tools/types.ts` —— `ToolDef` / `ToolContext` / `ToolResult`。
 3. `src/server/tools/read-artifact.ts` —— **最简模板**(纯读、zod 校验、按会话 scope)。
 4. `src/server/tools/registry.ts` —— 注册 + `execute`(事实上的 ToolExecutor)。
@@ -41,7 +41,7 @@ export interface ToolDef {
 `ToolResult`(`types.ts:15-17`):`{ ok: true; value: unknown } | { ok: false; error: string }`。
 
 要点:
-- **name** 必须 `^[a-zA-Z0-9_]+$`(snake_case,无点无连字符)——它要当 LLM 可调用标识符(spec 07:42)。
+- **name** 必须 `^[a-zA-Z0-9_]+$`(snake_case,无点无连字符)——它要当 LLM 可调用标识符。
 - **input schema 写两遍**:`parameters` 是手写 **JSON Schema**(给 LLM 看),运行时另用一个 **zod schema**(`safeParse`)。两者**不自动同步,手工保持一致**。
 - **handler 收原始 `unknown`**(LLM 生成的,可能不合规),必须先 `safeParse`;**返回 `ToolResult` 对象,不是 `StreamEvent`**(adapter 负责把它包成 `tool.result` 事件)。
 
@@ -114,9 +114,9 @@ function buildRegistry(): ToolRegistry {
 
 `src/db/builtin-agents.ts` 各 agent 的 `toolNames` 数组(`:24/48/73/98/121`)——只在「想让某内置 agent 出厂自带」时加;且只影响**全新 seed**,不改已有库。
 
-### 5. 同步 spec 07
+### 5.(不适用)同步 spec 07
 
-`specs/07-tools.md`:内置工具清单表(`:69-77`)加一行 + 写一节 `### my_tool`。
+原指南要求同步 `specs/07-tools.md` 的内置工具清单表,但该文件不在本仓库中。若你的上游仓库存在该文档,再补同步;否则以代码为准。
 
 ---
 
@@ -132,23 +132,23 @@ function buildRegistry(): ToolRegistry {
 
 ## 常见坑
 
-1. **沙箱:碰文件系统的工具(fs_*/bash)绝不能直接用 `ctx.workspacePath`**。每个路径参数过 `assertPathWithinWorkspace(workspace, target)`(`src/server/workspace-utils.ts:47-53`)→ 内部 `resolveSafePath`(`:40-45`)以 `getEffectiveCwd(workspace)` 解析相对路径,逃出子树就抛 `Path "..." is outside workspace`。先 `getWorkspaceForConversation(ctx.conversationId)` 拿 workspace(`fs-read.ts:37-38`)。bash 的 cwd 强制为 `getEffectiveCwd`。(effective cwd = local 模式 `boundPath`,sandbox 模式 `rootPath`,`workspace-utils.ts:10-16`。)spec 07:147、292-301。
+1. **沙箱:碰文件系统的工具(fs_*/bash)绝不能直接用 `ctx.workspacePath`**。每个路径参数过 `assertPathWithinWorkspace(workspace, target)`(`src/server/workspace-utils.ts:47-53`)→ 内部 `resolveSafePath`(`:40-45`)以 `getEffectiveCwd(workspace)` 解析相对路径,逃出子树就抛 `Path "..." is outside workspace`。先 `getWorkspaceForConversation(ctx.conversationId)` 拿 workspace(`fs-read.ts:37-38`)。bash 的 cwd 强制为 `getEffectiveCwd`。(effective cwd = local 模式 `boundPath`,sandbox 模式 `rootPath`,`workspace-utils.ts:10-16`。)
 
-2. **业务错误 `return {ok:false,error}`,不要 `throw`**(spec 07:251)。`throw` 只留给「真正意外的内部异常」,registry 会兜住它。错误串会作为 `tool_result.isError=true` 喂给 LLM,所以要写人/模型都能懂的原因(CLAUDE.md §4.4:异常要有上下文)。
+2. **业务错误 `return {ok:false,error}`,不要 `throw`**。`throw` 只留给「真正意外的内部异常」,registry 会兜住它。错误串会作为 `tool_result.isError=true` 喂给 LLM,所以要写人/模型都能懂的原因。
 
-3. **两个 schema 手工对齐**:`parameters`(JSON Schema)和 zod `ArgsSchema` 各写一份,改一个记得改另一个。JSON Schema 建议 `type:'object'`(别用 `oneOf`,DeepSeek/OpenAI 兼容性差)、列全 `required`、`description` 写具体(spec 07:284-287)。
+3. **两个 schema 手工对齐**:`parameters`(JSON Schema)和 zod `ArgsSchema` 各写一份,改一个记得改另一个。JSON Schema 建议 `type:'object'`(别用 `oneOf`,DeepSeek/OpenAI 兼容性差)、列全 `required`、`description` 写具体。
 
 4. **按会话 scope**:碰 DB / 文件的工具要用 `ctx.conversationId` 限定,防跨会话越权(`read-artifact.ts:31`、`write-artifact.ts:78-80`)。
 
-5. **Claude Code 走的是另一条路**:`claude-code-adapter.ts` 里那些 agent **不读本项目工具表**,用 SDK 预置工具;只有 `write_artifact`/`read_artifact`/`ask_user` 被按名桥接进 SDK MCP 层(`:134/153/193`),由 `canUseTool` 钩子(`:231`)放行。普通新工具只需管好 Custom 这条路(spec 07:313-325)。
+5. **Claude Code 走的是另一条路**:`claude-code-adapter.ts` 里那些 agent **不读本项目工具表**,用 SDK 预置工具;只有 `write_artifact`/`read_artifact`/`ask_user` 被按名桥接进 SDK MCP 层(`:134/153/193`),由 `canUseTool` 钩子(`:231`)放行。普通新工具只需管好 Custom 这条路。
 
 6. **`value.artifactId` 约定**:若 handler 成功 `value` 里含字符串 `artifactId`,Custom adapter 自动发 `artifact.create`、Runner 注入 `artifact_ref` part(`custom-agent-adapter.ts:281-289`、`write-artifact.ts:18-21`)。别自己发那个事件。
 
-7. **黑名单是单一数据源**:若新工具引入要禁的 shell 命令,规则只写 `src/server/security.ts` 的 `getBannedPatterns`,并同步 spec 11(CLAUDE.md §5.2)。
+7. **黑名单是单一数据源**:若新工具引入要禁的 shell 命令,规则只写 `src/server/security.ts` 的 `getBannedPatterns`。
 
 ---
 
-## 提交自检(对齐 CLAUDE.md §6.5)
+## 提交自检
 
 - [ ] `pnpm typecheck` / `pnpm lint` 过
 - [ ] handler 入参先 `safeParse`,业务错走 `{ok:false,error}` 而非 throw
@@ -156,4 +156,4 @@ function buildRegistry(): ToolRegistry {
 - [ ] 碰 fs/bash 的:路径全过 `assertPathWithinWorkspace`,cwd 为 effective cwd
 - [ ] 长操作尊重 `ctx.abortSignal`
 - [ ] registry 注册了;UI `AVAILABLE_TOOLS` 加了(若需用户可勾)
-- [ ] `specs/07` 已同步;引入禁用命令的同步了 `security.ts` + spec 11
+- [ ] 若上游仓库存在 `specs/07` 等规格文档,已同步(本仓库未收录);引入禁用命令的已同步 `security.ts`

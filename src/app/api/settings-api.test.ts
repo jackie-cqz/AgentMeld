@@ -67,7 +67,7 @@ describe("PATCH /api/settings", () => {
     expect(res.status).toBe(400);
   });
 
-  it("updates multiple keys at once", async () => {
+  it("updates multiple keys at once and returns them masked", async () => {
     const req = jsonRequest("PATCH", {
       openaiApiKey: "sk-openai-123",
       deepseekApiKey: "sk-ds-456"
@@ -76,8 +76,25 @@ describe("PATCH /api/settings", () => {
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as { settings: { openaiApiKey: string | null; deepseekApiKey: string | null } };
-    expect(body.settings.openaiApiKey).toBe("sk-openai-123");
-    expect(body.settings.deepseekApiKey).toBe("sk-ds-456");
+    // PATCH must not echo raw secrets back to the caller.
+    expect(body.settings.openaiApiKey).not.toBe("sk-openai-123");
+    expect(body.settings.deepseekApiKey).not.toBe("sk-ds-456");
+    expect(body.settings.openaiApiKey).toContain("123");
+    expect(body.settings.deepseekApiKey).toContain("456");
+
+    expect(getSettings().openaiApiKey).toBe("sk-openai-123");
+    expect(getSettings().deepseekApiKey).toBe("sk-ds-456");
+  });
+
+  it("does not leak stored keys when PATCHed with an empty body", async () => {
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "sk-SETTINGS-LEAK-1234" }));
+
+    const res = await PATCH(jsonRequest("PATCH", {}));
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as { settings: { deepseekApiKey: string | null } };
+    expect(body.settings.deepseekApiKey).not.toBe("sk-SETTINGS-LEAK-1234");
+    expect(body.settings.deepseekApiKey).toMatch(/^\*+1234$/);
   });
 
   it("allows setting key to null to clear it", async () => {

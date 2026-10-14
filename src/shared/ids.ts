@@ -57,3 +57,7 @@ export function newEvidenceId() {
 export function newVerdictId() {
   return `vd_${nanoid(ID_SIZE)}`;
 }
+
+export function newFactId() {
+  return `fact_${nanoid(ID_SIZE)}`;
+}

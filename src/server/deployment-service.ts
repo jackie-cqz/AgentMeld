@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { getDataDir } from "@/db/client";
 import { getArtifact } from "@/server/repositories";
@@ -199,20 +200,49 @@ function validatePublishRoot(configuredPath: string | null): string {
     throw new Error("Deployment publish directory must be an absolute non-root directory.");
   }
 
-  const normalized = process.platform === "win32" ? publishRoot.toLowerCase() : publishRoot;
+  const normalized = normalizePathForComparison(publishRoot);
+  // macOS routes per-user temp directories through /var/folders, so the broad
+  // /var guard below would reject every os.tmpdir() target. Allow the OS temp
+  // root explicitly (lexical and realpath form) instead of weakening /var.
+  const tempRoots = [os.tmpdir(), realPathOrResolve(os.tmpdir())].map(normalizePathForComparison);
+  if (tempRoots.some((tempRoot) => isSameOrInside(normalized, tempRoot))) {
+    return publishRoot;
+  }
+
   const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
+  const isWindows = process.platform === "win32";
   const forbidden = [
     home ? path.join(home, ".ssh") : "",
-    process.platform === "win32" ? process.env.WINDIR ?? "C:\\Windows" : "/etc",
-    process.platform === "win32" ? process.env.ProgramFiles ?? "C:\\Program Files" : "/usr",
-    process.platform === "win32" ? process.env.ProgramData ?? "C:\\ProgramData" : "/var"
-  ].filter(Boolean).map((item) => process.platform === "win32" ? path.resolve(item).toLowerCase() : path.resolve(item));
+    isWindows ? process.env.WINDIR ?? "C:\\Windows" : "/etc",
+    isWindows ? process.env.ProgramFiles ?? "C:\\Program Files" : "/usr",
+    isWindows ? process.env.ProgramData ?? "C:\\ProgramData" : "/var"
+  ]
+    .filter(Boolean)
+    .flatMap((item) => [item, realPathOrResolve(item)])
+    .map(normalizePathForComparison);
 
-  if (forbidden.some((item) => normalized === item || normalized.startsWith(item + path.sep))) {
+  if (forbidden.some((item) => isSameOrInside(normalized, item))) {
     throw new Error("Deployment publish directory points to a protected system location.");
   }
 
   return publishRoot;
+}
+
+function normalizePathForComparison(target: string): string {
+  const resolved = path.resolve(target);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function realPathOrResolve(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+function isSameOrInside(target: string, root: string): boolean {
+  return target === root || target.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
 }
 
 function buildPublicDeploymentUrl(baseUrl: string | null, deploymentId: string): string {

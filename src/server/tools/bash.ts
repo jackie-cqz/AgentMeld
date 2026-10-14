@@ -69,9 +69,23 @@ function findSourceMutationPattern(command: string): RegExp | null {
   return null;
 }
 
+// Splits a shell command into the segments that actually execute. Pipeline
+// stages (`|`, `|&`), newlines and background `&` each run a separate command,
+// so every segment must be validated on its own — nothing may be discarded.
+// The lone `&` in shell redirects such as `2>&1` is not a separator.
+const COMMAND_SEPARATOR = /\s*(?:&&|\|\||\|&|;|\||\r?\n|(?<!>)&)\s*/;
+
+function splitCommandSegments(command: string): string[] {
+  return command
+    .split(COMMAND_SEPARATOR)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+// Segmenting happens in splitCommandSegments; this only removes benign output
+// redirects and must never drop a pipeline stage.
 function stripOutputFilter(segment: string): string {
   return segment
-    .split("|")[0]
     .replace(/\s+2>&1\b/g, "")
     .replace(/\s+1>\s*\$null\b/gi, "")
     .trim();
@@ -92,10 +106,7 @@ function isDependencyCommandSegment(segment: string): boolean {
 }
 
 export function isVerificationOnlyCommand(command: string): boolean {
-  const segments = command
-    .split(/\s*(?:;|&&|\|\|)\s*/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = splitCommandSegments(command);
   if (segments.length === 0) return false;
 
   let sawVerification = false;
@@ -107,11 +118,8 @@ export function isVerificationOnlyCommand(command: string): boolean {
   return sawVerification;
 }
 
-function isDependencyOnlyCommand(command: string): boolean {
-  const segments = command
-    .split(/\s*(?:;|&&|\|\|)\s*/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+export function isDependencyOnlyCommand(command: string): boolean {
+  const segments = splitCommandSegments(command);
   if (segments.length === 0) return false;
 
   let sawDependencyCommand = false;

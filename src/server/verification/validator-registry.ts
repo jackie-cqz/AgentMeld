@@ -57,7 +57,9 @@ export function validateCriterion(
 }
 
 function validateFileExists(path: string, evidence: EvidenceRecord[]): ValidationResult {
-  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path);
+  // Evidence with status "invalid" comes from a failed/blocked tool call and must
+  // never satisfy a criterion — only verified evidence counts (Evidence > declaration).
+  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path && e.status === "valid");
   if (matched.length > 0) {
     return { passed: true, evidenceIds: matched.map(e => e.id), reason: `File "${path}" was written.` };
   }
@@ -65,7 +67,7 @@ function validateFileExists(path: string, evidence: EvidenceRecord[]): Validatio
 }
 
 function validateFileChanged(path: string, evidence: EvidenceRecord[]): ValidationResult {
-  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path);
+  const matched = evidence.filter(e => e.type === "file_written" && e.subjectId === path && e.status === "valid");
   if (matched.length > 0) {
     return { passed: true, evidenceIds: matched.map(e => e.id), reason: `File "${path}" was modified.` };
   }
@@ -73,8 +75,11 @@ function validateFileChanged(path: string, evidence: EvidenceRecord[]): Validati
 }
 
 function validateCommandExit(command: string, expectedExitCode: number, evidence: EvidenceRecord[]): ValidationResult {
+  // A blocked/never-run command (security policy, rejected approval) is recorded
+  // with status "invalid", so requiring "valid" means the command actually ran.
   const matched = evidence.filter(e =>
     (e.type === "command_executed" || e.type === "test_executed") &&
+    e.status === "valid" &&
     e.subjectId.includes(command.slice(0, 60))
   );
   if (matched.length === 0) {
@@ -152,16 +157,34 @@ function hasArtifactContent(content: import("@/shared/types").ArtifactContent): 
 function validateDeploymentCreated(outputKey: string | undefined, evidence: EvidenceRecord[]): ValidationResult {
   const matched = evidence.filter(e =>
     e.type === "deployment_created" &&
+    e.status === "valid" &&
     (!outputKey || e.subjectId === outputKey)
   );
+  // A deployment tool can report ok:true while the deployment itself failed
+  // (deployment-service status "failed"), so the payload status must be checked too.
+  const succeeded = matched.filter(e => readDeploymentStatus(e.payloadJson) !== "failed");
+  if (succeeded.length > 0) {
+    return { passed: true, evidenceIds: succeeded.map(e => e.id), reason: `Deployment was created.` };
+  }
   if (matched.length > 0) {
-    return { passed: true, evidenceIds: matched.map(e => e.id), reason: `Deployment was created.` };
+    return { passed: false, evidenceIds: matched.map(e => e.id), reason: `Deployment evidence reports a failed deployment.` };
   }
   return { passed: false, evidenceIds: [], reason: `No deployment_created evidence found.` };
 }
 
+function readDeploymentStatus(payloadJson: string): string {
+  try {
+    const payload = JSON.parse(payloadJson) as Record<string, unknown>;
+    return typeof payload.deploymentStatus === "string" ? payload.deploymentStatus : "";
+  } catch {
+    return "";
+  }
+}
+
 function validateUserConfirmation(evidence: EvidenceRecord[]): ValidationResult {
-  const matched = evidence.filter(e => e.type === "user_answered" || e.type === "approval_resolved");
+  const matched = evidence.filter(e =>
+    (e.type === "user_answered" || e.type === "approval_resolved") && e.status === "valid"
+  );
   if (matched.length > 0) {
     return { passed: true, evidenceIds: matched.map(e => e.id), reason: `User confirmation received.` };
   }

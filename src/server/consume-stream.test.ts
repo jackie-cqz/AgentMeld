@@ -350,4 +350,98 @@ describe("consumeStream", () => {
       deployment: expect.objectContaining({ status: "ready" })
     });
   });
+
+  it("appends streamed parts after initialParts and offsets their indices", async () => {
+    const published: StreamEvent[] = [];
+    const unsubscribe = eventBus.subscribe(({ event }) => published.push(event));
+    try {
+      const result = await consumeStream({
+        stream: eventsToStream([
+          {
+            type: "part.start", conversationId: "c1", timestamp: 1,
+            messageId: "", partIndex: 0,
+            part: { type: "text", content: "" }
+          },
+          {
+            type: "part.delta", conversationId: "c1", timestamp: 2,
+            messageId: "", partIndex: 0,
+            delta: { type: "text.append", text: "aggregate summary" }
+          },
+          {
+            type: "part.end", conversationId: "c1", timestamp: 3,
+            messageId: "", partIndex: 0
+          }
+        ]),
+        messageId: "msg_aggregate",
+        runId: "run_conductor",
+        initialParts: [{ type: "tool_use", callId: "call_1", toolName: "plan_tasks", args: {} }]
+      });
+
+      // The earlier stage's part is preserved and the new part is appended after it.
+      expect(result.parts).toHaveLength(2);
+      expect(result.parts[0]).toMatchObject({ type: "tool_use", callId: "call_1" });
+      expect(result.parts[1]).toEqual({ type: "text", content: "aggregate summary" });
+
+      // Live events must target the existing part indices so the client appends, not overwrites.
+      const start = published.find((event) => event.type === "part.start");
+      expect(start).toMatchObject({ messageId: "msg_aggregate", partIndex: 1 });
+      const delta = published.find((event) => event.type === "part.delta");
+      expect(delta).toMatchObject({ messageId: "msg_aggregate", partIndex: 1 });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps an appended tool part when a later streamed part arrives", async () => {
+    // Regression: part events were placed with `parts[event.partIndex]` while tool
+    // parts were appended, so once a tool call was interleaved the stream index
+    // fell behind the array index and the next text part overwrote that call's
+    // tool_use (leaving a tool_result with no matching call).
+    const interleaved = (): StreamEvent[] => [
+      {
+        type: "part.start", conversationId: "c1", timestamp: 1, messageId: "", partIndex: 0,
+        part: { type: "text", content: "first" }
+      },
+      { type: "part.end", conversationId: "c1", timestamp: 2, messageId: "", partIndex: 0 },
+      {
+        type: "tool.call", conversationId: "c1", timestamp: 3, messageId: "",
+        callId: "call_1", toolName: "read_artifact", args: { artifactId: "art_1" }
+      },
+      {
+        type: "tool.result", conversationId: "c1", timestamp: 4, messageId: "",
+        callId: "call_1", result: "content here", isError: false
+      },
+      {
+        type: "part.start", conversationId: "c1", timestamp: 5, messageId: "", partIndex: 1,
+        part: { type: "text", content: "second" }
+      },
+      { type: "part.end", conversationId: "c1", timestamp: 6, messageId: "", partIndex: 1 }
+    ];
+
+    // No initial parts: the same bug corrupted a plain multi-round agent reply.
+    const plain = await consumeStream({
+      stream: eventsToStream(interleaved()),
+      messageId: "msg_interleaved",
+      runId: "run_1"
+    });
+    expect(plain.parts.map((part) => part.type)).toEqual([
+      "text", "tool_use", "tool_result", "text"
+    ]);
+    expect(plain.parts[1]).toMatchObject({ type: "tool_use", callId: "call_1" });
+    expect(plain.parts[3]).toMatchObject({ type: "text", content: "second" });
+
+    // With previous-stage parts (the Conductor assess -> aggregate case).
+    const withInitial = await consumeStream({
+      stream: eventsToStream(interleaved()),
+      messageId: "msg_aggregate_interleaved",
+      runId: "run_1",
+      initialParts: [{ type: "tool_use", callId: "call_0", toolName: "plan_tasks", args: {} }]
+    });
+    expect(withInitial.parts.map((part) => part.type)).toEqual([
+      "tool_use", "text", "tool_use", "tool_result", "text"
+    ]);
+    expect(withInitial.parts[0]).toMatchObject({ type: "tool_use", callId: "call_0" });
+    expect(withInitial.parts[2]).toMatchObject({ type: "tool_use", callId: "call_1" });
+    expect(withInitial.parts[4]).toMatchObject({ type: "text", content: "second" });
+  });
 });

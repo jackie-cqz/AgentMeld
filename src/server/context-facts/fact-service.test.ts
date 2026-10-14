@@ -2,11 +2,14 @@
 // P2: Fact Service tests
 // ---------------------------------------------------------------------------
 
-import { describe, expect, it } from "vitest";
-import { canonicalizeFactKey } from "@/server/context-facts/fact-service";
+import { describe, expect, it, vi } from "vitest";
+import { getDatabase } from "@/db/client";
+import { createConversation } from "@/server/repositories";
+import { canonicalizeFactKey, resolveFacts } from "@/server/context-facts/fact-service";
 import { validateFactValue } from "@/server/context-facts/fact-value-validator";
 import { generateCanonicalKey, isKeyConflict } from "@/server/context-facts/fact-key-generator";
 import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agent-dto";
+import { setupTestDatabase } from "@/test/test-database";
 import type { CandidateFactUpdate } from "@/shared/context-fact-types";
 
 describe("fact-canonicalizer", () => {
@@ -195,5 +198,52 @@ describe.skip("fact-agent-dto", () => {
     });
     const colorDef = result.find((d) => d.definitionId === "builtin_ui_primary_color");
     expect(colorDef).toBeDefined();
+  });
+});
+
+// Regression: fact ids used to be `fact_<canonicalKey>_<Date.now()>`, so two
+// resolutions of the same canonical key inside the same millisecond — e.g. two
+// conversations — produced the same primary key and aborted the whole
+// resolution transaction with a UNIQUE constraint error. Freezing the clock
+// turns that intermittent collision into a deterministic assertion.
+describe("fact id uniqueness", () => {
+  it("persists the same canonical key for two conversations resolved in the same millisecond", () => {
+    const teardown = setupTestDatabase("agentmeld-fact-id-");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const now = Date.now();
+      const first = createConversation({
+        id: "conv_fact_id_a", title: "a", mode: "single",
+        agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now,
+      });
+      const second = createConversation({
+        id: "conv_fact_id_b", title: "b", mode: "single",
+        agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now,
+      });
+
+      const candidate: CandidateFactUpdate = {
+        definitionId: "builtin_ui_primary_color",
+        value: "#22c55e",
+        confidence: 1,
+      };
+
+      // Both writes happen at the identical frozen timestamp.
+      const firstResult = resolveFacts(first.id, [candidate], "message", "source_a");
+      const secondResult = resolveFacts(second.id, [candidate], "message", "source_b");
+
+      expect(firstResult.resolutions.map((r) => r.status)).not.toContain("rejected");
+      expect(secondResult.resolutions.map((r) => r.status)).not.toContain("rejected");
+
+      const rows = getDatabase()
+        .prepare("SELECT id, conversation_id FROM conversation_facts WHERE canonical_key = ?")
+        .all("ui.theme.primaryColor") as Array<{ id: string; conversation_id: string }>;
+
+      expect(rows.map((row) => row.conversation_id).sort()).toEqual(["conv_fact_id_a", "conv_fact_id_b"]);
+      expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+    } finally {
+      vi.useRealTimers();
+      teardown();
+    }
   });
 });

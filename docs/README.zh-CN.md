@@ -156,7 +156,7 @@ Copy-Item .env.example .env.local
 
 ## 配置
 
-常用环境变量：
+常用环境变量（完整清单见 `.env.example`，其中也包含仅 benchmark 使用的变量）：
 
 ```env
 AGENTMELD_DATA_DIR=.agentmeld-data
@@ -176,10 +176,18 @@ pnpm start      # 启动生产服务
 pnpm typecheck  # TypeScript 检查
 pnpm lint       # ESLint 检查
 pnpm test       # 运行 Vitest 测试
-pnpm db:push    # 开发数据库结构时应用 Drizzle schema
+pnpm db:push    # 用 drizzle-kit 应用 src/db/schema.ts 这份类型化镜像。仅对全新空库安全：对应用已建好的库（src/db/bootstrap.ts）它会提议删除检索（FTS）表，切勿对真实数据运行，更不要加 --force。详见 docs/schema.md
+pnpm db:seed    # 必要时创建本地数据库并打印各表行数（不会插入示例数据）
+pnpm e2e:fixture # 评估一次已完成的运行：pnpm e2e:fixture <runId> <fixturePath>
+pnpm e2e:report  # 列出 benchmark fixture；或加 --run <runId> --fixture <path> 评估某次运行
+pnpm quality:gates # 基于已保存的 benchmark 报告运行发布质量门禁，门禁失败时以非 0 退出；全新 clone 尚无 benchmark 数据，minimum-fixtures 门禁会失败
+pnpm agent:bench        # benchmark 命令入口，必须带参数（见 pnpm agent:bench:all）；不带参数只打印用法并以 1 退出
+pnpm agent:bench:all    # 列出全部 benchmark fixture 和用法示例（不执行运行）
+pnpm agent:bench:smoke  # 运行标记为 smoke 的 benchmark 用例
+pnpm agent:bench:full   # 运行完整 benchmark 套件
 ```
 
-仓库中也保留了早期评估和 fixture 脚本，但当前版本的核心定位是运行时可观测性，而不是完整 benchmark 平台。
+仓库中也保留了早期评估和 fixture 脚本。运行应用代码的脚本（`db:seed`、`e2e:*`、`quality:gates`、`agent:bench*`）会先读 `.env.local` 再读 `.env`（通过 `scripts/load-env.mjs`）；其中 benchmark/evaluation 脚本还要求应用已启动且配置好模型服务凭据。当前版本的核心定位仍是运行时可观测性，而不是完整 benchmark 平台。
 
 ## 本地数据
 

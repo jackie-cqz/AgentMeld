@@ -44,17 +44,27 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     fetch("/api/settings")
-      .then((r) => r.json())
-      .then((data) => {
+      .then(async (r) => {
+        setLoadError(null);
+        const data = await r.json() as {
+          settings?: SettingsData;
+          keySources?: Record<string, ApiKeySource>;
+          error?: string;
+        };
+        if (!r.ok || !data.settings) throw new Error(data.error ?? "加载设置失败。");
         setSettings(data.settings);
         setKeySources(data.keySources ?? {});
         setDirtyKeys({});
       })
-      .catch(() => {});
+      .catch((error) => {
+        setLoadError(error instanceof Error ? error.message : "加载设置失败。");
+      });
   }, [open]);
 
   if (!open) return null;
@@ -65,8 +75,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
-      await fetch("/api/settings", {
+      const response = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -81,7 +92,13 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           )
         })
       });
+      const data = await response.json().catch(() => ({})) as { error?: unknown };
+      if (!response.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : "保存设置失败。");
+      }
       onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "保存设置失败。");
     } finally {
       setSaving(false);
     }
@@ -176,6 +193,13 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         <p className="mt-2 text-sm text-stone-500">
           配置 API Key 后，所有 Agent 共享使用。Agent 编辑页可单独覆盖 Key。
         </p>
+
+        {loadError ? (
+          <div className="mt-3 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <XCircle className="h-4 w-4 shrink-0" />
+            <span className="break-all leading-5">{loadError}</span>
+          </div>
+        ) : null}
 
         <div className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-800">
           <KeyRound className="h-4 w-4" />
@@ -286,7 +310,13 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
 
         </div>
 
-        <div className="flex shrink-0 justify-end gap-3 border-t border-stone-200 bg-white px-6 py-4">
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-stone-200 bg-white px-6 py-4">
+          {saveError ? (
+            <span className="mr-auto flex min-w-0 items-center gap-1.5 text-xs text-red-700">
+              <XCircle className="h-4 w-4 shrink-0" />
+              <span className="break-all leading-5">{saveError}</span>
+            </span>
+          ) : null}
           <button onClick={onClose} className="h-9 rounded-md px-4 text-sm text-stone-600 hover:bg-stone-100">
             取消
           </button>

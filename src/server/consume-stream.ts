@@ -15,6 +15,9 @@ export interface ConsumeStreamInput {
   messageId: string;
   runId: string;
   signal?: AbortSignal;
+  /** Parts already persisted for this message. Streamed part indices are appended
+   *  after them instead of overwriting earlier stages' output (e.g. conductor assess → aggregate). */
+  initialParts?: MessagePart[];
   /** Called for each event after filling IDs.
    *  Return `{ stop: true }` to persist/publish the current event, then break out of the loop. */
   onEvent?: (event: StreamEvent) => { stop?: boolean } | void;
@@ -46,14 +49,20 @@ export interface ConsumeStreamResult {
 export async function consumeStream(
   input: ConsumeStreamInput
 ): Promise<ConsumeStreamResult> {
-  let parts: MessagePart[] = [];
+  let parts: MessagePart[] = input.initialParts ? [...input.initialParts] : [];
+  // Maps the stream's own part index to the slot that part actually occupies in
+  // the message. They are not the same number: tool parts are appended, so once a
+  // tool call has been interleaved the stream index falls behind the array index.
+  // Assigning `parts[event.partIndex]` directly would let a later text part
+  // overwrite an already appended tool_use/tool_result part.
+  const partSlots = new Map<number, number>();
   let usage: StreamUsage | null = null;
 
   for await (const event of input.stream) {
     if (input.signal?.aborted) break;
 
-    // 1. Fill missing IDs
-    const filled = fillEventIds(event, input.messageId, input.runId);
+    // 1. Fill missing IDs, then resolve part indices to real message slots
+    const filled = resolvePartIndex(fillEventIds(event, input.messageId, input.runId), partSlots, parts);
 
     // 2. Callback can inspect the event and request that no later events are consumed.
     // The current event is still persisted/published so tool results never disappear from the UI.
@@ -104,6 +113,40 @@ function fillEventIds(event: StreamEvent, messageId: string, runId: string): Str
     e = { ...e, runId };
   }
   return e as StreamEvent;
+}
+
+/**
+ * Rewrite a part event so its `partIndex` is the slot the part actually occupies
+ * in the message.
+ *
+ * The adapter numbers only the parts it streams (0, 1, 2, …), while tool parts are
+ * appended to the array as they arrive. Taking the stream index as an array index
+ * therefore collides with appended tool parts — a second text part after a tool
+ * call used to overwrite that call's `tool_use`. The first time a stream index is
+ * seen it is bound to the next free slot; later events for it reuse that slot.
+ * Rewriting the published event keeps the client reducer's index bookkeeping in
+ * step, and `initialParts` needs no separate offset because the first fresh slot
+ * already sits after them.
+ */
+function resolvePartIndex(
+  event: StreamEvent,
+  partSlots: Map<number, number>,
+  parts: MessagePart[]
+): StreamEvent {
+  if (event.type !== "part.start" && event.type !== "part.delta" && event.type !== "part.end") {
+    return event;
+  }
+
+  if (event.type === "part.start") {
+    const slot = partSlots.get(event.partIndex) ?? parts.length;
+    partSlots.set(event.partIndex, slot);
+    return { ...event, partIndex: slot };
+  }
+
+  // A delta/end for a part we never saw start: leave it alone so the existing
+  // "no such part" guards downstream still drop it.
+  const slot = partSlots.get(event.partIndex);
+  return slot === undefined ? event : { ...event, partIndex: slot };
 }
 
 /**

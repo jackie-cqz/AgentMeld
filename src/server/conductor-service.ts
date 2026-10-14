@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { createMessage, getConversation, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -24,7 +24,7 @@ import { verifyTaskAttempt } from "@/server/verification/verification-engine";
 import { upsertCriterionVerdict } from "@/server/repositories/evidence-repository";
 import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { newMessageId, newTaskAttemptId, newContextSnapshotId } from "@/shared/ids";
-import type { Message, DispatchPlanItem, Agent } from "@/shared/types";
+import type { Message, MessagePart, StreamEvent, DispatchPlanItem, Agent } from "@/shared/types";
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, ContextManifestItem } from "@/shared/task-context-types";
 import {
@@ -207,7 +207,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     await executeConductorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
       input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId,
-      input.signal
+      input.messageId, input.signal
     );
   }
 }
@@ -302,6 +302,7 @@ export async function executeConductorPlan(
   planId: string,
   triggerMessage: Message,
   conductorAgentId: string,
+  messageId: string,
   signal?: AbortSignal
 ): Promise<{ results: Map<string, TaskResult>; completionStatus: CompletionStatus; conflicts: StructuredConflict[] }> {
   plan = enforceExplicitFrameworkContracts(plan, extractTextFromMessage(triggerMessage));
@@ -538,7 +539,7 @@ export async function executeConductorPlan(
   await runAggregateStage(
     conversationId, plan, results, outputBindings,
     conductorAgentId, conductorRunId, triggerMessage,
-    completionStatus, abortSignal
+    completionStatus, messageId, abortSignal
   );
 
   return { results, completionStatus, conflicts: allConflicts };
@@ -1264,27 +1265,28 @@ async function runAggregateStage(
   conductorRunId: string,
   triggerMessage: Message,
   completionStatus: CompletionStatus,
+  messageId: string,
   signal: AbortSignal
 ): Promise<void> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
   if (!agent || agent.adapterName !== "custom") {
     // Fallback to template summary
-    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
   }
 
   const conversation = getConversation(conversationId);
   const workspace = getWorkspaceForConversation(conversationId);
   if (!conversation || !workspace) {
-    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
   }
 
   const settings = getSettings();
   const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
   if (!apiKey) {
-    generateAggregateFallback(conversationId, results, plan, outputBindings);
+    await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
   }
 
@@ -1317,18 +1319,28 @@ async function runAggregateStage(
 
   const adapter = getAdapter(agent.adapterName);
 
-  // Consume aggregate stream — events published directly (aggregate output is self-contained)
-  for await (const event of adapter.run(adapterInput, signal)) {
-    eventBus.publish(event);
-  }
+  // Route the aggregate stream through consumeStream so every event carries the
+  // conductor's messageId, its parts are persisted, and the summary survives a refresh.
+  // (Previously events were published straight from the adapter with messageId: "",
+  // and the client reducer dropped them because state.messages[""] is undefined.)
+  await consumeStream({
+    stream: adapter.run(adapterInput, signal),
+    messageId,
+    runId: conductorRunId,
+    signal,
+    // Preserve parts streamed by earlier stages (the assess/plan turn) in the same message.
+    initialParts: getMessage(messageId)?.parts ?? []
+  });
 }
 
-function generateAggregateFallback(
+export async function generateAggregateFallback(
   conversationId: string,
+  messageId: string,
+  conductorRunId: string,
   results: Map<string, TaskResult>,
   plan: ParsedTask[],
   outputBindings?: Map<string, string>
-): void {
+): Promise<void> {
   const completed = Array.from(results.values()).filter((r) => r.status === "complete").length;
   const failed = Array.from(results.values()).filter((r) => r.status === "failed" || r.status === "blocked").length;
   const skipped = Array.from(results.values()).filter((r) => r.status === "skipped").length;
@@ -1348,13 +1360,21 @@ function generateAggregateFallback(
     lines.push("", "### 产物输出", ...Array.from(outputBindings.entries()).map(([key, artId]) => `- ${key} → ${artId}`));
   }
 
-  const message = createMessage({
-    id: newMessageId(), conversationId, role: "agent",
-    agentId: plan[0]?.agentId ?? "ag_conductor", runId: "",
-    parts: [{ type: "text", content: lines.join("\n") }],
-    status: "complete", now: Date.now()
+  // Persist the fallback onto the conductor's own message so it is visible live and after refresh.
+  await consumeStream({
+    stream: singleTextPartStream(conversationId, lines.join("\n")),
+    messageId,
+    runId: conductorRunId,
+    initialParts: getMessage(messageId)?.parts ?? []
   });
-  eventBus.publish({ type: "message.added", conversationId, timestamp: Date.now(), message });
+}
+
+/** Synthesize a one-part stream so non-streamed fallback text flows through consumeStream. */
+async function* singleTextPartStream(conversationId: string, content: string): AsyncIterable<StreamEvent> {
+  const timestamp = Date.now();
+  const part: MessagePart = { type: "text", content };
+  yield { type: "part.start", conversationId, timestamp, messageId: "", partIndex: 0, part };
+  yield { type: "part.end", conversationId, timestamp, messageId: "", partIndex: 0 };
 }
 
 function escapeXml(s: string): string {
