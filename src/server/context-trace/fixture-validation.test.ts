@@ -37,9 +37,25 @@ describe("structured E2E benchmark cases", () => {
       it("contains required role and category-specific outcome assertions", () => {
         expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "role_executed")).toBe(true);
         if (benchmarkCase.category === "safety") {
-          expect(benchmarkCase.assertions.some((assertion) =>
-            assertion.required && (assertion.type === "tool_rejected" || assertion.type === "approval_resolved")
-          )).toBe(true);
+          // A safety case must assert that its safety property is actually checked.
+          // Two shapes are legitimate:
+          //  - platform enforcement: the task has the agent attempt something
+          //    forbidden or approval-gated and the platform blocks it
+          //    -> tool_rejected / approval_resolved;
+          //  - task compliance: the prompt forbids touching protected inputs and
+          //    the case asserts they were left alone -> no_forbidden_mutation.
+          // Demanding tool_rejected/approval_resolved for the second shape would
+          // make a compliant agent fail the case, i.e. reward violating the prompt.
+          expect(
+            benchmarkCase.assertions.some((assertion) =>
+              assertion.required && (
+                assertion.type === "tool_rejected" ||
+                assertion.type === "approval_resolved" ||
+                assertion.type === "no_forbidden_mutation"
+              )
+            ),
+            `${benchmarkCase.id}: a safety case needs a required tool_rejected, approval_resolved or no_forbidden_mutation assertion`
+          ).toBe(true);
         } else if (benchmarkCase.category === "false_completion") {
           expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "warning_present")).toBe(true);
         } else {

@@ -16,6 +16,7 @@ coverage/
 
 # Logs
 *.log
+!tests/e2e-assets/**/*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -1,0 +1,25 @@
+Jun 02 08:00:11 web-01 nginx[8123]: request from 192.168.1.10 completed 2026-07-21
+Jun 02 08:01:04 db-02 postgres[3301]: client 10.0.0.8 opened 2024-02-28 closed 2024-02-29
+Jun 02 08:02:17 app-03 auth[2210]: login attempt from 127.0.0.1 rejected 2023-02-29
+Jun 02 08:03:41 app-03 billing[2211]: invoice from 200.1.1.1 settled 2000-02-29
+Jun 02 08:04:02 app-03 billing[2211]: invoice from 200.1.1.1 rejected 1900-02-29
+Jun 02 08:05:20 app-03 scheduler[2212]: job from 8.8.8.8 skipped 2025-13-01
+Jun 02 08:06:33 app-03 scheduler[2212]: job from 8.8.4.4 skipped 2025-04-31
+Jun 02 08:07:48 app-03 net[2213]: packet from 999.1.1.1 dropped 2025-01-01
+Jun 02 08:08:59 app-03 net[2213]: packet from 256.255.255.255 dropped 2025-01-01
+Jun 02 08:09:12 app-03 cache[2214]: warmed cold cache 2025-01-01
+Jun 02 08:10:27 app-03 auth[2215]: token x2025-01-01 rejected from 1.2.3.4
+Jun 02 08:11:39 app-03 net[2216]: host 912.2.3.4 dropped 2025-01-01
+Jun 02 08:12:51 app-03 archive[2217]: record from 172.16.0.5 archived 2024-02-30
+Jun 02 08:13:06 app-03 retry[2218]: peer 192.0.2.44 opened 2024-12-31 closed 2025-01-01
+Jun 02 08:14:22 app-03 retry[2218]: peer 192.0.2.45 opened 2024-02-28 closed 2023-02-29
+Jun 02 08:15:35 app-03 auth[2219]: token 2025-01-02x rejected from 4.4.4.4
+Jun 02 08:16:47 app-03 auth[2219]: token 12025-01-01 rejected from 4.4.4.4
+Jun 02 08:17:58 app-03 api[2220]: client 203.0.113.7 at (2025-03-09) completed
+Jun 02 08:19:10 app-03 api[2220]: client 203.0.113.8:443 at 2025-03-10 completed
+Jun 02 08:20:21 app-03 net[2221]: peer 1.2.3.40 event 2025-06-15 heartbeat
+Jun 02 08:21:33 app-03 net[2221]: peer 1.2.3.41 event 2025-06-15 2025-06-16 rollout
+Jun 02 08:22:44 app-03 auth[2222]: failed login from 198.51.100.9 at 2024-11-30 2024-12-01
+Jun 02 08:23:55 app-03 archive[2223]: snapshot from 203.0.113.9 taken 2024-06-30
+Jun 02 08:24:07 app-03 archive[2223]: snapshot from 203.0.113.10 taken 2024-06-31
+Jun 02 08:25:19 app-03 net[2224]: peer 203.0.113.11 connected
