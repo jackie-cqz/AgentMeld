@@ -22,6 +22,7 @@ export function applyMessageEvent(state: StoreDraft, event: StreamEvent) {
       id: event.messageId,
       conversationId: event.conversationId,
       role: "agent",
+      origin: "bot",
       agentId: event.agentId,
       runId: event.runId,
       parts: [],

@@ -6,7 +6,7 @@ const conversationId = "conv_123456789abc";
 const sampleMessage: Message = {
   id: "msg_123456789abc",
   conversationId,
-  role: "user",
+  role: "user", origin: "human",
   agentId: null,
   runId: null,
   parts: [{ type: "text", content: "hello" }],
@@ -231,7 +231,7 @@ describe("app-store search state", () => {
 
 describe("app-store tool, artifact, and run events", () => {
   it("upserts tool results by call id", () => {
-    const message = { ...sampleMessage, id: "msg_agent", role: "agent" as const, parts: [] };
+    const message = { ...sampleMessage, id: "msg_agent", role: "agent" as const, origin: "bot" as const, parts: [] };
     const { applyEvent } = useAppStore.getState();
     applyEvent({ type: "message.added", conversationId, timestamp: 1, message });
     applyEvent({
@@ -283,7 +283,7 @@ describe("app-store tool, artifact, and run events", () => {
   });
 
   it("replaces deploy status for the same deployment id", () => {
-    const message = { ...sampleMessage, id: "msg_deploy", role: "agent" as const, parts: [] };
+    const message = { ...sampleMessage, id: "msg_deploy", role: "agent" as const, origin: "bot" as const, parts: [] };
     const { applyEvent } = useAppStore.getState();
     applyEvent({ type: "message.added", conversationId, timestamp: 1, message });
     const deployment = {
@@ -319,6 +319,7 @@ describe("app-store tool, artifact, and run events", () => {
       ...sampleMessage,
       id: "msg_agent_failed",
       role: "agent",
+      origin: "bot",
       agentId: run.agentId,
       runId: run.id,
       status: "streaming",

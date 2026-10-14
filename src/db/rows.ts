@@ -50,6 +50,8 @@ export interface MessageRow {
   id: string;
   conversation_id: string;
   role: string;
+  /** NOT NULL DEFAULT 'human' in the schema, so it is never absent. */
+  origin: string;
   agent_id: string | null;
   run_id: string | null;
   parts: string;
@@ -209,6 +211,7 @@ export function mapMessage(row: MessageRow): Message {
     id: row.id,
     conversationId: row.conversation_id,
     role: row.role as Message["role"],
+    origin: row.origin as Message["origin"],
     agentId: row.agent_id,
     runId: row.run_id,
     parts: parseJson<MessagePart[]>(row.parts, []),

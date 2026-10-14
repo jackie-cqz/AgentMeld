@@ -132,6 +132,7 @@ describe("agent-runner", () => {
     });
 
     const result = await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "test message"
     });
@@ -169,6 +170,7 @@ describe("agent-runner", () => {
     });
 
     await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "hello"
     });
@@ -193,6 +195,7 @@ describe("agent-runner", () => {
     });
 
     await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "hello"
     });
@@ -216,6 +219,7 @@ describe("agent-runner", () => {
     });
 
     const result = await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "run start test"
     });
@@ -249,6 +253,7 @@ describe("agent-runner", () => {
     });
 
     const result = await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "abort me"
     });
@@ -343,6 +348,7 @@ describe("agent-runner", () => {
     });
 
     const triggerMsg = await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "this should fail"
     });
@@ -382,6 +388,7 @@ describe("agent-runner", () => {
     });
 
     await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "order test"
     });

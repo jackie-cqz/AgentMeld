@@ -118,6 +118,7 @@ export const useAppStore = create<AppState>()(
       const optimisticMessage: Message = {
         id: tempId,
         conversationId,
+        origin: "human",
         role: "user",
         agentId: null,
         runId: null,

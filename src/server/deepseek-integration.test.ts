@@ -157,6 +157,7 @@ describe("DeepSeek adapter integration", () => {
     });
     const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
     const sent = await sendMessage({
+      origin: "human",
       conversationId: conv.id,
       content: "Build a pomodoro timer"
     });

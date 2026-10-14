@@ -100,7 +100,7 @@ function fakeMessage(conversationId: string, content: string): Message {
   return {
     id: "msg_benchmark",
     conversationId,
-    role: "user",
+    role: "user", origin: "human",
     agentId: null,
     runId: null,
     parts: [{ type: "text", content }],

@@ -34,7 +34,7 @@ function buildInput(overrides?: Partial<AdapterInput>): AdapterInput {
       rootPath: tempDir, boundPath: null, createdAt: 1, updatedAt: 1
     },
     triggerMessage: {
-      id: "msg_t", conversationId: "conv_test", role: "user", agentId: null, runId: null,
+      id: "msg_t", conversationId: "conv_test", role: "user", origin: "human", agentId: null, runId: null,
       parts: [{ type: "text", content: "Hello" }], status: "complete",
       mentionedAgentIds: [], parentMessageId: null, createdAt: 1, updatedAt: 1
     },

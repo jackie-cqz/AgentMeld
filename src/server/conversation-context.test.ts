@@ -66,7 +66,7 @@ describe("conversation-context — buildHistoryFor", () => {
     });
 
     // Send a new trigger message (excluded)
-    const result = await sendMessage({ conversationId: conv.id, content: "trigger" });
+    const result = await sendMessage({ origin: "human", conversationId: conv.id, content: "trigger" });
 
     const history = await buildHistoryFor("ag_mock_builder", conv.id, {
       excludeMessageId: result.message.id

@@ -330,7 +330,7 @@ describe("context-compiler", () => {
     const triggerMessage: Message = {
       id: "msg_test_compile",
       conversationId,
-      role: "user",
+      role: "user", origin: "human",
       agentId: null,
       runId: null,
       parts: [{ type: "text", content: "帮我做一个番茄时钟" }],

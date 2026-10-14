@@ -20,6 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   try {
     const result = await sendMessage({
+      origin: "human",
       conversationId: id,
       content: parsed.data.content,
       mentionedAgentIds: parsed.data.mentionedAgentIds,

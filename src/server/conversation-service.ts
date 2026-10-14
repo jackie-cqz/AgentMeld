@@ -25,7 +25,7 @@ import {
 } from "@/server/repositories";
 import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
-import type { Agent, Conversation, FsWriteApprovalMode, Message } from "@/shared/types";
+import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
 
 interface BootstrapPayload {
   agents: Agent[];
@@ -62,6 +62,13 @@ interface SendMessageInput {
   mentionedAgentIds?: string[];
   attachmentIds?: string[];
   parentMessageId?: string | null;
+  /**
+   * Who authored the message. Required on purpose: this is the boundary channel
+   * ingress will call, and a default of "human" would mean a future caller that
+   * forgets the field silently gets permission to start runs. Making it
+   * mandatory turns that omission into a compile error instead.
+   */
+  origin: MessageOrigin;
 }
 
 export function getBootstrapPayload(): BootstrapPayload {
@@ -160,6 +167,7 @@ export async function sendMessage(input: SendMessageInput) {
   ensureDatabase();
   const content = input.content.trim();
   if (!content) throw new Error("Message content cannot be empty.");
+  const origin = assertMessageOrigin(input.origin);
 
   const conversation = getConversation(input.conversationId);
   if (!conversation) throw new Error("Conversation not found.");
@@ -191,6 +199,7 @@ export async function sendMessage(input: SendMessageInput) {
     id: newMessageId(),
     conversationId: input.conversationId,
     role: "user",
+    origin,
     parts,
     status: "complete",
     mentionedAgentIds,
@@ -206,8 +215,9 @@ export async function sendMessage(input: SendMessageInput) {
     message
   });
 
-  // Check for deploy command before starting agent runs
-  const deployIntent = detectDeployCommand(content);
+  // Check for deploy command before starting agent runs. Only a human may
+  // issue one: a bot echo of a deploy-looking string must not deploy.
+  const deployIntent = origin === "human" ? detectDeployCommand(content) : null;
   if (deployIntent) {
     const deployMessage = await handleDeployCommand(input.conversationId, deployIntent);
     return {
@@ -217,7 +227,7 @@ export async function sendMessage(input: SendMessageInput) {
     };
   }
 
-  const responderIds = pickResponders(conversation, mentionedAgentIds);
+  const responderIds = dispatchTargets(conversation, origin, mentionedAgentIds);
   const handles = responderIds.map((agentId) =>
     startAgentRun({
       conversationId: input.conversationId,
@@ -227,6 +237,38 @@ export async function sendMessage(input: SendMessageInput) {
   );
 
   return { message, runIds: handles.map((h) => h.runId) };
+}
+
+/**
+ * The type makes `origin` required, but that only constrains TypeScript
+ * callers. A caller that bypasses the type — or arrives from untyped code —
+ * would otherwise have `createMessage` fall back to the role default and write
+ * 'human' while `dispatchTargets` refuses to dispatch, producing a row that
+ * says human but behaves as though it were not. Fail loudly instead, before
+ * anything is written.
+ */
+function assertMessageOrigin(value: unknown): MessageOrigin {
+  if (value === "human" || value === "bot" || value === "internal") return value;
+  throw new Error("sendMessage requires an explicit origin of human, bot, or internal.");
+}
+
+/**
+ * Which agents a message may start work for.
+ *
+ * Only human-authored messages dispatch. `pickResponders` falls back to the
+ * conductor whenever nothing is mentioned, so without this gate a single
+ * bot-authored message — a channel echo, a projected internal event — would
+ * start a new conductor run, whose output would be projected back and start
+ * another: an unbounded loop. Non-human messages are still recorded in the
+ * conversation for context; they simply never start a run.
+ */
+function dispatchTargets(
+  conversation: Conversation,
+  origin: MessageOrigin,
+  mentionedAgentIds: string[]
+): string[] {
+  if (origin !== "human") return [];
+  return pickResponders(conversation, mentionedAgentIds);
 }
 
 function pickResponders(conversation: Conversation, mentionedAgentIds: string[]) {

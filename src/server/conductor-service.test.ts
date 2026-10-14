@@ -156,7 +156,7 @@ describe("buildConductorAggregatePrompt", () => {
     ["t1", { taskId: "t1", status: "complete", summary: "PRD 完成" }]
   ]);
   const triggerMsg = {
-    id: "msg_1", conversationId: "c1", role: "user" as const,
+    id: "msg_1", conversationId: "c1", role: "user" as const, origin: "human" as const,
     agentId: null, runId: null,
     parts: [{ type: "text" as const, content: "帮我做番茄时钟" }],
     status: "complete" as const, parentMessageId: null,

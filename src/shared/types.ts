@@ -9,6 +9,16 @@ export type ModelProvider =
 
 export type ConversationMode = "single" | "group";
 export type MessageRole = "user" | "agent" | "system";
+
+/**
+ * Who authored a message.
+ *
+ * `role` says how the conversation should treat a message — an external bot's
+ * message is still user-role input as far as the agents are concerned — while
+ * `origin` records where it actually came from. Only `human` may start work;
+ * see `dispatchTargets` in conversation-service.
+ */
+export type MessageOrigin = "human" | "bot" | "internal";
 export type MessageStatus = "streaming" | "complete" | "error" | "aborted";
 export type AgentRunStatus = "queued" | "running" | "complete" | "failed" | "aborted";
 export type FsWriteApprovalMode = "auto" | "review";
@@ -173,6 +183,7 @@ export interface Message {
   id: string;
   conversationId: string;
   role: MessageRole;
+  origin: MessageOrigin;
   agentId: string | null;
   runId: string | null;
   parts: MessagePart[];

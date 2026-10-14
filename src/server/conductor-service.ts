@@ -873,7 +873,7 @@ async function runChildTask(
         : renderTaskContextPrompt(envelope);
 
       const attemptMsg: Message = {
-        id: newMessageId(), conversationId, role: "user", agentId: null, runId: null,
+        id: newMessageId(), conversationId, origin: "internal", role: "user", agentId: null, runId: null,
         parts: [{ type: "text", content: attemptPrompt }], status: "complete",
         mentionedAgentIds: [task.agentId], parentMessageId: triggerMessage.id,
         createdAt: Date.now(), updatedAt: Date.now()
@@ -2188,7 +2188,7 @@ ${originalPlan
     agent: { ...agent, toolNames: ["plan_tasks"], systemPrompt },
     conversation,
     workspace,
-    triggerMessage: { id: "", conversationId, role: "user", agentId: null, runId: null,
+    triggerMessage: { id: "", conversationId, origin: "internal", role: "user", agentId: null, runId: null,
       parts: [{ type: "text", content: recoveryPrompt }], status: "complete",
       mentionedAgentIds: [], parentMessageId: null, createdAt: Date.now(), updatedAt: Date.now() },
     recentMessages: [],
