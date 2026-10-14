@@ -14,7 +14,7 @@ import { createWorkspace } from "@/server/conversation-service";
 function storedAttachments(conversationId: string) {
   return getDatabase()
     .prepare(
-      "SELECT id, kind, file_name, file_path, size FROM attachments WHERE conversation_id = ? ORDER BY created_at"
+      "SELECT id, kind, file_name, file_path, size, mime_type FROM attachments WHERE conversation_id = ? ORDER BY created_at"
     )
     .all(conversationId) as Array<{
     id: string;
@@ -22,6 +22,7 @@ function storedAttachments(conversationId: string) {
     file_name: string;
     file_path: string;
     size: number;
+    mime_type: string;
   }>;
 }
 
@@ -35,12 +36,25 @@ vi.mock("@/server/channels/feishu/registry", () => ({
     const channel = channelsByAgent.get(agentId);
     if (!channel) return null;
     return {
-      downloadResource: async (messageId: string, fileKey: string, type: string) => {
+      downloadResourceToFile: async (
+        messageId: string,
+        fileKey: string,
+        type: string,
+        destPath: string
+      ) => {
         downloads.push({ messageId, fileKey, type });
         const behaviour = (channel as { behaviour?: (key: string) => unknown }).behaviour;
         const result = behaviour ? behaviour(fileKey) : Buffer.from(`bytes of ${fileKey}`);
         if (result instanceof Error) throw result;
-        return result as Buffer;
+        // The real call writes to disk and reports what it wrote; a mock that
+        // only returned bytes would not exercise the streaming path at all.
+        const body = result as { body: Buffer; contentType?: string } | Buffer;
+        const bytes = Buffer.isBuffer(body) ? body : body.body;
+        fs.writeFileSync(destPath, bytes);
+        return {
+          bytesWritten: bytes.length,
+          contentType: Buffer.isBuffer(body) ? undefined : body.contentType
+        };
       }
     };
   }
@@ -130,9 +144,66 @@ describe("importing attachments a person sent", () => {
     expect(stored.size).toBe("bytes of fk_1".length);
   });
 
-  it("records an image as an image", async () => {
-    await importOnce([{ type: "image", fileKey: "fk_png", fileName: "图.png" }]);
-    expect(storedAttachments("conv_1")[0].kind).toBe("image");
+  it("records an image as an image even though the platform sends no filename", async () => {
+    // The old test passed `fileName: "图.png"`, which the platform NEVER sends
+    // for an image — the SDK's own converter produces `{ type: "image",
+    // fileKey }` with no name. Inferring the kind from a filename therefore made
+    // every pasted screenshot a generic file, and the test had invented the
+    // input it was asserting on.
+    channelsByAgent.set(AGENT, {
+      behaviour: () => ({ body: Buffer.from("png-bytes"), contentType: "image/png" })
+    });
+
+    await importOnce([{ type: "image", fileKey: "fk_png", fileName: null }]);
+
+    const stored = storedAttachments("conv_1")[0];
+    expect(stored.kind).toBe("image");
+    expect(stored.mime_type).toBe("image/png");
+    // The server's content-type supplies the extension the name lacked.
+    expect(stored.file_name).toBe("attachment-1.png");
+  });
+
+  it("requests audio and video as files, which is what the API takes", async () => {
+    // `ResourceDescriptor.type` carries audio/video/sticker, but the download
+    // API accepts only 'image' or 'file'.
+    await importOnce([{ type: "audio", fileKey: "fk_a", fileName: "a.m4a" }]);
+    expect(downloads[0].type).toBe("file");
+  });
+
+  it("does not ask for a sticker, which the platform will not serve", async () => {
+    const outcome = await importOnce([{ type: "sticker", fileKey: "fk_s", fileName: null }]);
+
+    if (outcome.status !== "imported") throw new Error("expected imported");
+    expect(downloads).toHaveLength(0);
+    expect(outcome.skipped.join()).toContain("平台不提供此类资源");
+  });
+
+  it("removes the partial file when it exceeds the cap", async () => {
+    // Streamed to disk, so the cap can only be applied after the write — and a
+    // file left behind would make the cap decorative.
+    channelsByAgent.set(AGENT, { behaviour: () => Buffer.alloc(31 * 1024 * 1024) });
+
+    await importOnce([{ type: "file", fileKey: "fk_big", fileName: "大.bin" }]);
+
+    const workspace = getWorkspaceForConversation("conv_1")!;
+    const leftovers = fs
+      .readdirSync(`${workspace.rootPath}/attachments`)
+      .filter((name) => name.endsWith(".part"));
+    expect(leftovers).toEqual([]);
+    expect(storedAttachments("conv_1")).toHaveLength(0);
+  });
+
+  it("truncates a long name by code point, leaving no lone surrogate", async () => {
+    // Slicing by UTF-16 unit splits a surrogate pair, and the filesystem turns
+    // the orphan into U+FFFD — so the stored name and the file on disk differ.
+    const name = `${"图".repeat(130)}.png`;
+    await importOnce([{ type: "file", fileKey: "fk_1", fileName: name }]);
+
+    const stored = storedAttachments("conv_1")[0];
+    expect(/[\uD800-\uDFFF]/.test(stored.file_name)).toBe(false);
+    // And the name on disk is the name in the row.
+    expect(fs.existsSync(stored.file_path)).toBe(true);
+    expect(stored.file_path.endsWith(stored.file_name)).toBe(true);
   });
 
   it("gives a traversal-shaped name nowhere to go", async () => {

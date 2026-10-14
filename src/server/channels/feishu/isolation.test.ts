@@ -32,7 +32,7 @@ import type { Artifact } from "@/shared/types";
  */
 const { channelsByAgent, sent, updated } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
-  sent: [] as Array<{ agentId: string; chatId: string; input: Record<string, unknown> }>,
+  sent: [] as Array<{ agentId: string; chatId: string; input: Record<string, unknown>; messageId: string }>,
   updated: [] as Array<{ messageId: string; card: unknown }>
 }));
 
@@ -41,8 +41,9 @@ vi.mock("@/server/channels/feishu/registry", () => ({
     if (!channelsByAgent.has(agentId)) return null;
     return {
       send: async (chatId: string, input: Record<string, unknown>) => {
-        sent.push({ agentId, chatId, input });
-        return { messageId: `om_${sent.length}` };
+        const messageId = `om_${sent.length + 1}`;
+        sent.push({ agentId, chatId, input, messageId });
+        return { messageId };
       },
       updateCard: async (messageId: string, card: unknown) => {
         updated.push({ messageId, card });
@@ -117,28 +118,35 @@ describe("two groups sharing one set of agents", () => {
     teardown();
   });
 
-  it("keeps one room's messages out of the other", async () => {
-    const { sendMessage } = await import("@/server/conversation-service");
+  it("keeps each room's messages out of the other", async () => {
     const conversationA = conversationFor(CHAT_A);
     const conversationB = conversationFor(CHAT_B);
     startChannelProjection();
 
-    const message = createMessage({
-      id: "msg_a", conversationId: conversationA, role: "agent", agentId: AGENT,
-      parts: [{ type: "text", content: "这是 A 群的答复" }], status: "complete", now: 2
-    });
-    eventBus.publish({
-      type: "message.end", conversationId: conversationA, timestamp: 2,
-      messageId: message.id, status: "complete"
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // BOTH rooms produce traffic. Only producing A's makes "each to its own
+    // room" indistinguishable from "everything to the first room" — which is
+    // exactly how a mutation hard-coding the first chat survived here.
+    for (const [conversationId, chatId] of [[conversationA, CHAT_A], [conversationB, CHAT_B]] as const) {
+      const message = createMessage({
+        id: `msg_${chatId.slice(-1)}`, conversationId, role: "agent", agentId: AGENT,
+        parts: [{ type: "text", content: `这是 ${chatId} 的答复` }], status: "complete", now: 2
+      });
+      eventBus.publish({
+        type: "message.end", conversationId, timestamp: 2,
+        messageId: message.id, status: "complete"
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(sentTo(CHAT_A, "text")).toHaveLength(1);
-    expect(sentTo(CHAT_B, "text")).toHaveLength(0);
-    // And it really landed in A's history, not B's.
-    expect(listMessages(conversationA).some((row) => row.id === message.id)).toBe(true);
-    expect(listMessages(conversationB)).toHaveLength(0);
-    void sendMessage;
+    expect(sentTo(CHAT_B, "text")).toHaveLength(1);
+    // Each room got ITS OWN text, not merely one message each.
+    expect(JSON.stringify(sentTo(CHAT_A, "text"))).toContain(CHAT_A);
+    expect(JSON.stringify(sentTo(CHAT_B, "text"))).toContain(CHAT_B);
+    expect(JSON.stringify(sentTo(CHAT_A, "text"))).not.toContain(CHAT_B);
+    // And they really landed in their own histories.
+    expect(listMessages(conversationA)).toHaveLength(1);
+    expect(listMessages(conversationB)).toHaveLength(1);
   });
 
   it("sends two concurrent runs' progress cards to their own rooms", async () => {
@@ -165,7 +173,9 @@ describe("two groups sharing one set of agents", () => {
     expect(sentTo(CHAT_A, "card")).toHaveLength(1);
     expect(sentTo(CHAT_B, "card")).toHaveLength(1);
 
-    // Ending one settles only its own card.
+    // Ending one settles only its own card — and which card is asserted, not
+    // just how many. Counting alone passed even when the wrong card was taken.
+    const cardForA = sentTo(CHAT_A, "card")[0];
     updated.length = 0;
     eventBus.publish({
       type: "run.end", conversationId: runA.conversationId, timestamp: 3,
@@ -173,24 +183,34 @@ describe("two groups sharing one set of agents", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(updated).toHaveLength(1);
+    // WHICH card, not just how many: taking the last card in the registry
+    // instead of this run's passed this test until the message id was asserted.
+    expect(updated[0].messageId).toBe(cardForA.messageId);
+    expect(JSON.stringify(updated[0].card)).toContain("已完成");
   });
 
-  it("delivers an artifact only to the room it belongs to", async () => {
+  it("delivers each artifact only to the room it belongs to", async () => {
     startChannelArtifactDelivery();
-    const conversationA = conversationFor(CHAT_A);
 
-    const artifact: Artifact = {
-      id: "art_a", conversationId: conversationA, createdByAgentId: AGENT,
-      type: "document", title: "A 群的产物",
-      content: { type: "document", content: "# A" },
-      version: 1, parentArtifactId: null, createdAt: 1, updatedAt: 1
-    };
-
-    eventBus.publish({ type: "artifact.create", conversationId: conversationA, timestamp: 1, artifact });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Both rooms again: one artifact in A cannot tell "routed correctly" from
+    // "routed to the first room".
+    for (const [chatId, suffix] of [[CHAT_A, "a"], [CHAT_B, "b"]] as const) {
+      const artifact: Artifact = {
+        id: `art_${suffix}`, conversationId: conversationFor(chatId), createdByAgentId: AGENT,
+        type: "document", title: `${chatId} 的产物`,
+        content: { type: "document", content: `# ${chatId}` },
+        version: 1, parentArtifactId: null, createdAt: 1, updatedAt: 1
+      };
+      eventBus.publish({
+        type: "artifact.create", conversationId: artifact.conversationId, timestamp: 1, artifact
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(sentTo(CHAT_A, "file")).toHaveLength(1);
-    expect(sentTo(CHAT_B, "file")).toHaveLength(0);
+    expect(sentTo(CHAT_B, "file")).toHaveLength(1);
+    expect(JSON.stringify(sentTo(CHAT_A, "file"))).not.toContain(CHAT_B);
+    expect(JSON.stringify(sentTo(CHAT_B, "file"))).not.toContain(CHAT_A);
   });
 
   it("asks a question in one room and answers it there", async () => {

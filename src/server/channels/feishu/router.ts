@@ -1,4 +1,5 @@
 import { sendMessage } from "@/server/conversation-service";
+import { createMessage } from "@/server/repositories";
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import { resolveChannelConversation } from "@/server/channels/feishu/conversation-binding";
 import {
@@ -11,7 +12,7 @@ import {
   describeSkippedResources,
   importInboundResources
 } from "@/server/channels/feishu/attachment-import";
-import { newChannelInboundMessageId } from "@/shared/ids";
+import { newChannelInboundMessageId, newMessageId } from "@/shared/ids";
 import type { ChannelInboundMessage, MessageOrigin } from "@/shared/types";
 
 /**
@@ -167,7 +168,14 @@ export async function routeChannelInbound(
   });
   const attachmentIds = imported.status === "imported" ? imported.attachmentIds : [];
   const skippedNote =
-    imported.status === "imported" ? describeSkippedResources(imported.skipped) : null;
+    imported.status === "imported"
+      ? describeSkippedResources(imported.skipped)
+      : // A skip is only worth saying when there is someone who could say it. If
+        // the agent has no live channel there is no bot to deliver a complaint,
+        // and "no attachments" is not news.
+        imported.reason === "the conversation has no workspace"
+        ? `⚠️ 有附件没能导入：${imported.reason}`
+        : null;
 
   const result = await sendMessage({
     conversationId: channelConversation.conversationId,
@@ -178,13 +186,12 @@ export async function routeChannelInbound(
   });
 
   if (skippedNote) {
-    await sendMessage({
-      conversationId: channelConversation.conversationId,
-      content: skippedNote,
-      origin: "internal"
-    }).catch(() => {
-      // The note is a courtesy; the message it is about is already recorded.
-    });
+    // Written as a SYSTEM message that names the agent, not as an ordinary
+    // message. `sendMessage` produces role "user", and the channel projects
+    // agent answers and system notices — so the notice this used to write was
+    // recorded on the web and never left AgentMeld. The person who sent the
+    // file is in the room, and that is where they need to be told.
+    recordChannelNotice(channelConversation.conversationId, inbound.agentId, skippedNote);
   }
 
   setChannelInboundMessageId(claimId, result.message.id);
@@ -196,6 +203,27 @@ export async function routeChannelInbound(
     runIds: result.runIds,
     origin
   };
+}
+
+/**
+ * Record a notice that names an agent, so the room can hear it.
+ *
+ * System role plus an agent id is exactly the shape the channel projection
+ * takes: a room's bot is per-agent, so a notice with no agent has no bot to
+ * deliver it.
+ */
+function recordChannelNotice(conversationId: string, agentId: string, text: string): void {
+  const now = Date.now();
+  const message = createMessage({
+    id: newMessageId(),
+    conversationId,
+    agentId,
+    role: "system",
+    parts: [{ type: "text", content: text }],
+    status: "complete",
+    now
+  });
+  eventBus.publish({ type: "message.added", conversationId, timestamp: now, message });
 }
 
 declare global {

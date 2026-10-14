@@ -138,36 +138,49 @@ export const MAX_FILE_READ_BYTES = 1_048_576; // 1 MB
  * 4. It must be a regular file: a directory, a FIFO or a device is not something
  *    to read, and a FIFO would block forever.
  */
-export function resolveWorkspaceFileForRead(
+export function resolveWorkspaceRealPath(
   workspace: Workspace,
   targetPath: string
-): { ok: true; realPath: string; size: number } | { ok: false; reason: string } {
+): { ok: true; realPath: string; rootPath: string } | { ok: false; reason: string; code: string } {
   const root = workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath;
 
   let realRoot: string;
   try {
     realRoot = fs.realpathSync(root);
   } catch {
-    return { ok: false, reason: "the workspace root is not accessible" };
+    return { ok: false, reason: "the workspace root is not accessible", code: "root" };
   }
 
   let logical: string;
   try {
     logical = resolveSafePath(root, targetPath);
   } catch {
-    return { ok: false, reason: "the path is not inside the workspace" };
+    return { ok: false, reason: "the path is not inside the workspace", code: "malformed" };
   }
 
   let realTarget: string;
   try {
     realTarget = fs.realpathSync(logical);
   } catch {
-    return { ok: false, reason: "the file is no longer on disk" };
+    return { ok: false, reason: "the file is no longer on disk", code: "missing" };
   }
 
+  // After realpath, not before: a symlink passes a lexical check while pointing
+  // anywhere, and its target is what would be read.
   if (!isPathWithin(realTarget, realRoot)) {
-    return { ok: false, reason: "the path escapes the workspace" };
+    return { ok: false, reason: "the path escapes the workspace", code: "escape" };
   }
+
+  return { ok: true, realPath: realTarget, rootPath: realRoot };
+}
+
+export function resolveWorkspaceFileForRead(
+  workspace: Workspace,
+  targetPath: string
+): { ok: true; realPath: string; size: number } | { ok: false; reason: string } {
+  const resolved = resolveWorkspaceRealPath(workspace, targetPath);
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  const realTarget = resolved.realPath;
 
   let stat: fs.Stats;
   try {

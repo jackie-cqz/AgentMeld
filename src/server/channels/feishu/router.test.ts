@@ -23,6 +23,17 @@ import type { ChannelInboundMessage } from "@/shared/types";
  */
 const { startAgentRunMock } = vi.hoisted(() => ({ startAgentRunMock: vi.fn() }));
 
+vi.mock("@/server/channels/feishu/attachment-import", () => ({
+  // One file fails, so the notice is produced.
+  importInboundResources: async () => ({
+    status: "imported",
+    attachmentIds: [],
+    skipped: ["坏的.pdf（下载失败）"]
+  }),
+  describeSkippedResources: (skipped: string[]) =>
+    skipped.length ? `⚠️ 有附件没能导入：${skipped.join("、")}` : null
+}));
+
 vi.mock("@/server/agent-runner", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/agent-runner")>();
   return {
@@ -141,7 +152,14 @@ describe("routeChannelInbound", () => {
     expect(first.status).toBe("routed");
     expect(second.status).toBe("duplicate");
     if (first.status !== "routed") return;
-    expect(listMessages(first.conversationId)).toHaveLength(1);
+    // What the test is about: the HUMAN message is stored once. Counting every
+    // row was too broad — a routing notice is also a message, and it is not
+    // what "redelivery" concerns.
+    const fromSender = listMessages(first.conversationId).filter((m) => m.role === "user");
+    expect(fromSender).toHaveLength(1);
+    // And the inbound content is not the notice's.
+    const body = fromSender[0].parts.find((p) => p.type === "text");
+    expect(body?.type === "text" && body.content).toContain("帮我看看这个");
   });
 
   it("marks a claimed message even when routing it produced no run", async () => {
@@ -337,5 +355,46 @@ describe("startChannelRouter", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(startAgentRunMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("an attachment that does not arrive", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-router-notice-");
+    startAgentRunMock.mockReset();
+    startAgentRunMock.mockImplementation((input: { agentId: string }) => ({
+      runId: `run_${input.agentId}`,
+      abort: () => {}
+    }));
+  });
+
+  afterEach(() => {
+    stopChannelRouterForTests();
+    teardown();
+  });
+
+  it("is recorded where the room can hear it", async () => {
+    // The bug this pins, and the review that caught it: the notice was written
+    // with `sendMessage`, which produces role "user" — and the projection sends
+    // agent answers and SYSTEM notices. So it reached the web and never left
+    // AgentMeld, while the commit claimed "the person who sent it is the one
+    // who needs to know". They are in the room.
+    const outcome = await routeChannelInbound(
+      inbound({
+        messageId: "om_attach",
+        resources: [{ type: "file", fileKey: "fk", fileName: "坏的.pdf" }]
+      })
+    );
+    expect(outcome.status).toBe("routed");
+    if (outcome.status !== "routed") return;
+
+    const notice = listMessages(outcome.conversationId).find((m) => m.role === "system");
+    expect(notice).toBeDefined();
+    // System AND named: a notice with no agent has no bot that could deliver it.
+    expect(notice?.agentId).toBe("ag_pm");
+    const body = notice?.parts.find((p) => p.type === "text");
+    expect(body?.type === "text" && body.content).toContain("坏的.pdf");
   });
 });

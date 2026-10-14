@@ -36,21 +36,64 @@ export type ResourceImportOutcome =
 
 /** A filename a filesystem can take, without letting a name suggest a path. */
 export function safeAttachmentName(fileName: string | null, fallback: string): string {
-  const base = (fileName ?? "")
+  const cleaned = (fileName ?? "")
     .replace(/[/\\]/g, "-")
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f<>:"|?*]/g, "")
-    .trim()
-    .slice(0, 120);
+    .trim();
+
+  // Truncated by CODE POINT, not by UTF-16 unit. Slicing a surrogate pair in
+  // half leaves a lone surrogate that the filesystem turns into U+FFFD, so the
+  // name in the database and the name on disk stop matching.
+  const points = [...cleaned];
+  const base = points.length > 120 ? points.slice(0, 120).join("") : cleaned;
+
   if (!base || base === "." || base === "..") return fallback;
   return base;
 }
 
-function kindFor(fileName: string): "image" | "file" {
-  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(fileName) ? "image" : "file";
+/**
+ * The type the SDK will accept.
+ *
+ * `ResourceDescriptor.type` also carries audio, video and sticker, but the
+ * download API takes only 'image' or 'file'. Those are requested as files —
+ * which they are for this purpose. A sticker is the exception: the platform
+ * does not serve them at all, so asking would only produce an error.
+ */
+function sdkResourceType(type: string): "image" | "file" | null {
+  if (type === "sticker") return null;
+  return type === "image" ? "image" : "file";
 }
 
-function mimeFor(fileName: string): string {
+/**
+ * Whether this is an image, from the platform's own classification.
+ *
+ * Not from the filename: the SDK's image resources carry NO `fileName` at all,
+ * so inferring from one made every pasted screenshot a generic file.
+ */
+function kindFor(resourceType: string): "image" | "file" {
+  return resourceType === "image" ? "image" : "file";
+}
+
+/** The extension implied by the server's content-type, if it names one. */
+function extensionForContentType(contentType: string | undefined): string {
+  const map: Record<string, string> = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+    "text/markdown": ".md",
+    "text/plain": ".txt",
+    "application/json": ".json",
+    "text/csv": ".csv",
+    "application/zip": ".zip"
+  };
+  return contentType ? (map[contentType] ?? "") : "";
+}
+
+function mimeFor(fileName: string, contentType: string | undefined): string {
+  if (contentType) return contentType;
   const extension = path.extname(fileName).toLowerCase();
   const known: Record<string, string> = {
     ".png": "image/png",
@@ -93,35 +136,68 @@ export async function importInboundResources(input: {
   const skipped: string[] = [];
 
   for (const [index, resource] of input.resources.slice(0, MAX_RESOURCES).entries()) {
-    const fileName = safeAttachmentName(resource.fileName, `attachment-${index + 1}`);
+    const provisional = safeAttachmentName(resource.fileName, `attachment-${index + 1}`);
+
+    const sdkType = sdkResourceType(resource.type);
+    if (!sdkType) {
+      skipped.push(`${provisional}（平台不提供此类资源）`);
+      continue;
+    }
+
+    const id = newAttachmentId();
+    // Streamed to disk rather than into a Buffer: `downloadResource` materialises
+    // the whole payload, so a size cap checked after it returns has already let
+    // the bytes into memory. The SDK's own docs say to prefer this path for
+    // anything headed for disk.
+    const partPath = path.join(attachDir, `${id}.part`);
+
     try {
-      const body = await channel.downloadResource(
+      const { contentType, bytesWritten } = await channel.downloadResourceToFile(
         input.platformMessageId,
         resource.fileKey,
-        resource.type as never
+        sdkType,
+        partPath
       );
-      if (body.length > MAX_RESOURCE_BYTES) {
-        // Recorded as skipped rather than silently dropped: a file that never
-        // arrived is different from one that was never sent.
-        skipped.push(`${fileName}（超过大小上限）`);
+
+      if (bytesWritten > MAX_RESOURCE_BYTES) {
+        // Removed, not kept: the cap already let this much reach the disk, and
+        // keeping it would make the cap decorative.
+        fs.rmSync(partPath, { force: true });
+        skipped.push(`${provisional}（超过大小上限）`);
         continue;
       }
 
-      const id = newAttachmentId();
+      // The server's content-type names the real type; the filename may be
+      // absent entirely (image resources never carry one).
+      const withExtension =
+        path.extname(provisional) === ""
+          ? `${provisional}${extensionForContentType(contentType)}`
+          : provisional;
+      const fileName = safeAttachmentName(withExtension, `attachment-${index + 1}`);
       const filePath = path.join(attachDir, `${id}-${fileName}`);
-      fs.writeFileSync(filePath, body);
+      fs.renameSync(partPath, filePath);
 
       getDatabase()
         .prepare(
           `INSERT INTO attachments (id, conversation_id, kind, file_name, file_path, size, mime_type, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(id, input.conversationId, kindFor(fileName), fileName, filePath, body.length, mimeFor(fileName), now);
+        .run(
+          id,
+          input.conversationId,
+          kindFor(resource.type),
+          fileName,
+          filePath,
+          bytesWritten,
+          mimeFor(fileName, contentType),
+          now
+        );
 
       attachmentIds.push(id);
     } catch (error) {
-      skipped.push(`${fileName}（下载失败）`);
-      console.error(`[feishu] failed to fetch an attachment: ${fileName}`, error);
+      fs.rmSync(partPath, { force: true });
+      skipped.push(`${provisional}（下载失败）`);
+      console.error(`[feishu] failed to fetch an attachment: ${provisional}`, error);
     }
   }
 

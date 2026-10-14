@@ -130,14 +130,21 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
  * Also removes it from the registry: the card is finished, and keeping it would
  * leave a cancel button reachable through a stale entry.
  */
-export async function settleRunCard(run: AgentRun): Promise<void> {
+export async function settleRunCard(run: AgentRun, status?: AgentRunStatus): Promise<void> {
   const card = getRunCards().get(run.id);
   if (!card) return;
   getRunCards().delete(run.id);
 
   const channel = getFeishuChannelForAgent(card.agentId);
   if (!channel) return;
-  await channel.updateCard(card.messageId, buildProgressCard(run, card.agentName, run.status));
+  // The status comes from the EVENT, not from the row. `run.end` and the row
+  // update are not ordered, so reading it back could settle the card with
+  // "still running" — which is what a test caught when it asserted the card's
+  // text instead of only counting the calls.
+  await channel.updateCard(
+    card.messageId,
+    buildProgressCard(run, card.agentName, status ?? run.status)
+  );
 }
 
 export type CancelOutcome = { ok: true } | { ok: false; message: string };
@@ -185,7 +192,7 @@ export function startChannelProgress(): () => void {
       void import("@/server/repositories")
         .then(({ getRun }) => {
           const run = getRun(event.runId);
-          if (run) return settleRunCard(run);
+          if (run) return settleRunCard(run, event.status);
           return undefined;
         })
         .catch((error: unknown) => console.error("[feishu] failed to settle run progress:", error));
