@@ -563,8 +563,18 @@ async function launchBrowser(): Promise<Awaited<ReturnType<typeof chromium.launc
 
   try {
     return await chromium.launch({ headless: true });
-  } catch {
-    return chromium.launch({ headless: true, channel: "chrome" });
+  } catch (bundledError) {
+    try {
+      return await chromium.launch({ headless: true, channel: "chrome" });
+    } catch (channelError) {
+      // Keep both messages: the bundled-browser one is the actionable hint
+      // ("run npx playwright install chromium"), the channel one explains why the
+      // fallback could not rescue the run.
+      const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+      throw new Error(
+        `${describe(bundledError)} | fallback to channel "chrome" also failed: ${describe(channelError)}`
+      );
+    }
   }
 }
 

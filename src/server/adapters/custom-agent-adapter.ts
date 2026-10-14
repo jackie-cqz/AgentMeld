@@ -1406,7 +1406,10 @@ function formatApiError(err: unknown, model: string, provider: string, baseUrl?:
   // Naming the provider and the endpoint is the whole point: a key issued by one
   // service and a request sent to another produces a bare 401 that reads like
   // "your key is wrong", which is what made a data-directory reset so confusing.
-  const context = baseUrl ? `（provider "${provider}"，endpoint ${baseUrl}）` : `（provider "${provider}"）`;
+  // Credentials embedded in the URL are redacted — this text ends up in the
+  // conversation transcript.
+  const safeBaseUrl = baseUrl?.replace(/\/\/[^/@]*@/, "//***@");
+  const context = safeBaseUrl ? `（provider "${provider}"，endpoint ${safeBaseUrl}）` : `（provider "${provider}"）`;
   if (err instanceof Error) {
     const msg = err.message;
     // OpenAI SDK wraps HTTP errors with status code in message

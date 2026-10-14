@@ -38,13 +38,26 @@ describe("normalizeApiBaseUrl", () => {
     // so a /v3 endpoint became /v3/v1.
     expect(normalizeApiBaseUrl("https://gateway.example.com/v1")).toBe("https://gateway.example.com/v1");
     expect(normalizeApiBaseUrl("https://ark.example.com/api/v3")).toBe("https://ark.example.com/api/v3");
+    expect(normalizeApiBaseUrl("https://gemini.example.com/v1beta")).toBe("https://gemini.example.com/v1beta");
+  });
+
+  it("does not invent a path for an empty value", () => {
+    expect(normalizeApiBaseUrl("")).toBe("");
+    expect(normalizeApiBaseUrl("   ")).toBe("");
   });
 });
 
 describe("resolveProviderBaseUrl", () => {
-  it("prefers the explicit override over the environment and the default", () => {
+  it("uses an explicit override verbatim, without rewriting it", () => {
+    // Regression guard: normalising the override appended /v1 to a bare host,
+    // which would quietly change the endpoint an existing agent was already
+    // talking to. The override is what the user configured; leave it alone.
     process.env.DEEPSEEK_BASE_URL = "https://from-env.example.com";
     expect(resolveProviderBaseUrl("deepseek", "https://from-agent.example.com"))
+      .toBe("https://from-agent.example.com");
+    expect(resolveProviderBaseUrl("deepseek", "https://from-agent.example.com/v1"))
+      .toBe("https://from-agent.example.com/v1");
+    expect(resolveProviderBaseUrl("deepseek", "  https://from-agent.example.com/v1  "))
       .toBe("https://from-agent.example.com/v1");
   });
 
@@ -55,6 +68,11 @@ describe("resolveProviderBaseUrl", () => {
     process.env.DEEPSEEK_BASE_URL = "https://from-env.example.com";
     expect(resolveProviderBaseUrl("deepseek", null)).toBe("https://from-env.example.com/v1");
     expect(resolveProviderBaseUrl("deepseek")).toBe("https://from-env.example.com/v1");
+  });
+
+  it("normalises the environment value, including one that already has /v1", () => {
+    process.env.DEEPSEEK_BASE_URL = "https://from-env.example.com/v1";
+    expect(resolveProviderBaseUrl("deepseek", null)).toBe("https://from-env.example.com/v1");
   });
 
   it("uses the built-in endpoint when nothing overrides it", () => {
