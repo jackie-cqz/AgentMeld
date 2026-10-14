@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestDatabase } from "@/test/test-database";
 import {
   isChannelProjectionPaused,
+  projectRunFailure,
   projectableText,
   projectMessage,
   setChannelProjectionPaused,
@@ -9,6 +10,7 @@ import {
   stopChannelProjectionForTests,
   withinSendBudget
 } from "@/server/channels/feishu/projection";
+import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import {
   createChannelConversation,
@@ -282,6 +284,132 @@ describe("projectMessage", () => {
   });
 });
 
+describe("projectRunFailure", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-channel-failure-");
+    sent.length = 0;
+    channelsByAgent.clear();
+    stopChannelProjectionForTests();
+
+    createConversation({
+      id: "conv_1",
+      title: "飞书群",
+      mode: "group",
+      agentIds: ["ag_pm"],
+      fsWriteApprovalMode: "auto",
+      now: 1
+    });
+    createChannelConversation({
+      id: "cc_1",
+      channel: "feishu",
+      chatId: "oc_1",
+      conversationId: "conv_1",
+      now: 1
+    });
+    channelsByAgent.set("ag_pm", { send: async () => ({ messageId: "om_out" }) });
+  });
+
+  afterEach(() => {
+    stopChannelProjectionForTests();
+    teardown();
+  });
+
+  const failedRun = () =>
+    ({
+      id: "run_1",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: null,
+      parentRunId: null,
+      status: "failed" as const,
+      stage: null,
+      error: 'No API key configured for provider "deepseek". Set DEEPSEEK_API_KEY',
+      usage: null,
+      interrupted: false,
+      errorCategory: "config",
+      retryable: false,
+      startedAt: 1,
+      finishedAt: 2,
+      createdAt: 1,
+      updatedAt: 2
+    });
+
+  it("tells the group a run did not finish", async () => {
+    // Without this a failure is visible only as "no answer arrived", which in a
+    // chat is indistinguishable from being ignored.
+    const outcome = await projectRunFailure(failedRun());
+
+    expect(outcome.status).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].agentId).toBe("ag_pm");
+  });
+
+  it("does not put the reason in the room", async () => {
+    // An error string routinely carries environment variable names, paths and
+    // provider internals — the same detail a reply must not leak.
+    await projectRunFailure(failedRun());
+
+    const text = (sent[0].input as { text: string }).text;
+    expect(text).not.toContain("DEEPSEEK_API_KEY");
+    expect(text).not.toContain("deepseek");
+    expect(text).toContain("没能完成");
+  });
+
+  it("announces each failure once", async () => {
+    await projectRunFailure(failedRun());
+    const again = await projectRunFailure(failedRun());
+
+    expect(again).toEqual({ status: "skipped", reason: "already announced" });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("is not suppressed by the send budget", async () => {
+    // The moment a failure notice is dropped for being the twenty-first message
+    // is the moment it is most needed. Failures are bounded by the run count.
+    const now = Date.now();
+    for (let i = 0; i < 20; i += 1) {
+      await projectMessage(agentMessage({ id: `msg_fill_${i}` }), now);
+    }
+    sent.length = 0;
+
+    const outcome = await projectRunFailure(failedRun());
+
+    expect(outcome.status).toBe("sent");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("still yields to the pause switch, which is an explicit instruction", async () => {
+    setChannelProjectionPaused(true);
+    const outcome = await projectRunFailure(failedRun());
+
+    expect(outcome).toEqual({ status: "skipped", reason: "paused" });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("stays silent for a conversation that is not on a channel", async () => {
+    const outcome = await projectRunFailure({ ...failedRun(), conversationId: "conv_other" });
+
+    expect(outcome.status).toBe("skipped");
+    expect(sent).toHaveLength(0);
+  });
+});
+
+/** A failed run row, so `getRun` has something to read for a `run.end`. */
+function createFailedRun(runId: string): string {
+  getDatabase()
+    .prepare(`
+      INSERT INTO agent_runs (
+        id, conversation_id, agent_id, trigger_message_id, parent_run_id, status,
+        stage, error, usage, interrupted, error_category, retryable,
+        started_at, finished_at, created_at, updated_at
+      ) VALUES (?, 'conv_1', 'ag_pm', NULL, NULL, 'failed', NULL, 'boom', NULL, 0, 'config', 0, 1, 2, 1, 2)
+    `)
+    .run(runId);
+  return runId;
+}
+
 describe("startChannelProjection", () => {
   let teardown: () => void;
 
@@ -379,6 +507,34 @@ describe("startChannelProjection", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(sent).toHaveLength(0);
+  });
+
+  it("announces a failed run, and not an aborted one", async () => {
+    // A failed run produces no reply at all, so the group would otherwise see
+    // nothing and could not tell a failure from being ignored. An abort is the
+    // user stopping it, which they already know.
+    startChannelProjection();
+    const failed = createFailedRun("run_failed");
+
+    eventBus.publish({
+      type: "run.end",
+      conversationId: "conv_1",
+      timestamp: 3,
+      runId: "run_aborted",
+      status: "aborted"
+    });
+    eventBus.publish({
+      type: "run.end",
+      conversationId: "conv_1",
+      timestamp: 4,
+      runId: failed,
+      status: "failed",
+      error: "boom"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(sent).toHaveLength(1);
+    expect((sent[0].input as { text: string }).text).toContain("没能完成");
   });
 
   it("returns the same subscription when started twice", () => {
