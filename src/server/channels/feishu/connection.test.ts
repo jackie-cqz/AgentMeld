@@ -217,6 +217,9 @@ describe("feishu connection layer", () => {
       senderType: "bot",
       senderIsBot: true,
       mentionedBot: true,
+      // Only open ids are carried forward: a mention's display name is set by
+      // whoever sent it and is not identity.
+      mentionOpenIds: ["ou_x"],
       content: "hello",
       threadId: "omt_1",
       createTime: 1_700_000_000_000

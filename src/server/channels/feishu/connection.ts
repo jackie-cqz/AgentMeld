@@ -8,7 +8,7 @@ import {
 import { ensureDatabase } from "@/db/bootstrap";
 import { eventBus } from "@/server/event-bus";
 import { listFeishuBindings } from "@/server/channels/feishu/binding";
-import { getChannelBindingSecret } from "@/server/repositories";
+import { getChannelBindingSecret, setChannelBindingBotOpenId } from "@/server/repositories";
 import type {
   ChannelBinding,
   ChannelConnectionInfo,
@@ -126,6 +126,11 @@ function toInbound(agentId: string, message: NormalizedMessage): ChannelInboundM
     senderType: message.senderType ?? null,
     senderIsBot: message.senderIsBot ?? null,
     mentionedBot: message.mentionedBot,
+    // Only open ids: a mention's display name is set by whoever sent it and is
+    // not identity.
+    mentionOpenIds: message.mentions
+      .map((mention) => mention.openId)
+      .filter((openId): openId is string => Boolean(openId)),
     content: message.content,
     threadId: message.threadId ?? null,
     createTime: message.createTime
@@ -206,6 +211,10 @@ async function connectOne(binding: ChannelBinding, appSecret: string): Promise<C
     const identity = channel.getBotIdentity();
     entry.botOpenId = identity.openId;
     entry.botName = identity.name;
+    // Persisted because routing needs to map a mentioned open id back to an
+    // agent, and the registry that knows it is per-process and empty until a
+    // connection succeeds.
+    setChannelBindingBotOpenId(binding.id, identity.openId);
   } catch (error) {
     // The connection is up; only the identity lookup failed. Not fatal, and
     // worth recording rather than failing the whole start.

@@ -6,6 +6,7 @@ import type {
   ArtifactContent,
   Attachment,
   ChannelBinding,
+  ChannelConversation,
   Conversation,
   ConversationContextSummary,
   Message,
@@ -348,6 +349,26 @@ export function mapChannelBinding(row: ChannelBindingRow): ChannelBinding {
     tenantBrand: row.tenant_brand,
     botOpenId: row.bot_open_id,
     boundByOpenId: row.bound_by_open_id,
+    chatId: row.chat_id,
+    conversationId: row.conversation_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export interface ChannelConversationRow {
+  id: string;
+  channel: string;
+  chat_id: string;
+  conversation_id: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export function mapChannelConversation(row: ChannelConversationRow): ChannelConversation {
+  return {
+    id: row.id,
+    channel: row.channel as ChannelConversation["channel"],
     chatId: row.chat_id,
     conversationId: row.conversation_id,
     createdAt: row.created_at,
