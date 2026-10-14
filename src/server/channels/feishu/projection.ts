@@ -16,18 +16,37 @@ import type { Message, MessagePart } from "@/shared/types";
  * by local state, never by an inbound message.
  */
 
-/** Rolling ceiling on how much one conversation may post. */
+/**
+ * Rolling ceiling on how much one conversation may post.
+ *
+ * This is a RATE LIMIT, not the hard stop design §5.8 layer 4 described. A
+ * runaway is slowed to this rate and resumes by itself when the window rolls —
+ * it is never stopped, and nothing needs resetting. Two consequences worth
+ * knowing: a conversation that legitimately produces more than this within a
+ * minute is cut off mid-task with a single notice, and because a conductor's
+ * child tasks share the conversation, a handful of tasks with retries can
+ * exhaust it — the summary that gets swallowed can be the conductor's own.
+ */
 const SEND_WINDOW_MS = 60_000;
 const MAX_SENDS_PER_WINDOW = 20;
 
 /**
  * What of a message is fit for the room.
  *
- * Text and code are the answer; artifact references are links to it. Everything
- * else — reasoning, tool calls and their results, deployment internals, raw
- * attachments — stays on the web, which is where the detail belongs. A message
- * that is only tool calls therefore projects to nothing, which is correct: the
- * group should see conclusions, not a transcript.
+ * Text and code are the answer; an artifact reference becomes a label naming it
+ * — **not a link**, because an artifact has no URL a chat member could open.
+ * Design §5.6 wanted an actual entry point; this does not provide one.
+ *
+ * Everything else — reasoning, tool calls and their results, deployment
+ * internals, raw attachments — stays on the web, which is where the detail
+ * belongs. A message that is only tool calls therefore projects to nothing,
+ * which is correct: the group should see conclusions, not a transcript.
+ *
+ * Deliberately NOT implemented, from review: a reply that FAILED is not posted,
+ * so a failure shows up only as "no answer arrived". §5.6 and §5.8 both say a
+ * failure should be announced; they are right and this does not do it. Deploy
+ * and delivery messages are `role: "system"` and are filtered out for the same
+ * reason, so §5.6's delivery half is unimplemented too.
  */
 export function projectableText(parts: MessagePart[]): string {
   const chunks: string[] = [];
@@ -50,7 +69,13 @@ declare global {
   var __agentMeldProjectionNotices: Set<string> | undefined;
 }
 
-/** Stop everything going out, without touching recording or inbound. */
+/**
+ * Stop everything going out, without touching recording or inbound.
+ *
+ * Reached through `POST /api/channels/feishu/projection`. The flag is in memory,
+ * so a restart resumes projection — the right failure direction for a switch
+ * meant to stop an incident fast, but it does mean the pause is not durable.
+ */
 export function setChannelProjectionPaused(paused: boolean): void {
   globalThis.__agentMeldChannelProjectionPaused = paused;
 }
@@ -130,7 +155,8 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
     // than silently swallowing output.
     await noticeOnce(`${channelConversation.id}:budget`, () =>
       channel.send(channelConversation.chatId, {
-        text: "本会话短时间内的消息过多，已暂停继续发送。详情请在 AgentMeld 网页查看。"
+        // Not "paused": the window rolls and sending resumes on its own.
+        text: "本会话短时间内的消息过多，部分内容未发送。详情请在 AgentMeld 网页查看。"
       })
     );
     return { status: "skipped", reason: "send budget exhausted" };
@@ -169,7 +195,9 @@ export function startChannelProjection(): () => void {
     if (event.type !== "message.end") return;
     const message = getMessage(event.messageId);
     if (!message || message.role !== "agent") return;
-    // A withdrawn or errored reply is not an answer worth posting.
+    // An errored reply is not an answer worth posting. Note that an ABORTED run
+    // is normalised to "complete" downstream, so a reply the user stopped
+    // halfway IS posted and looks like a finished answer.
     if ((event.status ?? message.status) !== "complete") return;
     void projectMessage(message).catch((error: unknown) => {
       console.error("[feishu] failed to project a message:", error);
