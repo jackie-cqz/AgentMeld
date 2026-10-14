@@ -15,6 +15,9 @@ export interface ConsumeStreamInput {
   messageId: string;
   runId: string;
   signal?: AbortSignal;
+  /** Parts already persisted for this message. Streamed part indices are appended
+   *  after them instead of overwriting earlier stages' output (e.g. conductor assess → aggregate). */
+  initialParts?: MessagePart[];
   /** Called for each event after filling IDs.
    *  Return `{ stop: true }` to persist/publish the current event, then break out of the loop. */
   onEvent?: (event: StreamEvent) => { stop?: boolean } | void;
@@ -46,14 +49,15 @@ export interface ConsumeStreamResult {
 export async function consumeStream(
   input: ConsumeStreamInput
 ): Promise<ConsumeStreamResult> {
-  let parts: MessagePart[] = [];
+  let parts: MessagePart[] = input.initialParts ? [...input.initialParts] : [];
+  const partOffset = parts.length;
   let usage: StreamUsage | null = null;
 
   for await (const event of input.stream) {
     if (input.signal?.aborted) break;
 
-    // 1. Fill missing IDs
-    const filled = fillEventIds(event, input.messageId, input.runId);
+    // 1. Fill missing IDs, then shift part indices past any pre-existing parts
+    const filled = offsetPartIndices(fillEventIds(event, input.messageId, input.runId), partOffset);
 
     // 2. Callback can inspect the event and request that no later events are consumed.
     // The current event is still persisted/published so tool results never disappear from the UI.
@@ -104,6 +108,15 @@ function fillEventIds(event: StreamEvent, messageId: string, runId: string): Str
     e = { ...e, runId };
   }
   return e as StreamEvent;
+}
+
+/** Append streamed part indices after the parts already present in the message. */
+function offsetPartIndices(event: StreamEvent, offset: number): StreamEvent {
+  if (offset === 0) return event;
+  if (event.type === "part.start" || event.type === "part.delta" || event.type === "part.end") {
+    return { ...event, partIndex: event.partIndex + offset };
+  }
+  return event;
 }
 
 /**

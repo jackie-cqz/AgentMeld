@@ -350,4 +350,45 @@ describe("consumeStream", () => {
       deployment: expect.objectContaining({ status: "ready" })
     });
   });
+
+  it("appends streamed parts after initialParts and offsets their indices", async () => {
+    const published: StreamEvent[] = [];
+    const unsubscribe = eventBus.subscribe(({ event }) => published.push(event));
+    try {
+      const result = await consumeStream({
+        stream: eventsToStream([
+          {
+            type: "part.start", conversationId: "c1", timestamp: 1,
+            messageId: "", partIndex: 0,
+            part: { type: "text", content: "" }
+          },
+          {
+            type: "part.delta", conversationId: "c1", timestamp: 2,
+            messageId: "", partIndex: 0,
+            delta: { type: "text.append", text: "aggregate summary" }
+          },
+          {
+            type: "part.end", conversationId: "c1", timestamp: 3,
+            messageId: "", partIndex: 0
+          }
+        ]),
+        messageId: "msg_aggregate",
+        runId: "run_conductor",
+        initialParts: [{ type: "tool_use", callId: "call_1", toolName: "plan_tasks", args: {} }]
+      });
+
+      // The earlier stage's part is preserved and the new part is appended after it.
+      expect(result.parts).toHaveLength(2);
+      expect(result.parts[0]).toMatchObject({ type: "tool_use", callId: "call_1" });
+      expect(result.parts[1]).toEqual({ type: "text", content: "aggregate summary" });
+
+      // Live events must target the existing part indices so the client appends, not overwrites.
+      const start = published.find((event) => event.type === "part.start");
+      expect(start).toMatchObject({ messageId: "msg_aggregate", partIndex: 1 });
+      const delta = published.find((event) => event.type === "part.delta");
+      expect(delta).toMatchObject({ messageId: "msg_aggregate", partIndex: 1 });
+    } finally {
+      unsubscribe();
+    }
+  });
 });

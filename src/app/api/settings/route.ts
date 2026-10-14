@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getApiKeySources, getSettings, updateSettings } from "@/server/settings-service";
+import type { AppSettings } from "@/shared/types";
 
 export const dynamic = "force-dynamic";
 
@@ -17,17 +18,7 @@ const patchSchema = z.object({
 
 export async function GET() {
   const settings = getSettings();
-
-  // Mask keys in response (show only last 4 chars)
-  const masked = {
-    ...settings,
-    anthropicApiKey: maskKey(settings.anthropicApiKey),
-    openaiApiKey: maskKey(settings.openaiApiKey),
-    deepseekApiKey: maskKey(settings.deepseekApiKey),
-    arkApiKey: maskKey(settings.arkApiKey)
-  };
-
-  return Response.json({ settings: masked, keySources: getApiKeySources(settings) });
+  return Response.json({ settings: maskSettings(settings), keySources: getApiKeySources(settings) });
 }
 
 export async function PATCH(request: Request) {
@@ -38,7 +29,18 @@ export async function PATCH(request: Request) {
   }
 
   const updated = updateSettings(removeMaskedKeys(parsed.data));
-  return Response.json({ settings: updated });
+  return Response.json({ settings: maskSettings(updated) });
+}
+
+// Never return raw API keys from the API — GET and PATCH must both mask.
+function maskSettings(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    anthropicApiKey: maskKey(settings.anthropicApiKey),
+    openaiApiKey: maskKey(settings.openaiApiKey),
+    deepseekApiKey: maskKey(settings.deepseekApiKey),
+    arkApiKey: maskKey(settings.arkApiKey)
+  };
 }
 
 function maskKey(key: string | null): string | null {
