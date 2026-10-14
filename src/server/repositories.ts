@@ -806,6 +806,21 @@ export function getChannelConversationByChat(
   return row ? mapChannelConversation(row) : null;
 }
 
+/**
+ * The chat a conversation projects to, if it is a channel conversation at all.
+ *
+ * The unique index on `conversation_id` is what makes this a single row rather
+ * than a choice: a conversation has at most one chat it speaks to.
+ */
+export function getChannelConversationByConversationId(
+  conversationId: string
+): ChannelConversation | null {
+  const row = getDatabase()
+    .prepare("SELECT * FROM channel_conversations WHERE conversation_id = ?")
+    .get(conversationId) as ChannelConversationRow | undefined;
+  return row ? mapChannelConversation(row) : null;
+}
+
 export function createChannelConversation(input: {
   id: string;
   channel: string;
