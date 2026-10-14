@@ -171,9 +171,13 @@ export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcom
   if (notices.has(key)) return { status: "skipped", reason: "already announced" };
   notices.add(key);
 
-  const result = await channel.send(channelConversation.chatId, {
-    text: "⚠️ 这次任务没能完成。详情请在 AgentMeld 网页查看。"
-  });
+  const result = await deliverSend<SendResult>(
+    channel,
+    run.conversationId,
+    run.agentId,
+    channelConversation.chatId,
+    { text: "⚠️ 这次任务没能完成。详情请在 AgentMeld 网页查看。" }
+  );
   console.info(
     `[feishu] announced failure of ${run.id} -> ${channelConversation.chatId} (${result.messageId})`
   );

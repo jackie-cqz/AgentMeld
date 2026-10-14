@@ -587,6 +587,33 @@ describe("startChannelProjection", () => {
     expect((sent[0].input as { text: string }).text).toContain("没能完成");
   });
 
+  it("records a failure of the failure announcement too", async () => {
+    // The completeness claim, pinned where it actually broke: wrapping the
+    // OTHER `channel.send` in this file missed this one, so the health record
+    // would have said everything was fine while the one message that matters
+    // most was not going out.
+    const { clearDeliveryHealthForTests, getDeliveryHealth } = await import(
+      "@/server/channels/feishu/delivery"
+    );
+    clearDeliveryHealthForTests();
+    channelsByAgent.set("ag_pm", {
+      send: async () => {
+        throw new Error("cannot post");
+      }
+    });
+
+    const runId = createFailedRun("run_send_fails");
+    const { getRun } = await import("@/server/repositories");
+    const run = getRun(runId);
+    if (!run) throw new Error("expected a run row");
+
+    await expect(projectRunFailure(run)).rejects.toThrow("cannot post");
+
+    const [entry] = getDeliveryHealth();
+    expect(entry).toMatchObject({ conversationId: "conv_1", agentId: "ag_pm", failed: 1 });
+    clearDeliveryHealthForTests();
+  });
+
   it("returns the same subscription when started twice", () => {
     const first = startChannelProjection();
     const second = startChannelProjection();
