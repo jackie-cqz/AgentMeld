@@ -23,13 +23,18 @@ import type { ChannelInboundMessage } from "@/shared/types";
  */
 const { startAgentRunMock } = vi.hoisted(() => ({ startAgentRunMock: vi.fn() }));
 
+const { importCalls } = vi.hoisted(() => ({ importCalls: { count: 0 } }));
+
 vi.mock("@/server/channels/feishu/attachment-import", () => ({
   // One file fails, so the notice is produced.
-  importInboundResources: async () => ({
-    status: "imported",
-    attachmentIds: [],
-    skipped: ["坏的.pdf（下载失败）"]
-  }),
+  importInboundResources: async () => {
+    importCalls.count += 1;
+    return {
+      status: "imported",
+      attachmentIds: [],
+      skipped: ["坏的.pdf（下载失败）"]
+    };
+  },
   describeSkippedResources: (skipped: string[]) =>
     skipped.length ? `⚠️ 有附件没能导入：${skipped.join("、")}` : null
 }));
@@ -373,6 +378,31 @@ describe("an attachment that does not arrive", () => {
   afterEach(() => {
     stopChannelRouterForTests();
     teardown();
+  });
+
+  it("imports the attachments once, not once per delivery", async () => {
+    // The review listed "a redelivered message re-imports its attachments" as
+    // missed. The claim row is keyed on the platform's message id and the
+    // import runs after it, so this should not happen — but that was reasoning,
+    // and reasoning is what produced the wrong claims in this PR. Asked as a
+    // question instead.
+    importCalls.count = 0;
+    const first = await routeChannelInbound(
+      inbound({
+        messageId: "om_same",
+        resources: [{ type: "file", fileKey: "fk", fileName: "报告.pdf" }]
+      })
+    );
+    const second = await routeChannelInbound(
+      inbound({
+        messageId: "om_same",
+        resources: [{ type: "file", fileKey: "fk", fileName: "报告.pdf" }]
+      })
+    );
+
+    expect(first.status).toBe("routed");
+    expect(second.status).toBe("duplicate");
+    expect(importCalls.count).toBe(1);
   });
 
   it("is recorded where the room can hear it", async () => {
