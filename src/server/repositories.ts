@@ -334,6 +334,9 @@ export function persistConductorTask(record: {
   childRunId?: string | null;
   attempt: number;
   errorCategory?: string | null;
+  /** Evidence-verification outcome. The column is NOT NULL with a default, so a
+   *  task that never ran (skipped/aborted) is stored as "not_started". */
+  verificationStatus?: string | null;
   now: number;
 }) {
   getDatabase()
@@ -341,14 +344,15 @@ export function persistConductorTask(record: {
       INSERT OR REPLACE INTO conductor_task_results (
         id, conductor_run_id, conversation_id, task_id, agent_id,
         title, status, summary, child_run_id, attempt, error_category,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        verification_status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       record.id, record.conductorRunId, record.conversationId,
       record.taskId, record.agentId, record.title ?? null,
       record.status, record.summary ?? null, record.childRunId ?? null,
       record.attempt, record.errorCategory ?? null,
+      record.verificationStatus ?? "not_started",
       record.now, record.now
     );
 }
