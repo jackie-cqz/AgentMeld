@@ -697,6 +697,75 @@ describe("channel binding state", () => {
     expect(session?.appId).toBe("cli_3");
     expect(session?.bindingId).toBe("cb_3");
   });
+
+  it("records connection health per agent", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 7,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "connected"
+    });
+
+    const info = useAppStore.getState().channelConnections["ag_1"];
+    expect(info?.status).toBe("connected");
+    expect(info?.appId).toBe("cli_1");
+    expect(info?.connectedAt).toBe(7);
+  });
+
+  it("carries a connection failure's reason into lastError", () => {
+    // Without this the panel can only say "failed", which is not actionable.
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 8,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "error",
+      reason: "connect refused"
+    });
+
+    expect(useAppStore.getState().channelConnections["ag_1"]?.lastError).toBe("connect refused");
+  });
+
+  it("clears a stale error once the connection recovers", () => {
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 9,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "error",
+      reason: "connect refused"
+    });
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 10,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "reconnected"
+    });
+
+    expect(useAppStore.getState().channelConnections["ag_1"]?.lastError).toBeNull();
+  });
+
+  it("keeps a guard trip visible rather than dropping it silently", () => {
+    // §5.8 layer 6 arms botLoopGuard with onTrip:"reject" precisely so a trip
+    // shows up somewhere. This is where.
+    useAppStore.getState().applyEvent({
+      type: "channel.connection",
+      conversationId: "",
+      timestamp: 11,
+      agentId: "ag_1",
+      appId: "cli_1",
+      status: "connected",
+      reason: "rejected:bot_loop"
+    });
+
+    expect(useAppStore.getState().channelConnections["ag_1"]?.lastError).toBe("rejected:bot_loop");
+  });
 });
 
 describe("channel binding actions", () => {
@@ -895,6 +964,42 @@ describe("channel binding actions", () => {
     const state = useAppStore.getState();
     expect(state.channelBindingSessions["cbs_1"]?.status).toBe("succeeded");
     expect(state.channelBindingSessions["cbs_2"]?.qrUrl).toContain("user_code=KEEP");
+  });
+
+  it("loads connection health", async () => {
+    globalThis.fetch = (async () =>
+      json(200, {
+        data: {
+          connections: [
+            {
+              agentId: "ag_1",
+              appId: "cli_1",
+              status: "connected",
+              botOpenId: "ou_1",
+              botName: "PM 小灰",
+              lastError: null,
+              connectedAt: 42
+            }
+          ]
+        }
+      })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelConnections();
+
+    expect(useAppStore.getState().channelConnections["ag_1"]?.botName).toBe("PM 小灰");
+  });
+
+  it("does not let a failed health read erase a real error", async () => {
+    // Connection health is diagnostic. Losing the message the user has to act
+    // on because a status probe failed would be the wrong trade.
+    useAppStore.setState((state) => {
+      state.channelBindingError = "解绑失败：404";
+    });
+    globalThis.fetch = (async () => json(500, { error: "boom" })) as typeof fetch;
+
+    await useAppStore.getState().loadChannelConnections();
+
+    expect(useAppStore.getState().channelBindingError).toBe("解绑失败：404");
   });
 
   it("does not clear a real error when a passive refresh succeeds", async () => {

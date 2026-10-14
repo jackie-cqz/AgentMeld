@@ -29,6 +29,57 @@ export type CompanionMode = "off" | "lan" | "tailnet";
 /** Lifecycle of an in-flight "scan to bind" attempt. */
 export type ChannelBindingStatus = "awaiting_scan" | "succeeded" | "failed" | "cancelled";
 
+/** Health of a channel's long connection, for the UI and for diagnostics. */
+export type ChannelConnectionStatus =
+  | "connected"
+  | "reconnecting"
+  | "reconnected"
+  | "disconnected"
+  | "error";
+
+/**
+ * A normalized inbound message from a channel, before routing.
+ *
+ * A trimmed, serializable view of the SDK's `NormalizedMessage`: enough to
+ * deduplicate, map to a conversation and dispatch, without carrying the raw
+ * platform payload (which holds tenant keys and full user ids) into the event
+ * stream. `senderType` is a plain string on purpose — the platform can send
+ * values beyond `user`/`bot`, and an absent value means "unknown", never
+ * "not a bot".
+ */
+export interface ChannelInboundMessage {
+  channel: "feishu";
+  /** Which agent's bot received it — i.e. whose app got the event. */
+  agentId: string;
+  chatId: string;
+  chatType: "p2p" | "group";
+  messageId: string;
+  senderId: string;
+  senderType: string | null;
+  senderIsBot: boolean | null;
+  mentionedBot: boolean;
+  content: string;
+  threadId: string | null;
+  createTime: number;
+}
+
+/**
+ * Long-connection health for one bound agent, as the API reports it.
+ *
+ * Lives here rather than beside the connection module because the client reads
+ * it: `src/server/channels/feishu/connection.ts` imports the platform SDK, and
+ * a client file must never reach into that.
+ */
+export interface ChannelConnectionInfo {
+  agentId: string;
+  appId: string;
+  status: ChannelConnectionStatus;
+  botOpenId: string | null;
+  botName: string | null;
+  lastError: string | null;
+  connectedAt: number | null;
+}
+
 /**
  * A stored channel binding: one agent speaking through one external app
  * identity. Deliberately does NOT carry the app secret — that value never
@@ -586,4 +637,22 @@ export type StreamEvent =
       bindingId?: string;
       appId?: string;
       error?: string;
+    })
+  // ── Channel connections ──────────────────────────────────────────────────
+  // Neither of these belongs to a conversation, so `conversationId` is empty —
+  // the same convention `channel.binding.updated` uses.
+  | (BaseEvent & {
+      type: "channel.inbound";
+      message: ChannelInboundMessage;
+    })
+  | (BaseEvent & {
+      type: "channel.connection";
+      agentId: string;
+      appId: string;
+      status: ChannelConnectionStatus;
+      /**
+       * For `rejected:*` and `error`: why. A `rejected:bot_loop` here is how we
+       * can tell §5.8's transport-level guard actually tripped.
+       */
+      reason?: string;
     });
