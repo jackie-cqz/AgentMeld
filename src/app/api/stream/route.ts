@@ -57,7 +57,7 @@ export async function GET(request: Request) {
           };
           const id = eventBus.lastEventId();
           write(encodeSse(id, event));
-        });
+        }).catch(() => cleanup());
       }, HEARTBEAT_MS);
 
       const cleanup = () => {
