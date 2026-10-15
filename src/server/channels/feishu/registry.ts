@@ -13,6 +13,13 @@ import type { ChannelBinding, ChannelConnectionInfo, ChannelConnectionStatus } f
  */
 
 export interface ConnectionEntry {
+  /**
+   * A channel this entry failed to close, kept only so the next retry can try
+   * again. Deliberately NOT `channel`: `getFeishuChannelForAgent` hands that one
+   * to outbound sends regardless of status, and a socket being torn down must
+   * not be handed out.
+   */
+  staleChannel?: LarkChannel | null;
   binding: ChannelBinding;
   /** `null` on a failed attempt: the entry exists to REPORT the failure. */
   channel: LarkChannel | null;

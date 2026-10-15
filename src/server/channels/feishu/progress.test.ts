@@ -572,25 +572,15 @@ describe("the status button", () => {
     // The card consulted `withinSendBudget` but never called `recordSend`, so a
     // run posting cards all minute neither counted nor was stopped.
     const run = seed();
-    const conversationId = run.conversationId;
-    const sendLog = (globalThis as unknown as {
-      __agentMeldProjectionSendLog?: Map<string, number[]>;
-    }).__agentMeldProjectionSendLog;
-    // The window is process-global, so this test owns its conversation's entry
-    // and leaves nothing behind for the tests after it.
-    sendLog?.delete(conversationId);
-    try {
-      for (let i = 0; i < 19; i++) recordSend(conversationId, Date.now());
+    // beforeEach clears the process-global window, so this fills from zero and
+    // nothing has to be cleaned up here.
+    for (let i = 0; i < 19; i++) recordSend(run.conversationId, Date.now());
 
-      await projectRunStarted(run);
+    await projectRunStarted(run);
 
-      // The 20th send was spent by the card, so the budget is now closed.
-      expect(withinSendBudget(conversationId, Date.now())).toBe(false);
-    } finally {
-      sendLog?.delete(conversationId);
-    }
+    // The 20th send was spent by the card, so the budget is now closed.
+    expect(withinSendBudget(run.conversationId, Date.now())).toBe(false);
   });
-
 
   /** How many cards the registry still holds, to assert nothing leaks. */
   function getRunCardsSizes(): number {

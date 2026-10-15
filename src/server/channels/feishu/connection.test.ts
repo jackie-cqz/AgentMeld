@@ -405,6 +405,33 @@ describe("feishu connection layer", () => {
     expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retries closing a socket it failed to close, on the next cooldown", async () => {
+    // Dropping the handle when a close fails means no later attempt can ever
+    // close that socket, and the next retry happily opens a second one beside
+    // it — the hazard this whole block exists for.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    created[0].emit("error", new Error("socket wobble"));
+    created[0].disconnect.mockRejectedValueOnce(new Error("close failed"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+      // The close failed: no second socket, and the handle is retained.
+      expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 120_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The next round closed it (second disconnect call) before connecting.
+    expect(created[0].disconnect).toHaveBeenCalledTimes(2);
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+  });
+
   it("gives up on an app that never answers, so the others still connect", async () => {
     // The SDK times out the WebSocket handshake but not the HTTP calls that
     // come first, so a black-hole host would otherwise hold the whole start

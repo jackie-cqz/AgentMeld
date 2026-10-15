@@ -317,10 +317,15 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         if (now - existing.lastAttemptAt < RETRY_COOLDOWN_MS) continue;
       }
 
-      const fail = (reason: string) => {
+      const fail = (reason: string, staleChannel: LarkChannel | null = null) => {
         const entry: ConnectionEntry = {
           binding,
           channel: null,
+          // Kept, not dropped: a close that failed leaves a socket that may
+          // still be live, and discarding the only handle to it means no later
+          // retry can ever close it. It is not `channel`, so nothing will try to
+          // send on it in the meantime.
+          staleChannel: staleChannel ?? existing?.staleChannel ?? null,
           status: "error",
           botOpenId: null,
           botName: null,
@@ -347,17 +352,21 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
       // that is being torn down; the app is briefly absent from the status list
       // instead, which is the safe direction (a send is skipped rather than
       // attempted on a dying socket).
-      if (existing?.channel) {
-        const stale = existing.channel;
+      const stale = existing?.channel ?? existing?.staleChannel ?? null;
+      if (stale) {
         registry.delete(binding.appId);
         try {
           await stale.disconnect();
         } catch (error) {
           // A close that failed means the old socket may still be live; making a
           // second one would be exactly the hazard this block exists for. Report
-          // and leave the app on the error list for the next cooldown.
+          // and leave the app on the error list — WITH the handle, so the next
+          // cooldown's retry can try to close it again.
           console.error("[feishu] failed to disconnect a stale connection:", error);
-          fail(`could not close the previous connection: ${error instanceof Error ? error.message : String(error)}`);
+          fail(
+            `could not close the previous connection: ${error instanceof Error ? error.message : String(error)}`,
+            stale
+          );
           continue;
         }
       }
