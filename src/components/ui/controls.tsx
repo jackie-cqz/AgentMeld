@@ -9,7 +9,7 @@ export function Feedback({ children, tone = "error" }: { children: ReactNode; to
 }
 
 export function Tabs<T extends string>({ value, onChange, items, label }: {
-  value: T; onChange: (value: T) => void; items: { value: T; label: string; icon?: ReactNode; disabled?: boolean }[]; label: string;
+  value: T; onChange: (value: T) => void; items: { value: T; label: string; shortLabel?: string; icon?: ReactNode; disabled?: boolean }[]; label: string;
 }) {
   const id = useId();
   return <div className="ui-tabs" role="tablist" aria-label={label} onKeyDown={event => {
@@ -23,7 +23,7 @@ export function Tabs<T extends string>({ value, onChange, items, label }: {
       document.getElementById(`${id}-${available[next].value}`)?.focus();
     }
   }}>{items.map(item => <button type="button" role="tab" id={`${id}-${item.value}`} key={item.value} aria-selected={value === item.value} tabIndex={value === item.value ? 0 : -1}
-    disabled={item.disabled} onClick={() => onChange(item.value)}>{item.icon}{item.label}</button>)}</div>;
+    disabled={item.disabled} onClick={() => onChange(item.value)}>{item.icon}{item.shortLabel ? <><span className="ui-tab-full-label">{item.label}</span><span className="ui-tab-short-label">{item.shortLabel}</span></> : item.label}</button>)}</div>;
 }
 
 export function SectionHeading({ title, detail }: { title: string; detail?: string }) {

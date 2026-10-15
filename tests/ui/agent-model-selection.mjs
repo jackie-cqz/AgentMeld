@@ -41,7 +41,7 @@ async function capture(name) {
   const viewport = page.viewportSize();
   assert(box.x >= -1 && box.y >= -1 && box.x + box.width <= viewport.width + 1 && box.y + box.height <= viewport.height + 1, `${name}: modal bounds`);
   assert(await modal.evaluate(node => node.scrollWidth <= node.clientWidth + 1), `${name}: horizontal overflow`);
-  const footer = await modal.locator('footer').boundingBox();
+  const footer = await modal.locator(':scope > footer').boundingBox();
   assert(footer.y + footer.height <= viewport.height + 1, `${name}: footer visible`);
   assert(Math.abs(footer.y + footer.height - box.y - box.height) <= 2, `${name}: footer pinned to dialog bottom`);
   assert(await modal.evaluate(node => node.contains(document.activeElement)), `${name}: focus inside`);
@@ -105,17 +105,17 @@ try {
   await page.getByTitle('Agents', { exact: true }).click();
   await editAgent();
   assert((await page.getByRole('button', { name: '模型 *', exact: true }).innerText()).includes('glm-fast'));
-  // Nested Settings can update a model catalog without replacing the Agent draft.
+  // Inline provider management updates the catalog without replacing the Agent draft.
   await page.getByRole('button', { name: '管理供应商', exact: true }).click();
   await page.getByRole('button', { name: `配置 ${profileName}`, exact: true }).click();
   await page.getByLabel('默认模型', { exact: true }).fill('glm-new-default');
   await page.getByRole('button', { name: '保存供应商', exact: true }).click();
-  await page.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '返回模型配置', exact: true }).click();
   assert((await page.getByRole('button', { name: '模型 *', exact: true }).innerText()).includes('glm-fast'));
   await page.getByRole('button', { name: '模型 *', exact: true }).click();
   await page.getByRole('button', { name: '选择模型 glm-new-default', exact: true }).waitFor();
   await page.keyboard.press('Escape');
-  assert.equal(await page.getByRole('heading', { name: '编辑 Agent', exact: true }).count(), 1, 'Escape only closes topmost dialog');
+  assert.equal(await page.getByRole('heading', { name: '编辑 Agent', exact: true }).count(), 1, 'Escape returns to config without closing the Agent draft');
   await page.locator('.agent-model-advanced summary').click();
   await page.getByLabel('Agent API Key', { exact: true }).fill('fixture-agent-private-key');
   await page.getByLabel('Agent API 地址', { exact: true }).fill('https://override.fixture.invalid/v1');

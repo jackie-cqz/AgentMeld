@@ -21,6 +21,7 @@ import {
 import { useState } from "react";
 import type { MessagePart } from "@/shared/types";
 import { getToolDisplayName } from "@/shared/tool-display";
+import { summarizeToolCalls, toolCallState, toolCallStates, type ToolCallState } from "@/lib/tool-call-status";
 
 type ToolUsePart = MessagePart & { type: "tool_use" };
 type ToolResultPart = MessagePart & { type: "tool_result" };
@@ -65,6 +66,7 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
   }
 
   const summary = getToolGroupSummary(entries, msgDone);
+  const states = toolCallStates(entries.map(entry => ({ toolName: entry.use.toolName, result: entry.result })), msgDone);
 
   return (
     <div className={`workspace-tool-call ${summary.status === "error" ? "has-error" : ""}`}>
@@ -79,7 +81,7 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
         <span className="min-w-0 flex-1 truncate font-medium text-stone-700 dark:text-slate-200">
           工具调用 × {entries.length}
         </span>
-        <span className={`shrink-0 text-xs ${summary.statusClass}`}>{summary.label}</span>
+        <span className={`tool-group-summary shrink-0 text-xs ${summary.statusClass}`}>{summary.label}</span>
         {groupExpanded
           ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-stone-400" />
           : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-stone-400" />}
@@ -87,13 +89,14 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
 
       {groupExpanded ? (
         <div className="divide-y divide-stone-200/80 border-t border-stone-200/80 bg-white/70 dark:divide-slate-700 dark:border-slate-700 dark:bg-slate-950/40">
-          {entries.map(({ use, result }) => (
+          {entries.map(({ use, result }, index) => (
             <ToolCallItem
               key={use.callId}
               toolUse={use}
               toolResult={result}
               forceDone={msgDone && !result}
               grouped
+              state={states[index]}
             />
           ))}
         </div>
@@ -106,22 +109,24 @@ function ToolCallItem({
   toolUse,
   toolResult,
   forceDone,
-  grouped = false
+  grouped = false,
+  state
 }: {
   toolUse: ToolUsePart;
   toolResult?: ToolResultPart | undefined;
   forceDone?: boolean;
   grouped?: boolean;
+  state?: ToolCallState;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isBash = toolUse.toolName === "bash" || toolUse.toolName === "job_start";
   const resultValue = toolResult ? unwrapToolResult(toolResult.result) : null;
-  const jobRunning = toolUse.toolName.startsWith("job_") && isRecord(resultValue) && resultValue.status === "running";
+  const jobRunning = toolUse.toolName.startsWith("job_") && (state ? state === "running" : isRecord(resultValue) && resultValue.status === "running");
   const isFileWrite = toolUse.toolName === "fs_write" || toolUse.toolName === "fs_patch";
   const isArtifactWrite = toolUse.toolName === "write_artifact";
   const isComplete = !!toolResult || forceDone;
-  const isError = !forceDone && (toolResult?.isError || (isRecord(resultValue) && (resultValue.passed === false || (toolUse.toolName.startsWith("job_") && resultValue.status !== "running" && resultValue.exitCode !== undefined && resultValue.exitCode !== 0))));
-  const isPending = !isComplete;
+  const isError = (state ?? toolCallState(toolUse.toolName, toolResult, !!forceDone)) === "failed";
+  const isPending = !isComplete || jobRunning;
   const args = toolUse.args as Record<string, unknown> | undefined;
 
   return (
@@ -144,7 +149,7 @@ function ToolCallItem({
           {getToolDisplayName(toolUse.toolName)}
         </span>
         {isPending ? (
-          <span className="text-xs text-amber-600">执行中...</span>
+          <span className="text-xs text-amber-600">{jobRunning ? "命令运行中" : "执行中..."}</span>
         ) : isError ? (
           <span className="text-xs text-red-500">失败</span>
         ) : (
@@ -201,21 +206,14 @@ function ToolCallItem({
 }
 
 function getToolGroupSummary(entries: ToolCallEntry[], messageDone: boolean) {
-  let pending = 0;
-  let failed = 0;
+  const summary = summarizeToolCalls(entries.map(entry => ({ toolName: entry.use.toolName, result: entry.result })), messageDone);
+  const pending = summary.running;
+  const failed = summary.failed;
 
-  for (const entry of entries) {
-    if (entry.result?.isError) {
-      failed += 1;
-    } else if (!entry.result && !messageDone) {
-      pending += 1;
-    }
-  }
-
-  if (pending > 0) {
+  if (pending > 0 && failed === 0) {
     return {
       status: "pending" as const,
-      label: `${pending} 个执行中`,
+      label: summary.label,
       statusClass: "text-amber-600",
       containerClass: "border-amber-200 bg-amber-50/80 dark:border-amber-900/70 dark:bg-amber-950/20"
     };
@@ -224,7 +222,7 @@ function getToolGroupSummary(entries: ToolCallEntry[], messageDone: boolean) {
   if (failed > 0) {
     return {
       status: "error" as const,
-      label: `${failed} 个失败`,
+      label: summary.label,
       statusClass: "text-red-500",
       containerClass: "border-red-200 bg-red-50/80 dark:border-red-900/70 dark:bg-red-950/30"
     };
@@ -232,7 +230,7 @@ function getToolGroupSummary(entries: ToolCallEntry[], messageDone: boolean) {
 
   return {
     status: "complete" as const,
-    label: "已完成",
+    label: summary.label,
     statusClass: "text-emerald-700 dark:text-emerald-400",
     containerClass: "border-emerald-100 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20"
   };

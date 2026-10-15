@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, FileText, Loader2, Pencil, Terminal, X, Network } from "lucide-react";
-import { useState } from "react";
+import { Check, ChevronDown, ChevronUp, FileText, ListTree, Loader2, MessageSquare, Terminal, X, Network } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { DispatchPlanEditor, validatePlan } from "@/components/dispatch-plan-editor";
 import { PendingQuestionCard } from "@/components/pending-question-card";
@@ -22,35 +22,34 @@ export function PendingApprovalPanel() {
   const bashes = useAppStore(useShallow((s) => selectConversationPendingBashCommands(s, s.activeConversationId)));
   const plans = useAppStore(useShallow((s) => selectConversationPendingDispatchPlans(s, s.activeConversationId)));
   const questions = useAppStore(useShallow((s) => selectConversationPendingQuestions(s, s.activeConversationId)));
+  const [selected, setSelected] = useState("");
+  const [expanded, setExpanded] = useState(true);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const items = [
+    ...plans.map(item => ({ key: `plan:${item.id}`, label: "编排计划", agentId: Object.values(agents).find(agent => agent.isConductor)?.id ?? "Conductor", content: <DispatchPlanCard plan={item} /> })),
+    ...questions.map(item => ({ key: `question:${item.id}`, label: "询问用户", agentId: item.agentId, content: <PendingQuestionCard question={item} agentName={agents[item.agentId]?.name} /> })),
+    ...writes.map(item => ({ key: `write:${item.id}`, label: `文件修改 · ${item.path}`, agentId: item.agentId, content: <PendingWriteCard write={item} /> })),
+    ...bashes.map(item => ({ key: `bash:${item.id}`, label: "命令执行", agentId: item.agentId, content: <PendingBashCard bash={item} /> }))
+  ];
+  const activeKey = items.some(item => item.key === selected) ? selected : items[0]?.key;
+  useLayoutEffect(() => { if (scrollerRef.current) scrollerRef.current.scrollTop = 0; }, [activeKey]);
 
   if (!activeConversationId) return null;
 
   if (writes.length === 0 && bashes.length === 0 && plans.length === 0 && questions.length === 0) return null;
-  const useWideDecisionSurface = questions.length > 0 || plans.length > 0;
-
   return (
-    <div
-      className="ui-pending max-h-[48vh] shrink-0 overflow-y-auto border-t border-[var(--ui-line)] bg-[var(--ui-subtle)] px-4 py-3"
-    >
-      <div className={`mx-auto space-y-2 ${useWideDecisionSurface ? "max-w-[1100px]" : "max-w-3xl"}`}>
-        {plans.map((plan) => (
-          <DispatchPlanCard key={plan.id} plan={plan} />
-        ))}
-        {questions.map((question) => (
-          <PendingQuestionCard
-            key={question.id}
-            question={question}
-            agentName={agents[question.agentId]?.name ?? question.agentId}
-          />
-        ))}
-        {writes.map((write) => (
-          <PendingWriteCard key={write.id} write={write} />
-        ))}
-        {bashes.map((bash) => (
-          <PendingBashCard key={bash.id} bash={bash} />
-        ))}
+    <section className="ui-pending decision-queue" aria-label="待处理事项">
+      <header className="decision-queue-header">
+        <span>待处理 <strong>{items.length}</strong></span>
+        <select aria-label="选择待处理事项" value={activeKey} onChange={event => { setSelected(event.target.value); setExpanded(true); }}>
+          {items.map(item => <option key={item.key} value={item.key}>{item.label} · {agents[item.agentId]?.name ?? item.agentId}</option>)}
+        </select>
+        <button type="button" className="ui-icon-button" title={expanded ? "收起待处理事项" : "展开待处理事项"} aria-label={expanded ? "收起待处理事项" : "展开待处理事项"} aria-expanded={expanded} aria-controls="decision-queue-content" onClick={() => setExpanded(value => !value)}>{expanded ? <ChevronDown size={16} /> : <ChevronUp size={16} />}</button>
+      </header>
+      <div ref={scrollerRef} id="decision-queue-content" className="decision-queue-content" hidden={!expanded}>
+        {items.map(item => <div key={item.key} hidden={item.key !== activeKey}>{item.content}</div>)}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -216,7 +215,7 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
   };
 
   return (
-    <div className="ui-decision flex items-start gap-3 p-4">
+    <div className="ui-decision ui-plan-decision flex items-start gap-3 p-4">
       <Network className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-stone-900">编排计划待审批</div>
@@ -225,13 +224,13 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
             <DispatchPlanEditor plan={editedPlan} agents={agents} conversation={conversation} onChange={setEditedPlan} />
           </div>
         ) : <div className="mt-2 space-y-1">
-          {plan.plan.map((item) => {
+          {editedPlan.map((item) => {
             const agent = agents[item.agentId];
             return (
               <div key={item.id} className="rounded-md border border-stone-100 bg-stone-50 px-2 py-1.5 text-xs">
                 <div className="flex flex-wrap items-center gap-2 break-words">
                   <span className="font-mono text-stone-400">{item.id}</span>
-                  <span>{item.task.slice(0, 80)}</span>
+                  <span>{item.task.slice(0, 80)}{item.task.length > 80 ? "…" : ""}</span>
                   <span className="shrink-0 text-stone-400">→</span>
                   <span className="font-medium text-stone-700">{agent?.name ?? item.agentId}</span>
                   {item.dependsOn.length > 0 ? (
@@ -269,39 +268,39 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
         ) : null}
         {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
       </div>
-      <div className="flex shrink-0 gap-1">
+      <div className="ui-plan-actions flex shrink-0 gap-1">
         <button
           type="button"
           disabled={resolving}
           onClick={() => setEditing((value) => !value)}
-          className="grid h-8 w-8 place-items-center rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+          className="ui-button"
           title={editing ? "收起结构化编辑" : "结构化编辑计划"}
         >
-          <Pencil className="h-4 w-4" />
+          <ListTree className="h-4 w-4" />编辑任务
         </button>
         <button
           disabled={resolving}
           onClick={() => void handleResolve("approve")}
-          className="grid h-8 w-8 place-items-center rounded-md bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+          className="ui-button ui-button--primary"
           title="批准执行"
         >
-          {resolving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          {resolving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}批准执行
         </button>
         <button
           disabled={resolving}
           onClick={() => void handleResolve("revise")}
-          className="grid h-8 w-8 place-items-center rounded-md bg-blue-100 text-blue-700 hover:bg-blue-200"
-          title="修改计划"
+          className="ui-button"
+          title="要求重新规划"
         >
-          <Pencil className="h-4 w-4" />
+          <MessageSquare className="h-4 w-4" />重新规划
         </button>
         <button
           disabled={resolving}
           onClick={() => void handleResolve("reject")}
-          className="grid h-8 w-8 place-items-center rounded-md bg-red-100 text-red-700 hover:bg-red-200"
+          className="ui-button ui-button--danger"
           title="拒绝"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" />拒绝
         </button>
       </div>
     </div>

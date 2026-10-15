@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Trash2, Pencil } from "lucide-react";
+import { LayoutGrid, List, Plus, Search, Trash2, Pencil } from "lucide-react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
@@ -21,6 +21,10 @@ export function AgentsPanel() {
   const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [adapter, setAdapter] = useState("");
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const visibleAgents = agentList.filter(agent => (!adapter || agent.adapterName === adapter) && `${agent.name} ${agent.description} ${agent.modelId ?? ""} ${agent.capabilities.join(" ")}`.toLowerCase().includes(query.trim().toLowerCase()));
 
   const handleCreate = async (payload: {
     name: string;
@@ -84,8 +88,14 @@ export function AgentsPanel() {
         </button>
       </div>
 
-      <div className="workspace-agent-grid flex-1 overflow-y-auto px-4 py-3 space-y-2">
-        {agentList.map((agent) => (
+      <div className="agent-library-filters">
+        <label className="ui-search-field"><Search size={15} /><input aria-label="搜索 Agent" placeholder="搜索 Agent" value={query} onChange={event => setQuery(event.target.value)} /></label>
+        <select aria-label="筛选适配器" value={adapter} onChange={event => setAdapter(event.target.value)}><option value="">全部适配器</option>{[...new Set(agentList.map(agent => agent.adapterName))].map(name => <option key={name} value={name}>{name}</option>)}</select>
+        <div className="ui-segmented" role="group" aria-label="Agent 显示方式">{([{ value: "grid", label: "卡片视图", Icon: LayoutGrid }, { value: "list", label: "紧凑列表", Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => setView(value)}><Icon size={16} /></button>)}</div>
+        <span className="ui-muted">{visibleAgents.length}/{agentList.length}</span>
+      </div>
+      <div className={`workspace-agent-grid ${view === "list" ? "is-list" : ""} flex-1 overflow-y-auto px-4 py-3 space-y-2`}>
+        {visibleAgents.map((agent) => (
           <div
             key={agent.id}
             className="workspace-agent-row flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
@@ -105,10 +115,8 @@ export function AgentsPanel() {
                   <span className="shrink-0 rounded bg-stone-200 px-1.5 py-0.5 text-[10px] text-stone-500">内置</span>
                 ) : null}
               </div>
-              <div className="mt-0.5 text-xs text-stone-500">
-                {agent.adapterName} · {agent.modelId || "无模型"} · {agent.toolNames.length} 工具
-              </div>
               <p className="workspace-agent-description">{agent.description || "未填写职责描述"}</p>
+              <div className="agent-library-config"><span title={`适配器 ${agent.adapterName}`}>{agent.adapterName}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span>{agent.toolNames.length} 工具</span></div>
             </div>
             <button
               type="button"
@@ -129,8 +137,8 @@ export function AgentsPanel() {
             ) : null}
           </div>
         ))}
-        {agentList.length === 0 ? (
-          <div className="py-8 text-center text-sm text-stone-500">暂无 Agent</div>
+        {visibleAgents.length === 0 ? (
+          <div className="agent-library-empty py-8 text-center text-sm text-stone-500">{agentList.length === 0 ? "暂无 Agent" : "没有匹配的 Agent"}{agentList.length > 0 ? <button className="ui-button" onClick={() => { setQuery(""); setAdapter(""); }}>清除筛选</button> : null}</div>
         ) : null}
         {error ? <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
       </div>

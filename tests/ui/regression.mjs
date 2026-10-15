@@ -35,8 +35,10 @@ messages[15].parts.push(
 const fixture = { ...bootstrap, messagesByConversation: { ...bootstrap.messagesByConversation, [conversation.id]: messages },
   artifactsByConversation: { ...bootstrap.artifactsByConversation, [conversation.id]: artifacts } };
 async function newPage(width = 1440, height = 900, pending = false) {
-  const page = await browser.newPage({ viewport: { width, height } });
+  const page = await browser.contexts()[0].newPage();
+  await page.setViewportSize({ width, height });
   await page.addInitScript(() => {
+    window.localStorage.setItem('agentmeld:right-panel-width', '640');
     const NativeSource = window.EventSource;
     window.EventSource = class extends NativeSource {
       constructor(...args) { super(...args); window.uiEventSource = this; }
@@ -217,7 +219,7 @@ try {
   await page.locator('#message-ui_message_15').getByTitle('上下文追踪', { exact: true }).click();
   await modalCheck(page, 'trace-drawer');
   await screenshot(page, 'trace-drawer');
-  await page.getByRole('tab', { name: '证据', exact: true }).click();
+  await page.getByRole('tab', { name: '证据 0', exact: true }).click();
   await page.keyboard.press('Escape');
   await page.close();
   for (const width of [1440, 390]) {
@@ -232,6 +234,7 @@ try {
     await page.route('**/api/dispatch-plans/ui_plan/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/pending-bash/ui_bash/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/pending-writes/ui_write/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
+    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('question:ui_question');
     await page.getByRole('button', { name: '完整流程', exact: true }).click();
     await page.getByLabel('还有哪些验收要求？').fill('无横向溢出，保留任务证据');
     const answerResponse = page.waitForResponse(response => response.url().endsWith('/ui_question/answer'));
@@ -239,6 +242,7 @@ try {
     await answerResponse;
     await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'ask_user.answered', conversationId: conversation.id, timestamp: now, pendingId: 'ui_question', answers: submitted[0].answers });
     await page.getByText('需要你的选择', { exact: true }).waitFor({ state: 'detached' });
+    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('plan:ui_plan');
     const planSurface = page.locator('.ui-decision').filter({ hasText: '编排计划待审批' });
     const planResponse = page.waitForResponse(response => response.url().endsWith('/ui_plan/resolve'));
     await planSurface.getByTitle('批准执行', { exact: true }).click();
@@ -246,10 +250,12 @@ try {
     assert(await planSurface.getByTitle('批准执行', { exact: true }).isDisabled(), 'Resolved plan stays disabled until its stream event');
     await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'dispatch.plan.resolved', conversationId: conversation.id, timestamp: now, pendingId: 'ui_plan', runId: 'ui_run', approved: true });
     await page.getByText('编排计划待审批', { exact: true }).waitFor({ state: 'detached' });
+    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('bash:ui_bash');
     const bashResponse = page.waitForResponse(response => response.url().endsWith('/ui_bash/resolve'));
     await page.getByTitle('拒绝执行', { exact: true }).click();
     await bashResponse;
     assert(await page.getByTitle('拒绝执行', { exact: true }).isDisabled(), 'Resolved command stays disabled until its stream event');
+    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('write:ui_write');
     await page.getByRole('button', { name: '查看修改差异', exact: true }).click();
     await page.getByText('export const ready = true;', { exact: false }).waitFor();
     await noOverflow(page, `${width}-file-diff`);
