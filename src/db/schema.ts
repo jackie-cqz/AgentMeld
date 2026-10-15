@@ -681,7 +681,9 @@ export const channelInboundMessages = sqliteTable(
   },
   (table) => [
     uniqueIndex("idx_channel_inbound_external").on(table.channel, table.externalMessageId),
-    index("idx_channel_inbound_conversation").on(table.conversationId)
+    index("idx_channel_inbound_conversation").on(table.conversationId),
+    // The topic lookup goes by the local message id.
+    index("idx_channel_inbound_message").on(table.messageId)
   ]
 );
 

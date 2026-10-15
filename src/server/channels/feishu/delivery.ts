@@ -113,6 +113,16 @@ export function deliverSend<T>(
         // failing here would lose the answer entirely, and this module calls
         // silence the worst of the available outcomes. Post it at the top level
         // instead — what would have happened without any of this.
+        //
+        // The cost, which the operations guide states as well: when the reply's
+        // outcome is UNCERTAIN (a timeout, or an `unknown` that exhausted its
+        // retries) the platform may have accepted it, and the room would then
+        // see the answer twice — once in the topic and once at the top. The SDK
+        // already handles the common `target_revoked` case internally by
+        // resending without replyTo, so what reaches here is mostly a definite
+        // failure (safe to fall back) or one of those uncertain ones. Choosing
+        // "possibly twice" over "silently never" matches what the artifact
+        // delivery path already does for the same reason.
         console.error("[feishu] reply failed; posting at the top level instead:", error);
       }
     }
