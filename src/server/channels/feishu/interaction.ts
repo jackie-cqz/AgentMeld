@@ -33,8 +33,13 @@ import type {
  * Partial answers are held in memory rather than resolved as they arrive.
  * `answerQuestion` resolves with whatever it is given and deletes the record,
  * so sending it a single answer out of three would silently discard the other
- * two. If the process restarts mid-question the collected answers are lost and
- * the user clicks again; the card is the record of what was clicked.
+ * two.
+ *
+ * Restarting mid-question loses more than the collected answers: the pending
+ * question itself lives only in memory, and recovery marks the run failed. A
+ * click on the old card then lands on "already handled", and the only way
+ * forward is to start the task again. An earlier version of this comment said
+ * the user would simply click again, which is not possible.
  */
 
 /** The three things that wait for a decision. */
@@ -173,17 +178,35 @@ export function buildApprovalCard(
  */
 export function buildQuestionCard(
   question: PendingQuestion,
-  state: { answered?: Record<string, string>; answeredBy?: string; cancelled?: boolean } = {}
+  state: {
+    /** Answers by question TEXT — what a resolved record carries. */
+    answered?: Record<string, string>;
+    /**
+     * Answers by question INDEX — what is collected while the card is only
+     * partly answered. Two questions can share their text, so the index is the
+     * only key that tells them apart.
+     */
+    answeredByIndex?: Record<string, string>;
+    answeredBy?: string;
+    cancelled?: boolean;
+  } = {}
 ): object {
   const answered = state.answered ?? {};
-  // Terminal means nobody may click anything any more. Deriving it from "there
-  // are answers" was wrong: a CANCELLED question has none, so every button kept
-  // its value and the card stayed live after being settled.
-  const terminal = state.cancelled === true || Object.keys(answered).length > 0;
+  const answeredByIndex = state.answeredByIndex ?? {};
   const elements: object[] = [];
 
   question.questions.forEach((item, index) => {
-    const chosen = answered[item.question];
+    // Per question, not per card. This used to be one flag for the whole card —
+    // "terminal" the moment ANY question had an answer — so answering the first
+    // of two questions stripped the buttons from the second as well, and the
+    // rest of the card could not be answered from the room. It also looked the
+    // answer up by question text in a buffer keyed by index, so it never found
+    // it: the card that came back showed no selection at all.
+    const chosen = answeredByIndex[String(index)] ?? answered[item.question];
+    // Nobody may click an answered question again, or any question on a card
+    // that has been cancelled — which has no answers, and was the reason the
+    // flag existed.
+    const inert = state.cancelled === true || chosen !== undefined;
     elements.push({
       tag: "div",
       text: {
@@ -201,7 +224,7 @@ export function buildQuestionCard(
         tag: "button",
         text: { tag: "plain_text", content: option.label },
         type: chosen === option.label ? "primary" : "default",
-        ...(terminal
+        ...(inert
           ? {}
           : {
               value: {
@@ -219,7 +242,7 @@ export function buildQuestionCard(
     elements.push({ tag: "div", text: { tag: "lark_md", content: "这个问题已经作废。" } });
   }
 
-  if (state.answeredBy && Object.keys(answered).length > 0) {
+  if (state.answeredBy && (Object.keys(answered).length > 0 || Object.keys(answeredByIndex).length > 0)) {
     elements.push({
       tag: "div",
       text: { tag: "lark_md", content: `已由 **${escapeLarkMd(state.answeredBy)}** 回答` }
@@ -390,7 +413,7 @@ async function handleQuestionAnswer(
 
   if (Object.keys(answers).length < question.questions.length) {
     return {
-      card: { type: "raw", data: buildQuestionCard(question, { answered: answers }) }
+      card: { type: "raw", data: buildQuestionCard(question, { answeredByIndex: answers }) }
     };
   }
 
@@ -414,7 +437,7 @@ async function handleQuestionAnswer(
   return {
     card: {
       type: "raw",
-      data: buildQuestionCard(question, { answered: answers, answeredBy: event.operator?.name })
+      data: buildQuestionCard(question, { answeredByIndex: answers, answeredBy: event.operator?.name })
     },
     toast: { type: "success", content: "已回答。" }
   };
