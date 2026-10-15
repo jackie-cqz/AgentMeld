@@ -1,6 +1,7 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import type { AppSettings, CompanionMode } from "@/shared/types";
+import { requireModelProviderProfile } from "@/server/model-provider-service";
 
 export type ApiKeySource = "app_settings" | "environment" | "missing";
 
@@ -105,6 +106,8 @@ export function resolveApiKey(
 ): string | null {
   // 1. Per-agent override
   if (agentApiKey) return agentApiKey;
+
+  if (provider.startsWith("profile:")) return requireModelProviderProfile(provider).apiKey;
 
   // openai-compatible must be per-agent — never fall back to global or env
   if (provider === "openai-compatible") return null;

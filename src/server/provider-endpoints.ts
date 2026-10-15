@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ModelProvider } from "@/shared/types";
+import { requireModelProviderProfile } from "@/server/model-provider-service";
 
 /** Built-in endpoints, used when neither the agent nor the environment overrides them. */
 export const PROVIDER_BASE_URLS: Partial<Record<ModelProvider, string>> = {
@@ -62,8 +63,11 @@ export function resolveProviderBaseUrl(
   provider: string,
   override?: string | null
 ): string | undefined {
+  // Validate references even with an agent override: missing profiles must fail closed.
+  const profile = provider.startsWith("profile:") ? requireModelProviderProfile(provider) : null;
   const explicit = override?.trim();
   if (explicit) return explicit;
+  if (profile) return profile.baseUrl;
 
   const envKey = PROVIDER_BASE_URL_ENV[provider as ModelProvider];
   const envValue = envKey ? process.env[envKey] : undefined;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,7 +12,9 @@ import {
   User,
   Wrench
 } from "lucide-react";
-import type { AdapterName, ModelProvider } from "@/shared/types";
+import type { AdapterName, ModelProvider, ModelProviderProfile } from "@/shared/types";
+import { profileProviderId } from "@/shared/provider-presets";
+import { requestJson } from "@/lib/request-json";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
 import {
@@ -104,6 +106,18 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [error, setError] = useState<string | null>(null);
   const [draftBasis, setDraftBasis] = useState<string | null>(null);
   const [editTab, setEditTab] = useState<AgentEditTab>("basic");
+  const [providerProfiles, setProviderProfiles] = useState<ModelProviderProfile[]>([]);
+  const [providerLoadError, setProviderLoadError] = useState<string | null>(null);
+  const [providerLoadVersion, setProviderLoadVersion] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    requestJson<{ providers: ModelProviderProfile[] }>("/api/model-providers", { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) { if (!Array.isArray(data.providers)) throw new Error("供应商列表读取失败。"); setProviderProfiles(data.providers); setProviderLoadError(null); } })
+      .catch(failure => { if (!controller.signal.aborted) setProviderLoadError(failure instanceof Error ? failure.message : "供应商列表读取失败。"); });
+    return () => controller.abort();
+  }, [open, providerLoadVersion]);
+  const selectedProfile = providerProfiles.find(profile => profileProviderId(profile.id) === modelProvider);
 
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
@@ -411,23 +425,30 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         {!isSdk ? (
           <>
             <label className="mt-4 block text-sm font-medium text-stone-700">
-              Provider
+              模型供应商
             </label>
             <select
               className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
               value={modelProvider ?? "deepseek"}
+              aria-label="模型供应商"
               onChange={(e) => {
                 const provider = e.target.value as ModelProvider;
                 setModelProvider(provider);
-                setModelId(PROVIDER_DEFAULT_MODELS[provider] ?? "");
+                setModelId(providerProfiles.find(profile => profileProviderId(profile.id) === provider)?.defaultModel ?? PROVIDER_DEFAULT_MODELS[provider] ?? "");
+                setApiKey("");
+                setApiBaseUrl("");
                 setError(null);
               }}
             >
-              <option value="deepseek">DeepSeek</option>
+              {modelProvider?.startsWith("profile:") && !selectedProfile ? <option value={modelProvider}>原供应商配置（待加载或不可用）</option> : null}
+              {providerProfiles.length ? <optgroup label="已配置供应商">{providerProfiles.map(profile => <option key={profile.id} value={profileProviderId(profile.id)}>{profile.name}</option>)}</optgroup> : null}
+              <optgroup label="内置供应商"><option value="deepseek">DeepSeek</option>
               <option value="openai">OpenAI</option>
               <option value="volcano-ark">火山方舟</option>
               <option value="openai-compatible">OpenAI-Compatible（需 Key + URL）</option>
+              </optgroup>
             </select>
+            {providerLoadError ? <div className="mt-2"><Feedback>{providerLoadError}</Feedback><button className="ui-button" onClick={() => setProviderLoadVersion(version => version + 1)}>重试加载供应商</button></div> : null}
 
             <label className="mt-3 block text-sm font-medium text-stone-700">
               Model ID <span className="text-red-500">*</span>
@@ -436,9 +457,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
               placeholder="deepseek-chat"
               aria-label="Model ID"
+              list="agent-provider-models"
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
             />
+            {selectedProfile ? <datalist id="agent-provider-models">{selectedProfile.models.map(model => <option key={model} value={model} />)}</datalist> : null}
           </>
         ) : null}
 
@@ -466,7 +489,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         <label className="mt-3 block text-sm font-medium text-stone-700">API Base URL（可选）</label>
         <input
           className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
-          placeholder={isSdk ? "SDK 自动管理" : "留空使用默认"}
+          placeholder={isSdk ? "SDK 自动管理" : selectedProfile?.baseUrl ?? "留空使用默认"}
           value={apiBaseUrl}
           onChange={(e) => setApiBaseUrl(e.target.value)}
           disabled={isSdk}

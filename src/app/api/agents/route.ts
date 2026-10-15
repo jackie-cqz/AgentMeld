@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { modelProviderSchema } from "@/shared/model-provider-schema";
 import { createAgent, getAllAgents, DEFAULT_CUSTOM_PROMPT } from "@/server/agent-service";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +10,7 @@ const createAgentSchema = z.object({
   description: z.string().max(500).optional(),
   capabilities: z.array(z.string()).max(10).optional(),
   adapterName: z.enum(["custom", "claude-code", "codex", "mock"]),
-  modelProvider: z.enum(["openai", "deepseek", "volcano-ark", "anthropic", "openai-compatible"]).nullable().optional(),
+  modelProvider: modelProviderSchema.nullable().optional(),
   modelId: z.string().max(100).nullable().optional(),
   apiKey: z.string().max(200).nullable().optional(),
   apiBaseUrl: z.string().max(500).nullable().optional(),

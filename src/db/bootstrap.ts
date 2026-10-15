@@ -21,6 +21,19 @@ export function ensureDatabase() {
   const db = getDatabase();
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS model_provider_profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      preset_id TEXT,
+      protocol TEXT NOT NULL DEFAULT 'chat-completions',
+      base_url TEXT NOT NULL,
+      default_model TEXT NOT NULL,
+      models TEXT NOT NULL DEFAULT '[]',
+      api_key TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

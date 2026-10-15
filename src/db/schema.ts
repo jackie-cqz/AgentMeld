@@ -18,6 +18,19 @@ import type {
   WorkspaceMode
 } from "@/shared/types";
 
+export const modelProviderProfiles = sqliteTable("model_provider_profiles", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  presetId: text("preset_id"),
+  protocol: text("protocol").$type<"chat-completions">().notNull().default("chat-completions"),
+  baseUrl: text("base_url").notNull(),
+  defaultModel: text("default_model").notNull(),
+  models: text("models", { mode: "json" }).$type<string[]>().notNull(),
+  apiKey: text("api_key"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+});
+
 export const agents = sqliteTable("agents", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),

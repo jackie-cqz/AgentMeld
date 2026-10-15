@@ -5,7 +5,20 @@ export type ModelProvider =
   | "openai"
   | "deepseek"
   | "volcano-ark"
-  | "openai-compatible";
+  | "openai-compatible"
+  | `profile:${string}`;
+
+export interface ModelProviderProfile {
+  id: string;
+  name: string;
+  presetId: string | null;
+  protocol: "chat-completions";
+  baseUrl: string;
+  defaultModel: string;
+  models: string[];
+  credentialSource: "app_settings" | "environment" | "missing";
+  agentCount: number;
+}
 
 export type ConversationMode = "single" | "group";
 export type MessageRole = "user" | "agent" | "system";

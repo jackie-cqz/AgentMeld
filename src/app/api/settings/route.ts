@@ -29,7 +29,7 @@ export async function PATCH(request: Request) {
   }
 
   const updated = updateSettings(removeMaskedKeys(parsed.data));
-  return Response.json({ settings: maskSettings(updated) });
+  return Response.json({ settings: maskSettings(updated), keySources: getApiKeySources(updated) });
 }
 
 // Never return raw API keys from the API — GET and PATCH must both mask.

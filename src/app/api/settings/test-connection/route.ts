@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { getSettings, resolveApiKey } from "@/server/settings-service";
+import { modelProviderSchema, providerBaseUrlSchema } from "@/shared/model-provider-schema";
+import { findProviderPreset } from "@/shared/provider-presets";
+import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 
 export const dynamic = "force-dynamic";
 
 const testSchema = z.object({
-  provider: z.enum(["deepseek", "openai", "volcano-ark"]),
+  provider: modelProviderSchema.refine(value => value !== "anthropic"),
+  presetId: z.string().max(80).optional(),
   modelId: z.string().trim().min(1).max(120).optional(),
   apiKey: z.string().trim().min(1).max(300).optional(),
-  apiBaseUrl: z.string().trim().url().max(500).optional()
+  apiBaseUrl: providerBaseUrlSchema.optional()
 });
 
 const PROVIDER_DEFAULTS = {
@@ -33,7 +37,17 @@ export async function POST(request: Request) {
   }
 
   const settings = getSettings();
-  const apiKey = resolveApiKey(parsed.data.provider, parsed.data.apiKey ?? null, settings);
+  const preset = findProviderPreset(parsed.data.presetId);
+  if (parsed.data.presetId && !preset) return Response.json({ ok: false, error: "未知的供应商预设。" }, { status: 400 });
+  let apiKey: string | null;
+  let resolvedBaseUrl: string | undefined;
+  try {
+    apiKey = resolveApiKey(parsed.data.provider, parsed.data.apiKey ?? null, settings)
+      ?? (parsed.data.provider === "openai-compatible" && preset?.envKey ? process.env[preset.envKey]?.trim() || null : null);
+    resolvedBaseUrl = resolveProviderBaseUrl(parsed.data.provider, parsed.data.apiBaseUrl);
+  } catch {
+    return Response.json({ ok: false, error: "供应商配置不存在。" }, { status: 400 });
+  }
   if (!apiKey) {
     return Response.json({
       ok: false,
@@ -41,8 +55,10 @@ export async function POST(request: Request) {
     }, { status: 400 });
   }
 
-  const defaults = PROVIDER_DEFAULTS[parsed.data.provider];
-  const baseUrl = (parsed.data.apiBaseUrl ?? defaults.baseUrl).replace(/\/+$/, "");
+  const defaults = PROVIDER_DEFAULTS[parsed.data.provider as keyof typeof PROVIDER_DEFAULTS];
+  const modelId = parsed.data.modelId ?? defaults?.modelId;
+  const baseUrl = resolvedBaseUrl?.replace(/\/+$/, "");
+  if (!baseUrl || !modelId) return Response.json({ ok: false, error: "请指定 API 地址和测试模型。" }, { status: 400 });
   const startedAt = performance.now();
 
   try {
@@ -53,7 +69,7 @@ export async function POST(request: Request) {
         "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: parsed.data.modelId ?? defaults.modelId,
+        model: modelId,
         messages: [{ role: "user", content: "Reply with OK." }],
         max_tokens: 4,
         temperature: 0
@@ -66,7 +82,7 @@ export async function POST(request: Request) {
       return Response.json({
         ok: false,
         latencyMs,
-        error: `HTTP ${response.status}${detail ? `: ${detail.slice(0, 180)}` : ""}`
+        error: `HTTP ${response.status}${detail ? `: ${detail.split(apiKey).join("[redacted]").slice(0, 180)}` : ""}`
       }, { status: 502 });
     }
 
@@ -74,7 +90,7 @@ export async function POST(request: Request) {
       ok: true,
       latencyMs,
       provider: parsed.data.provider,
-      modelId: parsed.data.modelId ?? defaults.modelId
+      modelId
     });
   } catch (error) {
     return Response.json({

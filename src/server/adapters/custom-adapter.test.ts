@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveModelProviderProfile } from "@/server/model-provider-service";
+import { profileProviderId } from "@/shared/provider-presets";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -121,6 +123,26 @@ afterEach(() => {
 });
 
 describe("custom-agent-adapter", () => {
+  it("uses a saved provider profile for a real SDK streaming request", async () => {
+    const profile = saveModelProviderProfile({ name: "Profile Runtime", presetId: null, protocol: "chat-completions", baseUrl: "https://fixture.example/api/paas/v4", defaultModel: "fixture-model", models: ["fixture-model"], apiKey: "fixture-profile-runtime-key" });
+    const input = buildAdapterInput();
+    input.agent.modelProvider = profileProviderId(profile.id);
+    input.agent.modelId = profile.defaultModel;
+    const fetchMock = vi.fn(async () => new Response('data: {"choices":[{"index":0,"delta":{"content":"Profile OK"},"finish_reason":null}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    try {
+      const events = [];
+      for await (const event of getAdapter("custom").run(input, new AbortController().signal)) events.push(event);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(String(url)).toBe("https://fixture.example/api/paas/v4/chat/completions");
+      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer fixture-profile-runtime-key");
+      expect(JSON.parse(init.body as string).model).toBe("fixture-model");
+      expect(events.some(event => event.type === "part.delta" && event.delta.type === "text.append" && event.delta.text === "Profile OK")).toBe(true);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   it("allows enough tool rounds for coding workflows", () => {
     expect(CUSTOM_AGENT_MAX_TOOL_ROUNDS).toBeGreaterThanOrEqual(48);
     expect(TASK_REPORT_FINALIZATION_ROUNDS).toBe(1);

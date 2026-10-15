@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { modelProviderSchema } from "@/shared/model-provider-schema";
 import { deleteAgent, getAgentById, updateAgent } from "@/server/agent-service";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +9,7 @@ const patchAgentSchema = z.object({
   avatar: z.string().max(10).optional(),
   description: z.string().max(500).optional(),
   capabilities: z.array(z.string()).max(10).optional(),
-  modelProvider: z.enum(["openai", "deepseek", "volcano-ark", "anthropic", "openai-compatible"]).nullable().optional(),
+  modelProvider: modelProviderSchema.nullable().optional(),
   modelId: z.string().max(100).nullable().optional(),
   apiKey: z.string().max(200).nullable().optional(),
   apiBaseUrl: z.string().max(500).nullable().optional(),
