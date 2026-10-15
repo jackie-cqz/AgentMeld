@@ -6,7 +6,7 @@ import "./channel-settings.css";
 import "./agent-model-config.css";
 import "./agent-avatar.css";
 import "./agent-editor.css";
-import { ClientErrorReporter } from "@/components/client-error-reporter";
+import { ClientErrorReporter, ClientStuckProbe } from "@/components/client-error-reporter";
 
 export const metadata: Metadata = {
   title: "AgentMeld",
@@ -22,6 +22,7 @@ export default function RootLayout({
     <html lang="zh-CN">
       <body>
         <ClientErrorReporter />
+        <ClientStuckProbe />
         {children}
       </body>
     </html>

@@ -4,9 +4,10 @@ import { gateRequest } from "@/server/api-gate";
 export const dynamic = "force-dynamic";
 
 const reportSchema = z.object({
-  kind: z.enum(["error", "unhandledrejection", "react"]),
+  kind: z.enum(["error", "unhandledrejection", "react", "stuck"]),
   message: z.string().max(4000),
   stack: z.string().max(8000).optional(),
+  detail: z.string().max(4000).optional(),
   url: z.string().max(2000).optional()
 });
 
@@ -28,9 +29,9 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const parsed = reportSchema.safeParse(body);
   if (!parsed.success) return Response.json({ ok: false }, { status: 400 });
-  const { kind, message, stack, url } = parsed.data;
+  const { kind, message, stack, url, detail } = parsed.data;
   console.error(
-    `[client-error] ${kind}: ${message}` + (url ? `\n  at ${url}` : "") + (stack ? `\n${stack}` : "")
+    `[client-error] ${kind}: ${message}` + (detail ? `\n  detail: ${detail}` : "") + (url ? `\n  at ${url}` : "") + (stack ? `\n${stack}` : "")
   );
   return Response.json({ ok: true });
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { useAppStore } from "@/stores/app-store";
 
 /**
  * Report what the browser saw go wrong.
@@ -50,6 +51,66 @@ export function ClientErrorReporter() {
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
     };
+  }, []);
+
+  return null;
+}
+
+/**
+ * Self-check for the failure that leaves no trace at all: the page is alive —
+ * it keeps polling — but nothing responds to a click. Nothing throws, so the
+ * error listeners stay silent, and the person is left saying "it froze again"
+ * with no evidence anywhere.
+ *
+ * Every 45 seconds this looks at what is actually on top of the page, whether
+ * the live stream is still open, and how far the main thread has drifted from
+ * its timer. Reported as a `stuck` event, it turns "it froze" into "an element
+ * with class X covers the viewport and the stream is CLOSED".
+ */
+export function ClientStuckProbe() {
+  useEffect(() => {
+    const describe = (element: Element | null) => {
+      if (!element) return "none";
+      const cls = typeof element.className === "string" ? element.className.slice(0, 80) : "";
+      return `${element.tagName.toLowerCase()}${cls ? "." + cls.split(/\s+/).join(".") : ""}`;
+    };
+    let last = Date.now();
+    const timer = window.setInterval(() => {
+      const drift = Date.now() - last - 45_000;
+      last = Date.now();
+      const center = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+      const covering: string[] = [];
+      for (const element of Array.from(document.querySelectorAll("body *"))) {
+        const rect = element.getBoundingClientRect();
+        if (rect.width >= window.innerWidth * 0.9 && rect.height >= window.innerHeight * 0.9) {
+          const style = getComputedStyle(element);
+          if (style.position === "fixed" || style.position === "absolute") covering.push(describe(element));
+        }
+        if (covering.length >= 4) break;
+      }
+      // The stream is the one thing the server cannot see: its requests are the
+      // long-lived ones, so a dead stream looks like silence rather than a
+      // failure. The store knows its state, so the report can say so.
+      const stream = useAppStore.getState().connectionStatus;
+      const detail = [
+        `center=${describe(center)}`,
+        `covering=[${covering.join(", ")}]`,
+        `stream=${stream}`,
+        `driftMs=${drift}`,
+        `dialogs=${document.querySelectorAll("dialog[open]").length}`,
+        `title=${document.title}`
+      ].join(" | ");
+      // Only when something looks wrong: a healthy page should not fill the log.
+      if (drift > 2000 || covering.length > 0 || stream === "error") {
+        void fetch("/api/client-errors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "stuck", message: "page looks stuck", detail, url: location.href }),
+          keepalive: true
+        }).catch(() => {});
+      }
+    }, 45_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   return null;
