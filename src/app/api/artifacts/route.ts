@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { getAllArtifacts, createNewArtifact } from "@/server/artifact-service";
+import { announceArtifactCreated, getAllArtifacts, createNewArtifact } from "@/server/artifact-service";
+import type { Artifact } from "@/shared/types";
 import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  let created: Artifact | null = null;
   try {
     const artifact = createNewArtifact({
       conversationId: parsed.data.conversationId,
@@ -34,11 +36,17 @@ export async function POST(request: Request) {
       title: parsed.data.title,
       content: parsed.data.content as never
     });
-    return Response.json({ artifact }, { status: 201 });
+    created = artifact;
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "Failed to create artifact." },
       { status: 400 }
     );
   }
+
+  // Outside the try: the row is stored, and an event listener failing must not
+  // be reported to the caller as a failed creation (it would retry, and the
+  // retry would store a second artifact).
+  if (created) announceArtifactCreated(created);
+  return Response.json({ artifact: created }, { status: 201 });
 }

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  announceArtifactCreated,
+  isNoOpArtifactUpdate,
   getArtifactById,
   createNewArtifactVersion,
   getVersionChain
@@ -39,6 +41,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // An edit that changes nothing is not an edit: no new row, and no
+  // byte-identical copy delivered to the room.
+  const existing = getArtifactById(id);
+  if (existing && isNoOpArtifactUpdate(existing, {
+    title: parsed.data.title,
+    content: parsed.data.content as ArtifactContent | undefined
+  })) {
+    return Response.json({ artifact: existing });
+  }
+
   const artifact = createNewArtifactVersion(id, {
     title: parsed.data.title,
     content: parsed.data.content as ArtifactContent | undefined
@@ -47,6 +59,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: "Artifact not found." }, { status: 404 });
   }
 
+  // A new version is a NEW row (new id, version + 1), so this is the same event
+  // the create path publishes — and the room gets the new content rather than
+  // nothing at all.
+  announceArtifactCreated(artifact);
   return Response.json({ artifact });
 }
 

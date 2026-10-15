@@ -5,6 +5,7 @@ import { createArtifact, getArtifact, listArtifacts } from "@/server/repositorie
 import { resolveStaticFilePath } from "@/server/static-file-utils";
 import { newArtifactId } from "@/shared/ids";
 import type { Artifact, ArtifactContent, ArtifactType } from "@/shared/types";
+import { eventBus } from "@/server/event-bus";
 
 interface CreateArtifactInput {
   conversationId: string;
@@ -91,6 +92,57 @@ export function createNewArtifactVersion(artifactId: string, input: UpdateArtifa
     parentArtifactId: existing.id,
     now: Date.now()
   });
+}
+
+/**
+ * Would this update change anything?
+ *
+ * Both routes that create a new version ask this first: an edit that changes
+ * nothing is not an edit, and treating it as one created a duplicate row and
+ * delivered a byte-identical copy to the room.
+ *
+ * Comparison is structural, not textual: a client that re-serialises the same
+ * content with its keys in another order is not making a change.
+ */
+export function isNoOpArtifactUpdate(existing: Artifact, input: UpdateArtifactInput): boolean {
+  // `==` on purpose: the schema accepts null, and a client sending
+  // {"content": null} means "unchanged" just as much as omitting it — while the
+  // write path (`input.content ?? existing.content`) already treats it that way.
+  const titleUnchanged = input.title == null || input.title === existing.title;
+  const contentUnchanged = input.content == null || canonical(input.content) === canonical(existing.content);
+  return titleUnchanged && contentUnchanged;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Announce a created artifact to the room.
+ *
+ * Publishing belongs next to the write, not at each call site: the web routes
+ * forgot it entirely for a long time, and a listener that throws must not be
+ * reported to the caller as a failed creation (the row is already stored, and
+ * the client would retry into a duplicate).
+ */
+export function announceArtifactCreated(artifact: Artifact): void {
+  try {
+    eventBus.publish({
+      type: "artifact.create",
+      conversationId: artifact.conversationId,
+      timestamp: Date.now(),
+      artifact
+    });
+  } catch (error) {
+    console.error("[artifacts] failed to announce a created artifact:", error);
+  }
 }
 
 export function getVersionChain(artifactId: string): Artifact[] {

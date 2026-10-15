@@ -16,14 +16,18 @@ import {
 import { eventBus } from "@/server/event-bus";
 import {
   createChannelConversation,
+  addChannelConversationMember,
   createConversation,
+  getConversation,
   upsertChannelBinding
 } from "@/server/repositories";
+import { getDatabase } from "@/db/client";
 import type { Artifact, Workspace } from "@/shared/types";
 
-const { channelsByAgent, sent } = vi.hoisted(() => ({
+const { channelsByAgent, sent, failingAgents } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
-  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>
+  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>,
+  failingAgents: new Set<string>()
 }));
 
 vi.mock("@/server/channels/feishu/registry", () => ({
@@ -31,6 +35,7 @@ vi.mock("@/server/channels/feishu/registry", () => ({
     if (!channelsByAgent.has(agentId)) return null;
     return {
       send: async (chatId: string, input: unknown) => {
+        if (failingAgents.has(agentId)) throw new Error(`bot ${agentId} is not a member of ${chatId}`);
         sent.push({ agentId, chatId, input });
         return { messageId: `om_${sent.length}` };
       }
@@ -272,6 +277,7 @@ describe("delivering an artifact into the room", () => {
     teardown = setupTestDatabase("agentmeld-channel-artifact-");
     sent.length = 0;
     channelsByAgent.clear();
+    failingAgents.clear();
     stopChannelArtifactDeliveryForTests();
     // The rate limit is a rolling window per conversation, and it lives in
     // globalThis — so a test that spends the budget leaves the next one unable
@@ -291,6 +297,9 @@ describe("delivering an artifact into the room", () => {
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
       boundByOpenId: "ou_user", now: 1
     });
+    // Who is IN the group, which is the member table — not the conversation's
+    // agentIds, which only says who may speak in it.
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: AGENT, now: 1 });
   });
 
   afterEach(() => {
@@ -331,6 +340,65 @@ describe("delivering an artifact into the room", () => {
     clearDeliveryHealthForTests();
   });
 
+  it("logs a skip the operator is told to grep for", async () => {
+    // The operations guide says to grep `[feishu] not delivering`, so that line
+    // is an interface: it vanished once with no test to notice.
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const outcome = await projectArtifact(
+        // A type that is still refused: web_app folds into a file now (#56),
+        // so the skip this test is about needs a shape that has no single-file
+        // form at all.
+        artifact({ id: "art_unfoldable", content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } })
+      );
+      expect(outcome.status).toBe("skipped");
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("not delivering art_unfoldable");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("says why when nobody in the group can carry the file", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      channelsByAgent.clear();
+      const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+      expect(outcome).toEqual({
+        status: "skipped",
+        reason: "no agent observed in this group has a live channel"
+      });
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("no agent observed in this group has a live channel");
+    } finally {
+      info.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
+  it("reports every candidate failure, and the reason it gave up", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const second = "ag_designer";
+      channelsByAgent.set(second, {});
+      addChannelConversationMember({ channelConversationId: "cc_1", agentId: second, now: 2 });
+      failingAgents.add(AGENT);
+      failingAgents.add(second);
+
+      const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+
+      expect(outcome.status).toBe("skipped");
+      expect(errors.mock.calls.length).toBe(2);
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("not delivering art_1");
+    } finally {
+      info.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
   it("stays silent for a conversation that is not on a channel", async () => {
     const outcome = await projectArtifact(artifact({ conversationId: "conv_other" }));
     expect(outcome).toMatchObject({ status: "skipped" });
@@ -339,13 +407,66 @@ describe("delivering an artifact into the room", () => {
 
   it("stays silent rather than delivering as the wrong agent", async () => {
     channelsByAgent.clear();
+    failingAgents.clear();
     const outcome = await projectArtifact(artifact());
     expect(outcome).toEqual({ status: "skipped", reason: "agent has no live channel" });
   });
 
-  it("stays silent for an artifact nobody authored", async () => {
+  it("hands over an artifact nobody authored, using a bot in the conversation", async () => {
+    // Web-created artifacts have no author. Skipping them made the whole
+    // create path dead code: the row was stored and the room never heard.
+    const delivered = await projectArtifact(artifact({ createdByAgentId: null }));
+    expect(delivered).toMatchObject({ status: "delivered" });
+  });
+
+  it("carries an authorless artifact with a bot OBSERVED in the group", async () => {
+    // conversation.agentIds says who may speak; the member table says who is in
+    // the room. A bot that is only in the first list is not a carrier.
+    const outsider = "ag_not_in_group";
+    // Has a live channel, is in the conversation's agentIds — and was never
+    // OBSERVED in the group, so it is not a carrier.
+    channelsByAgent.set(outsider, {});
+    // The outsider comes FIRST in agentIds; the bot actually in the group is
+    // second, and the member table is the only source that says so.
+    // The conversation already exists; make the outsider its FIRST agent, so a
+    // carrier list taken from agentIds would pick the wrong bot.
+    getDatabase()
+      .prepare("UPDATE conversations SET agent_ids = ? WHERE id = ?")
+      .run(JSON.stringify([outsider, AGENT]), "conv_1");
+    expect(getConversation("conv_1")?.agentIds).toEqual([outsider, AGENT]);
+
+    await projectArtifact(artifact({ createdByAgentId: null }));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].agentId).toBe(AGENT);
+  });
+
+  it("tries the next observed member when the first cannot send", async () => {
+    const second = "ag_designer";
+    channelsByAgent.set(second, {});
+    // Later first_seen_at, so the member order is definitely [failing, second]
+    // (the list is ordered by first_seen_at, and equal timestamps leave the
+    // order unspecified — which made an earlier version of this test pass even
+    // with the fallback removed).
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: second, now: 2 });
+    failingAgents.add(AGENT);
+
     const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
-    expect(outcome).toEqual({ status: "skipped", reason: "the artifact has no author" });
+
+    expect(outcome).toMatchObject({ status: "delivered" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].agentId).toBe(second);
+  });
+
+  it("stays silent for an artifact nobody authored when no bot can carry it", async () => {
+    // Nobody observed in the group has a channel any more.
+    channelsByAgent.clear();
+    failingAgents.clear();
+    const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+    expect(outcome).toEqual({
+      status: "skipped",
+      reason: "no agent observed in this group has a live channel"
+    });
   });
 
   it("yields to the pause switch", async () => {
