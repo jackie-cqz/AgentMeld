@@ -102,9 +102,6 @@ ${rendered}
 <div class="hud"><span id="position">1</span> / ${slides.length} · ← → 翻页 · N 备注</div>
 <script>
 (function () {
-  // With scripting, the pager takes over and shows one slide at a time; the
-  // no-js class is what keeps every slide visible when it cannot run.
-  document.body.classList.remove('no-js');
   var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
   var index = 0;
   function show(next) {
@@ -123,6 +120,11 @@ ${rendered}
     show(index + 1);
   });
   show(0);
+  // Removed LAST, once the pager is actually running: taken off at the top, any
+  // later throw would leave a deck that is already collapsed to one slide with
+  // nothing to page it. This way every failure mode falls back to "all slides
+  // visible".
+  document.body.classList.remove('no-js');
 })();
 </script>
 </body>

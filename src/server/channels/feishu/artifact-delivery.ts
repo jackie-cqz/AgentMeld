@@ -169,7 +169,14 @@ export function artifactFileFor(
     // several times over (every `&`/`<` becomes four or more characters). There
     // is no reason to build a 40 MB string only to reject it — the same rule the
     // web_app branch follows.
-    const sourceBytes = Buffer.byteLength(JSON.stringify(content), "utf-8");
+    // A value that cannot be serialised (a cycle) has no size to check; the
+    // renderer is the authority for it either way.
+    let sourceBytes = 0;
+    try {
+      sourceBytes = Buffer.byteLength(JSON.stringify(content), "utf-8");
+    } catch {
+      sourceBytes = 0;
+    }
     if (sourceBytes > MAX_WEB_APP_BYTES) {
       return { reason: `the deck source is ${sourceBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
     }

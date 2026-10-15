@@ -154,6 +154,21 @@ describe("rendering a deck", () => {
       expect(injected.html).not.toContain("body { display: none }");
       expect(injected.html).not.toContain("} body {");
     }
+
+    // No braces at all, just a second declaration: a rule weakened to "reject
+    // url(, expression( and braces" accepts this, and it still reaches the CSS
+    // because the value is interpolated into a declaration.
+    const declaration = renderDeckHtml({
+      slides: [{ title: "x" }],
+      theme: { primary: "#fff; opacity: 0.01" } as never
+    });
+    expect(declaration.ok).toBe(true);
+    if (declaration.ok) {
+      // The rejected value falls back to the default, so the CSS still has a
+      // literal colour — and none of the injected declaration.
+      expect(declaration.html).not.toContain("opacity");
+      expect(declaration.html).toMatch(/\.slide h1 \{[^}]*color: #[0-9a-f]{3,6};/i);
+    }
   });
 
   it("references nothing outside the file", () => {
@@ -214,6 +229,11 @@ describe("rendering a deck", () => {
     }
     // ...and through the delivery decision, which must return a reason.
     expect(() => artifactFileFor(pptArtifact({ type: "ppt", slides: [{ title: "x", blocks: [null] }] } as never), null)).not.toThrow();
+
+    // A value the size pre-check cannot serialise must not become its problem.
+    const cyclic: Record<string, unknown> = { type: "ppt", slides: [{ title: "x" }] };
+    cyclic.self = cyclic;
+    expect(() => artifactFileFor(pptArtifact(cyclic), null)).not.toThrow();
   });
 
   it("shows every slide to a client that cannot run the pager", () => {
@@ -222,7 +242,11 @@ describe("rendering a deck", () => {
     if (!result.ok) return;
     expect(result.html).toContain('<body class="no-js">');
     expect(result.html).toContain(".no-js .slide { display: block; }");
-    expect(result.html).toContain("classList.remove('no-js')");
+    // After the pager has been started, not before it: taken off first, a later
+    // throw would leave a deck collapsed to one slide with nothing to page it.
+    expect(result.html.indexOf("show(0);")).toBeLessThan(
+      result.html.indexOf("classList.remove('no-js')")
+    );
   });
 });
 
