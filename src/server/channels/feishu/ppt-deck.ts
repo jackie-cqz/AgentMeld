@@ -1,4 +1,4 @@
-import { safeFileName } from "@/server/channels/feishu/file-name";
+import { artifactFileName } from "@/server/channels/feishu/file-name";
 import type { PptBlock, PptSlide, PptTheme } from "@/shared/types";
 
 /**
@@ -25,13 +25,12 @@ import type { PptBlock, PptSlide, PptTheme } from "@/shared/types";
 
 export const MAX_DECK_SLIDES = 200;
 
-const DEFAULT_THEME: Required<Pick<PptTheme, "primary" | "background" | "surface" | "textBody" | "textMuted" | "accentPositive">> = {
+const DEFAULT_THEME: Required<Pick<PptTheme, "primary" | "background" | "surface" | "textBody" | "textMuted">> = {
   primary: "#1f2937",
   background: "#ffffff",
   surface: "#f5f5f4",
   textBody: "#292524",
   textMuted: "#78716c",
-  accentPositive: "#15803d"
 };
 
 export function renderDeckHtml(content: {
@@ -48,7 +47,7 @@ export function renderDeckHtml(content: {
   }
 
   const theme = resolveTheme(content.theme);
-  const deckTitle = escapeHtml(content.title ?? "演示文稿");
+  const deckTitle = escapeHtml(asText(content.title) || "演示文稿");
 
   const rendered = slides
     .map((slide, index) => renderSlide(slide, index, theme))
@@ -68,6 +67,8 @@ export function renderDeckHtml(content: {
   .deck { display: block; }
   .slide { display: none; padding: 48px 56px; min-height: 100vh; }
   .slide.is-active { display: block; }
+  /* Without JS the pager cannot run, so every slide is shown instead. */
+  .no-js .slide { display: block; }
   .slide h1 { font-size: 34px; margin: 0 0 8px; color: ${theme.primary}; }
   .slide h2 { font-size: 26px; margin: 0 0 6px; color: ${theme.primary}; }
   .subtitle { color: ${theme.textMuted}; margin: 0 0 24px; font-size: 16px; }
@@ -94,13 +95,16 @@ export function renderDeckHtml(content: {
   }
 </style>
 </head>
-<body>
+<body class="no-js">
 <div class="deck">
 ${rendered}
 </div>
 <div class="hud"><span id="position">1</span> / ${slides.length} · ← → 翻页 · N 备注</div>
 <script>
 (function () {
+  // With scripting, the pager takes over and shows one slide at a time; the
+  // no-js class is what keeps every slide visible when it cannot run.
+  document.body.classList.remove('no-js');
   var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
   var index = 0;
   function show(next) {
@@ -128,9 +132,10 @@ ${rendered}
 }
 
 export function deckFileName(title: string): string {
-  const trimmed = title.trim();
-  const withoutExtension = trimmed.replace(/\.[A-Za-z0-9]{1,8}$/, "").trim();
-  return safeFileName(withoutExtension.length > 0 ? withoutExtension : trimmed, "deck", ".html");
+  // Shared with the web_app naming: a single-pass strip left "设计稿v2.0",
+  // whose ".0" safeFileName then read as the extension, so the delivered deck
+  // had none at all.
+  return artifactFileName(title, "deck", ".html");
 }
 
 function renderSlide(slide: PptSlide, index: number, theme: ResolvedTheme): string {
@@ -156,6 +161,11 @@ ${notes ? `<aside class="notes">${escapeHtml(notes)}</aside>` : ""}
 }
 
 function renderBlock(block: PptBlock, theme: ResolvedTheme): string {
+  // `write_artifact` validates only that `slides` is an array, so a model can
+  // emit {"blocks":[null]}. The contract here is "HTML or a reason", never a
+  // throw: a throw is swallowed by the subscriber and leaves no skip reason at
+  // all, so nothing is logged and nothing is retried.
+  if (!block || typeof block !== "object") return "";
   const type = block?.type;
   if (type === "divider") return `<div class="divider"></div>`;
   if (type === "spacer") return `<div style="height:12px"></div>`;

@@ -51,3 +51,33 @@ export function safeFileName(fileName: string | null, fallback: string, extensio
   if (!base || base === "." || base === "..") return `${fallback}${suffix}`;
   return `${base}${suffix}`;
 }
+
+/**
+ * A title with every trailing dot segment removed.
+ *
+ * safeFileName keeps whatever extension the name appears to have, so a title
+ * like "Dashboard 2.0.1" or "设计稿v2.0.pptx" silently loses the extension the
+ * caller asked for. Both artifact types that build a delivered file name need
+ * the same two steps in this order: strip ALL trailing dot segments (a loop —
+ * one pass leaves "2.0", whose ".0" then reads as the extension), then force
+ * the one the content actually has. Two copies of this drifted once already.
+ */
+export function stripAllExtensions(title: string): string {
+  let trimmed = title.trim();
+  let previous = "";
+  while (previous !== trimmed) {
+    previous = trimmed;
+    trimmed = trimmed.replace(/\.[^.]*$/, "").trim();
+  }
+  return trimmed.length > 0 ? trimmed : title.trim();
+}
+
+/** Append the extension if the sanitiser left something else. */
+export function forceExtension(name: string, extension: string): string {
+  return name.toLowerCase().endsWith(extension) ? name : `${name}${extension}`;
+}
+
+/** The name to deliver a file under, with the content's extension forced. */
+export function artifactFileName(title: string, fallback: string, extension: string): string {
+  return forceExtension(safeFileName(stripAllExtensions(title), fallback, extension), extension);
+}

@@ -165,6 +165,15 @@ export function artifactFileFor(
   }
 
   if (content.type === "ppt") {
+    // Cheap check first: the source is JSON text, and escaping can inflate it
+    // several times over (every `&`/`<` becomes four or more characters). There
+    // is no reason to build a 40 MB string only to reject it — the same rule the
+    // web_app branch follows.
+    const sourceBytes = Buffer.byteLength(JSON.stringify(content), "utf-8");
+    if (sourceBytes > MAX_WEB_APP_BYTES) {
+      return { reason: `the deck source is ${sourceBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+
     // The artifact is a structure, not a file: a self-contained HTML deck is
     // the rendering that needs nothing else (see ppt-deck.ts).
     const deck = renderDeckHtml(content);
