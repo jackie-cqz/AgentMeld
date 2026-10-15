@@ -1,0 +1,28 @@
+.agent-avatar {
+  --avatar-ink: #4b7c67; --avatar-tint: #f0f6f3; --avatar-edge: #dce8e1;
+  display: inline-grid; place-items: center; flex-shrink: 0; vertical-align: middle;
+  width: 36px; height: 36px; border-radius: 7px; border: 1px solid var(--avatar-edge);
+  background: var(--avatar-tint); color: var(--avatar-ink); line-height: 1;
+}
+.agent-avatar > svg { width: 18px; height: 18px; flex-shrink: 0; }
+.agent-avatar-monogram { font-size: 11px; font-weight: 600; }
+.agent-avatar--xs { width: 20px; height: 20px; border-radius: 4px; }
+.agent-avatar--xs > svg { width: 12px; height: 12px; }
+.agent-avatar--xs .agent-avatar-monogram { font-size: 8px; }
+.agent-avatar--sm { width: 28px; height: 28px; border-radius: 6px; }
+.agent-avatar--sm > svg { width: 15px; height: 15px; }
+.agent-avatar--sm .agent-avatar-monogram { font-size: 9px; }
+.agent-avatar--lg { width: 44px; height: 44px; border-radius: 8px; }
+.agent-avatar--lg > svg { width: 22px; height: 22px; }
+.agent-avatar--lg .agent-avatar-monogram { font-size: 13px; }
+.agent-avatar-button { display: inline-flex; padding: 0; border-radius: 7px; flex-shrink: 0; align-self: flex-start; }
+.agent-avatar-button:hover .agent-avatar { border-color: var(--avatar-ink); }
+.agent-avatar-tone--violet { --avatar-ink: #78649c; --avatar-tint: #f3f0f8; --avatar-edge: #e5deef; }
+.agent-avatar-tone--blue { --avatar-ink: #536fa4; --avatar-tint: #eff3fa; --avatar-edge: #dce4f1; }
+.agent-avatar-tone--fuchsia { --avatar-ink: #996a87; --avatar-tint: #f8f1f5; --avatar-edge: #eddee7; }
+.agent-avatar-tone--cyan { --avatar-ink: #497f89; --avatar-tint: #eff6f7; --avatar-edge: #d9e8eb; }
+.agent-avatar-tone--amber { --avatar-ink: #917943; --avatar-tint: #f8f5ee; --avatar-edge: #eae3d3; }
+.agent-avatar-tone--indigo { --avatar-ink: #6b70a1; --avatar-tint: #f2f3f9; --avatar-edge: #e0e2ef; }
+.agent-avatar-tone--orange { --avatar-ink: #a0785b; --avatar-tint: #f9f3ef; --avatar-edge: #eee1d8; }
+.dark .agent-avatar { background: color-mix(in srgb, var(--avatar-ink) 12%, var(--ui-surface)); border-color: color-mix(in srgb, var(--avatar-ink) 23%, var(--ui-line)); color: color-mix(in srgb, var(--avatar-ink) 60%, #fff); }
+.dark .agent-avatar-button:hover .agent-avatar { border-color: color-mix(in srgb, var(--avatar-ink) 65%, var(--ui-line)); }

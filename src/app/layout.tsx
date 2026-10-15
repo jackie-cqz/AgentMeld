@@ -3,6 +3,9 @@ import "./globals.css";
 import "./workspace.css";
 import "./provider-settings.css";
 import "./channel-settings.css";
+import "./agent-model-config.css";
+import "./agent-avatar.css";
+import "./agent-editor.css";
 
 export const metadata: Metadata = {
   title: "AgentMeld",

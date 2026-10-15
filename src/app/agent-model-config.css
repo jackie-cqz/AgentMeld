@@ -1,0 +1,47 @@
+.agent-model-config { padding-top: 8px; }
+.agent-model-heading { display: flex; align-items: center; gap: 9px; padding: 4px 0 20px; }
+.agent-model-heading > svg { color: var(--ui-muted); }
+.agent-model-heading h3 { font-size: 14px; font-weight: 600; }
+.agent-model-heading > button { margin-left: auto; font-size: 11px; }
+.agent-model-field { margin-bottom: 20px; }
+.agent-model-field > label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--ui-muted); }
+.agent-model-field > label > span { color: var(--ui-danger); }
+.agent-model-select { display: flex; width: 100%; align-items: center; gap: 12px; text-align: left; min-height: 74px; padding: 14px 16px; border: 1px solid var(--ui-line); border-radius: 7px; background: var(--ui-surface); }
+.agent-model-select:hover:not(:disabled) { border-color: var(--ui-accent); background: var(--ui-subtle); }
+.agent-model-select:disabled { opacity: .5; cursor: not-allowed; }
+.agent-model-select > span:not(.provider-mark), .agent-model-options button > span:not(.provider-mark) { min-width: 0; flex: 1; }
+.agent-model-select strong, .agent-model-options strong { display: block; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.agent-model-select small, .agent-model-options small { display: block; font-size: 11px; margin-top: 5px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.agent-model-select > svg, .agent-model-options button > svg { color: var(--ui-muted); flex-shrink: 0; }
+.agent-model-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--ui-muted); margin: -4px 0 20px; }
+.agent-model-meta > span { display: inline-flex; gap: 5px; align-items: center; }
+.agent-model-advanced { margin-top: 24px; border-top: 1px solid var(--ui-line); padding: 16px 0 4px; }
+.agent-model-advanced summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--ui-muted); font-size: 12px; list-style: none; }
+.agent-model-advanced summary::-webkit-details-marker { display: none; }
+.agent-model-advanced summary > svg:last-child { margin-left: auto; }
+.agent-model-advanced[open] summary > svg:last-child { transform: rotate(90deg); }
+.agent-model-advanced summary > span { font-size: 10px; color: var(--ui-accent); }
+.agent-model-advanced .ui-field { display: block; margin: 18px 0 0; font-size: 12px; }
+.agent-model-advanced .provider-key-input { margin-top: 7px; }
+.agent-model-notice { margin-bottom: 16px; }
+.agent-model-notice button { margin-top: 8px; }
+.agent-model-picker { width: min(580px, calc(100vw - 32px)); height: min(570px, calc(100dvh - 48px)); }
+.agent-model-picker .ui-modal-body { padding: 8px 16px 16px; flex: 1; }
+.agent-model-picker .ui-modal-nav { padding: 0 20px 14px; }
+.agent-model-search { display: flex; gap: 8px; align-items: center; padding: 0 10px; border: 1px solid var(--ui-line); border-radius: 6px; color: var(--ui-muted); }
+.agent-model-search:focus-within { border-color: var(--ui-accent); }
+.agent-model-picker .agent-model-search input:not([type=checkbox]):not([type=radio]) { padding: 9px 0; border: 0; background: transparent; box-shadow: none; outline: none; }
+.agent-model-options { display: flex; flex-direction: column; gap: 4px; }
+.agent-model-options > button { display: flex; gap: 12px; align-items: center; padding: 12px; text-align: left; min-height: 66px; border: 1px solid transparent; border-radius: 6px; }
+.agent-model-options > button:hover:not(:disabled) { background: var(--ui-subtle); }
+.agent-model-options > button[aria-pressed=true] { background: var(--ui-accent-soft); border-color: color-mix(in srgb, var(--ui-accent) 25%, transparent); }
+.agent-model-options > button[aria-pressed=true] > svg:last-child { color: var(--ui-accent); }
+.agent-model-options > button:disabled { opacity: .5; }
+.agent-model-empty { text-align: center; color: var(--ui-muted); font-size: 12px; padding: 50px 10px; }
+@media (max-width: 500px) {
+  .agent-model-heading { flex-wrap: wrap; }
+  .agent-model-heading > button { padding: 4px; }
+  .agent-model-select { padding: 12px; }
+  .agent-model-picker .ui-modal-footer { gap: 6px; }
+  .agent-model-picker .ui-modal-footer .ui-button { font-size: 11px; padding-inline: 9px; }
+}

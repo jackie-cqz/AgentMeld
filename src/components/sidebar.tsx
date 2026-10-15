@@ -9,7 +9,7 @@ import { Popover } from "@/components/ui/popover";
 import { Feedback, Tabs } from "@/components/ui/controls";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectAgentList, selectConversationList } from "@/stores/selectors";
 import type { Agent, Conversation } from "@/shared/types";
@@ -213,7 +213,7 @@ function CreateConversationDialog({ agents, onClose, onCreate }: {
           <input type={mode === "single" ? "radio" : "checkbox"} name="conversation-agents" aria-label={agent.name}
             checked={agentIds.includes(agent.id)} disabled={saving}
             onChange={() => setAgentIds(current => mode === "single" ? [agent.id] : current.includes(agent.id) ? current.filter(id => id !== agent.id) : [...current, agent.id])} />
-          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${getAgentAvatarStyle(agent).solid}`}>{agent.avatar}</span>
+          <AgentAvatar agent={agent} />
           <span className="min-w-0"><strong className="block text-sm font-medium">{agent.name}</strong>
             <span className="block text-xs text-[var(--ui-muted)]">{agent.adapterName} / {agent.modelId || "未指定模型"}</span>
             <span className="mt-1 block text-xs text-[var(--ui-muted)]">{agent.description || agent.systemPrompt.split(/\n{2,}/)[0]}</span></span>

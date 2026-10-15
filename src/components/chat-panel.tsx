@@ -18,7 +18,7 @@ import { FileTab } from "@/components/file-tab";
 import { PendingWriteDiffTab } from "@/components/pending-write-diff-tab";
 import { PinnedMessagesBar } from "@/components/pinned-messages-bar";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar, type AgentAvatarSize } from "@/components/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import {
   selectActiveConversation,
@@ -105,7 +105,7 @@ export function ChatPanel() {
   const handleEditAgent = (agent: Agent) => setEditingAgent(agent);
 
   const handleUpdateAgent = async (payload: {
-    name: string; description: string; capabilities?: string[]; adapterName: AdapterName; modelProvider?: ModelProvider | null;
+    name: string; avatar?: string; description: string; capabilities?: string[]; adapterName: AdapterName; modelProvider?: ModelProvider | null;
     modelId?: string | null; apiKey?: string | null; apiBaseUrl?: string | null;
     systemPrompt?: string; toolNames?: string[];
   }) => {
@@ -208,7 +208,7 @@ export function ChatPanel() {
         <div className="workspace-team-members">
               {activeAgents.slice(0, 3).map((agent) => (
                 <button key={agent.id} className="workspace-team-member" title={`查看 ${agent.name}`} onClick={event => handleViewAgent(agent, event)}>
-                  <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span><span>{agent.name}</span>
+                  <AgentAvatar agent={agent} size="xs" /><span>{agent.name}</span>
                 </button>
               ))}
               <button type="button" title="管理会话 Agent" className="workspace-team-member workspace-team-manage" onClick={() => setShowAgentManager(true)}>
@@ -255,7 +255,7 @@ export function ChatPanel() {
                   <div className="workspace-empty-conversation"><span className="workspace-empty-mark"><Layers size={26} strokeWidth={1.5} /></span>
                     <h2>准备好开始了</h2><p>{activeAgents.length} 位 Agent · {conversation.mode === "group" ? "团队协作" : "单独对话"}</p>
                     <div>{activeAgents.map(agent => <button type="button" key={agent.id} onClick={event => handleViewAgent(agent, event)} title={`查看 ${agent.name}`}>
-                      <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span>{agent.name}</button>)}</div>
+                      <AgentAvatar agent={agent} size="xs" />{agent.name}</button>)}</div>
                   </div>
                 ) : null}
                 {visibleMessages.map((message) => (
@@ -316,6 +316,8 @@ export function ChatPanel() {
         onCreate={handleUpdateAgent}
         initial={editingAgent ? {
           name: editingAgent.name,
+          avatar: editingAgent.avatar,
+          isConductor: editingAgent.isConductor,
           description: editingAgent.description,
           capabilities: editingAgent.capabilities,
           adapterName: editingAgent.adapterName as AdapterName,
@@ -541,13 +543,13 @@ function extractMessageText(message: Message) {
   return text?.type === "text" ? text.content : "";
 }
 
-function Avatar({ label, displayLabel, agent, dark, muted, compact, className = "", onClick }: { label: string; displayLabel?: string; agent?: Agent; dark?: boolean; muted?: boolean; compact?: boolean; className?: string; onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void }) {
-  const agentColor = agent ? getAgentAvatarStyle(agent).solid : "bg-emerald-600 text-white";
-  const content = displayLabel ?? (agent ? getAgentAvatarLabel(agent) : label.slice(0, 2));
-  const sizeClass = compact ? "h-8 w-8" : "h-9 w-9";
-  const base = `grid ${sizeClass} shrink-0 place-items-center rounded-full text-xs font-semibold ${
-    dark ? "bg-[#4169ff] text-white" : muted ? "bg-slate-100 text-slate-500" : agentColor
-  } ${className}`;
+function Avatar({ label, agent, dark, size = "sm", className = "", onClick }: { label: string; agent?: Agent; dark?: boolean; size?: AgentAvatarSize; className?: string; onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void }) {
+  if (agent) {
+    const avatar = <AgentAvatar agent={agent} size={size} className={className} />;
+    return onClick ? <button type="button" className="agent-avatar-button" onClick={onClick} title={`查看 ${label}`} aria-label={`查看 ${label}`}>{avatar}</button> : avatar;
+  }
+  const content = label.slice(0, 2);
+  const base = `grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold ${dark ? "bg-[#4169ff] text-white" : "bg-[var(--ui-subtle)] text-[var(--ui-muted)]"} ${className}`;
 
   if (onClick) {
     return (
@@ -592,7 +594,7 @@ function AgentProfileCard({
         </button>
 
         <div className="flex gap-3 pr-7">
-          <Avatar agent={agent} label={agent.name} className="h-12 w-12 text-sm" />
+          <Avatar agent={agent} label={agent.name} size="lg" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-base font-semibold text-slate-950 dark:text-slate-50">{agent.name}</div>
             <div className="mt-1 flex flex-wrap gap-1.5">

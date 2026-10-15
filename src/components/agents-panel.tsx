@@ -9,7 +9,7 @@ import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 
 export function AgentsPanel() {
@@ -24,6 +24,7 @@ export function AgentsPanel() {
 
   const handleCreate = async (payload: {
     name: string;
+    avatar?: string;
     description: string;
     capabilities?: string[];
     adapterName: AdapterName;
@@ -89,8 +90,8 @@ export function AgentsPanel() {
             key={agent.id}
             className="workspace-agent-row flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
           >
-            <button type="button" aria-label={`查看 ${agent.name} 的详情`} onClick={() => setViewingAgent(agent)} className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${getAgentAvatarStyle(agent).solid}`}>
-              {getAgentAvatarLabel(agent)}
+            <button type="button" aria-label={`查看 ${agent.name} 的详情`} onClick={() => setViewingAgent(agent)} className="agent-avatar-button">
+              <AgentAvatar agent={agent} />
             </button>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
@@ -159,6 +160,8 @@ export function AgentsPanel() {
           onCreate={handleUpdate}
           initial={{
             name: editingAgent.name,
+            avatar: editingAgent.avatar,
+            isConductor: editingAgent.isConductor,
             description: editingAgent.description,
             capabilities: editingAgent.capabilities,
             adapterName: editingAgent.adapterName,

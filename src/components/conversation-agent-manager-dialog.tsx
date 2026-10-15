@@ -3,7 +3,7 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import type { Conversation } from "@/shared/types";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
@@ -73,7 +73,7 @@ export function ConversationAgentManagerDialog({
           {Object.values(agents).map((agent) => (
             <label key={agent.id} className="ui-list-row cursor-pointer">
               <input type="checkbox" checked={selected.includes(agent.id)} onChange={() => toggle(agent.id)} />
-              <span className={`grid h-8 w-8 place-items-center rounded-full ${getAgentAvatarStyle(agent).solid}`}>{agent.avatar}</span>
+              <AgentAvatar agent={agent} size="sm" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium text-slate-900">{agent.name}</span>
                 <span className="block truncate text-xs text-slate-500">{agent.description}</span>

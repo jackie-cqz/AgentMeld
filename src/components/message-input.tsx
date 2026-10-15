@@ -5,7 +5,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover } from "@/components/ui/popover";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectConversationPendingDispatchPlans } from "@/stores/selectors";
 import type { Agent, Attachment, Conversation, MessagePart } from "@/shared/types";
@@ -135,7 +135,7 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
     {recipientMenu ? <Popover {...recipientMenu} label="选择回复 Agent" className="workspace-recipient-menu" onClose={() => setRecipientMenu(null)}>
       <button className="workspace-recipient-option" onClick={() => setMentionedIds([])}><Users size={17} /><span><strong>团队协作</strong><small>由会话默认规则分派</small></span>{!mentionedAgents.length ? <Check size={15} /> : null}</button>
       <div className="workspace-recipient-list">{agents.map(agent => <label className="workspace-recipient-option" key={agent.id}>
-        <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span><span><strong>{agent.name}</strong><small>{agent.modelId || agent.adapterName}</small></span>
+        <AgentAvatar agent={agent} size="xs" /><span><strong>{agent.name}</strong><small>{agent.modelId || agent.adapterName}</small></span>
         <input type="checkbox" aria-label={`@${agent.name}`} checked={mentionedIds.includes(agent.id)} onChange={() => setMentionedIds(current => current.includes(agent.id) ? current.filter(id => id !== agent.id) : [...current, agent.id])} />
       </label>)}</div>
     </Popover> : null}
