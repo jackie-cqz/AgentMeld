@@ -13,6 +13,8 @@ import type {
 // Module-level refs — survive HMR and React StrictMode double-mount
 let activeSource: EventSource | null = null;
 let refCount = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
 let bootstrapPromise: Promise<void> | null = null;
 const pendingRecoveryByConversation = new Map<string, Promise<void>>();
 
@@ -35,8 +37,13 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
       refCount--;
-      if (refCount <= 0 && activeSource) {
-        activeSource.close();
+      if (refCount <= 0) {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        reconnectAttempt = 0;
+        activeSource?.close();
         activeSource = null;
       }
     };
@@ -60,6 +67,31 @@ function ensureBootstrap() {
   return bootstrapPromise;
 }
 
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * Open the event stream, and KEEP it open.
+ *
+ * An EventSource that reaches `CLOSED` is never retried by the browser — and it
+ * reaches CLOSED for reasons that happen in normal use: the server ends an idle
+ * stream, or answers 204 once. The old code left `activeSource` set, so
+ * `connectStream()` returned early forever: the page stayed alive (the
+ * per-conversation polls are separate fetches) and stopped receiving anything —
+ * no messages, no progress, no approvals — which is exactly "它又卡住了". The
+ * stream ending is now a reconnect, with backoff, and the reference is cleared
+ * so the guard cannot block it.
+ */
+function scheduleReconnect() {
+  if (reconnectTimer || refCount <= 0) return;
+  const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
+  reconnectAttempt += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectStream();
+  }, delay);
+}
+
 function connectStream() {
   if (activeSource) return;
 
@@ -67,17 +99,29 @@ function connectStream() {
   setConnectionStatus("connecting");
   activeSource = new EventSource("/api/stream");
 
-  activeSource.onopen = () => {
+  const opened = activeSource;
+  opened.onopen = () => {
+    if (opened !== activeSource) return;
+    reconnectAttempt = 0;
     setConnectionStatus("open");
     const conversationId = useAppStore.getState().activeConversationId;
     if (conversationId) void recoverPendingState(conversationId);
   };
-  activeSource.onerror = () => {
-    setConnectionStatus(
-      activeSource?.readyState === EventSource.CLOSED ? "error" : "connecting"
-    );
+  const source = activeSource;
+  source.onerror = () => {
+    if (source !== activeSource) return;
+    if (source.readyState === EventSource.CLOSED) {
+      // The browser will not retry this one. Drop it and bring up a new one.
+      source.close();
+      activeSource = null;
+      setConnectionStatus("error");
+      scheduleReconnect();
+      return;
+    }
+    // CONNECTING: the browser is retrying by itself.
+    setConnectionStatus("connecting");
   };
-  activeSource.onmessage = (event) => {
+  opened.onmessage = (event) => {
     try {
       applyEvent(JSON.parse(event.data) as StreamEvent);
       setConnectionStatus("open");
