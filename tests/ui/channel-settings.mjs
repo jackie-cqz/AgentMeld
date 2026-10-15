@@ -7,10 +7,23 @@ const base = process.env.UI_BASE_URL || 'http://127.0.0.1:3018';
 const browser = await chromium.connectOverCDP(process.env.UI_CDP_URL || 'http://127.0.0.1:9223');
 const output = '.tmp-ui-artifacts/channel-settings';
 await fs.mkdir(output, { recursive: true });
-const bootstrap = await (await browser.contexts()[0].request.get(`${base}/api/bootstrap`)).json();
+const context = browser.contexts()[0];
+const authStatus = await context.request.get(`${base}/api/auth/status`);
+assert(authStatus.ok(), 'The isolated fixture server must expose auth status');
+if (!(await authStatus.json()).paired) {
+  const minted = await context.request.post(`${base}/api/auth/pair/code`);
+  assert(minted.ok(), 'Could not mint an initial pairing code for the isolated fixture server');
+  const { code } = await minted.json();
+  const paired = await context.request.post(`${base}/api/auth/pair`, { data: { code } });
+  assert(paired.ok(), 'Could not pair the fixture browser');
+}
+const bootstrapResponse = await context.request.get(`${base}/api/bootstrap`);
+assert(bootstrapResponse.ok(), 'Use a paired fixture browser; never reset an existing owner to run this suite');
+const bootstrap = await bootstrapResponse.json();
 const agents = bootstrap.agents.slice(0, 6).map((agent, index) => ({ ...agent, name: ['Conductor', '产品经理', '视觉设计师', '前端工程师', 'Reviewer', '研究 Agent'][index] }));
 agents.push({ ...agents[5], id: 'ag_ui_channel_extra', name: '负责分析跨渠道协作结果与历史审查材料的研究助手' });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const page = await context.newPage();
+await page.setViewportSize({ width: 1440, height: 900 });
 const errors = [];
 const calls = [];
 let bindingReads = 0;
