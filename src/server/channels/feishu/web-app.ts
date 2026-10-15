@@ -75,6 +75,10 @@ export function inlineWebApp(
   const used = new Set<string>();
   let html = entryHtml;
   let refusal: string | null = null;
+  // A document carrying an importmap resolves bare specifiers itself, so those
+  // are the one non-absolute form an inline module CAN keep; relative
+  // specifiers are still refused (nothing maps them).
+  const hasImportMap = /<script\b[^>]*type\s*=\s*["']?importmap/i.test(entryHtml);
 
   // <link rel="stylesheet" href="style.css"> -> <style>…</style>
   html = html.replace(/<link\b[^>]*>/gi, (tag) => {
@@ -130,7 +134,7 @@ export function inlineWebApp(
       return tag;
     }
     if (type && /\bmodule\b/i.test(type)) {
-      if (hasRelativeImport(body)) {
+      if (hasRelativeImport(body, hasImportMap)) {
         // An inline module has no URL of its own, so "./dep.js" can never
         // resolve — even when dep.js is also packed into this document.
         refusal ??= `"${file.name}" is a module with a relative import, which cannot resolve once inlined`;
@@ -157,8 +161,11 @@ export function inlineWebApp(
   // unquoted attribute, a mention inside a comment or a string — which the
   // previous "was this file inlined somewhere?" rule could not see.
   const leftover = leftoverReference(html, files);
+  if (leftover?.kind === "base") {
+    return { ok: false, reason: "the document sets a <base href>, which this fold cannot follow" };
+  }
   if (leftover) {
-    return { ok: false, reason: `the entry still references "${leftover}"` };
+    return { ok: false, reason: `the document still references "${leftover.name}"` };
   }
 
   // And nothing may be left out: an unreferenced extra file would be dropped
@@ -186,12 +193,17 @@ export function zipWebAppName(title: string): string {
  * became a ZIP called index.html. The extension is decided by the content.
  */
 function stripExtension(title: string): string {
-  const trimmed = title.trim();
-  // Everything after the last dot goes: a trailing bare "." and a 12-character
-  // suffix both slipped through an {1,8}-character pattern, and safeFileName
-  // then treated the title as already having an extension.
-  const withoutExtension = trimmed.replace(/\.[^.]*$/, "").trim();
-  return withoutExtension.length > 0 ? withoutExtension : trimmed;
+  let trimmed = title.trim();
+  // EVERY trailing dot segment goes, in a loop: "Dashboard 2.0.1" stripped once
+  // becomes "Dashboard 2.0", and safeFileName would then treat ".0" as the
+  // extension and drop the one we asked for. Version-numbered titles are the
+  // common case, not the exotic one.
+  let previous = "";
+  while (previous !== trimmed) {
+    previous = trimmed;
+    trimmed = trimmed.replace(/\.[^.]*$/, "").trim();
+  }
+  return trimmed.length > 0 ? trimmed : title.trim();
 }
 
 /**
@@ -286,45 +298,37 @@ export function zipWebApp(files: Record<string, string>): Buffer {
 }
 
 /**
- * The first reference left in the document that names one of the app's own
- * files.
+ * Anything left in the document that names one of the app's own files.
  *
- * "Nothing may still point at a file that will not be beside the document" has
- * to cover every way a document can point at one, not just `src` and `href`:
- * a `srcset` candidate list, a `poster`, an `object data`, a `form action`,
- * `url()` or `@import` inside an inlined stylesheet, and a `<base href>` that
- * re-bases every relative reference in the document. A review found each of
- * those surviving into a delivered page.
+ * The first two versions of this enumerated the ways a document can reference a
+ * file — `src`, `href`, then `srcset`, `poster`, `object data`, `form action`,
+ * `url()`, `@import` — and a review found a fresh form each time: `formaction`,
+ * `imagesrcset`, `cite`, `ping`, `srcdoc`, the legacy `background`, and
+ * `<meta http-equiv=refresh content="0; url=…">`. The enumeration cannot be
+ * finished, so this is a POSITIVE check instead: after folding, if any packaged
+ * file's name still appears anywhere in the result, the single file would still
+ * depend on something that is not beside it, and the zip is the answer.
+ *
+ * Being positive makes it slightly over-eager — a script that merely mentions
+ * its own file name in a string also refuses — and that is the direction this
+ * whole feature errs in: a zip always works, a page that looks delivered and
+ * is not does not.
  */
-function leftoverReference(html: string, files: Record<string, string>): string | null {
-  // A <base> changes what every relative reference means, and this fold cannot
-  // follow it. Refusing is the honest answer.
-  if (/<base\b[^>]*\bhref\s*=/i.test(html)) {
-    return "<base href> re-bases the document";
-  }
+type Leftover = { kind: "file"; name: string } | { kind: "base" } | null;
 
-  const attributePattern = /\b(?:src|href|poster|data|action|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
-  for (const match of html.matchAll(attributePattern)) {
-    const value = match[1] ?? match[2] ?? match[3] ?? "";
-    // `srcset` is a comma-separated candidate list: "a.png 1x, b.png 2x".
-    for (const candidate of value.split(",")) {
-      const reference = candidate.trim().split(/\s+/)[0] ?? "";
-      if (!reference) continue;
-      if (/^(?:https?:|data:|mailto:|#|\/\/)/i.test(reference)) continue;
-      const file = lookup(files, reference);
-      if (file) return file.name;
+function leftoverReference(html: string, files: Record<string, string>): Leftover {
+  // A <base> changes what every relative reference means and this fold cannot
+  // follow it.
+  if (/<base\b[^>]*\bhref\s*=/i.test(html)) return { kind: "base" };
+
+  for (const name of Object.keys(files)) {
+    // The full key and the last segment: markup usually writes "style.css",
+    // while the map may hold "assets/style.css".
+    const candidates = new Set([name, name.split("/").pop() ?? name]);
+    for (const candidate of candidates) {
+      if (candidate && html.includes(candidate)) return { kind: "file", name };
     }
   }
-
-  // Inside a folded stylesheet, `url(…)` and `@import` are references too.
-  const cssPattern = /(?:url\(\s*["']?([^"')]+)["']?\s*\)|@import\s+["']([^"']+)["'])/gi;
-  for (const match of html.matchAll(cssPattern)) {
-    const reference = (match[1] ?? match[2] ?? "").trim();
-    if (!reference || /^(?:https?:|data:|\/\/)/i.test(reference)) continue;
-    const file = lookup(files, reference);
-    if (file) return file.name;
-  }
-
   return null;
 }
 
@@ -362,12 +366,17 @@ function containsBlockTerminator(body: string, block: "script" | "style"): boole
  *
  * Conservative on purpose: a specifier this cannot classify means the zip.
  */
-function hasRelativeImport(body: string): boolean {
-  const specifierPattern = /(?:\bimport\s*\(|\b(?:import|export)\b[^;'"]*?from\s*)["']([^"']+)["']|\bimport\s+["']([^"']+)["']/g;
+function hasRelativeImport(body: string, bareSpecifiersAreMapped = false): boolean {
+  // Quotes and backticks both: `import(`./dep.js`)` is the same dependency as
+  // `import("./dep.js")` and a double-quote-only pattern misses it.
+  const specifierPattern =
+    /(?:\bimport\s*\(|\b(?:import|export)\b[^;'"`]*?from\s*)[`'"]([^`'"]+)[`'"]|\bimport\s+[`'"]([^`'"]+)[`'"]/g;
   for (const match of body.matchAll(specifierPattern)) {
     const specifier = (match[1] ?? match[2] ?? "").trim();
     if (!specifier) continue;
     if (/^(?:https?:|data:|\/\/)/i.test(specifier)) continue;
+    const isRelative = /^[./]/.test(specifier);
+    if (!isRelative && bareSpecifiersAreMapped) continue;
     return true;
   }
   return false;

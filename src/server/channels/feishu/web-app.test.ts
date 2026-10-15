@@ -504,12 +504,124 @@ describe("small things a review measured", () => {
   });
 });
 
+describe("references no enumeration can finish", () => {
+  it("refuses the forms a review found one at a time", () => {
+    // Each of these survived the attribute-by-attribute scan; the positive
+    // check catches them because the file's name is simply still there.
+    for (const markup of [
+      '<button formaction="s.css"></button>',
+      '<input formaction="s.css">',
+      '<img imagesrcset="s.css 1x">',
+      '<body background="s.css">',
+      '<blockquote cite="s.css"></blockquote>',
+      '<a ping="s.css">x</a>',
+      '<iframe srcdoc="s.css"></iframe>',
+      '<meta http-equiv="refresh" content="0; url=s.css">'
+    ]) {
+      const result = inlineWebApp(
+        { "index.html": `<link rel="stylesheet" href="s.css">${markup}`, "s.css": "body{}" },
+        "index.html"
+      );
+      expect(result.ok, markup).toBe(false);
+    }
+  });
+
+  it("refuses when a file's name merely appears in a string", () => {
+    // Over-eager on purpose: the zip always works, a page that only looks
+    // delivered does not.
+    const result = inlineWebApp(
+      {
+        "index.html": '<link rel="stylesheet" href="a.css"><script src="app.js"></script>',
+        "a.css": "body{}",
+        "app.js": 'const name = "a.css";'
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("says what it knows about a <base> instead of quoting a sentence", () => {
+    const result = inlineWebApp(
+      { "index.html": '<base href="assets/"><link rel="stylesheet" href="style.css">', "style.css": "body{}" },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("<base href>");
+      expect(result.reason).not.toContain('references "<base');
+    }
+  });
+});
+
+describe("module specifiers, both directions", () => {
+  it("allows a bare specifier when the document carries an importmap", () => {
+    // The importmap is inlined untouched and maps "three" to a CDN, so this
+    // app folds to one file that works — the earlier whitelist pushed it to a
+    // zip for no reason.
+    const result = inlineWebApp(
+      {
+        "index.html": '<script type="importmap">{"imports":{"three":"https://cdn.example/three.js"}}</script><script type="module" src="m.js"></script>',
+        "m.js": "import * as THREE from 'three';"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("still refuses a relative specifier, importmap or not", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<script type="importmap">{"imports":{}}</script><script type="module" src="m.js"></script><script src="dep.js"></script>',
+        "m.js": "import './dep.js';",
+        "dep.js": "1;"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses a relative specifier even when no packaged file has that name", () => {
+    // Isolates the specifier rule from the positive name scan: "vendor.js" is
+    // NOT part of the app, so only the specifier check can refuse it. A
+    // double-quoted pattern that misses backticks let this through.
+    for (const call of ["await import(`./vendor.js`);", 'await import("./vendor.js");']) {
+      const result = inlineWebApp(
+        { "index.html": '<script type="module" src="m.js"></script>', "m.js": call },
+        "index.html"
+      );
+      expect(result.ok, call).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("relative import");
+    }
+  });
+
+  it("refuses a backtick dynamic import", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<script type="module" src="m.js"></script><script src="dep.js"></script>',
+        "m.js": "await import(`./dep.js`);",
+        "dep.js": "1;"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("delivered names force the extension", () => {
   it("does not let a dotted title swallow the extension", () => {
     // safeFileName keeps an existing extension, so "Dashboard 2.0" was
     // delivered as a file named "Dashboard 2.0" with none.
     expect(inlineWebAppName("Dashboard 2.0")).toMatch(/\.html$/);
     expect(zipWebAppName("我的应用 v1.0")).toMatch(/\.zip$/);
+  });
+
+  it("keeps stripping when the title has several dots", () => {
+    // Stripping once left "Dashboard 2.0", whose ".0" safeFileName then
+    // treated as the extension — so the delivered name had none at all.
+    for (const title of ["Dashboard 2.0.1", "我的应用 v2.0.1", "site.v1.0", "a.b.c"]) {
+      expect(inlineWebAppName(title), title).toMatch(/\.html$/);
+      expect(zipWebAppName(title), title).toMatch(/\.zip$/);
+    }
   });
 
   it("does not deliver a zip under an .html name", () => {
