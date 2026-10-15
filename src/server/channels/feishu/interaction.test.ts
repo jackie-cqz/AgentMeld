@@ -1000,6 +1000,25 @@ describe("run card actions through the card handler", () => {
     expect(JSON.stringify(response)).toContain("不属于这个群");
   });
 
+  it("refuses a cancel click when the run's conversation is not mapped to a chat", async () => {
+    // Fail closed, like the question and approval cards. The mapping can be
+    // missing — a plain conversation, or a channel conversation whose row is
+    // gone — and that must read as "not this card", not as "any card will do".
+    createConversation({
+      id: "conv_plain", title: "普通会话", mode: "group", agentIds: [AGENT],
+      fsWriteApprovalMode: "auto", now: 1
+    });
+    const run = createRun({
+      id: "run_plain", conversationId: "conv_plain", agentId: AGENT,
+      triggerMessageId: null, parentRunId: null, status: "running", now: Date.now()
+    });
+
+    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }));
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    expect(JSON.stringify(response)).toContain("不属于这个群");
+  });
+
   it("lets a cancel click from the right chat through to the owner check", async () => {
     // The control for the test above: same click, right chat, and it gets past
     // the chat guard. Nothing is actually running, so it lands on "already over".

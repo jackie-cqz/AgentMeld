@@ -29,7 +29,7 @@ import {
 } from "@/server/repositories";
 import type { AgentRun } from "@/shared/types";
 
-const { channelsByAgent, sent, updated, connections, abortRunMock, gate } = vi.hoisted(() => ({
+const { channelsByAgent, sent, updated, connections, abortRunMock, gate, failure } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
   sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>,
   updated: [] as Array<{ messageId: string; card: unknown }>,
@@ -37,7 +37,9 @@ const { channelsByAgent, sent, updated, connections, abortRunMock, gate } = vi.h
   abortRunMock: vi.fn(),
   // Holds the NEXT card update open until released, so a test can decide the
   // order in which two updates to one card land.
-  gate: { next: null as Promise<void> | null }
+  gate: { next: null as Promise<void> | null },
+  // Makes the NEXT card update fail, once.
+  failure: { next: false }
 }));
 
 vi.mock("@/server/channels/feishu/registry", () => ({
@@ -45,6 +47,9 @@ vi.mock("@/server/channels/feishu/registry", () => ({
     if (!channelsByAgent.has(agentId)) return null;
     return {
       send: async (chatId: string, input: unknown) => {
+        const wait = gate.next;
+        gate.next = null;
+        if (wait) await wait;
         sent.push({ agentId, chatId, input });
         return { messageId: `om_${sent.length}` };
       },
@@ -52,6 +57,10 @@ vi.mock("@/server/channels/feishu/registry", () => ({
         const wait = gate.next;
         gate.next = null;
         if (wait) await wait;
+        if (failure.next) {
+          failure.next = false;
+          throw new Error("cannot update");
+        }
         updated.push({ messageId, card });
       }
     };
@@ -100,7 +109,7 @@ describe("buildProgressCard", () => {
     // Found by what it does, not by where it sits: the status button shares the
     // row and the order is a layout choice.
     const cancel = action.actions.find((button) => button.value.kind === "cancel_run");
-    expect(cancel?.value).toEqual({ kind: "cancel_run", runId: "run_1" });
+    expect(cancel?.value).toEqual({ kind: "cancel_run", runId: "run_1", v: 0 });
   });
 
   it("offers a status button that carries the run", () => {
@@ -109,7 +118,7 @@ describe("buildProgressCard", () => {
       actions: Array<{ value: { kind: string; runId: string } }>;
     };
     const status = action.actions.find((button) => button.value.kind === "run_status");
-    expect(status?.value).toEqual({ kind: "run_status", runId: "run_1" });
+    expect(status?.value).toEqual({ kind: "run_status", runId: "run_1", v: 0 });
   });
 
   it("stops offering cancel once the run is over", () => {
@@ -490,6 +499,7 @@ describe("the status button", () => {
     connections.length = 0;
     channelsByAgent.clear();
     gate.next = null;
+    failure.next = false;
     abortRunMock.mockReset();
     stopChannelProgressForTests();
     setChannelProjectionPaused(false);
@@ -536,6 +546,14 @@ describe("the status button", () => {
   }
 
   const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+
+  /** How many cards the registry still holds, to assert nothing leaks. */
+  function getRunCardsSizes(): number {
+    return (
+      (globalThis as unknown as { __agentMeldChannelRunCards?: Map<string, unknown> })
+        .__agentMeldChannelRunCards?.size ?? 0
+    );
+  }
 
   it("counts a run's children and what is waiting on a person, and nobody else's", () => {
     const conductor = seed({ id: "run_conductor" });
@@ -657,6 +675,144 @@ describe("the status button", () => {
     await tick();
     expect(updated).toHaveLength(0);
     expect(sent).toHaveLength(0);
+  });
+
+  /** The version carried by each button of a card, by what the button does. */
+  function versions(card: unknown): Record<string, number> {
+    const elements = (card as {
+      elements: Array<{ tag: string; actions?: Array<{ value: { kind: string; v: number } }> }>;
+    }).elements;
+    const buttons = elements.filter((element) => element.tag === "action").flatMap((element) => element.actions ?? []);
+    return Object.fromEntries(buttons.map((button) => [button.value.kind, button.value.v]));
+  }
+
+  it("gives the card a new version each time it is rewritten", async () => {
+    // The SDK drops a repeated click — same person, same card, same value — for
+    // twelve hours, silently. A status button whose value never changed could be
+    // pressed once per person per card. Each rewrite changes it.
+    const run = seed();
+    await projectRunStarted(run);
+    expect(versions((sent[0].input as { card: unknown }).card)).toEqual({ run_status: 0, cancel_run: 0 });
+    updated.length = 0;
+
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" });
+    await tick();
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" });
+    await tick();
+
+    expect(updated).toHaveLength(2);
+    expect(versions(updated[0].card)).toEqual({ run_status: 1, cancel_run: 1 });
+    expect(versions(updated[1].card)).toEqual({ run_status: 2, cancel_run: 2 });
+  });
+
+  it("does not advance the version for a rewrite that failed", async () => {
+    // The card on screen still carries the old version, so the next rewrite has
+    // to go out as the one after THAT. Recording the new version before the
+    // platform accepted it would leave the card showing a value the next click
+    // was never told about.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const run = seed();
+    await projectRunStarted(run);
+    updated.length = 0;
+
+    failure.next = true;
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" });
+    await tick();
+    expect(updated).toHaveLength(0);
+
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" });
+    await tick();
+
+    expect(updated).toHaveLength(1);
+    expect(versions(updated[0].card)).toEqual({ run_status: 1, cancel_run: 1 });
+    errors.mockRestore();
+  });
+
+  it("holds a settle that arrives while the card is still being sent", async () => {
+    // The card used to be registered only after the send resolved, so a run that
+    // failed inside those milliseconds produced a settle that found no card and
+    // quietly returned — the room kept a card that said "running" forever, with
+    // a cancel button on it. Sending and registering are one queued unit now.
+    const run = seed();
+    let release!: () => void;
+    gate.next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const posting = projectRunStarted(run);
+    const settled = settleRunCard(
+      { ...run, status: "failed", finishedAt: run.startedAt + 2000 },
+      "failed"
+    );
+    await tick();
+    expect(sent).toHaveLength(0);
+
+    release();
+    await Promise.all([posting, settled]);
+
+    // The card was sent, then settled, and the registry is empty afterwards.
+    expect(sent).toHaveLength(1);
+    expect(updated).toHaveLength(1);
+    expect(JSON.stringify(updated[0].card)).toContain("失败");
+    expect(JSON.stringify(updated[0].card)).not.toContain("取消运行");
+    expect(getRunCardsSizes()).toBe(0);
+  });
+
+  it("does not post a card for a run that ended while it waited its turn", async () => {
+    // The second start is queued behind the first (same run) while the first is
+    // held in its send; the run fails in between. When the second's turn comes,
+    // it must see a finished run and post nothing — posting would be exactly the
+    // stale card the queue exists to prevent.
+    const run = seed();
+    let release!: () => void;
+    gate.next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = projectRunStarted(run);
+    // Let the first start's work begin, pass its terminal check, and sit in its
+    // send — otherwise the failure lands before either has looked at the run.
+    await tick();
+    const second = projectRunStarted(run);
+    updateRunStatus(run.id, "failed", null, Date.now());
+    release();
+    const outcomes = await Promise.all([first, second]);
+
+    expect(sent).toHaveLength(1);
+    expect(outcomes[1]).toMatchObject({ status: "skipped", reason: "run already ended" });
+  });
+
+  it("keeps three updates to one card in the order they were asked for", async () => {
+    // A refresh is held open, a settle queues behind it, and a third click
+    // queues behind that. If the queue's cleanup deleted the chain entry when
+    // the FIRST item finished rather than when the last did, the third click
+    // would start a parallel chain and could land before the settle.
+    const run = seed();
+    await projectRunStarted(run);
+    updated.length = 0;
+    let release!: () => void;
+    gate.next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" }); // refresh A, held
+    const settled = settleRunCard(
+      { ...run, status: "complete", finishedAt: run.startedAt + 2000 },
+      "complete"
+    );
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" }); // refresh B, queued
+    await tick();
+    expect(updated).toHaveLength(0);
+
+    release();
+    await settled;
+    await tick();
+
+    // Refresh A, then the settle. Refresh B finds no card and does nothing —
+    // not: lands first, in parallel, ahead of the settle.
+    expect(updated).toHaveLength(2);
+    expect(JSON.stringify(updated[0].card)).toContain("查看状态");
+    expect(JSON.stringify(updated[1].card)).toContain("已完成");
   });
 
   it("lets a refresh that is still on its way land BEFORE the settle, not after", async () => {

@@ -11,7 +11,7 @@ import { getAllPendingQuestions } from "@/server/pending-questions";
 import { getAllPendingBashCommands } from "@/server/pending-bash";
 import { getAllPendingWrites } from "@/server/pending-writes";
 import { getAllPendingPlans } from "@/server/dispatch-plan-manager";
-import { escapeLarkMd } from "@/server/channels/feishu/card-text";
+import { escapeLarkMd, withVersion } from "@/server/channels/feishu/card-text";
 import {
   getFeishuChannelForAgent,
   listFeishuConnections
@@ -41,6 +41,8 @@ interface RunCard {
   messageId: string;
   agentId: string;
   agentName: string | null;
+  /** Which rewrite of the card is on screen; see `withVersion`. */
+  version: number;
 }
 
 declare global {
@@ -60,7 +62,7 @@ declare global {
  * anything queued after it finds the card gone from the registry and does
  * nothing.
  */
-function enqueueCardWork(runId: string, work: () => Promise<void>): Promise<void> {
+function enqueueCardWork<T>(runId: string, work: () => Promise<T>): Promise<T> {
   globalThis.__agentMeldChannelRunCardWork ??= new Map<string, Promise<unknown>>();
   const chains = globalThis.__agentMeldChannelRunCardWork;
   const previous = chains.get(runId) ?? Promise.resolve();
@@ -190,7 +192,8 @@ export function buildProgressCard(
   run: AgentRun,
   agentName: string | null,
   ended?: AgentRunStatus,
-  snapshot?: RunStatusSnapshot
+  snapshot?: RunStatusSnapshot,
+  version = 0
 ): object {
   const status = ended ?? run.status;
   const finished = ended !== undefined;
@@ -228,13 +231,13 @@ export function buildProgressCard(
                   tag: "button",
                   text: { tag: "plain_text", content: "查看状态" },
                   type: "default",
-                  value: { kind: "run_status", runId: run.id }
+                  value: withVersion({ kind: "run_status", runId: run.id }, version)
                 },
                 {
                   tag: "button",
                   text: { tag: "plain_text", content: "取消运行" },
                   type: "danger",
-                  value: { kind: "cancel_run", runId: run.id }
+                  value: withVersion({ kind: "cancel_run", runId: run.id }, version)
                 }
               ]
             }
@@ -268,20 +271,38 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
   }
 
   const agentName = agentNameFor(run.agentId);
-  const sent = await deliverSend<{ messageId: string }>(
-    channel,
-    run.conversationId,
-    run.agentId,
-    channelConversation.chatId, {
-    card: buildProgressCard(run, agentName)
+
+  // Sent and REGISTERED as one unit, on the card's work queue. The registry
+  // entry used to be written only after the send resolved, so a run that failed
+  // during those milliseconds produced a settle that found no card and quietly
+  // returned — leaving the room a card that said "running" forever, with a
+  // cancel button on it. On the queue, a settle that arrives mid-send waits,
+  // and finds the card.
+  return enqueueCardWork(run.id, async () => {
+    // The run may have ended while this waited its turn. Posting a card for a
+    // run that is already over is exactly the stale card the queue exists to
+    // prevent.
+    const current = getRun(run.id);
+    if (current && isTerminalRunStatus(current.status)) {
+      return { status: "skipped" as const, reason: "run already ended" };
+    }
+
+    const sent = await deliverSend<{ messageId: string }>(
+      channel,
+      run.conversationId,
+      run.agentId,
+      channelConversation.chatId, {
+      card: buildProgressCard(run, agentName)
+    });
+    getRunCards().set(run.id, {
+      version: 0,
+      chatId: channelConversation.chatId,
+      messageId: sent.messageId,
+      agentId: run.agentId,
+      agentName
+    });
+    return { status: "posted" as const, chatId: channelConversation.chatId };
   });
-  getRunCards().set(run.id, {
-    chatId: channelConversation.chatId,
-    messageId: sent.messageId,
-    agentId: run.agentId,
-    agentName
-  });
-  return { status: "posted", chatId: channelConversation.chatId };
 }
 
 /**
@@ -342,21 +363,29 @@ export function refreshRunCard(run: AgentRun, snapshot: RunStatusSnapshot): Prom
     const channel = getFeishuChannelForAgent(card.agentId);
     if (!channel) return;
 
+    // The next version goes out with this rewrite and is recorded only once the
+    // platform has accepted it. Recording it first would leave a card on screen
+    // carrying a version the next click was never told about.
+    const next = card.version + 1;
     await deliverCardUpdate(
       channel,
       run.conversationId,
       card.agentId,
       card.messageId,
-      buildProgressCard(run, card.agentName, undefined, snapshot)
+      buildProgressCard(run, card.agentName, undefined, snapshot, next)
     );
+    card.version = next;
   });
 }
 
 /**
  * Answer a click on the status button.
  *
- * Read-only, so it asks for no owner check: everything it shows is already
- * visible in the room. Acting on the run — cancelling — still needs the owner.
+ * Read-only, so it asks for no owner check — a deliberate decision, and worth
+ * stating precisely: the child-task counts and the waiting counts are NOT
+ * otherwise in the room, they were web-only. What a member learns is counts
+ * without content; acting on the run — cancelling — still needs the owner. If
+ * that trade ever stops being acceptable, this is the check to tighten.
  * The click must come from the chat the card belongs to, failing closed when the
  * mapping is missing, like every other card action.
  *
