@@ -45,6 +45,16 @@ export function ClientErrorReporter() {
       );
     };
 
+    // One beacon per load. Without it there is no way to tell "the new bundle
+    // is running and found nothing wrong" from "the page is still running the
+    // old bundle", and every diagnosis rests on that distinction.
+    void fetch("/api/client-errors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "stuck", message: "reporter loaded", detail: `hidden=${document.hidden}`, url: location.href }),
+      keepalive: true
+    }).catch(() => {});
+
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
     return () => {
