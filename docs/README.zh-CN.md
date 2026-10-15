@@ -124,13 +124,13 @@ Next.js UI
 - Next.js 16、React 19、TypeScript
 - Zustand 与 Immer
 - SQLite、Drizzle ORM、`better-sqlite3`
-- OpenAI-compatible Adapter，当前推荐 DeepSeek
+- Pi 0.84.2 执行内核，模型使用已配置的 OpenAI-compatible 或 Anthropic 供应商
 - Tailwind CSS
 - Vitest、ESLint、TypeScript 检查
 
 ## 环境要求
 
-- Node.js 20.19.0 或更高版本
+- Node.js 22.19.0 或更高版本
 - pnpm 10 或更高版本
 - 至少一个模型服务 API Key，例如 DeepSeek
 
@@ -205,9 +205,11 @@ AgentMeld 默认将本地数据库、工作区、预览、部署和运行时生�
 
 ## 模型服务说明
 
-当前版本最推荐通过自定义 OpenAI-compatible Adapter 使用 DeepSeek 或其他兼容模型服务。
+所有生产 Agent（包括 Conductor）统一通过项目锁定的 Pi 执行。供应商和模型仍在 AgentMeld 设置中维护，Agent 编辑页选择对应模型；Pi 安装检测只代表版本可用，不代表供应商认证已通过。
 
-项目中保留了 Claude Code 和 Codex Adapter 文件，但完整 SDK 执行链路不是本版本推荐运行路径。
+自研 Agent Loop、生产 Adapter 注册表及 Claude Code/Codex 占位执行器已退役。原 Custom/Mock 配置迁移到 Pi，保留身份、聊天历史和渠道绑定；其他旧执行器必须在编辑界面显式迁移，不会静默回退。
+
+详见 [Pi 执行架构与恢复说明](pi-runtime.md)。原生文件能力复用已有 `fs_*` 权限，计划、询问、产物和部署通过平台业务工具桥接。此私有扩展桥不是外部 MCP 服务。每次调用创建独立 Pi 会话，平台负责跨任务上下文；旧历史不转换成 Pi 原生会话，崩溃的命令不会自动恢复。命令仍在宿主机执行，不是 OS 沙箱。同一数据目录只运行一个控制服务；无法确认退出的执行会保留工作区租约。当前不支持任意全局 Pi 版本、用户扩展、其他 Harness 或 standalone 打包。
 
 ## 已知限制
 

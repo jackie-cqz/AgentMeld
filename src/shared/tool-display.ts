@@ -1,4 +1,10 @@
 const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  read: "读取文件",
+  write: "写入文件",
+  edit: "文件修改",
+  ls: "浏览文件",
+  grep: "搜索内容",
+  find: "查找文件",
   ask_user: "询问用户",
   bash: "执行命令",
   fs_glob: "查找文件",

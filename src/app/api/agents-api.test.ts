@@ -44,7 +44,7 @@ function jsonRequest(method: string, body?: unknown): Request {
 function createTestAgent() {
   return createAgent({
     name: "API Test Agent",
-    adapterName: "custom",
+    adapterName: "pi",
     modelId: "gpt-4.1-mini"
   });
 }
@@ -68,7 +68,7 @@ describe("POST /api/agents", () => {
   it("creates an agent and returns 201", async () => {
     const req = jsonRequest("POST", {
       name: "New API Agent",
-      adapterName: "custom",
+      adapterName: "pi",
       modelProvider: "openai",
       modelId: "gpt-4.1-mini"
     });
@@ -82,7 +82,7 @@ describe("POST /api/agents", () => {
   it("accepts full agent config", async () => {
     const req = jsonRequest("POST", {
       name: "Full Config",
-      adapterName: "custom",
+      adapterName: "pi",
       modelProvider: "deepseek",
       modelId: "deepseek-chat",
       apiKey: "sk-test",

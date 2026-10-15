@@ -38,7 +38,7 @@ describe("agent-service", () => {
     it("creates a custom agent with model", () => {
       const agent = createAgent({
         name: "Test Custom Agent",
-        adapterName: "custom",
+        adapterName: "pi",
         modelProvider: "openai",
         modelId: "gpt-4.1-mini",
         toolNames: ["fs_read", "write_artifact"]
@@ -46,7 +46,7 @@ describe("agent-service", () => {
 
       expect(agent.id).toMatch(/^ag_/);
       expect(agent.name).toBe("Test Custom Agent");
-      expect(agent.adapterName).toBe("custom");
+      expect(agent.adapterName).toBe("pi");
       expect(agent.modelProvider).toBe("openai");
       expect(agent.modelId).toBe("gpt-4.1-mini");
       expect(agent.toolNames).toEqual(["fs_read", "write_artifact"]);
@@ -57,7 +57,7 @@ describe("agent-service", () => {
     it("uses default system prompt when not provided", () => {
       const agent = createAgent({
         name: "Default Prompt",
-        adapterName: "custom",
+        adapterName: "pi",
         modelId: "deepseek-chat"
       });
       expect(agent.systemPrompt).toBe(DEFAULT_CUSTOM_PROMPT);
@@ -69,39 +69,33 @@ describe("agent-service", () => {
       expect(() =>
         createAgent({
           name: "Bad Agent",
-          adapterName: "custom",
+          adapterName: "pi",
           modelId: ""
         })
-      ).toThrow("Custom agents must specify a model ID.");
+      ).toThrow("Pi Agents must specify a model ID.");
     });
 
-    it("creates a Claude Code agent with empty toolNames", () => {
-      const agent = createAgent({
+    it("rejects the retired Claude Code placeholder", () => {
+      expect(() => createAgent({
         name: "Claude Agent",
         adapterName: "claude-code",
         toolNames: ["fs_read"] // should be overridden
-      });
-
-      expect(agent.adapterName).toBe("claude-code");
-      expect(agent.toolNames).toEqual([]);
-      expect(agent.modelProvider).toBe("anthropic");
+      })).toThrow("Pi execution engine");
     });
 
-    it("creates a Codex agent with empty toolNames", () => {
-      const agent = createAgent({
+    it("rejects the retired Codex placeholder", () => {
+      expect(() => createAgent({
         name: "Codex Agent",
         adapterName: "codex",
         toolNames: ["write_artifact"]
-      });
-
-      expect(agent.toolNames).toEqual([]);
+      })).toThrow("Pi execution engine");
     });
   });
 
   describe("getAgentById / getAllAgents", () => {
     it("returns created agents", () => {
-      const a1 = createAgent({ name: "A1", adapterName: "custom", modelId: "gpt-4" });
-      createAgent({ name: "A2", adapterName: "custom", modelId: "gpt-4" });
+      const a1 = createAgent({ name: "A1", adapterName: "pi", modelId: "gpt-4" });
+      createAgent({ name: "A2", adapterName: "pi", modelId: "gpt-4" });
 
       const all = getAllAgents();
       // Built-in + 2 new
@@ -118,7 +112,7 @@ describe("agent-service", () => {
     it("updates name and tools", () => {
       const agent = createAgent({
         name: "Original",
-        adapterName: "custom",
+        adapterName: "pi",
         modelId: "gpt-4"
       });
 
@@ -153,7 +147,7 @@ describe("agent-service", () => {
 
   describe("deleteAgent", () => {
     it("deletes a non-builtin agent", () => {
-      const agent = createAgent({ name: "ToDelete", adapterName: "custom", modelId: "gpt-4" });
+      const agent = createAgent({ name: "ToDelete", adapterName: "pi", modelId: "gpt-4" });
       expect(getAgentById(agent.id)).not.toBeNull();
 
       const result = deleteAgent(agent.id);
@@ -194,7 +188,7 @@ describe("agent-service", () => {
     it("rejects unknown custom tool names", () => {
       expect(() => createAgent({
         name: "Invalid Tools",
-        adapterName: "custom",
+        adapterName: "pi",
         modelProvider: "deepseek",
         modelId: "deepseek-chat",
         toolNames: ["fs_read", "made_up_tool"]
@@ -204,7 +198,7 @@ describe("agent-service", () => {
     it("requires key and base URL for openai-compatible agents", () => {
       expect(() => createAgent({
         name: "Compatible",
-        adapterName: "custom",
+        adapterName: "pi",
         modelProvider: "openai-compatible",
         modelId: "custom-model"
       })).toThrow("API key");

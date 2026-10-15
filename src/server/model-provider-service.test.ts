@@ -48,7 +48,7 @@ describe("provider profiles", () => {
 
   it("retains a saved key on edits and keeps an agent reference attached", async () => {
     const profile = saveModelProviderProfile(input());
-    const agent = createAgent({ name: "Test Profile", adapterName: "custom", modelProvider: profileProviderId(profile.id), modelId: profile.defaultModel, toolNames: [] });
+    const agent = createAgent({ name: "Test Profile", adapterName: "pi", modelProvider: profileProviderId(profile.id), modelId: profile.defaultModel, toolNames: [] });
     const fields = { ...input(), apiKey: undefined };
     const response = await PATCH(request("PATCH", { ...fields, id: profile.id, name: "Edited", defaultModel: "glm-4.7" }));
     expect(response.status).toBe(200);
@@ -86,7 +86,7 @@ describe("provider profiles", () => {
 
   it("refuses deletion of an in-use profile, then permits deletion after reassignment", async () => {
     const profile = saveModelProviderProfile(input());
-    const agent = createAgent({ name: "Using Profile", adapterName: "custom", modelProvider: profileProviderId(profile.id), modelId: profile.defaultModel, toolNames: [] });
+    const agent = createAgent({ name: "Using Profile", adapterName: "pi", modelProvider: profileProviderId(profile.id), modelId: profile.defaultModel, toolNames: [] });
     expect((await DELETE(request("DELETE", { id: profile.id }))).status).toBe(409);
     expect(listModelProviderProfiles()).toHaveLength(1);
     deleteAgent(agent.id);
@@ -94,12 +94,12 @@ describe("provider profiles", () => {
     expect(listModelProviderProfiles()).toHaveLength(0);
     // Unknown references never fall back to the public OpenAI endpoint.
     expect(() => resolveProviderBaseUrl(profileProviderId(profile.id), "https://override.example/v1")).toThrow("不存在");
-    expect(() => createAgent({ name: "Stale", adapterName: "custom", modelProvider: profileProviderId(profile.id), modelId: "model" })).toThrow("不存在");
+    expect(() => createAgent({ name: "Stale", adapterName: "pi", modelProvider: profileProviderId(profile.id), modelId: "model" })).toThrow("不存在");
   });
 
   it("accepts valid references through the Agent API and rejects unknown or malformed references", async () => {
     const profile = saveModelProviderProfile(input());
-    const agentInput = { name: "Via API", adapterName: "custom", modelProvider: profileProviderId(profile.id), modelId: "glm-4.7", toolNames: [] };
+    const agentInput = { name: "Via API", adapterName: "pi", modelProvider: profileProviderId(profile.id), modelId: "glm-4.7", toolNames: [] };
     const success = await createAgentApi(request("POST", agentInput));
     expect(success.status).toBe(201);
     expect((await success.json()).agent.modelProvider).toBe(profileProviderId(profile.id));

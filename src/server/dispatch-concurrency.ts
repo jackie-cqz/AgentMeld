@@ -15,34 +15,40 @@ export async function acquireConcurrencySlot(signal: AbortSignal): Promise<() =>
 
   if (active < MAX_CONCURRENT_SUB_RUNS) {
     active++;
-    return () => releaseSlot();
+    return releaseOnce();
   }
 
   return new Promise<() => void>((resolve, reject) => {
     const onAbort = () => {
-      const idx = queue.findIndex((w) => w.resolve === resolve);
+      const idx = queue.indexOf(waiter);
       if (idx >= 0) queue.splice(idx, 1);
       reject(new Error("Aborted while waiting for concurrency slot."));
     };
 
     signal.addEventListener("abort", onAbort, { once: true });
 
-    queue.push({
+    const waiter: Waiter = {
       resolve: () => {
         signal.removeEventListener("abort", onAbort);
         active++;
-        resolve(() => releaseSlot());
+        resolve(releaseOnce());
       },
       abort: onAbort
-    });
+    };
+    queue.push(waiter);
 
     drainQueue();
   });
 }
 
-function releaseSlot(): void {
-  active--;
-  drainQueue();
+function releaseOnce(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    active--;
+    drainQueue();
+  };
 }
 
 function drainQueue(): void {

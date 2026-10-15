@@ -63,10 +63,10 @@ export function startConversationCompaction(
 
   const compactionAgent = conversation.agentIds
     .map((agentId) => getAgent(agentId))
-    .find((agent) => agent?.adapterName === "custom" && agent.modelProvider === "deepseek")
+    .find((agent) => agent?.adapterName === "pi" && agent.modelProvider === "deepseek")
     ?? conversation.agentIds
       .map((agentId) => getAgent(agentId))
-      .find((agent) => agent?.adapterName === "custom");
+      .find((agent) => agent?.adapterName === "pi");
 
   const provider = compactionAgent?.modelProvider ?? "deepseek";
   const model = compactionAgent?.modelId ?? "deepseek-chat";

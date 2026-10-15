@@ -21,7 +21,7 @@ afterEach(() => {
 describe("Agent avatar persistence", () => {
   it("round-trips every preset without a schema migration or model/tool changes", () => {
     for (const preset of AGENT_AVATAR_PRESETS) {
-      const agent = createAgent({ name: preset.label, avatar: preset.id, adapterName: "custom", modelProvider: "deepseek", modelId: "fixture-model", toolNames: ["fs_read"] });
+      const agent = createAgent({ name: preset.label, avatar: preset.id, adapterName: "pi", modelProvider: "deepseek", modelId: "fixture-model", toolNames: ["fs_read"] });
       expect(getAgentById(agent.id)?.avatar).toBe(preset.id);
       const updated = updateAgent(agent.id, { avatar: AGENT_AVATAR_AUTO });
       expect(updated?.avatar).toBe(AGENT_AVATAR_AUTO);
@@ -30,7 +30,7 @@ describe("Agent avatar persistence", () => {
     }
   });
   it("keeps legacy avatar values on unrelated updates", () => {
-    const agent = createAgent({ name: "Legacy", avatar: "AB", adapterName: "custom", modelId: "fixture-model" });
+    const agent = createAgent({ name: "Legacy", avatar: "AB", adapterName: "pi", modelId: "fixture-model" });
     expect(updateAgent(agent.id, { description: "New description" })?.avatar).toBe("AB");
   });
 });

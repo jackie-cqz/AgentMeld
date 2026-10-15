@@ -51,6 +51,23 @@ export const agents = sqliteTable("agents", {
   updatedAt: integer("updated_at").notNull()
 });
 
+export const agentExecutionBindings = sqliteTable("agent_execution_bindings", {
+  id: text("id").primaryKey(), agentId: text("agent_id").notNull(), harnessId: text("harness_id").notNull(),
+  version: text("version").notNull(), configurationJson: text("configuration_json").notNull(), createdAt: integer("created_at").notNull(),
+});
+
+export const harnessExecutions = sqliteTable("harness_executions", {
+  id: text("id").primaryKey(), runId: text("run_id").notNull(), bindingId: text("binding_id").notNull(), agentId: text("agent_id").notNull(),
+  taskIdentityJson: text("task_identity_json"), workspacePath: text("workspace_path").notNull(), sessionHome: text("session_home").notNull(),
+  nativeSessionId: text("native_session_id"), nativeSessionFile: text("native_session_file"), status: text("status").notNull(),
+  errorCategory: text("error_category"), usageJson: text("usage_json"), startedAt: integer("started_at").notNull(), finishedAt: integer("finished_at"),
+}, table => [index("idx_harness_executions_run").on(table.runId, table.startedAt)]);
+
+export const harnessWorkspaceLeases = sqliteTable("harness_workspace_leases", {
+  workspaceKey: text("workspace_key").primaryKey(), token: text("token").notNull(), ownerPid: integer("owner_pid").notNull(),
+  childPid: integer("child_pid"), status: text("status").notNull(), createdAt: integer("created_at").notNull(),
+});
+
 export const conversations = sqliteTable(
   "conversations",
   {

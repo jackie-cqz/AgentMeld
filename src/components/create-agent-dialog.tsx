@@ -17,6 +17,7 @@ import type { AdapterName, ModelProvider } from "@/shared/types";
 import { emptyAgentModel, type AgentModelValue } from "@/lib/agent-model-config";
 import { AgentModelConfig } from "@/components/agent-model-config";
 import { AgentAvatarPicker } from "@/components/agent-avatar-picker";
+import { PiRuntimeStatus } from "@/components/pi-runtime-status";
 import { AGENT_AVATAR_AUTO } from "@/shared/agent-avatar-presets";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
@@ -108,7 +109,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const formRef = useRef<HTMLDivElement>(null);
   const [description, setDescription] = useState(initial?.description ?? "");
   const [capabilitiesInput, setCapabilitiesInput] = useState((initial?.capabilities ?? []).join("，"));
-  const [adapterName] = useState<AdapterName>(initial?.adapterName ?? "custom");
+  const adapterName: AdapterName = "pi";
   const [modelConfig, setModelConfig] = useState<AgentModelValue>(() => ({
     provider: initial?.modelProvider ?? null, modelId: initial?.modelId ?? "",
     apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? ""
@@ -128,8 +129,6 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
   const isDetailed = isEdit || createStage === "detailed";
-  const isSdk = adapterName === "claude-code" || adapterName === "codex";
-  const isSdkDisabled = true;
 
   useEffect(() => {
     if (open) formRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
@@ -231,17 +230,17 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
       return;
     }
     // Config validation
-    if (!isSdk && !modelId?.trim()) {
+    if (!modelId?.trim()) {
       setError("请选择供应商和模型。");
       setEditTab("model");
       return;
     }
-    if (!isSdk && !modelProvider) {
+    if (!modelProvider) {
       setError("请选择模型供应商。");
       setEditTab("model");
       return;
     }
-    if (!isSdk && modelProvider === "openai-compatible") {
+    if (modelProvider === "openai-compatible") {
       if (!apiKey.trim()) {
         setError("OpenAI-Compatible 必须提供 API Key。");
         setEditTab("model");
@@ -261,12 +260,12 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         description: description.trim(),
         capabilities,
         adapterName,
-        modelProvider: isSdk ? undefined : modelProvider,
-        modelId: isSdk ? null : (modelId.trim() || null),
+        modelProvider,
+        modelId: modelId.trim() || null,
         apiKey: apiKey.trim() || null,
         apiBaseUrl: apiBaseUrl.trim() || null,
         systemPrompt: systemPrompt.trim() || undefined,
-        toolNames: isSdk ? [] : toolNames
+        toolNames
       });
       resetCreateForm();
       onClose();
@@ -374,7 +373,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
           <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
             <div className="flex items-center justify-between gap-3">
               <span>运行方式</span>
-              <span className="font-medium text-slate-800">{adapterName === "custom" ? "Custom Agent" : adapterName}</span>
+              <span className="font-medium text-slate-800">Pi</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span>当前模型</span>
@@ -389,11 +388,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
         {!isEdit ? (
           <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-            运行方式：Custom
+            执行引擎：Pi
           </div>
-        ) : isSdk && isSdkDisabled ? (
+        ) : initial?.adapterName !== "pi" ? (
           <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            这是历史 SDK Agent，保留原有运行配置。
+            原执行引擎已退役。确认模型和工具权限后保存，将迁移到 Pi；已有历史与身份不变。
           </div>
         ) : null}
 
@@ -406,15 +405,15 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {isDetailed ? (
-        <section role="tabpanel" aria-label="模型与适配器" className={editTab === "model" ? "" : "hidden"}>
-        <AgentModelConfig open={open} value={modelConfig} onChange={value => { setModelConfig(value); setError(null); }} sdk={isSdk} />
+        <section role="tabpanel" aria-label="模型与执行引擎" className={editTab === "model" ? "" : "hidden"}>
+        <PiRuntimeStatus open={open} />
+        <AgentModelConfig open={open} value={modelConfig} onChange={value => { setModelConfig(value); setError(null); }} />
         </section>
         ) : null}
 
         {isDetailed ? (
         <section role="tabpanel" aria-label="工具权限" className={editTab === "tools" ? "agent-tools-panel" : "hidden"}>
-        {/* Tools (Custom only) */}
-        {!isSdk ? (
+        {(
           <>
             <div>
               <div className="flex items-center justify-between gap-3">
@@ -455,7 +454,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                           onChange={() => toggleTool(tool)}
                         />
                         <span className="min-w-0">
-                          <span className="block font-medium">{TOOL_META[tool]?.label ?? tool}</span>
+                          <span className="block font-medium">{TOOL_META[tool]?.label ?? tool}<small className="ml-2 text-[var(--ui-muted)]">{["fs_list", "fs_glob", "fs_search", "fs_read", "fs_write", "fs_patch", "bash"].includes(tool) ? "Pi 原生" : "平台工具"}</small></span>
                           <span className="mt-0.5 block text-xs leading-5 text-[var(--ui-muted)]">{TOOL_META[tool]?.description}</span>
                         </span>
                       </label>
@@ -466,10 +465,6 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               {visibleGroups.length === 0 ? <p className="ui-muted py-6 text-center">没有匹配的工具</p> : null}
             </div>
           </>
-        ) : (
-          <p className="mt-4 text-xs text-stone-500">
-            SDK 适配器使用内置工具集，无需手动配置。
-          </p>
         )}
         </section>
         ) : null}
@@ -496,7 +491,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 function EditTabBar({ activeTab, onChange }: { activeTab: AgentEditTab; onChange: (tab: AgentEditTab) => void }) {
   const tabs = [
     { id: "basic" as const, label: "基本信息", icon: <User className="h-4 w-4" /> },
-    { id: "model" as const, label: "模型与适配器", icon: <Cpu className="h-4 w-4" /> },
+    { id: "model" as const, label: "模型与执行引擎", icon: <Cpu className="h-4 w-4" /> },
     { id: "tools" as const, label: "工具权限", icon: <Wrench className="h-4 w-4" /> },
     { id: "prompt" as const, label: "系统提示词", icon: <FileText className="h-4 w-4" /> }
   ];

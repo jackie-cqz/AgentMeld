@@ -6,6 +6,7 @@ import { gateRequest } from "@/server/api-gate";
 export const dynamic = "force-dynamic";
 
 const patchAgentSchema = z.object({
+  adapterName: z.literal("pi").optional(),
   name: z.string().trim().min(1).max(80).optional(),
   avatar: z.string().max(10).optional(),
   description: z.string().max(500).optional(),

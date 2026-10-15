@@ -1,8 +1,9 @@
-import type { AdapterName, Agent, Conversation, Message, Workspace, StreamEvent } from "@/shared/types";
+import type { Agent, Conversation, Message, StreamEvent, Workspace } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 
-export interface AdapterInput {
+/** One platform-owned invocation; Pi owns the internal messages and tool loop. */
+export interface PiInvocationInput {
   conversationId: string;
   runId: string;
   parentRunId?: string | null;
@@ -19,12 +20,11 @@ export interface AdapterInput {
   apiKey: string | null;
   apiBaseUrl?: string | null;
   history?: ChatMessage[];
-  /** P0: Pre-rendered dynamic context XML (task, envelope, failure) */
   contextXml?: string;
+  /** Public configuration revision only; never a credential value or hash. */
+  providerRevision?: string;
+  catalogProvider?: string;
 }
 
-export interface AgentPlatformAdapter {
-  readonly name: AdapterName;
-
-  run(input: AdapterInput, signal: AbortSignal): AsyncGenerator<StreamEvent>;
-}
+export type PiInvocationStream = AsyncGenerator<StreamEvent>;
+export type PiProviderSnapshot = Pick<PiInvocationInput, "apiKey" | "apiBaseUrl" | "providerRevision" | "catalogProvider">;
