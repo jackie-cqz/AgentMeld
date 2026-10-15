@@ -10,6 +10,7 @@ export interface ToolContext {
   taskExecution?: TaskExecutionIdentity | null;
   taskContract?: TaskExecutionContract | null;
   abortSignal: AbortSignal;
+  allowedToolNames?: readonly string[];
 }
 
 export type ToolFailureCategory =

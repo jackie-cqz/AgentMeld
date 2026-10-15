@@ -50,6 +50,10 @@ export class ToolRegistry {
     if (!tool) {
       return { ok: false, error: `Unknown tool: ${name}` };
     }
+    if (ctx.allowedToolNames && !ctx.allowedToolNames.includes(name)) {
+      return this.recordPreflightFailure(name, args, "Tool not authorized for this Agent run.", ctx,
+        meta ?? { callId: `denied_${ctx.runId}_${Date.now()}` }, { code: "TOOL_PERMISSION_DENIED", category: "security_policy" });
+    }
 
     const startedAt = Date.now();
     let result: ToolResult;
@@ -136,6 +140,11 @@ import { readAttachmentTool } from "@/server/tools/read-attachment";
 import { planTasksTool, reportTaskResultTool } from "@/server/tools/conductor-tools";
 import { readEvidenceTool } from "@/server/tools/read-evidence";
 import { updateContextFactsTool } from "@/server/tools/update-context-facts";
+import { fsGlobTool, fsSearchTool } from "@/server/tools/fs-search";
+import { jobStartTool, jobReadTool, jobWaitTool, jobCancelTool } from "@/server/tools/jobs";
+import { webFetchTool, webSearchTool } from "@/server/tools/web";
+import { gitInspectTool } from "@/server/tools/git-inspect";
+import { browserCheckTool } from "@/server/tools/browser-check";
 
 function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -155,6 +164,7 @@ function buildRegistry(): ToolRegistry {
   registry.register(reportTaskResultTool);
   registry.register(readEvidenceTool);
   registry.register(updateContextFactsTool);
+  for (const tool of [fsGlobTool, fsSearchTool, jobStartTool, jobReadTool, jobWaitTool, jobCancelTool, webFetchTool, webSearchTool, gitInspectTool, browserCheckTool]) registry.register(tool);
   return registry;
 }
 

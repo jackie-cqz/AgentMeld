@@ -649,7 +649,8 @@ function buildToolContext(input: AdapterInput, signal: AbortSignal): ToolContext
     parentRunId: input.parentRunId ?? null,
     taskExecution: input.taskExecution ?? null,
     taskContract: input.taskContract ?? null,
-    abortSignal: signal
+    abortSignal: signal,
+    allowedToolNames: input.toolNames
   };
 }
 

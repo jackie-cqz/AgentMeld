@@ -15,7 +15,7 @@ const patchAgentSchema = z.object({
   apiKey: z.string().max(200).nullable().optional(),
   apiBaseUrl: z.string().max(500).nullable().optional(),
   systemPrompt: z.string().max(4000).optional(),
-  toolNames: z.array(z.string()).max(20).optional()
+  toolNames: z.array(z.string()).max(64).optional()
 });
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {

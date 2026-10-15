@@ -7,9 +7,13 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  GitBranch,
+  Globe,
   HelpCircle,
   Loader2,
+  MonitorCheck,
   Rocket,
+  Search,
   Terminal,
   Wrench,
   XCircle
@@ -110,11 +114,13 @@ function ToolCallItem({
   grouped?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const isBash = toolUse.toolName === "bash";
+  const isBash = toolUse.toolName === "bash" || toolUse.toolName === "job_start";
+  const resultValue = toolResult ? unwrapToolResult(toolResult.result) : null;
+  const jobRunning = toolUse.toolName.startsWith("job_") && isRecord(resultValue) && resultValue.status === "running";
   const isFileWrite = toolUse.toolName === "fs_write" || toolUse.toolName === "fs_patch";
   const isArtifactWrite = toolUse.toolName === "write_artifact";
   const isComplete = !!toolResult || forceDone;
-  const isError = !forceDone && toolResult?.isError;
+  const isError = !forceDone && (toolResult?.isError || (isRecord(resultValue) && (resultValue.passed === false || (toolUse.toolName.startsWith("job_") && resultValue.status !== "running" && resultValue.exitCode !== undefined && resultValue.exitCode !== 0))));
   const isPending = !isComplete;
   const args = toolUse.args as Record<string, unknown> | undefined;
 
@@ -142,7 +148,7 @@ function ToolCallItem({
         ) : isError ? (
           <span className="text-xs text-red-500">失败</span>
         ) : (
-          <span className="text-xs text-emerald-700 dark:text-emerald-400">已完成</span>
+          <span className={`text-xs ${jobRunning ? "text-amber-600" : "text-emerald-700 dark:text-emerald-400"}`}>{jobRunning ? "命令运行中" : "已完成"}</span>
         )}
         {expanded
           ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-stone-400" />
@@ -253,7 +259,11 @@ function formatArtifactArgs(args: Record<string, unknown>): string {
 }
 
 function ToolIcon({ toolName }: { toolName: string }) {
-  if (toolName === "bash") return <Terminal className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
+  if (toolName === "bash" || toolName.startsWith("job_")) return <Terminal className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
+  if (toolName === "fs_glob" || toolName === "fs_search") return <Search className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
+  if (toolName.startsWith("web_")) return <Globe className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
+  if (toolName === "git_inspect") return <GitBranch className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
+  if (toolName === "browser_check") return <MonitorCheck className="h-3.5 w-3.5 shrink-0 text-stone-500" />;
   if (toolName === "fs_write" || toolName === "fs_patch" || toolName === "write_artifact") return <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />;
   if (toolName === "ask_user") return <HelpCircle className="h-3.5 w-3.5 shrink-0 text-violet-500" />;
   if (toolName.startsWith("deploy_")) return <Rocket className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
@@ -270,6 +280,39 @@ function StructuredToolResult({
   isError?: boolean;
 }) {
   const value = unwrapToolResult(result);
+
+  if (toolName.startsWith("job_") && isRecord(value) && typeof value.jobId === "string") {
+    const labels: Record<string, string> = { running: "运行中", completed: "已完成", failed: "执行失败", cancelled: "已取消", timed_out: "已超时" };
+    return <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5"><MetaBadge label={labels[String(value.status)] ?? String(value.status)} tone={value.status === "running" ? "warning" : value.exitCode === 0 ? "success" : "danger"} /><MetaBadge label={`exit ${value.exitCode ?? "待定"}`} tone="neutral" /><MetaBadge label={String(value.jobId)} tone="neutral" /></div>
+      <BashOutput output={String(value.output ?? "")} isError={value.status !== "running" && value.exitCode !== 0} />
+      {value.logTruncated ? <p className="text-xs text-amber-700">日志达到保留上限</p> : null}
+    </div>;
+  }
+
+  if (toolName === "browser_check" && isRecord(value) && typeof value.passed === "boolean") {
+    const screenshot = typeof value.screenshotUrl === "string" && /^\/api\/browser-checks\/[a-f0-9-]{36}$/.test(value.screenshotUrl) ? value.screenshotUrl : null;
+    return <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap gap-1.5"><MetaBadge label={value.passed ? "验收通过" : "验收未通过"} tone={value.passed ? "success" : "danger"} /><MetaBadge label={String(value.viewport)} tone="neutral" /><MetaBadge label={String(value.sourcePath)} tone="neutral" /></div>
+      {screenshot ? <a href={screenshot} target="_blank" rel="noopener noreferrer" title="打开验收截图">
+        {/* Browser-generated local PNG, never an arbitrary model-provided image URL. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={screenshot} alt="网页验收截图" className="max-h-64 w-auto max-w-full rounded border border-stone-200 object-contain dark:border-slate-700" />
+      </a> : null}
+      <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-stone-100 p-2 text-stone-700 dark:bg-slate-900 dark:text-slate-200">{formatResult({ steps: value.results, errors: value.errors, failedRequests: value.failedRequests, blockedRequests: value.blockedRequests }).slice(0, 12000)}</pre>
+    </div>;
+  }
+
+  if ((toolName === "web_search" || toolName === "web_fetch") && isRecord(value)) {
+    const sources = Array.isArray(value.results) ? value.results : [value];
+    return <div className="space-y-2 text-xs">
+      <MetaBadge label="外部资料 · 未验证" tone="warning" />
+      {sources.filter(isRecord).slice(0, 10).map((source, index) => <div key={index} className="space-y-1 break-words">
+        {typeof source.url === "string" && /^https?:\/\//i.test(source.url) ? <a className="text-blue-600 underline dark:text-blue-400" href={source.url} target="_blank" rel="noopener noreferrer">{String(source.title || source.url)}</a> : null}
+        <p className="whitespace-pre-wrap text-stone-600 dark:text-slate-300">{String(source.snippet ?? source.content ?? "").slice(0, 3000)}</p>
+      </div>)}
+    </div>;
+  }
 
   if (toolName === "bash" && isRecord(value)) {
     return (
@@ -344,7 +387,7 @@ function StructuredToolResult({
 
   return (
     <pre className="max-h-40 overflow-x-auto whitespace-pre-wrap rounded bg-stone-100 p-2 font-mono text-xs text-stone-700">
-      {formatResult(result).slice(0, 1000)}
+      {formatResult(result).slice(0, 12000)}
     </pre>
   );
 }

@@ -6,7 +6,10 @@ const nextConfig: NextConfig = {
     "@anthropic-ai/claude-agent-sdk",
     "@openai/codex-sdk",
     "@openai/codex",
-    "better-sqlite3"
+    "better-sqlite3",
+    "playwright",
+    "globby",
+    "cheerio"
   ],
   // Next 16 treats any origin other than `localhost` as cross-origin and blocks
   // dev resources (HMR) from it, so opening http://127.0.0.1:3000 leaves the app

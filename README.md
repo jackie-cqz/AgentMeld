@@ -130,7 +130,7 @@ Next.js UI
 
 ## Requirements
 
-- Node.js 20.9.0 or newer
+- Node.js 20.19.0 or newer
 - pnpm 10 or newer
 - A model provider API key, such as DeepSeek
 
@@ -168,6 +168,8 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 Agent-level settings can override the default provider, model, base URL, and API key.
 
 ## Common Commands
+
+See [Workspace Toolkit](docs/workspace-toolkit.md) for file search, paged reads, background verification, public web research, read-only Git inspection, and isolated browser acceptance checks. New permissions must be enabled for existing Agents; web search and browser checks have optional server setup requirements.
 
 ```bash
 pnpm dev        # Start the development server

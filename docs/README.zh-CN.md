@@ -130,7 +130,7 @@ Next.js UI
 
 ## 环境要求
 
-- Node.js 20.9.0 或更高版本
+- Node.js 20.19.0 或更高版本
 - pnpm 10 或更高版本
 - 至少一个模型服务 API Key，例如 DeepSeek
 

@@ -69,6 +69,20 @@ describe("capability declarations", () => {
 });
 
 describe("the workspace claim follows the tools", () => {
+  it("describes background execution even without the bash tool", () => {
+    expect(workspaceModeLabel(["job_start", "job_wait", "job_cancel"])).toBe("host-access");
+    const note = workspaceNoteFor(["job_start", "job_wait", "job_cancel"]).join("\n");
+    expect(note).toContain("job_start is NOT sandboxed");
+    expect(note).toContain("owned by this exact Agent run");
+  });
+
+  it("describes public network disclosure and browser isolation limits", () => {
+    expect(workspaceNoteFor(["web_search", "web_fetch"]).join("\n")).toContain("untrusted data");
+    expect(workspaceNoteFor(["web_search"]).join("\n")).toContain("queries leave this machine");
+    expect(workspaceModeLabel(["browser_check"])).toBe("host-access");
+    expect(workspaceNoteFor(["browser_check"]).join("\n")).toContain("not an OS sandbox");
+  });
+
   it("marks a bash-holding agent as host access, and says it is not a sandbox", () => {
     expect(workspaceModeLabel(["bash", "fs_write"])).toBe("host-access");
     const note = workspaceNoteFor(["bash", "fs_write"]).join("\n");

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Cpu,
+  FileText,
   SlidersHorizontal,
   Sparkles,
   User,
@@ -24,16 +25,29 @@ import {
 } from "@/shared/agent-constants";
 
 const TOOL_GROUPS = [
-  { label: "只读", tone: "safe", tools: ["fs_list", "fs_read", "read_artifact", "read_attachment"] as const },
+  { label: "读取与定位", tone: "safe", tools: ["fs_list", "fs_glob", "fs_search", "fs_read", "git_inspect", "read_artifact", "read_attachment", "read_evidence"] as const },
   { label: "文件写入", tone: "danger", tools: ["fs_mkdir", "fs_write", "fs_patch"] as const },
-  { label: "命令执行", tone: "danger", tools: ["bash"] as const },
+  { label: "命令执行", tone: "danger", tools: ["bash", "job_start", "job_read", "job_wait", "job_cancel"] as const },
+  { label: "联网与验收", tone: "danger", tools: ["web_search", "web_fetch", "browser_check"] as const },
   { label: "Artifact", tone: "safe", tools: ["write_artifact"] as const },
   { label: "部署", tone: "danger", tools: ["deploy_artifact", "deploy_workspace"] as const },
-  { label: "用户交互", tone: "safe", tools: ["ask_user"] as const },
+  { label: "用户交互与上下文", tone: "safe", tools: ["ask_user", "update_context_facts"] as const },
 ];
 
 const TOOL_META: Record<string, { label: string; description: string }> = {
   fs_list: { label: "列出文件", description: "查看工作区目录结构" },
+  fs_glob: { label: "查找文件", description: "按文件名模式定位，排除依赖和敏感文件" },
+  fs_search: { label: "搜索内容", description: "按文本搜索代码，返回文件与行号" },
+  git_inspect: { label: "检查代码变更", description: "只读查看工作区仓库的状态、差异和日志" },
+  job_start: { label: "启动后台命令", description: "长时间构建与测试，沿用命令策略和审批" },
+  job_read: { label: "查看命令输出", description: "分段读取当前运行的后台命令日志" },
+  job_wait: { label: "等待命令完成", description: "获取后台命令终态和退出码" },
+  job_cancel: { label: "取消后台命令", description: "终止当前运行创建的后台进程树" },
+  web_search: { label: "联网搜索", description: "搜索公开资料，需要服务器配置搜索密钥" },
+  web_fetch: { label: "读取网页", description: "读取公开网页文本，禁止访问内网" },
+  browser_check: { label: "网页验收", description: "隔离浏览器检查静态应用、交互、错误与截图" },
+  read_evidence: { label: "读取执行证据", description: "查看当前任务的工具执行证据" },
+  update_context_facts: { label: "更新上下文事实", description: "提交会话关键信息候选，供系统裁定" },
   fs_read: { label: "读取文件", description: "读取工作区文本内容" },
   fs_mkdir: { label: "创建目录", description: "在当前工作区创建目录" },
   fs_write: { label: "写入文件", description: "创建或完整覆盖工作区文件，需要谨慎授权" },
@@ -47,7 +61,7 @@ const TOOL_META: Record<string, { label: string; description: string }> = {
   ask_user: { label: "询问用户", description: "需求不明确时发起结构化提问" }
 };
 
-type AgentEditTab = "basic" | "model" | "tools";
+type AgentEditTab = "basic" | "model" | "tools" | "prompt";
 type CreateStage = "choice" | "quick" | "detailed";
 
 interface CreateAgentDialogProps {
@@ -115,6 +129,13 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     if (open) formRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
   }, [open, createStage]);
 
+  useEffect(() => {
+    if (open) {
+      const scroller = formRef.current?.closest<HTMLElement>("[data-ui-scroll]");
+      if (scroller) scroller.scrollTop = 0;
+    }
+  }, [open, editTab, createStage]);
+
   const resetCreateForm = () => {
     if (isEdit) return;
     setCreateStage("choice");
@@ -148,15 +169,15 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
     if (desc.includes("前端") || desc.includes("代码") || desc.includes("react") || desc.includes("vue")) {
       draft.name = draft.name || "前端开发";
-      draft.tools = ["fs_read", "fs_write", "fs_patch", "bash", "write_artifact", "read_artifact"];
+      draft.tools = [...TOOL_PRESETS["local-code"].tools, "write_artifact"];
       draft.prompt = `You are a frontend developer. Write clean, working code. Use fs_patch for focused source edits, fs_write for new or complete files, bash for build/test or dependency installation that requires user approval, and write_artifact for deliverable demos. ${quickDesc}`;
     } else if (desc.includes("审查") || desc.includes("review") || desc.includes("代码审查")) {
       draft.name = draft.name || "代码审查";
-      draft.tools = ["fs_list", "fs_read", "read_artifact"];
+      draft.tools = [...TOOL_PRESETS.review.tools];
       draft.prompt = `You are a code reviewer. Read code, check for issues, and provide clear feedback. Use fs_read and read_artifact to access files. ${quickDesc}`;
     } else if (desc.includes("部署") || desc.includes("deploy") || desc.includes("发布")) {
       draft.name = draft.name || "部署助手";
-      draft.tools = ["bash", "fs_read", "fs_write", "fs_patch", "write_artifact", "deploy_artifact", "deploy_workspace"];
+      draft.tools = [...TOOL_PRESETS.deployment.tools, "write_artifact"];
       draft.prompt = `You are a deployment assistant. Build, test, and deploy projects. ${quickDesc}`;
     } else if (desc.includes("文档") || desc.includes("写作") || desc.includes("doc")) {
       draft.name = draft.name || "文档写作";
@@ -185,7 +206,9 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
   const toggleTool = (tool: string) => {
     setToolNames((prev) =>
-      prev.includes(tool) ? prev.filter((t) => t !== tool) : [...prev, tool]
+      prev.includes(tool)
+        ? prev.filter((t) => t !== tool && !(["job_wait", "job_cancel"].includes(tool) && t === "job_start"))
+        : tool === "job_start" ? [...new Set([...prev, "job_start", "job_read", "job_wait", "job_cancel"])] : [...prev, tool]
     );
   };
 
@@ -287,7 +310,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {isDetailed ? (
-        <section className={editTab === "basic" ? "" : "hidden"}>
+        <section role="tabpanel" aria-label="基本信息" className={editTab === "basic" ? "" : "hidden"}>
         <AgentAvatarPicker agent={{ id: "draft", name, capabilities, isConductor: initial?.isConductor ?? false, avatar }} value={avatar} onChange={setAvatar} />
         {/* Name */}
         <label className="mt-4 block text-sm font-medium text-stone-700">
@@ -374,25 +397,13 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {isDetailed ? (
-        <section className={editTab === "model" ? "" : "hidden"}>
+        <section role="tabpanel" aria-label="模型与适配器" className={editTab === "model" ? "" : "hidden"}>
         <AgentModelConfig open={open} value={modelConfig} onChange={value => { setModelConfig(value); setError(null); }} sdk={isSdk} />
         </section>
         ) : null}
 
         {isDetailed ? (
-        <section className={editTab === "tools" ? "agent-tools-layout" : "hidden"}>
-        <div className="ui-prompt-panel">
-          <SectionHeading title="系统提示词" detail="角色、边界与协作规则" />
-          <textarea
-            className="min-h-40 w-full resize-y rounded-b-lg border-0 px-3 py-3 font-mono text-xs leading-6 outline-none"
-            placeholder="留空使用默认提示词..."
-            aria-label="系统提示词"
-            value={systemPrompt}
-            onChange={(e) => setSystemPrompt(e.target.value)}
-          />
-        </div>
-
-        <div className="ui-tool-permissions">
+        <section role="tabpanel" aria-label="工具权限" className={editTab === "tools" ? "agent-tools-panel" : "hidden"}>
         {/* Tools (Custom only) */}
         {!isSdk ? (
           <>
@@ -424,7 +435,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">低风险</span>
                     )}
                   </div>
-                  <div className="grid gap-2">
+                  <div className="ui-tool-options">
                     {group.tools.map((tool) => (
                       <label
                         key={tool}
@@ -452,7 +463,19 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             SDK 适配器使用内置工具集，无需手动配置。
           </p>
         )}
-        </div>
+        </section>
+        ) : null}
+
+        {isDetailed ? (
+        <section role="tabpanel" aria-label="系统提示词" className={editTab === "prompt" ? "ui-prompt-panel" : "hidden"}>
+          <SectionHeading title="系统提示词" detail="角色、边界与协作规则" />
+          <textarea
+            placeholder="留空使用默认提示词..."
+            aria-label="系统提示词"
+            spellCheck={false}
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+          />
         </section>
         ) : null}
 
@@ -466,7 +489,8 @@ function EditTabBar({ activeTab, onChange }: { activeTab: AgentEditTab; onChange
   const tabs = [
     { id: "basic" as const, label: "基本信息", icon: <User className="h-4 w-4" /> },
     { id: "model" as const, label: "模型与适配器", icon: <Cpu className="h-4 w-4" /> },
-    { id: "tools" as const, label: "工具与提示词", icon: <Wrench className="h-4 w-4" /> }
+    { id: "tools" as const, label: "工具权限", icon: <Wrench className="h-4 w-4" /> },
+    { id: "prompt" as const, label: "系统提示词", icon: <FileText className="h-4 w-4" /> }
   ];
 
   return <Tabs value={activeTab} onChange={onChange} label="Agent 配置" items={tabs.map(tab => ({ value: tab.id, label: tab.label, icon: tab.icon }))} />;
