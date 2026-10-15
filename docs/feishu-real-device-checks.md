@@ -18,7 +18,10 @@
 2. **`bound_by_open_id` 必须非 null**（A 与 C 都依赖）：查 `channel_bindings.bound_by_open_id`。为 null 时 `isAuthorisedOperator` **拒绝所有人**（fail-closed，见 `feishu-operations.md` §6.3）——那时本人也点不动，任何「被拒」的观测都**不能**用来推断命名空间。
 3. **一个不是绑定者的账号**也在群里（A 与 C 的反向验证需要它；绑定者自己点击看不出可见性差异）。
 4. **单问题卡片**（检查 A）：`ask_user` 允许 1–5 个问题，而**部分作答只更新卡片、不返回 toast**（只有全部答完才有「已回答。」）。用 2 问卡片点第一下会看不到任何 toast，从而得出与事实相反的结论。
-5. **每张卡、每个账号只能点一次有效**：SDK 在回调到达我们之前就丢弃**完全相同的重复点击**（同消息 + 同操作者 + 同 value，TTL 12 小时且跨重启）。想再点一次必须**换一张新卡**——否则「什么都没有」与「toast 不可见」无法区分。
+5. **观测点击时一定要用「还没人答过」的新卡**，两个原因：
+   - 平台会丢弃**完全相同的重复点击**（同消息 + 同操作者 + 同 value，TTL 12 小时且跨重启），所以重试必须换卡；
+   - **更硬的原因**：问题一旦被作答，卡片会被重绘成 inert 并且**把每个按钮的 `value` 整个删掉**——再点**根本不会产生回调**。它与「toast 不可见」完全无法区分。
+   已决定的审批卡更彻底：直接换成一段文本、连按钮都没有。
 
 控制台输出有用，但注意：**入站消息、连接成功、卡片动作都没有成功日志**（各检查里写了该查什么）。
 
@@ -30,12 +33,12 @@
 
 **步骤**
 
-1. 在群里 @ 一个 Bot，让它问**一个问题**（单选即可），卡片出现。
+1. 在测试群（`oc_1ac9122165a8dbc27ab38cf3c572f11b`）里 @ 一个 Bot（例如 `cli_aa45114061789c1b` / Conductor），让它问**一个问题**（单选即可），卡片出现。
 2. **绑定者**点其中一个选项，观察**点击者自己**的屏幕：是否出现 toast？卡片是否就地变成「已选择：…」？
 3. 立刻问群里那个**非绑定账号**（或用第二台设备以另一账号登录）：
    - 他**看得到 toast** 吗？
    - 他屏幕上的**卡片内容变了吗**（是否也显示「已选择：…」/「已由 … 回答」）？
-4. 让非绑定账号**拿一张新卡**点一次（见前置 5），看他看到什么。
+4. 让非绑定账号**拿一张还没人答过的新卡**点一次（见前置 5），并且**同时让绑定者/第三个人盯自己的屏幕**——只有一个人看自己的屏幕，区分不了「仅点击者可见」与「全群可见」。
 
 **看什么 / 记录**
 
@@ -63,23 +66,36 @@
 
 **步骤**
 
-1. 正常启动实例 A（`pnpm dev`），确认它已连接。
-2. **拷贝**数据目录（让 B 也有同一份绑定）：`cp -R .agentmeld-data /tmp/agentmeld-b`。
-3. 用**另一个端口**和**另一份数据目录**启动实例 B（`start` 需先 `pnpm build`；用 `dev` 也可）：
+1. **先构建**（必须在启动 A 之前：`next.config.ts` 没有 `distDir`，dev 与 build/start 共用 `.next`，A 的 dev server 正在跑时执行 `pnpm build` 会重写它，把 A 弄坏）：`pnpm build`。
+   若不想在同一目录跑两个进程，**更稳的做法是另开一个 worktree/checkout** 跑 B（`.next` 与工作目录都独立）。
+2. 启动实例 A（`pnpm dev`），确认**它**已连接：
+   `curl -s localhost:3000/api/channels/feishu/connections`（应显示该 `appId` 为 connected）。
+3. **停 A → 拷贝 → 再起 A**（活库是 WAL，**直接 `cp -R` 不是原子快照**，可能拷到撕裂状态，B 会读不到绑定）：
+   `rm -rf /tmp/agentmeld-b && mkdir -p /tmp/agentmeld-b`
+   `sqlite3 .agentmeld-data/agentmeld.db ".backup /tmp/agentmeld-b/agentmeld.db"`（或停 A 后 `cp -R`，再起 A）
+4. 用**另一个端口**和**另一份数据目录**启动实例 B：
    `AGENTMELD_DATA_DIR=/tmp/agentmeld-b PORT=3100 pnpm start`
-4. 在群里连续发 **10 条**内容带序号的 @ 消息（`#1`…`#10`），每条间隔 2 秒。
-5. 分别数两个库里的行数：
-   `sqlite3 .agentmeld-data/agentmeld.db "select count(*) from channel_inbound_messages"`
-   （B 换成 `/tmp/agentmeld-b` 的路径）
-6. 关掉 B，再发 5 条，确认 A 全收到。
+5. **确认 B 自己也连上了**（这一步不能省，否则 B=0 无法归因）：
+   `curl -s localhost:3100/api/channels/feishu/connections` 应显示同一 `appId` 为 connected；
+   `sqlite3 /tmp/agentmeld-b/agentmeld.db "select count(*) from channel_bindings"` 应为 **1**。
+6. **记下发消息前的时间戳**（毫秒）：`date +%s%3N`（下面按时间窗统计，不能用 `count(*)`——两个库是同一份历史的拷贝，长期测试群里历史行会把数字撑大）。
+7. 在群里连续发 **10 条**内容带序号的 @ 消息（`#1`…`#10`），每条间隔 2 秒。
+8. 分别按时间窗统计（`<ts>` 用第 6 步的时间戳；B 换自己的路径）：
+   `sqlite3 .agentmeld-data/agentmeld.db "
+      select count(*) from channel_inbound_messages where created_at >= <ts>;
+      select external_message_id from channel_inbound_messages where created_at >= <ts> order by external_message_id;"`
+   （没有 `sqlite3` CLI 时，用 node 的 `node:sqlite` / `better-sqlite3` 跑同样的 SQL——仓库自身走的就是它们。）
+9. 关掉 B，再发 5 条，确认 A 全收到。
 
 **看什么 / 记录**
 
 | 观测点 | 结果 |
 |---|---|
-| 两个实例是否**共用同一个 SQLite**？（本流程：**否**） | |
-| A 库里这 10 条消息的行数 | |
-| B 库里这 10 条消息的行数 | |
+| B 自己的状态接口是否显示同一 appId 为 connected | |
+| B 库里 `channel_bindings` 的行数（应为 1） | |
+| 发消息前的时间戳 `<ts>` | |
+| A 库里 `created_at >= <ts>` 的行数（应为 10） | |
+| B 库里 `created_at >= <ts>` 的行数 | |
 | A 与 B 的 `external_message_id` 集合是否互补（无交集） | |
 | 关掉 B 后 A 是否 5/5 | |
 
@@ -87,7 +103,7 @@
 
 - **两边各 5 条、集合互补**：平台**按连接瓜分**，§3 的隐患**成立**。那么「一个 appId 只允许一条连接」必须成为硬约束——同进程已有 `__agentMeldFeishuStarting` 去重，但**跨进程**（两个 `pnpm dev`）无法互相阻止，需要在启动时加基于 appId 的**文件锁/单实例守卫**，另开 PR。
 - **两边各 10 条**：平台**广播**给所有连接。隐患不成立，但同一条消息会被两个进程各处理一次；**共用同一个库**时会被 `(channel, external_message_id)` 唯一键去重（先到者 claim，后到者静默丢弃），此时库里只有 10 行，**无法**区分「瓜分」与「广播」——这就是本流程必须拷一份库的原因。**各用各的库时，重复回答是预期结果，不是 bug**。
-- **只有 A 有、B 为 0**：平台**固定选一条**；B 是死连接，`disconnectFeishuApp` + 重连前关闭已覆盖主要场景，记录即可。
+- **只有 A 有、B 为 0**：**先确认 B 真的连上了**（B 的状态接口显示 connected、B 库里 `channel_bindings` = 1）。B 没连上时这个 0 毫无信息量——空数据目录、端口没起来、坏快照都会造成它。两者都确认之后，才能读成「平台固定选一条；B 是死连接」（`disconnectFeishuApp` + 重连前关闭已覆盖主要场景，记录即可）。
 - 注意：实验期间两个实例都会**真的处理消息、起 run、消耗 token**；也可能有消息丢失（`feishu-operations.md` §5 把「第二个进程在跑同一应用」列为「消息只到了一半」的首要嫌疑）。
 
 ---
@@ -96,15 +112,16 @@
 
 **为什么必须真机**：授权条件是 `binding.boundByOpenId === 回调的 operator.openId` **且** `binding.appId === 发起回调的那个应用`。openId **按应用维度**取值，同一个人的 openId 在每个应用下都不同；绑定值来自注册返回值，回调值来自点击事件。
 
-**观测面**：卡片动作**不打 operator 日志**，但身份**会被持久化**：审批类动作写进 `pending_approvals.resolved_by`，格式 `feishu:<appId>:<openId>`，显示名在 `resolved_by_label`。
+**观测面**：卡片动作**不打 operator 日志**，但身份**会被持久化**：审批类动作写进 `pending_approvals.resolved_by`，格式 `feishu:<appId>:<openId>`。
+**注意**：房间里的点击**不会**写 `resolved_by_label`（只有网页那几条路由会写），所以名字只出现在卡片上，别去那一列找。
 
 **步骤**
 
 1. 查 `channel_bindings` 的 `bound_by_open_id` 与 `bot_open_id`（`bot_open_id` 也可用 `GET /api/channels/feishu/connections` 的 `botOpenId`；**连接成功不打日志**）。**确认 `bound_by_open_id` 非 null**（前置 2）。
-2. 用**绑定时用的账号**发起一次需要审批的动作（让 Bot 请求一次 bash/写入审批最方便），点「同意」。
+2. 用**绑定时用的账号**触发一次会写 `resolved_by` 的动作：让 Bot 问一个问题（`ask_user` 的作答也会写）**或**让它请求一次 bash/写入审批，然后作答/同意。问题比审批更容易稳定触发。
 3. 查 `pending_approvals.resolved_by`，去掉 `feishu:<appId>:` 前缀，与第 1 步的 `bound_by_open_id` 比对**是否完全相等**。
 4. 对**另一个应用**重复第 1 步，确认同一个人的两个 `bound_by_open_id` **不同且都非 null**（两个都为 null 时平凡成立、无信息）。
-5. 反向验证：用一个**没绑定过**的账号、拿一张**新卡**点一次，确认被拒。
+5. 反向验证：用一个**没绑定过**的账号、拿一张**还没被作答的新卡**点一次，确认被拒（已作答的卡按钮是死的，不会有回调）。
 
 **看什么 / 记录**
 
