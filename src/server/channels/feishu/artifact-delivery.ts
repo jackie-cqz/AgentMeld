@@ -11,6 +11,13 @@ import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/works
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
 import { deliverSend } from "@/server/channels/feishu/delivery";
+import {
+  MAX_WEB_APP_BYTES,
+  inlineWebApp,
+  inlineWebAppName,
+  zipWebApp,
+  zipWebAppName
+} from "@/server/channels/feishu/web-app";
 
 /**
  * Deliver an artifact into the room as a file.
@@ -24,10 +31,12 @@ import { deliverSend } from "@/server/channels/feishu/delivery";
  * present it was not). A file needs no URL, so the contradiction simply does
  * not apply to this route.
  *
- * Types that are a set of files (a web app) or a structure (a deck, a diff) are
- * NOT delivered here — sending one file out of a set would be worse than
- * sending nothing. They keep the reference the message projection writes, and
- * the reason is stated rather than left to look like an oversight.
+ * A web app is a set of files, so it is not sent as one arbitrary file out of
+ * the set: it is folded into a single self-contained page when that is
+ * faithful, and zipped when it is not (see web-app.ts). Structures that are not
+ * files at all — a deck's slides, a diff's hunks — keep the reference the
+ * message projection writes, and the reason is stated rather than left to look
+ * like an oversight.
  */
 
 export interface ArtifactFile {
@@ -99,9 +108,55 @@ export function artifactFileFor(
   }
 
   if (content.type === "web_app") {
-    return {
-      reason: "a web app is meant to be opened in a browser, and a .html attachment is not that"
-    };
+    // Malformed content must come back as a reason: this function's contract is
+    // "bytes or why", and a thrown TypeError here is swallowed by the
+    // subscriber's catch, so the not-delivering log line never appears.
+    const files = content.files;
+    if (!files || typeof files !== "object") {
+      return { reason: "the web app has no file map" };
+    }
+    const fileNames = Object.keys(files);
+    if (fileNames.length === 0) {
+      return { reason: "the web app has no files" };
+    }
+
+    // A cheap pre-check before any building: the precise ceiling is on the
+    // DELIVERED bytes below, but there is no reason to assemble a 40 MB input
+    // (folding and zipping both build the whole thing in memory) only to
+    // reject it afterwards.
+    const sourceBytes = fileNames.reduce(
+      (sum, name) => sum + Buffer.byteLength(typeof files[name] === "string" ? files[name] : "", "utf-8"),
+      0
+    );
+    if (sourceBytes > MAX_WEB_APP_BYTES) {
+      return { reason: `the web app is ${sourceBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+
+    // A single-page app with text assets becomes ONE self-contained HTML file,
+    // which is what "meant to be opened in a browser" actually needs. Anything
+    // else is delivered as a zip so the set stays whole (see web-app.ts).
+    const inlined = inlineWebApp(files, content.entry);
+    if (inlined.ok) {
+      const bytes = Buffer.from(inlined.html, "utf-8");
+      // The ceiling applies to what is DELIVERED, not to the source bytes: a
+      // zip adds per-entry overhead and could otherwise exceed it.
+      if (bytes.length > MAX_WEB_APP_BYTES) {
+        return { reason: `the folded page is ${bytes.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+      }
+      return { name: inlineWebAppName(artifact.title), content: bytes };
+    }
+
+    try {
+      const zipped = zipWebApp(files);
+      if (zipped.length > MAX_WEB_APP_BYTES) {
+        return { reason: `the packaged web app is ${zipped.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+      }
+      return { name: zipWebAppName(artifact.title), content: zipped };
+    } catch (error) {
+      return {
+        reason: error instanceof Error ? error.message : "the web app could not be packaged"
+      };
+    }
   }
 
   return { reason: `a ${content.type} artifact is not a single file` };
