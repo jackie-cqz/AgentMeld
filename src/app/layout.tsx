@@ -6,6 +6,7 @@ import "./channel-settings.css";
 import "./agent-model-config.css";
 import "./agent-avatar.css";
 import "./agent-editor.css";
+import { ClientErrorReporter } from "@/components/client-error-reporter";
 
 export const metadata: Metadata = {
   title: "AgentMeld",
@@ -19,7 +20,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <ClientErrorReporter />
+        {children}
+      </body>
     </html>
   );
 }
