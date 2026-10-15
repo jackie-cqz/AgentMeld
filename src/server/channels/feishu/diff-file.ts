@@ -53,8 +53,23 @@ function impliedCounts(lines: string[]): { oldLines: number; newLines: number } 
  * A newline inside a "line" was the dangerous one: `"+x\n--- a/victim.txt\n…"`
  * rendered a second file header, and `git apply` then wrote to `victim.txt` —
  * the content comes from a model or a `POST /api/artifacts` body, so this is
- * untrusted input reaching a patch format. Every newline is folded to a space,
- * and a line that would start a hunk or a file header is demoted to context.
+ * untrusted input reaching a patch format.
+ *
+ * Two rules, in this order:
+ *
+ * 1. A trailing line terminator is stripped and any interior one is folded to a
+ *    space, so one element can never become two lines.
+ * 2. A line that carries no marker and looks like structure gets a leading
+ *    space. A line that DOES carry a marker is content and is never rewritten:
+ *    `-` followed by `-- old comment` is `--- old comment`, a deletion of a
+ *    SQL/Lua comment, and demoting it to context would silently change what the
+ *    change says.
+ *
+ * What makes this safe is not the second rule but the counts: they are derived
+ * from the lines that are actually emitted, so a reader finishes the hunk at its
+ * last line and never looks for a file header inside one. That is why a
+ * header-looking BODY line may be left at column 0 — verified against git apply
+ * and GNU patch with a matrix of forging attempts.
  */
 function normalizeLine(line: string): string {
   // A trailing CR is a line TERMINATOR the producer split off, not content:
