@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $source = @'
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -82,7 +83,7 @@ public static class AgentMeldPiJob {
     }
     throw new Exception("Native job exit could not be confirmed.");
   }
-  public static void Run(string node, string[] args, string cwd) {
+  public static void Run(string node, string[] args, string cwd, string[] names, string[] values) {
     At("create_job");
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     Check(job != IntPtr.Zero);
@@ -104,7 +105,16 @@ public static class AgentMeldPiJob {
       var command = new StringBuilder(Quote(node));
       foreach (string arg in args) command.Append(" ").Append(Quote(arg));
       At("create_child");
-      Check(CreateProcess(node, command, IntPtr.Zero, IntPtr.Zero, true, 0x08000004, IntPtr.Zero, cwd, ref startup, out child));
+      var environment = new SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+      for (int n = 0; n < names.Length; n++) environment[names[n]] = values[n];
+      var block = new StringBuilder();
+      foreach (var entry in environment) block.Append(entry.Key).Append("=").Append(entry.Value).Append('\0');
+      block.Append('\0');
+      IntPtr environmentBlock = Marshal.StringToHGlobalUni(block.ToString());
+      try {
+        // CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED.
+        Check(CreateProcess(node, command, IntPtr.Zero, IntPtr.Zero, true, 0x08000404, environmentBlock, cwd, ref startup, out child));
+      } finally { Marshal.FreeHGlobal(environmentBlock); }
       At("assign_job");
       Check(AssignProcessToJobObject(job, child.Process));
       assigned = true;
@@ -138,7 +148,10 @@ public static class AgentMeldPiJob {
 '@
 try {
   Add-Type -TypeDefinition $source -ErrorAction Stop
-  [AgentMeldPiJob]::Run($env:AGENTMELD_PI_NODE_BINARY, [string[]]($env:AGENTMELD_PI_NODE_ARGV | ConvertFrom-Json), (Get-Location).Path)
+  $environment = $env:AGENTMELD_PI_NODE_ENV | ConvertFrom-Json
+  $names = [string[]]@($environment.PSObject.Properties.Name)
+  $values = [string[]]@($environment.PSObject.Properties.Value)
+  [AgentMeldPiJob]::Run($env:AGENTMELD_PI_NODE_BINARY, [string[]]($env:AGENTMELD_PI_NODE_ARGV | ConvertFrom-Json), (Get-Location).Path, $names, $values)
   exit 0
 } catch {
   $stage = 'compile'

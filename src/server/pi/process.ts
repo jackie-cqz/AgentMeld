@@ -41,9 +41,28 @@ export class PiProcess {
   constructor(private readonly options: PiProcessOptions) {
     const args = [options.cliPath, "--mode", "rpc", ...options.args];
     const hostScript = this.windowsJob ? path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "pi", "windows-job-host.ps1") : "";
+    const hostEnv: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV ?? "production" };
+    // Windows PowerShell needs its real OS profile to initialize. Pi receives a
+    // separate explicit environment block, never the host's profile or secrets.
+    if (this.windowsJob) {
+      for (const key of ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "SystemDrive", "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "PSModulePath", "PROCESSOR_ARCHITECTURE", "COMSPEC", "ComSpec"])
+        if (process.env[key]) hostEnv[key] = process.env[key];
+      const nativeEnv: Record<string, string> = {};
+      const names = new Set<string>();
+      // Match Node's Windows spawn semantics: first sorted spelling wins.
+      for (const key of Object.keys(options.env).sort()) {
+        const value = options.env[key];
+        if (value !== undefined && !names.has(key.toLowerCase())) {
+          if (key.includes("=") || key.includes("\0") || value.includes("\0")) throw new PiRuntimeError("Pi environment contains an invalid name or value.", "configuration");
+          names.add(key.toLowerCase());
+          nativeEnv[key] = value;
+        }
+      }
+      Object.assign(hostEnv, { AGENTMELD_PI_NODE_BINARY: process.execPath, AGENTMELD_PI_NODE_ARGV: JSON.stringify(args), AGENTMELD_PI_NODE_ENV: JSON.stringify(nativeEnv) });
+    }
     this.child = spawn(this.windowsJob ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : process.execPath,
       this.windowsJob ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", hostScript] : args, {
-      cwd: options.cwd, env: this.windowsJob ? { ...options.env, AGENTMELD_PI_NODE_BINARY: process.execPath, AGENTMELD_PI_NODE_ARGV: JSON.stringify(args) } : options.env, shell: false, windowsHide: true,
+      cwd: options.cwd, env: this.windowsJob ? hostEnv : options.env, shell: false, windowsHide: true,
       detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = new PiJsonLines();
