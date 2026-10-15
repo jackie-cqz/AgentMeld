@@ -335,23 +335,37 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         publishConnection(binding, "error", reason);
       };
 
-      const secret = getChannelBindingSecret(binding.id);
-      if (!secret) {
-        fail("missing app secret");
-        continue;
-      }
-
       // A FAILED entry is retried, and its old channel may still be alive: the
       // error path records the failure without disconnecting, and the SDK can
       // keep reconnecting on its own. Connecting a second socket for the same
       // app would split its events (the hazard §3 describes), so the old one is
-      // closed first. Failure to close is not fatal — the new connection may
-      // still work — but it must not be silent either.
+      // closed FIRST — before anything below can return early, including the
+      // missing-secret check, or the old socket would be orphaned with no
+      // reference left to close it.
+      //
+      // It leaves the registry before the close, so nothing is handed a channel
+      // that is being torn down; the app is briefly absent from the status list
+      // instead, which is the safe direction (a send is skipped rather than
+      // attempted on a dying socket).
       if (existing?.channel) {
-        await existing.channel.disconnect().catch((error: unknown) => {
-          console.error("[feishu] failed to disconnect a stale connection:", error);
-        });
+        const stale = existing.channel;
         registry.delete(binding.appId);
+        try {
+          await stale.disconnect();
+        } catch (error) {
+          // A close that failed means the old socket may still be live; making a
+          // second one would be exactly the hazard this block exists for. Report
+          // and leave the app on the error list for the next cooldown.
+          console.error("[feishu] failed to disconnect a stale connection:", error);
+          fail(`could not close the previous connection: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+      }
+
+      const secret = getChannelBindingSecret(binding.id);
+      if (!secret) {
+        fail("missing app secret");
+        continue;
       }
 
       try {

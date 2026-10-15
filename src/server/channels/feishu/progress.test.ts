@@ -139,6 +139,10 @@ describe("run progress in a room", () => {
   let teardown: () => void;
 
   beforeEach(() => {
+    // The send budget window is process-global; reset it here rather than
+    // relying on whichever test happened to create it first.
+    (globalThis as unknown as { __agentMeldProjectionSendLog?: Map<string, number[]> })
+      .__agentMeldProjectionSendLog = undefined;
     teardown = setupTestDatabase("agentmeld-channel-progress-");
     sent.length = 0;
     updated.length = 0;
@@ -515,6 +519,10 @@ describe("the status button", () => {
     failure.next = false;
     abortRunMock.mockReset();
     stopChannelProgressForTests();
+    // The send budget window is process-global; reset it here rather than
+    // relying on whichever test happened to create it first.
+    (globalThis as unknown as { __agentMeldProjectionSendLog?: Map<string, number[]> })
+      .__agentMeldProjectionSendLog = undefined;
     setChannelProjectionPaused(false);
     clearPendingQuestionsForTests();
     clearPendingBashForTests();

@@ -353,10 +353,15 @@ describe("feishu connection layer", () => {
       vi.useRealTimers();
     }
 
-    // The stale socket was closed before the replacement was created.
+    // The stale socket was closed before the replacement was created — the
+    // ORDER is the whole point: closing after connecting leaves two sockets for
+    // one app, which is the hazard this layer exists to prevent.
     const stale = created[0];
     expect(stale.disconnect).toHaveBeenCalledTimes(1);
     expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+    expect(stale.disconnect.mock.invocationCallOrder[0]).toBeLessThan(
+      createLarkChannelMock.mock.invocationCallOrder[1]
+    );
   });
 
   it("does not retry a failed app on every read, but does retry it later", async () => {
@@ -379,6 +384,25 @@ describe("feishu connection layer", () => {
       vi.useRealTimers();
     }
     expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not make a second socket when the old one will not close", async () => {
+    // A close that failed means the old socket may still be live; connecting
+    // anyway would be the two-socket hazard.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    created[0].emit("error", new Error("socket wobble"));
+    created[0].disconnect.mockRejectedValueOnce(new Error("close failed"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
   });
 
   it("gives up on an app that never answers, so the others still connect", async () => {
