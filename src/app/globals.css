@@ -3,13 +3,13 @@
 
 :root {
   color-scheme: light;
-  --background: #f6f7f9;
-  --foreground: #24272e;
+  --background: #f8f8f8;
+  --foreground: #262626;
   --ui-surface: #ffffff;
-  --ui-subtle: #f7f8fa;
-  --ui-hover: #eef0f4;
-  --ui-line: #e3e6eb;
-  --ui-muted: #6b7280;
+  --ui-subtle: #f5f5f5;
+  --ui-hover: #eaeaea;
+  --ui-line: #e7e7e7;
+  --ui-muted: #777777;
   --ui-accent: #315de8;
   --ui-accent-soft: #edf2ff;
   --ui-danger: #c03848;
@@ -20,13 +20,13 @@
 
 html.dark {
   color-scheme: dark;
-  --background: #17181c;
-  --foreground: #e8e9ed;
-  --ui-surface: #202126;
-  --ui-subtle: #25272d;
-  --ui-hover: #2d3038;
-  --ui-line: #373a43;
-  --ui-muted: #a1a6b3;
+  --background: #191919;
+  --foreground: #e5e5e5;
+  --ui-surface: #202020;
+  --ui-subtle: #292929;
+  --ui-hover: #343434;
+  --ui-line: #353535;
+  --ui-muted: #a1a1a1;
   --ui-accent: #8ba7ff;
   --ui-accent-soft: #293552;
   --ui-danger: #ffa0ab;
@@ -238,26 +238,13 @@ button:disabled {
 .ui-right-pane { width: min(var(--panel-width), calc(100vw - var(--sidebar-width) - 360px)); flex-shrink: 0; min-height: 0; }
 .ui-workspace-panel { width: 100%; min-width: 0; max-width: none; }
 .ui-sidebar :where(.rounded-xl, .rounded-2xl) { border-radius: 6px; }
-.ui-chat-header > :last-child { gap: 4px; }
 .ui-chat { container-type: inline-size; }
-@container (max-width: 640px) {
-  .ui-chat-header { flex-wrap: wrap; gap: 6px; }
-  .ui-chat > header { height: auto; min-height: 92px; padding: 8px 12px; }
-  .ui-composer-row { flex-wrap: wrap; }
-  .ui-composer-row > textarea { flex-basis: 100%; min-width: 0; }
-  .ui-composer-actions { width: 100%; justify-content: flex-end; }
-  .ui-agent-mentions { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
-  .ui-agent-mentions > button { flex-shrink: 0; }
-}
 .ui-pending :where(.bg-white) { background-color: var(--ui-surface); }
 .ui-pending :where(.bg-slate-50, .bg-stone-50) { background-color: var(--ui-subtle); }
 .ui-pending :where(.text-stone-900, .text-slate-900, .text-slate-950) { color: var(--foreground); }
 .ui-pending :where(.text-stone-500, .text-stone-600, .text-slate-500) { color: var(--ui-muted); }
 @media (max-width: 900px) {
   .ui-right-pane { position: absolute; inset: 0 0 0 auto; width: min(var(--panel-width), calc(100vw - 56px)); z-index: 30; box-shadow: -12px 0 40px #0002; }
-  .ui-chat-header { flex-wrap: wrap; gap: 6px; }
-  .ui-chat > header { min-height: 88px; height: auto; padding-top: 8px; padding-bottom: 8px; }
-  .ui-sidebar.w-\[280px\] { position: absolute; inset: 0 auto 0 0; z-index: 35; width: min(320px, calc(100vw - 40px)); box-shadow: 12px 0 40px #0002; }
 }
 @media (max-width: 700px) {
   .ui-modal { max-height: calc(100dvh - 20px); width: calc(100vw - 20px); }

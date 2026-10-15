@@ -117,9 +117,8 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
     setPanelWidth(constrainPanelWidth(panelWidth + delta, panelBounds));
   };
 
-  const bg = darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200";
+  const bg = "bg-[var(--ui-surface)] border-[var(--ui-line)]";
   const muted = darkMode ? "text-slate-400" : "text-slate-500";
-  const textMain = darkMode ? "text-slate-100" : "text-slate-800";
 
   return (
     <aside
@@ -139,10 +138,9 @@ export function WorkspaceFileBrowser({ conversationId, darkMode, onClose }: Prop
       >
         <div className="mx-auto h-full w-px bg-transparent group-hover:bg-blue-500" />
       </div>
-      <header className={`flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 px-4`}>
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--ui-line)] px-4">
         <div className="min-w-0">
-          <div className={`truncate text-base font-semibold ${textMain}`}>工作区文件</div>
-          <div className={`mt-1 text-xs ${muted}`}>浏览 workspace 目录</div>
+          <div className="truncate text-[13px] font-medium text-[var(--foreground)]">工作区文件</div>
         </div>
         <div className="flex gap-1">
           <button onClick={() => void refresh()} className={`grid h-8 w-8 place-items-center rounded-md ${muted} hover:bg-slate-100`} title="刷新文件树">

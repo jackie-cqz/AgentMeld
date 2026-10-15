@@ -68,7 +68,7 @@ export const useAppStore = create<AppState>()(
     activeConversationId: null,
     activeArtifactId: null,
     sidebarTab: "conversations",
-    rightPanelOpen: true,
+    rightPanelOpen: false,
     rightPanelMode: "artifact",
     artifactPanelWidth: DEFAULT_ARTIFACT_PANEL_WIDTH,
     connectionStatus: "connecting",

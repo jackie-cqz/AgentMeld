@@ -62,9 +62,9 @@ function MessagePartView({
 
   if (part.type === "thinking") {
     return (
-      <details className="rounded-lg border border-dashed border-slate-300 bg-slate-50/80 px-3 py-2 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-300">
-        <summary className="cursor-pointer text-xs font-medium text-slate-500 dark:text-slate-400">思考</summary>
-        <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-slate-500 dark:text-slate-400">{part.content || "正在整理上下文..."}</p>
+      <details className="workspace-thinking">
+        <summary>思考</summary>
+        <p>{part.content || "正在整理上下文..."}</p>
       </details>
     );
   }
@@ -176,21 +176,19 @@ function ArtifactReferenceCard({ part }: { part: Extract<MessagePart, { type: "a
 
   return (
     <button
-      className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition ${
-        error ? "border-red-200 bg-red-50 text-red-800" : "border-[#cfd9ff] bg-[#f4f7ff] text-slate-800 hover:border-[#9db3ff] hover:bg-[#edf2ff]"
-      }`}
+      className={`workspace-artifact-reference ${error ? "has-error" : ""}`}
       type="button"
       onClick={() => void open()}
       title={error ? "产物加载失败，点击重试" : "点击在右侧预览"}
     >
-      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-[#4264ff] shadow-sm">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--ui-subtle)] text-[var(--ui-muted)]">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{part.title ?? part.artifactId}</span>
-        <span className="mt-0.5 block text-xs opacity-70">{error ?? "点击在右侧工作区预览"}</span>
+        <span className="block truncate font-medium">{part.title ?? artifact?.title ?? part.artifactId}</span>
+        <span className="mt-0.5 block text-[11px] text-[var(--ui-muted)]">{error ?? `${artifact?.type === "document" ? "文档" : artifact?.type === "web_app" ? "网页应用" : "产物"}${artifact ? ` · v${artifact.version}` : ""}`}</span>
       </span>
-      <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs text-slate-500">{part.artifactType ?? "artifact"}</span>
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-[var(--ui-muted)]" />
     </button>
   );
 }

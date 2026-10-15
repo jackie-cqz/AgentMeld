@@ -64,6 +64,7 @@ beforeEach(() => {
     activeArtifactId: null,
     sidebarTab: "conversations",
     rightPanelOpen: true,
+    rightPanelMode: "artifact",
     artifactPanelWidth: 640,
     connectionStatus: "connecting",
     lastHeartbeatAt: null,
@@ -77,6 +78,14 @@ afterEach(() => {
 });
 
 describe("app-store normalized message events", () => {
+  it("starts with an unobstructed conversation and opens the workspace on demand", () => {
+    expect(useAppStore.getInitialState().rightPanelOpen).toBe(false);
+    useAppStore.setState({ rightPanelOpen: false });
+    useAppStore.getState().setRightPanelMode("files");
+    expect(useAppStore.getState().rightPanelOpen).toBe(true);
+    expect(useAppStore.getState().rightPanelMode).toBe("files");
+  });
+
   it("upserts repeated message.added events without duplicating ids", () => {
     const { applyEvent } = useAppStore.getState();
     applyEvent({ type: "message.added", conversationId, timestamp: 1, message: sampleMessage });

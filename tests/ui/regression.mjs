@@ -62,6 +62,7 @@ async function newPage(width = 1440, height = 900, pending = false) {
   await page.route('**/api/artifacts/ui_artifact_*/versions', route => route.fulfill({ json: { versions: artifacts, latestId: 'ui_artifact_2' } }));
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.locator('.ui-shell').waitFor();
+  await page.getByTitle('Artifact Workspace', { exact: true }).click();
   return page;
 }
 async function screenshot(page, name) { await page.screenshot({ path: `${output}/${name}.png` }); }

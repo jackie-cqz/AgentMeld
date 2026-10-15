@@ -29,6 +29,7 @@ export function ArtifactLibrary() {
     requestWorkspaceNavigation(() => {
       setActiveConversation(item.artifact.conversationId);
       setActiveArtifact(item.artifact.id);
+      useAppStore.getState().setSidebarTab("conversations");
     });
   };
 
