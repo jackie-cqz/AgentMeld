@@ -7,6 +7,7 @@ import { resetDatabaseForTests } from "@/db/client";
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import {
+  describePrincipal,
   createPairingCode,
   hasPairedOwner,
   listSessions,
@@ -192,6 +193,30 @@ describe("pairing codes", () => {
     const { code } = createPairingCode();
     redeemPairingCode(code);
     expect(hasPairedOwner()).toBe(true);
+  });
+});
+
+describe("describePrincipal", () => {
+  it("names an owner session by its id", () => {
+    expect(describePrincipal({ kind: "owner-session", sessionId: "os_abc", createdAt: 1 }))
+      .toBe("owner:session:os_abc");
+  });
+
+  it("names a companion device", () => {
+    expect(describePrincipal({ kind: "device-token", label: "companion" })).toBe("device:companion");
+  });
+
+  it("uses ONE Feishu format, with the operator in it", () => {
+    // There used to be two: `feishu:<appId>` here and `feishu:<appId>:<openId>`
+    // on the card-action path. An app-only string would put an application
+    // where a person belongs, so this pins the shared shape.
+    expect(describePrincipal({ kind: "feishu-binding", appId: "cli_pm", openId: "ou_x" }))
+      .toBe("feishu:cli_pm:ou_x");
+  });
+
+  it("leaves an anonymous caller unattributed", () => {
+    // NULL in the column, not the word "anonymous" reading later like a name.
+    expect(describePrincipal({ kind: "anonymous" })).toBeNull();
   });
 });
 

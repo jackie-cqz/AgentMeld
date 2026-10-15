@@ -52,7 +52,7 @@ describe("a click reaching us through the SDK", () => {
     channel = createLarkChannel({ appId: "cli_probe", appSecret: "probe", source: "dedup-test" });
     channel.on("cardAction", async (event) => {
       handled += 1;
-      return handleCardAction(event, "cli_probe");
+      return handleCardAction(event, "cli_pm");
     });
     const inner = channel as unknown as {
       registerDispatcherHandlers?: () => void;

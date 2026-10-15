@@ -431,10 +431,23 @@ export type CancelOutcome = { ok: true } | { ok: false; message: string };
  * where people who are not the owner are present, and cancelling somebody
  * else's work is not a spectator action.
  */
-export function cancelRunFromCard(runId: string, operatorOpenId: string | undefined, agentId: string): CancelOutcome {
+export function cancelRunFromCard(
+  runId: string,
+  operatorOpenId: string | undefined,
+  agentId: string,
+  deliveringAppId: string | undefined
+): CancelOutcome {
   const binding = getChannelBindingForAgent(agentId, "feishu");
   if (!binding?.boundByOpenId || binding.boundByOpenId !== operatorOpenId) {
     return { ok: false, message: "只有绑定这个应用的账号可以取消。" };
+  }
+  // The app that delivered this click, the same rule the question and approval
+  // cards follow: an open_id is only meaningful inside the app that issued it,
+  // so a click arriving through an app the agent is no longer bound to is a
+  // different person's word even when the string matches. Cancelling is
+  // owner-gated, so it needs the same app dimension.
+  if (binding.appId !== deliveringAppId) {
+    return { ok: false, message: "这张卡片来自已经不生效的应用，请重新发起。" };
   }
 
   const cancelled = abortRun(runId);

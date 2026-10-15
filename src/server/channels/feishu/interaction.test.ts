@@ -1200,6 +1200,22 @@ describe("run card actions through the card handler", () => {
     expect(JSON.stringify(response)).toContain("不属于这个群");
   });
 
+  it("refuses a cancel click delivered by an app the agent is no longer bound to", async () => {
+    // The same stale-delivery rule the question and approval cards follow: the
+    // open_id string matches the owner, but it was issued by an app that is no
+    // longer the binding. Without the app check this click reached abortRun.
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_other", appSecret: "s",
+      boundByOpenId: "ou_user", now: 2
+    });
+    const run = seedRun();
+
+    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }), "cli_old");
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    expect(JSON.stringify(response)).toContain("已经不生效的应用");
+  });
+
   it("lets a cancel click from the right chat through to the owner check", async () => {
     // The control for the test above: same click, right chat, and it gets past
     // the chat guard. Nothing is actually running, so it lands on "already over".

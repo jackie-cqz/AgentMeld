@@ -11,11 +11,10 @@ export const dynamic = "force-dynamic";
 const resolveSchema = z.object({
   approved: z.boolean(),
   // Display label only. The identity recorded in `resolved_by` is derived from
-  // the authenticated principal below. This boundary rejects an over-long label
-  // (400) while normalizeResolvedByLabel truncates, because an internal caller
-  // may hold a longer string than the HTTP contract allows.
-  // Display label only. The identity recorded in `resolved_by` is derived from
   // the authenticated principal below — a caller cannot name itself into it.
+  // This boundary rejects an over-long label (400) while
+  // normalizeResolvedByLabel truncates, because an internal caller may hold a
+  // longer string than the HTTP contract allows.
   resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional()
 });
 

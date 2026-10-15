@@ -392,7 +392,7 @@ export async function handleCardAction(
   if (value.kind === "run_status") {
     return handleRunStatusClick({ runId: value.runId, chatId: event.chatId });
   }
-  return handleCancelRun(value, event);
+  return handleCancelRun(value, event, deliveringAppId);
 }
 
 async function handleQuestionAnswer(
@@ -513,7 +513,8 @@ function publishApprovalResolved(
 
 async function handleCancelRun(
   value: Extract<CardActionValue, { kind: "cancel_run" }>,
-  event: CardActionEvent
+  event: CardActionEvent,
+  deliveringAppId: string
 ): Promise<Record<string, unknown> | undefined> {
   const run = getRun(value.runId);
   if (!run) return { toast: { type: "info", content: "这次运行已经结束了。" } };
@@ -526,7 +527,7 @@ async function handleCancelRun(
     return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
   }
 
-  const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId);
+  const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId, deliveringAppId);
   if (!outcome.ok) {
     // Not an error tone for a finished run — nothing went wrong, the moment
     // passed.
