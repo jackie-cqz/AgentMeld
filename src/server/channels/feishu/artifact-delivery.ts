@@ -108,26 +108,38 @@ export function artifactFileFor(
   }
 
   if (content.type === "web_app") {
+    // Malformed content must come back as a reason: this function's contract is
+    // "bytes or why", and a thrown TypeError here is swallowed by the
+    // subscriber's catch, so the not-delivering log line never appears.
+    const files = content.files;
+    if (!files || typeof files !== "object") {
+      return { reason: "the web app has no file map" };
+    }
+    const fileNames = Object.keys(files);
+    if (fileNames.length === 0) {
+      return { reason: "the web app has no files" };
+    }
+
     // A single-page app with text assets becomes ONE self-contained HTML file,
     // which is what "meant to be opened in a browser" actually needs. Anything
     // else is delivered as a zip so the set stays whole (see web-app.ts).
-    const totalBytes = Object.values(content.files).reduce(
-      (sum, file) => sum + Buffer.byteLength(file, "utf-8"),
-      0
-    );
-    if (totalBytes > MAX_WEB_APP_BYTES) {
-      return { reason: `the web app is ${totalBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    const inlined = inlineWebApp(files, content.entry);
+    if (inlined.ok) {
+      const bytes = Buffer.from(inlined.html, "utf-8");
+      // The ceiling applies to what is DELIVERED, not to the source bytes: a
+      // zip adds per-entry overhead and could otherwise exceed it.
+      if (bytes.length > MAX_WEB_APP_BYTES) {
+        return { reason: `the folded page is ${bytes.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+      }
+      return { name: inlineWebAppName(artifact.title), content: bytes };
     }
 
-    const inlined = inlineWebApp(content.files, content.entry);
-    if (inlined.ok) {
-      return {
-        name: inlineWebAppName(artifact.title),
-        content: Buffer.from(inlined.html, "utf-8")
-      };
-    }
     try {
-      return { name: zipWebAppName(artifact.title), content: zipWebApp(content.files) };
+      const zipped = zipWebApp(files);
+      if (zipped.length > MAX_WEB_APP_BYTES) {
+        return { reason: `the packaged web app is ${zipped.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+      }
+      return { name: zipWebAppName(artifact.title), content: zipped };
     } catch (error) {
       return {
         reason: error instanceof Error ? error.message : "the web app could not be packaged"

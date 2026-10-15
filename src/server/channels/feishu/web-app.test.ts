@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_WEB_APP_BYTES,
+  crc32,
   inlineWebApp,
   inlineWebAppName,
   zipWebApp,
@@ -167,5 +168,216 @@ describe("through the delivery decision", () => {
     const huge = { "index.html": "<p>x</p>", "app.js": "1;".repeat(MAX_WEB_APP_BYTES) };
     const file = artifactFileFor(artifactWithWebApp(huge), null);
     expect("reason" in file && file.reason).toContain("over the");
+  });
+});
+
+/**
+ * A real ZIP reader for the assertions below.
+ *
+ * The first version of these tests only checked that bytes "appeared" in the
+ * archive, and a mutation that wrote 0 into every central-directory offset —
+ * producing an archive `unzip -t` rejects — left them all green. This walks the
+ * structure the way a reader does: end-of-central-directory, central entries,
+ * each one's local header at its recorded offset, and the CRC of the stored
+ * bytes.
+ */
+function readZip(zip: Buffer) {
+  const eocd = zip.length - 22;
+  if (zip.readUInt32LE(eocd) !== 0x06054b50) throw new Error("no end-of-central-directory record");
+  const count = zip.readUInt16LE(eocd + 10);
+  const centralSize = zip.readUInt32LE(eocd + 12);
+  const centralOffset = zip.readUInt32LE(eocd + 16);
+  if (centralOffset + centralSize !== eocd) throw new Error("central directory size/offset disagree");
+
+  const entries: Array<{ name: string; content: string; crcMatches: boolean; localHeaderOk: boolean }> = [];
+  let cursor = centralOffset;
+  for (let i = 0; i < count; i++) {
+    if (zip.readUInt32LE(cursor) !== 0x02014b50) throw new Error(`entry ${i}: bad central signature`);
+    const crc = zip.readUInt32LE(cursor + 16);
+    const size = zip.readUInt32LE(cursor + 20);
+    const nameLength = zip.readUInt16LE(cursor + 28);
+    const extraLength = zip.readUInt16LE(cursor + 30);
+    const commentLength = zip.readUInt16LE(cursor + 32);
+    const localOffset = zip.readUInt32LE(cursor + 42);
+    const name = zip.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf-8");
+
+    const localHeaderOk = zip.readUInt32LE(localOffset) === 0x04034b50;
+    const localNameLength = zip.readUInt16LE(localOffset + 26);
+    const localExtraLength = zip.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const content = zip.subarray(dataStart, dataStart + size).toString("utf-8");
+    const localName = zip.subarray(localOffset + 30, localOffset + 30 + localNameLength).toString("utf-8");
+
+    entries.push({
+      name,
+      content,
+      crcMatches: crc === crc32(Buffer.from(content, "utf-8")) && localName === name,
+      localHeaderOk
+    });
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+describe("the zip is structurally real, not just byte-shaped", () => {
+  it("recomputes a known CRC32 vector", () => {
+    // Pins the checksum table against the published value for "hello".
+    expect(crc32(Buffer.from("hello"))).toBe(0x3610a686);
+  });
+
+  it("walks every entry to its local header and checksums the bytes", () => {
+    const files = { "index.html": "<p>x</p>", "assets/app.js": "const a = 1;", "data.json": '{"a":1}' };
+    const entries = readZip(zipWebApp(files));
+
+    expect(entries.map((entry) => entry.name).sort()).toEqual(Object.keys(files).sort());
+    for (const entry of entries) {
+      expect(entry.localHeaderOk).toBe(true);
+      expect(entry.crcMatches).toBe(true);
+      expect(entry.content).toBe(files[entry.name as keyof typeof files]);
+    }
+  });
+
+  it("survives a file set with an empty file and a deep path", () => {
+    const files = { "a/b/c/d.txt": "", "index.html": "x" };
+    const entries = readZip(zipWebApp(files));
+    expect(entries.find((entry) => entry.name === "a/b/c/d.txt")?.content).toBe("");
+    expect(entries.every((entry) => entry.crcMatches && entry.localHeaderOk)).toBe(true);
+  });
+});
+
+describe("fold rules a review proved were missing", () => {
+  it("refuses a script whose text would close the script block early", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script src="app.js"></script>', "app.js": 'const s = "</script>";' },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("end the script block");
+  });
+
+  it("refuses a stylesheet whose text would close the style block early", () => {
+    const result = inlineWebApp(
+      { "index.html": '<link rel="stylesheet" href="a.css">', "a.css": "/* </style> */ body{}" },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("end the style block");
+  });
+
+  it("refuses defer and async rather than running the script early", () => {
+    // An inline classic script runs where it sits; a deferred head script
+    // expects the DOM to exist.
+    for (const attribute of ["defer", "async"]) {
+      const result = inlineWebApp(
+        { "index.html": `<head><script ${attribute} src="app.js"></script></head>`, "app.js": "go();" },
+        "index.html"
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("defer or async");
+    }
+  });
+
+  it("refuses when a packaged file is still referenced after folding", () => {
+    // style.css IS inlined, so the "was every file inlined?" rule is happy —
+    // but an <img> still points at it, and that file will not be beside the
+    // delivered page. This is what the earlier rule could not see.
+    const result = inlineWebApp(
+      {
+        "index.html": '<link rel="stylesheet" href="style.css"><img src="style.css">',
+        "style.css": "body{}"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("still references");
+  });
+
+  it("refuses a module with a relative import", () => {
+    // An inline module has no URL, so "./dep.js" can never resolve — even when
+    // dep.js is packed into the same document.
+    const result = inlineWebApp(
+      {
+        "index.html": '<script type="module" src="main.js"></script><script src="dep.js"></script>',
+        "main.js": "import { x } from './dep.js';",
+        "dep.js": "export const x = 1;"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("relative import");
+  });
+
+  it("keeps type=module on an inline module that has no relative import", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script type="module" src="main.js"></script>', "main.js": "console.log(1);" },
+      "index.html"
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.html).toContain('<script type="module">');
+  });
+
+  it("does not mistake data-type for type", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script data-type="module" src="app.js"></script>', "app.js": "1;" },
+      "index.html"
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.html).toContain("<script>");
+      expect(result.html).not.toContain('type="module"');
+    }
+  });
+
+  it("refuses nomodule, which an inline script cannot keep", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script nomodule src="legacy.js"></script>', "legacy.js": "1;" },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("nomodule");
+  });
+
+  it("refuses a stylesheet loaded with a rel it would change the meaning of", () => {
+    const result = inlineWebApp(
+      { "index.html": '<link rel="preload" as="style" href="style.css">', "style.css": "body{}" },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("rel");
+  });
+
+  it("accepts an uppercase .CSS extension", () => {
+    const result = inlineWebApp(
+      { "index.html": '<link rel="stylesheet" href="Style.CSS">', "Style.CSS": "body{}" },
+      "index.html"
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses to pack an entry name that escapes the archive", () => {
+    // The preview route already refuses these names for the same file set; the
+    // zip is extracted by its recipient, so it must refuse them too.
+    for (const name of ["../evil.js", "/abs.js", "a\\b.js", "a/../b.js", ""]) {
+      expect(() => zipWebApp({ [name]: "x" })).toThrow(/safe archive entry|no files/);
+    }
+  });
+
+  it("refuses malformed content instead of throwing", () => {
+    expect(inlineWebApp({ "index.html": 42 as unknown as string }, "index.html").ok).toBe(false);
+    expect(inlineWebApp(undefined as unknown as Record<string, string>, "index.html").ok).toBe(false);
+  });
+});
+
+describe("delivered names force the extension", () => {
+  it("does not let a dotted title swallow the extension", () => {
+    // safeFileName keeps an existing extension, so "Dashboard 2.0" was
+    // delivered as a file named "Dashboard 2.0" with none.
+    expect(inlineWebAppName("Dashboard 2.0")).toMatch(/\.html$/);
+    expect(zipWebAppName("我的应用 v1.0")).toMatch(/\.zip$/);
+  });
+
+  it("does not deliver a zip under an .html name", () => {
+    expect(zipWebAppName("index.html")).toMatch(/\.zip$/);
+    expect(zipWebAppName("index.html")).not.toMatch(/\.html$/);
   });
 });

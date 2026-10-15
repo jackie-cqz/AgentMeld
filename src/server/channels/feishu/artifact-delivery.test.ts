@@ -212,6 +212,35 @@ describe("artifactFileFor", () => {
     expect("content" in web && web.content.includes(Buffer.from("data.json"))).toBe(true);
   });
 
+  it("returns a reason for malformed web app content instead of throwing", () => {
+    // The contract is "bytes or why": a TypeError here is swallowed by the
+    // subscriber's catch, so the not-delivering log line would never appear.
+    for (const files of [undefined, null, "nope", { "index.html": 42 }]) {
+      const file = artifactFileFor(
+        artifact({ content: { type: "web_app", files, entry: "index.html" } as never }),
+        null
+      );
+      expect("reason" in file).toBe(true);
+    }
+  });
+
+  it("refuses an empty web app rather than delivering an empty archive", () => {
+    const file = artifactFileFor(
+      artifact({ content: { type: "web_app", files: {}, entry: "index.html" } }),
+      null
+    );
+    expect("reason" in file && file.reason).toContain("no files");
+  });
+
+  it("measures the ceiling on what is delivered, not on the source", () => {
+    // A zip adds per-entry overhead, so a source at the limit can deliver over
+    // it. Here the description bytes alone push the packaged size past the cap.
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 400; i++) files[`file-${String(i).padStart(3, "0")}.txt`] = "x".repeat(2600);
+    const file = artifactFileFor(artifact({ content: { type: "web_app", files, entry: "index.html" } }), null);
+    expect("reason" in file && file.reason).toContain("over the");
+  });
+
   it("says why a type it cannot send is not sent", () => {
     const diff = artifactFileFor(
       artifact({ content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } }),

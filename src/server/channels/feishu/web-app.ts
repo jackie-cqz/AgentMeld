@@ -1,4 +1,7 @@
+import path from "node:path";
 import { safeFileName } from "@/server/channels/feishu/file-name";
+import { normalizeStaticFilePath } from "@/server/static-file-utils";
+import { MAX_FILE_READ_BYTES } from "@/server/workspace-utils";
 
 /**
  * Turning a web_app artifact into something a chat member can actually open.
@@ -11,34 +14,56 @@ import { safeFileName } from "@/server/channels/feishu/file-name";
  * single-page app whose assets are all text can be folded into ONE file that
  * opens in a browser with nothing else.
  *
- * So this module has two answers:
+ * Folding has to be FAITHFUL or not happen at all. Every rule below exists
+ * because a review found the naive version producing a page that looked
+ * delivered and was broken:
  *
- * - `inlineWebApp` — when the whole app is text and every local reference from
- *   the entry can be inlined, return one self-contained HTML document.
- * - `zipWebApp` — otherwise, store the set in a zip so nothing is lost.
+ * - a `</script` or `</style` inside a folded file would terminate the block
+ *   early (the sequence is legal in an external file and fatal once inlined);
+ * - a classic `defer`/`async` script executes at its parse position when
+ *   inlined, which is not what it asked for;
+ * - a module's relative imports have no URL to resolve against once inlined;
+ * - a reference left behind anywhere in the document — including inside a
+ *   comment or a string — still points at a file that is not beside it;
+ * - and anything that is not inlined means the single file is missing part of
+ *   the app.
  *
- * The zip is written here (stored entries, no compression) rather than pulling
- * in a dependency: the archives are small, deterministic output is easier to
- * test, and a zip writer with no compression is a few dozen lines.
+ * Anything that fails these becomes a zip instead. The zip is written here
+ * (stored entries, no compression) rather than pulling in a dependency: the
+ * archives are small, deterministic output is easier to test, and a zip writer
+ * with no compression is a few dozen lines.
+ *
+ * What is NOT claimed: how a chat client renders either file. That needs a
+ * human in a real room, and the operations guide says so.
  */
 
 /** Ceiling for one delivered web app, matching the single-file read limit. */
-export const MAX_WEB_APP_BYTES = 1_048_576;
+export const MAX_WEB_APP_BYTES = MAX_FILE_READ_BYTES;
 const MAX_WEB_APP_FILES = 512;
+
+type InlineResult = { ok: true; html: string } | { ok: false; reason: string };
 
 /**
  * Fold every locally-referenced asset of a single-page app into the entry.
  *
  * Returns a reason instead of guessing when the app cannot be represented as
- * one file: a reference this cannot resolve (a fetched JSON, a dynamic import,
- * a second HTML page) means the zip path is the honest answer.
+ * one file.
  */
 export function inlineWebApp(
   files: Record<string, string>,
   entry: string
-): { ok: true; html: string } | { ok: false; reason: string } {
+): InlineResult {
+  if (!files || typeof files !== "object") {
+    return { ok: false, reason: "the web app has no file map" };
+  }
   const names = Object.keys(files);
   if (names.length === 0) return { ok: false, reason: "the web app has no files" };
+  for (const name of names) {
+    if (typeof files[name] !== "string") {
+      return { ok: false, reason: `"${name}" is not text` };
+    }
+  }
+
   const normalizedEntry = normalize(entry);
   if (!normalizedEntry.endsWith(".html")) {
     return { ok: false, reason: `the entry "${entry}" is not an HTML page` };
@@ -50,41 +75,88 @@ export function inlineWebApp(
 
   const used = new Set<string>();
   let html = entryHtml;
+  let refusal: string | null = null;
 
   // <link rel="stylesheet" href="style.css"> -> <style>…</style>
-  html = html.replace(
-    /<link\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi,
-    (match, href: string) => {
-      const file = lookup(files, href);
-      if (!file) return match;
-      if (!file.name.endsWith(".css")) return match;
-      used.add(file.name);
-      return `<style>\n${files[file.name]}\n</style>`;
+  html = html.replace(/<link\b[^>]*>/gi, (tag) => {
+    const href = attributeValue(tag, "href");
+    if (!href) return tag;
+    const file = lookup(files, href);
+    if (!file) return tag;
+    if (!/\bstylesheet\b/i.test(attributeValue(tag, "rel") ?? "")) {
+      refusal ??= `the entry loads "${file.name}" with a rel this cannot inline`;
+      return tag;
     }
-  );
+    if (!/\.css$/i.test(file.name)) {
+      refusal ??= `the entry references "${file.name}", which is not a stylesheet`;
+      return tag;
+    }
+    const body = files[file.name];
+    if (containsBlockTerminator(body, "style")) {
+      refusal ??= `"${file.name}" contains text that would end the style block early`;
+      return tag;
+    }
+    used.add(file.name);
+    return `<style>\n${body}\n</style>`;
+  });
 
   // <script src="app.js"></script> -> <script>…</script>
-  html = html.replace(
-    /<script\b([^>]*)\bsrc\s*=\s*["']([^"']+)["']([^>]*)><\/script>/gi,
-    (match, before: string, src: string, after: string) => {
-      const file = lookup(files, src);
-      if (!file) return match;
-      if (!/\.(m?js|cjs)$/i.test(file.name)) return match;
-      used.add(file.name);
-      // Re-emit only the attribute that still means something inline: a
-      // module keeps its type, while src/defer/async/integrity do not apply.
-      // (Whitespace from the original tag must not leak into `<script >`.)
-      const type = /\btype\s*=\s*["']([^"']+)["']/i.exec(`${before} ${after}`);
-      const attributes = type ? ` type="${type[1]}"` : "";
-      return `<script${attributes}>\n${files[file.name]}\n</script>`;
+  html = html.replace(/<script\b[^>]*><\/script>/gi, (tag) => {
+    const src = attributeValue(tag, "src");
+    if (!src) return tag;
+    const file = lookup(files, src);
+    if (!file) return tag;
+    if (!/\.(m?js|cjs)$/i.test(file.name)) {
+      refusal ??= `the entry references "${file.name}", which is not a script`;
+      return tag;
     }
-  );
+    if (hasAttribute(tag, "nomodule")) {
+      refusal ??= `"${file.name}" is loaded with nomodule, which an inline script cannot keep`;
+      return tag;
+    }
+    if (hasAttribute(tag, "async") || hasAttribute(tag, "defer")) {
+      // An inline classic script runs where it sits; defer/async asked for
+      // something else. Relocating it would be a rewrite, not a fold.
+      refusal ??= `"${file.name}" is loaded with defer or async, which an inline script cannot keep`;
+      return tag;
+    }
+    const type = attributeValue(tag, "type");
+    const body = files[file.name];
+    if (containsBlockTerminator(body, "script")) {
+      refusal ??= `"${file.name}" contains text that would end the script block early`;
+      return tag;
+    }
+    if (type && /\bmodule\b/i.test(type)) {
+      if (hasRelativeImport(body)) {
+        // An inline module has no URL of its own, so "./dep.js" can never
+        // resolve — even when dep.js is also packed into this document.
+        refusal ??= `"${file.name}" is a module with a relative import, which cannot resolve once inlined`;
+        return tag;
+      }
+      used.add(file.name);
+      return `<script type="module">\n${body}\n</script>`;
+    }
+    if (type) {
+      refusal ??= `"${file.name}" is a ${type} script, which inline cannot keep`;
+      return tag;
+    }
+    used.add(file.name);
+    return `<script>\n${body}\n</script>`;
+  });
 
-  // One rule, and the strict one: every file in the app other than the entry
-  // must have been inlined. A file left over is either referenced in a way
-  // this cannot fold (a fetched JSON, a dynamic import) or not referenced at
-  // all — in both cases the single file would be missing part of the app, and
-  // a zip that keeps everything is the honest answer.
+  if (refusal) return { ok: false, reason: refusal };
+
+  // Nothing may still point at a file that will not be beside the document.
+  // This is what catches a reference the regexes above did not rewrite — an
+  // unquoted attribute, a mention inside a comment or a string — which the
+  // previous "was this file inlined somewhere?" rule could not see.
+  const leftover = leftoverReference(html, files);
+  if (leftover) {
+    return { ok: false, reason: `the entry still references "${leftover}"` };
+  }
+
+  // And nothing may be left out: an unreferenced extra file would be dropped
+  // silently, which is the failure the old refusal existed to prevent.
   const notInlined = names.filter((name) => name !== normalizedEntry && name !== entry && !used.has(name));
   if (notInlined.length > 0) {
     return { ok: false, reason: `"${notInlined[0]}" is part of the app but was not inlined` };
@@ -93,13 +165,24 @@ export function inlineWebApp(
   return { ok: true, html };
 }
 
-/** The name to send a self-contained app under. */
+/** Names to send the two shapes under, with the extension forced. */
 export function inlineWebAppName(title: string): string {
-  return safeFileName(title, "web-app", ".html");
+  return safeFileName(stripExtension(title), "web-app", ".html");
 }
 
 export function zipWebAppName(title: string): string {
-  return safeFileName(title, "web-app", ".zip");
+  return safeFileName(stripExtension(title), "web-app", ".zip");
+}
+
+/**
+ * A `safeFileName` keeps whatever extension the title already had, so "v2.0"
+ * became a delivered file named "v2.0" with no extension and "index.html"
+ * became a ZIP called index.html. The extension is decided by the content.
+ */
+function stripExtension(title: string): string {
+  const trimmed = title.trim();
+  const withoutExtension = trimmed.replace(/\.[A-Za-z0-9]{1,8}$/, "").trim();
+  return withoutExtension.length > 0 ? withoutExtension : trimmed;
 }
 
 /**
@@ -109,8 +192,24 @@ export function zipWebAppName(title: string): string {
  */
 export function zipWebApp(files: Record<string, string>): Buffer {
   const names = Object.keys(files).sort();
+  if (names.length === 0) throw new Error("the web app has no files");
   if (names.length > MAX_WEB_APP_FILES) {
     throw new Error(`a web app with ${names.length} files is over the ${MAX_WEB_APP_FILES} file limit`);
+  }
+  for (const name of names) {
+    // The same rule the preview route applies to these same file names: a zip
+    // is extracted by its recipient, and a "../" entry writes outside wherever
+    // they put it.
+    // normalizeStaticFilePath rewrites "\" to "/", which is right for serving a
+    // path and wrong for an archive entry: extractors disagree about what a
+    // backslash means, so a name containing one is refused rather than
+    // silently reinterpreted.
+    if (name.includes("\\") || !normalizeStaticFilePath(name)) {
+      throw new Error(`the file name "${name}" is not a safe archive entry`);
+    }
+    if (typeof files[name] !== "string") {
+      throw new Error(`"${name}" is not text`);
+    }
   }
 
   const chunks: Buffer[] = [];
@@ -174,6 +273,53 @@ export function zipWebApp(files: Record<string, string>): Buffer {
   return Buffer.concat([...chunks, centralBuffer, end]);
 }
 
+/**
+ * The first reference left in the document that names one of the app's own
+ * files. Attribute values are read with or without quotes, because an unquoted
+ * `src=app.js` is valid HTML and was invisible to the earlier pattern.
+ */
+function leftoverReference(html: string, files: Record<string, string>): string | null {
+  for (const match of html.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
+    const reference = match[1] ?? match[2] ?? match[3] ?? "";
+    if (/^(?:https?:|data:|mailto:|#|\/\/)/i.test(reference)) continue;
+    const file = lookup(files, reference);
+    if (file) return file.name;
+  }
+  return null;
+}
+
+/** Read one attribute out of a tag, quoted or not, without matching `data-type`. */
+function attributeValue(tag: string, name: string): string | undefined {
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, "i");
+  const match = pattern.exec(tag);
+  if (!match) return undefined;
+  return match[1] ?? match[2] ?? match[3] ?? "";
+}
+
+/**
+ * Is this attribute present at all? `defer`, `async` and `nomodule` are
+ * boolean: `<script defer src=…>` carries no value, so a value-reading pattern
+ * never sees it and the script would be inlined as if it had asked for nothing.
+ */
+function hasAttribute(tag: string, name: string): boolean {
+  return new RegExp(`(?:^|\\s)${name}(?=\\s|=|>|$)`, "i").test(tag);
+}
+
+/** Does this text contain a sequence that would close the given block early? */
+function containsBlockTerminator(body: string, block: "script" | "style"): boolean {
+  return new RegExp(`</${block}`, "i").test(body);
+}
+
+/** A module's bare or relative specifier, which an inline module cannot resolve. */
+function hasRelativeImport(body: string): boolean {
+  const patterns = [
+    /\bimport\s*\(\s*["']\.{1,2}\//,
+    /\bimport\s+[^;]*?from\s*["']\.{1,2}\//,
+    /\bexport\s+[^;]*?from\s*["']\.{1,2}\//
+  ];
+  return patterns.some((pattern) => pattern.test(body));
+}
+
 /** Resolve an HTML reference against the file map, tolerating `./` and a leading `/`. */
 function lookup(files: Record<string, string>, reference: string): { name: string } | null {
   const candidates = [reference, normalize(reference)];
@@ -185,8 +331,8 @@ function lookup(files: Record<string, string>, reference: string): { name: strin
   return null;
 }
 
-function normalize(path: string): string {
-  return path.replace(/^\.\//, "").replace(/^\//, "");
+function normalize(filePath: string): string {
+  return filePath.replace(/^\.\//, "").replace(/^\//, "");
 }
 
 const CRC_TABLE = (() => {
@@ -201,10 +347,18 @@ const CRC_TABLE = (() => {
   return table;
 })();
 
-function crc32(data: Buffer): number {
+export function crc32(data: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of data) {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Kept for callers that only want the name shape. */
+export function webAppBaseNames(title: string): { html: string; zip: string } {
+  return {
+    html: path.basename(inlineWebAppName(title)),
+    zip: path.basename(zipWebAppName(title))
+  };
 }
