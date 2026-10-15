@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { eventBus } from "@/server/event-bus";
-import { getChannelConversationByConversationId, getWorkspaceForConversation } from "@/server/repositories";
+import {
+  getChannelConversationByConversationId,
+  getConversation,
+  getWorkspaceForConversation
+} from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import {
   isChannelProjectionPaused,
@@ -162,6 +166,21 @@ export function artifactFileFor(
   return { reason: `a ${content.type} artifact is not a single file` };
 }
 
+/**
+ * A bot that can hand something over in this conversation: the first agent in
+ * it with a live channel. Attribution is not lost by this — an artifact that
+ * HAS an author keeps it; this only answers "who can carry the file" for one
+ * that never had an author to begin with.
+ */
+function delivererFor(conversationId: string): string | null {
+  const conversation = getConversation(conversationId);
+  if (!conversation) return null;
+  for (const agentId of conversation.agentIds) {
+    if (getFeishuChannelForAgent(agentId)) return agentId;
+  }
+  return null;
+}
+
 export type DeliveryOutcome =
   | { status: "delivered"; chatId: string; fileName: string }
   | { status: "skipped"; reason: string };
@@ -172,10 +191,15 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
   const channelConversation = getChannelConversationByConversationId(artifact.conversationId);
   if (!channelConversation) return { status: "skipped", reason: "conversation is not on a channel" };
 
-  // An artifact may have no author — one can be produced by a step rather than
-  // an agent — and in that case there is no bot that could hand it over.
-  const agentId = artifact.createdByAgentId;
-  if (!agentId) return { status: "skipped", reason: "the artifact has no author" };
+  // An artifact may have no author: one made on the web page belongs to the
+  // conversation, not to an agent. The room still has bots — the agents in this
+  // conversation — so the file is handed over by the first of them that has a
+  // live channel. Without this, every web-created artifact was skipped as
+  // "no author" and the create path was dead code.
+  const agentId = artifact.createdByAgentId ?? delivererFor(artifact.conversationId);
+  if (!agentId) {
+    return { status: "skipped", reason: "no agent in this conversation has a live channel" };
+  }
 
   const channel = getFeishuChannelForAgent(agentId);
   if (!channel) return { status: "skipped", reason: "agent has no live channel" };

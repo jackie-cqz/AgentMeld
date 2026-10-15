@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { createConversation } from "@/server/conversation-service";
-import { createNewArtifact } from "@/server/artifact-service";
+import { createNewArtifact, getArtifactById } from "@/server/artifact-service";
 import { eventBus } from "@/server/event-bus";
 
 import { GET as getArtifacts, POST as postArtifacts } from "@/app/api/artifacts/route";
@@ -207,34 +207,110 @@ describe("GET /api/artifacts/[id]/preview", () => {
 describe("the web artifact routes put their artifacts on the event bus", () => {
   // The room learns about an artifact from `artifact.create`; the adapters were
   // the only emitter, so anything created or edited on the web page was stored
-  // silently and the group never saw it.
-  function collectArtifactEvents() {
-    const seen: string[] = [];
+  // silently. These assertions are deliberately about the EVENT'S CONTENT and
+  // TIMING: "an event with this id appeared" also passes when the payload is a
+  // fabrication, when it is published before the row exists, and when it is
+  // published before the gate.
+  function collect() {
+    const seen: Array<{ id: string; conversationId: string; createdByAgentId: string | null }> = [];
     const unsubscribe = eventBus.subscribe((entry) => {
-      if (entry.event.type === "artifact.create") seen.push(entry.event.artifact.id);
+      if (entry.event.type === "artifact.create") {
+        seen.push({
+          id: entry.event.artifact.id,
+          conversationId: entry.event.artifact.conversationId,
+          createdByAgentId: entry.event.artifact.createdByAgentId
+        });
+      }
     });
     return { seen, unsubscribe };
   }
 
-  it("publishes on create", async () => {
+  function artifactBody(conversationId: string, title = "网页产物") {
+    return {
+      method: "POST" as const,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId,
+        type: "document",
+        title,
+        content: { type: "document", content: "# hi" }
+      })
+    };
+  }
+
+  it("publishes the row it actually stored, exactly once", async () => {
     const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
-    const { seen, unsubscribe } = collectArtifactEvents();
+    const { seen, unsubscribe } = collect();
     try {
       const response = await postArtifacts(
-        authedRequest("http://localhost/api/artifacts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversationId: conversation.id,
-            type: "document",
-            title: "网页产物",
-            content: { type: "document", content: "# hi" }
-          })
-        })
+        authedRequest("http://localhost/api/artifacts", artifactBody(conversation.id))
       );
       expect(response.status).toBe(201);
-      const body = (await response.json()) as { artifact: { id: string } };
-      expect(seen).toContain(body.artifact.id);
+      const body = (await response.json()) as { artifact: { id: string; createdByAgentId: string | null } };
+
+      expect(seen).toHaveLength(1);
+      const persisted = getArtifactById(body.artifact.id);
+      expect(persisted).not.toBeNull();
+      expect(seen[0]).toEqual({
+        id: persisted?.id,
+        conversationId: conversation.id,
+        createdByAgentId: persisted?.createdByAgentId ?? null
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("publishes nothing when the request is not authenticated", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const { seen, unsubscribe } = collect();
+    try {
+      resetTestAuth();
+      const response = await postArtifacts(
+        new Request("http://localhost/api/artifacts", artifactBody(conversation.id))
+      );
+      expect(response.status).toBeGreaterThanOrEqual(401);
+      expect(seen).toHaveLength(0);
+    } finally {
+      unsubscribe();
+      pairTestOwner();
+    }
+  });
+
+  it("publishes nothing when the body is rejected", async () => {
+    const { seen, unsubscribe } = collect();
+    try {
+      const response = await postArtifacts(
+        authedRequest("http://localhost/api/artifacts", artifactBody("conv_1", ""))
+      );
+      expect(response.status).toBe(400);
+      expect(seen).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("publishes nothing when an edit changes nothing", async () => {
+    // An empty PATCH used to create a new row and deliver a byte-identical
+    // copy to the room.
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "document",
+      title: "第一版",
+      content: { type: "document", content: "# one" }
+    });
+    const { seen, unsubscribe } = collect();
+    try {
+      const response = await patchArtifact(
+        authedRequest(`http://localhost/api/artifacts/${original.id}`, { method: "PATCH" }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { artifact: { id: string; version: number } };
+      expect(body.artifact.id).toBe(original.id);
+      expect(body.artifact.version).toBe(original.version);
+      expect(seen).toHaveLength(0);
     } finally {
       unsubscribe();
     }
@@ -248,7 +324,7 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       title: "第一版",
       content: { type: "document", content: "# one" }
     });
-    const { seen, unsubscribe } = collectArtifactEvents();
+    const { seen, unsubscribe } = collect();
     try {
       const response = await patchArtifact(
         authedRequest(`http://localhost/api/artifacts/${original.id}`, {
@@ -262,7 +338,8 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       const body = (await response.json()) as { artifact: { id: string; parentArtifactId: string | null } };
       expect(body.artifact.id).not.toBe(original.id);
       expect(body.artifact.parentArtifactId).toBe(original.id);
-      expect(seen).toContain(body.artifact.id);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].id).toBe(body.artifact.id);
     } finally {
       unsubscribe();
     }
@@ -276,7 +353,7 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       title: "第一版",
       content: { type: "document", content: "# one" }
     });
-    const { seen, unsubscribe } = collectArtifactEvents();
+    const { seen, unsubscribe } = collect();
     try {
       const response = await postArtifactVersion(
         authedRequest(`http://localhost/api/artifacts/${original.id}/versions`, {
@@ -288,9 +365,30 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       );
       expect(response.status).toBe(201);
       const body = (await response.json()) as { artifact: { id: string } };
-      expect(seen).toContain(body.artifact.id);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].id).toBe(body.artifact.id);
     } finally {
       unsubscribe();
     }
   });
+
+  it("still succeeds when a listener throws", async () => {
+    // The row is stored; a broken subscriber must not be reported to the caller
+    // as a failed creation, or it would retry into a duplicate artifact.
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = eventBus.subscribe((entry) => {
+      if (entry.event.type === "artifact.create") throw new Error("listener exploded");
+    });
+    try {
+      const response = await postArtifacts(
+        authedRequest("http://localhost/api/artifacts", artifactBody(conversation.id))
+      );
+      expect(response.status).toBe(201);
+    } finally {
+      boom();
+      errors.mockRestore();
+    }
+  });
 });
+

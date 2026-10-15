@@ -5,6 +5,7 @@ import { createArtifact, getArtifact, listArtifacts } from "@/server/repositorie
 import { resolveStaticFilePath } from "@/server/static-file-utils";
 import { newArtifactId } from "@/shared/ids";
 import type { Artifact, ArtifactContent, ArtifactType } from "@/shared/types";
+import { eventBus } from "@/server/event-bus";
 
 interface CreateArtifactInput {
   conversationId: string;
@@ -91,6 +92,27 @@ export function createNewArtifactVersion(artifactId: string, input: UpdateArtifa
     parentArtifactId: existing.id,
     now: Date.now()
   });
+}
+
+/**
+ * Announce a created artifact to the room.
+ *
+ * Publishing belongs next to the write, not at each call site: the web routes
+ * forgot it entirely for a long time, and a listener that throws must not be
+ * reported to the caller as a failed creation (the row is already stored, and
+ * the client would retry into a duplicate).
+ */
+export function announceArtifactCreated(artifact: Artifact): void {
+  try {
+    eventBus.publish({
+      type: "artifact.create",
+      conversationId: artifact.conversationId,
+      timestamp: Date.now(),
+      artifact
+    });
+  } catch (error) {
+    console.error("[artifacts] failed to announce a created artifact:", error);
+  }
 }
 
 export function getVersionChain(artifactId: string): Artifact[] {

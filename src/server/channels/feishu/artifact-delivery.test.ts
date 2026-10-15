@@ -17,6 +17,7 @@ import { eventBus } from "@/server/event-bus";
 import {
   createChannelConversation,
   createConversation,
+  getConversation,
   upsertChannelBinding
 } from "@/server/repositories";
 import type { Artifact, Workspace } from "@/shared/types";
@@ -343,9 +344,19 @@ describe("delivering an artifact into the room", () => {
     expect(outcome).toEqual({ status: "skipped", reason: "agent has no live channel" });
   });
 
-  it("stays silent for an artifact nobody authored", async () => {
+  it("hands over an artifact nobody authored, using a bot in the conversation", async () => {
+    // Web-created artifacts have no author. Skipping them made the whole
+    // create path dead code: the row was stored and the room never heard.
+    const delivered = await projectArtifact(artifact({ createdByAgentId: null }));
+    expect(delivered).toMatchObject({ status: "delivered" });
+  });
+
+  it("stays silent for an artifact nobody authored when no bot can carry it", async () => {
+    const conversation = getConversation(artifact().conversationId);
+    // No agent in the conversation has a channel any more.
+    for (const agentId of conversation?.agentIds ?? []) channelsByAgent.delete(agentId);
     const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
-    expect(outcome).toEqual({ status: "skipped", reason: "the artifact has no author" });
+    expect(outcome).toEqual({ status: "skipped", reason: "no agent in this conversation has a live channel" });
   });
 
   it("yields to the pause switch", async () => {

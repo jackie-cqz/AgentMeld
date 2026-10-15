@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  announceArtifactCreated,
   getArtifactById,
   createNewArtifactVersion,
   getVersionChain
@@ -7,7 +8,6 @@ import {
 import { getDatabase } from "@/db/client";
 import type { ArtifactContent } from "@/shared/types";
 import { gateRequest } from "@/server/api-gate";
-import { eventBus } from "@/server/event-bus";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +40,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // An edit that changes nothing is not an edit: no new row, no new file in the
+  // room. Without this, `PATCH {}` produced a duplicate version and delivered a
+  // byte-identical copy.
+  const existing = getArtifactById(id);
+  if (existing && parsed.data.title === undefined && parsed.data.content === undefined) {
+    return Response.json({ artifact: existing });
+  }
+  if (
+    existing &&
+    (parsed.data.title === undefined || parsed.data.title === existing.title) &&
+    (parsed.data.content === undefined || JSON.stringify(parsed.data.content) === JSON.stringify(existing.content))
+  ) {
+    return Response.json({ artifact: existing });
+  }
+
   const artifact = createNewArtifactVersion(id, {
     title: parsed.data.title,
     content: parsed.data.content as ArtifactContent | undefined
@@ -51,12 +66,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   // A new version is a NEW row (new id, version + 1), so this is the same event
   // the create path publishes — and the room gets the new content rather than
   // nothing at all.
-  eventBus.publish({
-    type: "artifact.create",
-    conversationId: artifact.conversationId,
-    timestamp: Date.now(),
-    artifact
-  });
+  announceArtifactCreated(artifact);
   return Response.json({ artifact });
 }
 

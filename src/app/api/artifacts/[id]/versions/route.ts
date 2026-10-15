@@ -6,7 +6,7 @@ import {
 } from "@/server/artifact-service";
 import type { ArtifactContent } from "@/shared/types";
 import { gateRequest } from "@/server/api-gate";
-import { eventBus } from "@/server/event-bus";
+import { announceArtifactCreated } from "@/server/artifact-service";
 
 export const dynamic = "force-dynamic";
 
@@ -54,11 +54,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   // A new version is a NEW row (new id, version + 1), so this is the same event
   // the create path publishes — and the room gets the new content rather than
   // nothing at all.
-  eventBus.publish({
-    type: "artifact.create",
-    conversationId: artifact.conversationId,
-    timestamp: Date.now(),
-    artifact
-  });
+  announceArtifactCreated(artifact);
   return Response.json({ artifact }, { status: 201 });
 }
