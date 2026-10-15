@@ -1,20 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Cpu,
-  Eye,
-  EyeOff,
   SlidersHorizontal,
   Sparkles,
   User,
   Wrench
 } from "lucide-react";
-import type { AdapterName, ModelProvider, ModelProviderProfile } from "@/shared/types";
-import { profileProviderId } from "@/shared/provider-presets";
-import { requestJson } from "@/lib/request-json";
+import type { AdapterName, ModelProvider } from "@/shared/types";
+import { emptyAgentModel, type AgentModelValue } from "@/lib/agent-model-config";
+import { AgentModelConfig } from "@/components/agent-model-config";
+import { AgentAvatarPicker } from "@/components/agent-avatar-picker";
+import { AGENT_AVATAR_AUTO } from "@/shared/agent-avatar-presets";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
 import {
@@ -47,13 +47,6 @@ const TOOL_META: Record<string, { label: string; description: string }> = {
   ask_user: { label: "询问用户", description: "需求不明确时发起结构化提问" }
 };
 
-const PROVIDER_DEFAULT_MODELS: Partial<Record<ModelProvider, string>> = {
-  deepseek: "deepseek-chat",
-  openai: "gpt-4o",
-  "volcano-ark": "doubao-seed-2-0-lite-260428",
-  "openai-compatible": ""
-};
-
 type AgentEditTab = "basic" | "model" | "tools";
 type CreateStage = "choice" | "quick" | "detailed";
 
@@ -62,6 +55,7 @@ interface CreateAgentDialogProps {
   onClose: () => void;
   onCreate: (payload: {
     name: string;
+    avatar?: string;
     description: string;
     capabilities?: string[];
     adapterName: AdapterName;
@@ -75,6 +69,8 @@ interface CreateAgentDialogProps {
   // Edit mode: pre-fill form with existing agent data
   initial?: {
     name: string;
+    avatar?: string;
+    isConductor?: boolean;
     description: string;
     capabilities: string[];
     adapterName: AdapterName;
@@ -92,32 +88,22 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [createStage, setCreateStage] = useState<CreateStage>(isEdit ? "detailed" : "choice");
   const [quickDesc, setQuickDesc] = useState("");
   const [name, setName] = useState(initial?.name ?? "");
+  const [avatar, setAvatar] = useState(initial?.avatar ?? AGENT_AVATAR_AUTO);
+  const formRef = useRef<HTMLDivElement>(null);
   const [description, setDescription] = useState(initial?.description ?? "");
   const [capabilitiesInput, setCapabilitiesInput] = useState((initial?.capabilities ?? []).join("，"));
   const [adapterName] = useState<AdapterName>(initial?.adapterName ?? "custom");
-  const [modelProvider, setModelProvider] = useState<ModelProvider | null>(initial?.modelProvider ?? "deepseek");
-  const [modelId, setModelId] = useState(initial?.modelId ?? "deepseek-chat");
-  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
-  const [apiBaseUrl, setApiBaseUrl] = useState(initial?.apiBaseUrl ?? "");
+  const [modelConfig, setModelConfig] = useState<AgentModelValue>(() => ({
+    provider: initial?.modelProvider ?? null, modelId: initial?.modelId ?? "",
+    apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? ""
+  }));
+  const { provider: modelProvider, modelId, apiKey, apiBaseUrl } = modelConfig;
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT);
   const [toolNames, setToolNames] = useState<string[]>(initial?.toolNames ?? [...TOOL_PRESETS["all-purpose"].tools]);
   const [submitting, setSubmitting] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draftBasis, setDraftBasis] = useState<string | null>(null);
   const [editTab, setEditTab] = useState<AgentEditTab>("basic");
-  const [providerProfiles, setProviderProfiles] = useState<ModelProviderProfile[]>([]);
-  const [providerLoadError, setProviderLoadError] = useState<string | null>(null);
-  const [providerLoadVersion, setProviderLoadVersion] = useState(0);
-  useEffect(() => {
-    if (!open) return;
-    const controller = new AbortController();
-    requestJson<{ providers: ModelProviderProfile[] }>("/api/model-providers", { signal: controller.signal })
-      .then(data => { if (!controller.signal.aborted) { if (!Array.isArray(data.providers)) throw new Error("供应商列表读取失败。"); setProviderProfiles(data.providers); setProviderLoadError(null); } })
-      .catch(failure => { if (!controller.signal.aborted) setProviderLoadError(failure instanceof Error ? failure.message : "供应商列表读取失败。"); });
-    return () => controller.abort();
-  }, [open, providerLoadVersion]);
-  const selectedProfile = providerProfiles.find(profile => profileProviderId(profile.id) === modelProvider);
 
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
@@ -125,20 +111,21 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const isSdk = adapterName === "claude-code" || adapterName === "codex";
   const isSdkDisabled = true;
 
+  useEffect(() => {
+    if (open) formRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [open, createStage]);
+
   const resetCreateForm = () => {
     if (isEdit) return;
     setCreateStage("choice");
     setQuickDesc("");
     setName("");
+    setAvatar(AGENT_AVATAR_AUTO);
     setDescription("");
     setCapabilitiesInput("");
-    setModelProvider("deepseek");
-    setModelId("deepseek-chat");
-    setApiKey("");
-    setApiBaseUrl("");
+    setModelConfig(emptyAgentModel());
     setSystemPrompt(DEFAULT_CUSTOM_PROMPT);
     setToolNames([...TOOL_PRESETS["all-purpose"].tools]);
-    setShowApiKey(false);
     setError(null);
     setDraftBasis(null);
     setEditTab("basic");
@@ -185,7 +172,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     setDescription(quickDesc.trim());
     setToolNames(draft.tools);
     setSystemPrompt(draft.prompt);
-    setDraftBasis(`根据“${quickDesc.trim().slice(0, 80)}”生成；默认使用 DeepSeek、普通协作 Agent，并由你确认工具权限后再保存。`);
+    setDraftBasis(`根据“${quickDesc.trim().slice(0, 80)}”生成普通协作 Agent，请确认模型与工具权限后保存。`);
     setEditTab("basic");
     setCreateStage("detailed");
   };
@@ -213,12 +200,12 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
     // Config validation
     if (!isSdk && !modelId?.trim()) {
-      setError("Custom 适配器必须指定 Model ID。");
+      setError("请选择供应商和模型。");
       setEditTab("model");
       return;
     }
     if (!isSdk && !modelProvider) {
-      setError("Custom 适配器必须指定 Provider。");
+      setError("请选择模型供应商。");
       setEditTab("model");
       return;
     }
@@ -238,6 +225,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     try {
       await onCreate({
         name: name.trim(),
+        avatar,
         description: description.trim(),
         capabilities,
         adapterName,
@@ -257,85 +245,50 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   };
 
-  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? "deepseek", initial?.modelId ?? "deepseek-chat", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT, initial?.toolNames ?? [...TOOL_PRESETS["all-purpose"].tools]]);
-  const dirty = Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt, toolNames]) !== original;
+  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT, initial?.toolNames ?? [...TOOL_PRESETS["all-purpose"].tools]]);
+  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt, toolNames]) !== original;
   const discard = useUnsavedChanges(dirty, handleClose, submitting);
   return (
     <><Modal open={open} onClose={discard.requestClose} title={isEdit ? "编辑 Agent" : isChoice ? "新建 Agent" : isQuick ? "快速创建" : "详细配置"}
-      description={isEdit ? initial?.name : "身份、模型与协作权限"} size={isDetailed ? "wide" : "medium"} busy={submitting}
+      description={isEdit ? initial?.name : undefined} className={isDetailed ? "agent-editor-dialog" : "agent-create-dialog"} size={isDetailed ? "wide" : "medium"} busy={submitting}
       navigation={isDetailed ? <EditTabBar activeTab={editTab} onChange={setEditTab} /> : undefined}
       footer={<>{error ? <Feedback>{error}</Feedback> : null}
         {!isEdit && !isChoice ? <button disabled={submitting} className="ui-button ui-button--quiet mr-auto" onClick={() => { setError(null); setCreateStage("choice"); }}><ArrowLeft size={15} />返回</button> : null}
         <button className="ui-button ui-button--quiet" onClick={discard.requestClose} disabled={submitting}>取消</button>
+        {isQuick ? <button className="ui-button ui-button--primary" disabled={!quickDesc.trim()} onClick={handleGenerateDraft}><Sparkles size={14} />生成草稿并预览</button> : null}
         {isDetailed ? <button className="ui-button ui-button--primary" onClick={() => void handleSubmit()} disabled={!name.trim() || !description.trim() || submitting}>{submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}</button> : null}</>}>
-        <div className="ui-form ui-agent-form">
-          {isChoice ? (
-            <>
-              <div className="ui-choice">
-                <button
-                  type="button"
-                  onClick={() => setCreateStage("quick")}
-                  className="group"
-                >
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[#4264ff] text-white">
-                    <Sparkles className="h-5 w-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-stone-950">快速创建</span>
-                    <span className="mt-1 block text-xs leading-5 text-stone-500">
-                      描述 Agent 的职责，自动生成名称、工具权限和系统提示词草稿。
-                    </span>
-                  </span>
-                  <ArrowRight className="h-4 w-4 shrink-0 text-blue-400 transition group-hover:translate-x-0.5 group-hover:text-[#2546d8]" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditTab("basic");
-                    setCreateStage("detailed");
-                  }}
-                  className="group"
-                >
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-stone-100 text-stone-700">
-                    <SlidersHorizontal className="h-5 w-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-stone-950">详细配置</span>
-                    <span className="mt-1 block text-xs leading-5 text-stone-500">
-                      从基本信息开始，逐项配置模型、API、工具权限和系统提示词。
-                    </span>
-                  </span>
-                  <ArrowRight className="h-4 w-4 shrink-0 text-stone-400 transition group-hover:translate-x-0.5 group-hover:text-stone-700" />
-                </button>
-              </div>
-            </>
-          ) : null}
+        <div ref={formRef} className={`ui-form ${isDetailed ? "ui-agent-form" : "agent-entry-form"}`}>
+          {isChoice ? <div className="agent-create-methods">
+            <button type="button" data-autofocus onClick={() => setCreateStage("quick")}>
+              <Sparkles size={23} strokeWidth={1.6} /><strong>快速创建</strong><span>从职责描述开始</span><ArrowRight size={16} />
+            </button>
+            <button type="button" onClick={() => { setEditTab("basic"); setCreateStage("detailed"); }}>
+              <SlidersHorizontal size={23} strokeWidth={1.6} /><strong>详细配置</strong><span>从空白配置开始</span><ArrowRight size={16} />
+            </button>
+          </div> : null}
 
         {/* Quick create: conversational draft */}
         {isQuick ? (
-          <div className="mt-4">
+          <div className="agent-quick-form">
             <label className="block text-sm font-medium text-slate-700">
               描述你想要的 Agent <span className="text-red-500">*</span>
             </label>
             <textarea
               className="mt-1 h-28 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400 resize-y"
               placeholder="例如：一个前端开发 Agent，擅长 React 和 TypeScript，能读写文件、运行构建命令、部署预览"
+              data-autofocus
+              aria-label="Agent 职责描述"
+              maxLength={500}
               value={quickDesc}
               onChange={(e) => setQuickDesc(e.target.value)}
             />
-            <button
-              onClick={handleGenerateDraft}
-              disabled={!quickDesc.trim()}
-              className="mt-3 h-9 w-full rounded-lg bg-slate-950 text-sm font-medium text-white disabled:opacity-50 hover:bg-slate-800"
-            >
-              生成草稿并预览
-            </button>
+            <span className="agent-quick-count">{quickDesc.length}/500</span>
           </div>
         ) : null}
 
         {isDetailed ? (
         <section className={editTab === "basic" ? "" : "hidden"}>
+        <AgentAvatarPicker agent={{ id: "draft", name, capabilities, isConductor: initial?.isConductor ?? false, avatar }} value={avatar} onChange={setAvatar} />
         {/* Name */}
         <label className="mt-4 block text-sm font-medium text-stone-700">
           名称 <span className="text-red-500">*</span>
@@ -344,6 +297,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
           className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
           placeholder="例如：代码审查助手"
           aria-label="名称"
+          maxLength={80}
           data-autofocus
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -403,11 +357,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
         {!isEdit ? (
           <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-            运行方式：Custom · 默认 Provider：DeepSeek。Claude/Codex SDK 入口已隐藏。
+            运行方式：Custom
           </div>
         ) : isSdk && isSdkDisabled ? (
           <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            这是历史 SDK Agent。当前项目只维护 Custom/DeepSeek 配置，建议切换或重新创建。
+            这是历史 SDK Agent，保留原有运行配置。
           </div>
         ) : null}
 
@@ -421,79 +375,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
         {isDetailed ? (
         <section className={editTab === "model" ? "" : "hidden"}>
-        {/* Provider & Model (Custom only) */}
-        {!isSdk ? (
-          <>
-            <label className="mt-4 block text-sm font-medium text-stone-700">
-              模型供应商
-            </label>
-            <select
-              className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
-              value={modelProvider ?? "deepseek"}
-              aria-label="模型供应商"
-              onChange={(e) => {
-                const provider = e.target.value as ModelProvider;
-                setModelProvider(provider);
-                setModelId(providerProfiles.find(profile => profileProviderId(profile.id) === provider)?.defaultModel ?? PROVIDER_DEFAULT_MODELS[provider] ?? "");
-                setApiKey("");
-                setApiBaseUrl("");
-                setError(null);
-              }}
-            >
-              {modelProvider?.startsWith("profile:") && !selectedProfile ? <option value={modelProvider}>原供应商配置（待加载或不可用）</option> : null}
-              {providerProfiles.length ? <optgroup label="已配置供应商">{providerProfiles.map(profile => <option key={profile.id} value={profileProviderId(profile.id)}>{profile.name}</option>)}</optgroup> : null}
-              <optgroup label="内置供应商"><option value="deepseek">DeepSeek</option>
-              <option value="openai">OpenAI</option>
-              <option value="volcano-ark">火山方舟</option>
-              <option value="openai-compatible">OpenAI-Compatible（需 Key + URL）</option>
-              </optgroup>
-            </select>
-            {providerLoadError ? <div className="mt-2"><Feedback>{providerLoadError}</Feedback><button className="ui-button" onClick={() => setProviderLoadVersion(version => version + 1)}>重试加载供应商</button></div> : null}
-
-            <label className="mt-3 block text-sm font-medium text-stone-700">
-              Model ID <span className="text-red-500">*</span>
-            </label>
-            <input
-              className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none focus:border-stone-500"
-              placeholder="deepseek-chat"
-              aria-label="Model ID"
-              list="agent-provider-models"
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-            />
-            {selectedProfile ? <datalist id="agent-provider-models">{selectedProfile.models.map(model => <option key={model} value={model} />)}</datalist> : null}
-          </>
-        ) : null}
-
-        {/* API Key */}
-        <label className="mt-3 block text-sm font-medium text-stone-700">API Key（可选，覆盖全局设置）</label>
-        <div className="mt-1 flex gap-2">
-          <input
-            className="h-9 flex-1 rounded-md border border-stone-300 px-3 text-sm font-mono outline-none focus:border-stone-500"
-            type={showApiKey ? "text" : "password"}
-            placeholder="sk-..."
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          <button
-            type="button"
-            onClick={() => setShowApiKey((prev) => !prev)}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-stone-200 text-stone-500 hover:bg-stone-50"
-            title={showApiKey ? "隐藏" : "显示"}
-          >
-            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </button>
-        </div>
-
-        {/* Base URL */}
-        <label className="mt-3 block text-sm font-medium text-stone-700">API Base URL（可选）</label>
-        <input
-          className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 text-sm outline-none"
-          placeholder={isSdk ? "SDK 自动管理" : selectedProfile?.baseUrl ?? "留空使用默认"}
-          value={apiBaseUrl}
-          onChange={(e) => setApiBaseUrl(e.target.value)}
-          disabled={isSdk}
-        />
+        <AgentModelConfig open={open} value={modelConfig} onChange={value => { setModelConfig(value); setError(null); }} sdk={isSdk} />
         </section>
         ) : null}
 

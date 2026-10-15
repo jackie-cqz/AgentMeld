@@ -25,7 +25,6 @@
 .channel-agent-list { margin: 0; padding: 0; list-style: none; }
 .channel-agent-row { padding: 16px 4px; border-bottom: 1px solid var(--ui-line); }
 .channel-agent-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.channel-agent-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; font-size: 10px; font-weight: 600; }
 .channel-agent-identity > div { min-width: 0; }
 .channel-agent-identity strong { display: block; font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
 .channel-agent-identity small { display: block; font-size: 10px; line-height: 15px; color: var(--ui-muted); overflow-wrap: anywhere; }

@@ -6,7 +6,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useAppStore } from "@/stores/app-store";
 import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
-import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import type {
   ChannelBinding,
   ChannelBindingSession,
@@ -271,7 +271,7 @@ export function ChannelBindingsPanel({ active = true }: { active?: boolean }) {
         const connection = connections[agentId];
         const detail = state.kind === "failed" ? state.session.error ?? "绑定未完成" : state.kind === "bound" ? connection?.lastError : null;
         return <li key={agentId} className="channel-agent-row">
-          <div className="channel-agent-identity">{agent ? <span className={`channel-agent-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span> : null}
+          <div className="channel-agent-identity">{agent ? <AgentAvatar agent={agent} /> : null}
             <div><strong title={agentId}>{agent?.name ?? agentId}</strong><small>{agent?.isConductor ? "主协调者" : agent?.capabilities[0] ?? "Agent"}</small></div>
           </div>
           <div className="channel-application">{loaded && state.kind === "bound" ? <><span>{connection?.botName || "已绑定应用"}</span><code title={state.appId}>{state.appId}</code></> : <span className="channel-muted">{!loaded ? "—" : state.kind === "binding" ? "正在绑定" : state.kind === "failed" ? "未完成绑定" : "未绑定应用"}</span>}</div>

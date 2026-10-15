@@ -6,12 +6,14 @@ const baseUrl = process.env.UI_BASE_URL || 'http://127.0.0.1:3018';
 const browser = await chromium.connectOverCDP(process.env.UI_CDP_URL || 'http://127.0.0.1:9223');
 const output = '.tmp-ui-artifacts/workflows';
 await fs.mkdir(output, { recursive: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const page = await browser.contexts()[0].newPage();
+await page.setViewportSize({ width: 1440, height: 900 });
 const errors = [];
 const requests = [];
 page.on('pageerror', error => errors.push(error.message));
 page.on('request', request => { if (request.method() !== 'GET') requests.push({ url: request.url(), method: request.method() }); });
 try {
+  assert((await page.request.get(`${baseUrl}/api/bootstrap`)).ok(), 'Use a paired isolated fixture browser');
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.locator('.ui-shell').waitFor();
   await page.getByTitle('Agents', { exact: true }).click();
@@ -21,6 +23,9 @@ try {
   await page.getByLabel('名称', { exact: true }).fill(name);
   await page.getByLabel('Agent 描述', { exact: true }).fill('用于隔离环境中的前端回归验证');
   await page.getByLabel('能力标签', { exact: true }).fill('review, ui');
+  await page.getByRole('tab', { name: '模型与适配器', exact: true }).click();
+  await page.getByRole('button', { name: '供应商 *', exact: true }).click();
+  await page.getByRole('button', { name: '选择供应商 DeepSeek', exact: true }).click();
   await page.getByRole('tab', { name: '工具与提示词', exact: true }).click();
   await page.getByLabel('工具权限预设').selectOption('review');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click();

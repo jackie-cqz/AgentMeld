@@ -7,7 +7,8 @@ const base = process.env.UI_BASE_URL || 'http://127.0.0.1:3018';
 const browser = await chromium.connectOverCDP(process.env.UI_CDP_URL || 'http://127.0.0.1:9223');
 const output = '.tmp-ui-artifacts/provider-presets';
 await fs.mkdir(output, { recursive: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const page = await browser.contexts()[0].newPage();
+await page.setViewportSize({ width: 1440, height: 900 });
 const suffix = Date.now();
 const name = `UI Preset GLM ${suffix}`;
 const agentName = `UI Preset Agent ${suffix}`;
@@ -32,6 +33,7 @@ async function capture(name) {
   await page.screenshot({ path: `${output}/${name}.png` });
 }
 try {
+  assert((await page.request.get(`${base}/api/bootstrap`)).ok(), 'Use a paired isolated fixture browser');
   await page.route('**/api/settings/test-connection', route => { testCalls.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true, latencyMs: 23 } }); });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.locator('.ui-shell').waitFor();
@@ -97,8 +99,9 @@ try {
   await page.getByLabel('名称', { exact: true }).fill(agentName);
   await page.getByLabel('Agent 描述', { exact: true }).fill('Isolated provider preset integration test');
   await page.getByRole('tab', { name: '模型与适配器', exact: true }).click();
-  await page.getByLabel('模型供应商', { exact: true }).selectOption(`profile:${providerId}`);
-  assert.equal(await page.getByLabel('Model ID', { exact: true }).inputValue(), 'glm-5.1');
+  await page.getByRole('button', { name: '供应商 *', exact: true }).click();
+  await page.getByRole('button', { name: `选择供应商 ${name}`, exact: true }).click();
+  assert((await page.getByRole('button', { name: '模型 *', exact: true }).innerText()).includes('glm-5.1'));
   await capture('desktop-agent-profile-selection');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'detached' });

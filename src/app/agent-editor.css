@@ -1,0 +1,37 @@
+.agent-entry-form { min-height: 0; }
+.agent-create-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.agent-create-methods > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 9px; min-height: 166px; padding: 20px; text-align: left; border: 1px solid var(--ui-line); border-radius: 7px; background: var(--ui-surface); }
+.agent-create-methods > button:hover { background: var(--ui-subtle); border-color: var(--ui-muted); }
+.agent-create-methods > button > svg:first-child { margin-bottom: 12px; color: var(--ui-muted); grid-column: 1 / -1; }
+.agent-create-methods strong { font-size: 14px; font-weight: 600; }
+.agent-create-methods > button > span { grid-row: 3; font-size: 12px; color: var(--ui-muted); }
+.agent-create-methods > button > svg:last-child { grid-row: 2; grid-column: 2; color: var(--ui-muted); }
+.agent-quick-form > label { color: var(--foreground); font-size: 13px; }
+.agent-quick-form > textarea { min-height: 164px; margin-top: 10px; }
+.agent-quick-count { display: block; text-align: right; color: var(--ui-muted); font-size: 10px; margin-top: 7px; }
+.agent-identity-preview { display: flex; gap: 13px; align-items: center; padding: 4px 0 20px; margin-bottom: 6px; border-bottom: 1px solid var(--ui-line); }
+.agent-identity-preview > div { flex: 1; min-width: 0; }
+.agent-identity-preview strong { display: block; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.agent-identity-preview > div > span { display: block; color: var(--ui-muted); margin-top: 5px; font-size: 11px; }
+.agent-identity-preview > button { flex-shrink: 0; font-size: 12px; }
+.agent-avatar-picker { width: min(510px, calc(100vw - 24px)); }
+.agent-avatar-picker fieldset { min-width: 0; border: 0; padding: 0; }
+.agent-avatar-auto { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 10px 12px; border: 1px solid var(--ui-line); border-radius: 6px; margin-bottom: 16px; cursor: pointer; font-size: 12px; }
+.agent-avatar-auto > span:not(.agent-avatar) { flex: 1; }
+.agent-avatar-auto > svg { color: var(--ui-accent); }
+.agent-avatar-preset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.agent-avatar-preset-grid > label { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; min-height: 86px; padding: 10px 5px; border: 1px solid var(--ui-line); border-radius: 7px; cursor: pointer; position: relative; }
+.agent-avatar-preset-grid > label > span:not(.agent-avatar) { font-size: 11px; color: var(--ui-muted); }
+.agent-avatar-picker label:has(input:checked) { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.agent-avatar-picker label:hover { border-color: var(--ui-muted); }
+.agent-avatar-picker label:focus-within { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.agent-avatar-picker input[type=radio] { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.agent-avatar-selected { position: absolute; right: 5px; top: 5px; color: var(--ui-accent); }
+@media (max-width: 500px) {
+  .agent-create-methods { grid-template-columns: 1fr; }
+  .agent-create-methods > button { min-height: 130px; padding: 16px; }
+  .agent-create-methods > button > svg:first-child { margin-bottom: 5px; }
+  .agent-avatar-preset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .agent-identity-preview { gap: 10px; }
+  .agent-identity-preview > button { padding-inline: 9px; font-size: 11px; }
+}
