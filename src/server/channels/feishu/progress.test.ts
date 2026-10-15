@@ -18,7 +18,7 @@ import { clearPendingQuestionsForTests, registerPendingQuestion } from "@/server
 import { clearPendingBashForTests, registerPendingBash } from "@/server/pending-bash";
 import { clearPendingWritesForTests, registerPendingWrite } from "@/server/pending-writes";
 import { clearPendingPlansForTests, registerPendingPlan } from "@/server/dispatch-plan-manager";
-import { setChannelProjectionPaused } from "@/server/channels/feishu/projection";
+import { setChannelProjectionPaused, recordSend, withinSendBudget } from "@/server/channels/feishu/projection";
 import {
   createChannelConversation,
   createConversation,
@@ -559,6 +559,30 @@ describe("the status button", () => {
   }
 
   const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+
+  it("counts a progress card as a send, so a burst cannot bypass the limit", async () => {
+    // The card consulted `withinSendBudget` but never called `recordSend`, so a
+    // run posting cards all minute neither counted nor was stopped.
+    const run = seed();
+    const conversationId = run.conversationId;
+    const sendLog = (globalThis as unknown as {
+      __agentMeldProjectionSendLog?: Map<string, number[]>;
+    }).__agentMeldProjectionSendLog;
+    // The window is process-global, so this test owns its conversation's entry
+    // and leaves nothing behind for the tests after it.
+    sendLog?.delete(conversationId);
+    try {
+      for (let i = 0; i < 19; i++) recordSend(conversationId, Date.now());
+
+      await projectRunStarted(run);
+
+      // The 20th send was spent by the card, so the budget is now closed.
+      expect(withinSendBudget(conversationId, Date.now())).toBe(false);
+    } finally {
+      sendLog?.delete(conversationId);
+    }
+  });
+
 
   /** How many cards the registry still holds, to assert nothing leaks. */
   function getRunCardsSizes(): number {

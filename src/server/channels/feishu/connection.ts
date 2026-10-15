@@ -341,6 +341,19 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         continue;
       }
 
+      // A FAILED entry is retried, and its old channel may still be alive: the
+      // error path records the failure without disconnecting, and the SDK can
+      // keep reconnecting on its own. Connecting a second socket for the same
+      // app would split its events (the hazard §3 describes), so the old one is
+      // closed first. Failure to close is not fatal — the new connection may
+      // still work — but it must not be silent either.
+      if (existing?.channel) {
+        await existing.channel.disconnect().catch((error: unknown) => {
+          console.error("[feishu] failed to disconnect a stale connection:", error);
+        });
+        registry.delete(binding.appId);
+      }
+
       try {
         const entry = await connectOne(binding, secret);
         entry.lastAttemptAt = Date.now();

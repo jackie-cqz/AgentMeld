@@ -334,6 +334,31 @@ describe("feishu connection layer", () => {
     expect(getFeishuChannelForAgent("ag_reviewer")).toBeNull();
   });
 
+  it("closes the old socket before reconnecting an app that errored", async () => {
+    // A live channel that reports `error` keeps its status AND its channel
+    // object. Reconnecting without closing it first would leave two sockets for
+    // one app — the event-splitting hazard this layer exists to prevent.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+    // The channel reports an error while it is still connected.
+    created[0].emit("error", new Error("socket wobble"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The stale socket was closed before the replacement was created.
+    const stale = created[0];
+    expect(stale.disconnect).toHaveBeenCalledTimes(1);
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not retry a failed app on every read, but does retry it later", async () => {
     // The status route nudges a reconnect, so without a cooldown every page
     // load would launch another attempt at an app known to be bad.
