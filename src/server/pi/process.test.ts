@@ -14,7 +14,7 @@ afterEach(async () => {
 function processFixture(source: string): PiProcess {
   const file = path.join(folder, "fixture.cjs");
   fs.writeFileSync(file, source);
-  const child = new PiProcess({ cliPath: file, cwd: folder, args: [], env: { ...process.env }, requestTimeoutMs: 1000, shutdownTimeoutMs: 100 });
+  const child = new PiProcess({ cliPath: file, cwd: folder, args: [], env: { ...process.env }, requestTimeoutMs: 5000, shutdownTimeoutMs: 100 });
   children.push(child);
   return child;
 }

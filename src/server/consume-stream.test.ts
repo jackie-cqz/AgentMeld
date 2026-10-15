@@ -3,6 +3,9 @@ import { consumeStream } from "@/server/consume-stream";
 import { eventBus } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
 import { setupTestDatabase } from "@/test/test-database";
+import { createMessage, getMessage } from "@/server/repositories";
+import { createConversation } from "@/server/conversation-service";
+import { newMessageId } from "@/shared/ids";
 
 let cleanupDatabase: (() => void) | undefined;
 
@@ -22,6 +25,17 @@ async function* eventsToStream(events: StreamEvent[]): AsyncGenerator<StreamEven
 }
 
 describe("consumeStream", () => {
+  it("persists a partial response even when the engine fails before part.end", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const message = createMessage({ id: newMessageId(), conversationId: conversation.id, role: "agent", agentId: "ag_mock_builder", parts: [], status: "streaming", now: Date.now() });
+    const stream = (async function* (): AsyncGenerator<StreamEvent> {
+      yield { type: "part.start", conversationId: conversation.id, timestamp: 1, messageId: "", partIndex: 0, part: { type: "text", content: "" } };
+      yield { type: "part.delta", conversationId: conversation.id, timestamp: 2, messageId: "", partIndex: 0, delta: { type: "text.append", text: "Saved before failure" } };
+      throw new Error("Fixture engine failure");
+    })();
+    await expect(consumeStream({ stream, messageId: message.id, runId: "fixture" })).rejects.toThrow("Fixture engine failure");
+    expect(getMessage(message.id)?.parts).toEqual([{ type: "text", content: "Saved before failure" }]);
+  });
   afterEach(() => {
     eventBus.clearForTests();
   });

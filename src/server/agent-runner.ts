@@ -2,7 +2,7 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { runPiInvocation } from "@/server/pi/runtime";
 import type { PiInvocationInput } from "@/server/pi/types";
 import { PiRuntimeError } from "@/server/pi/process";
-import { getPiRunUsage } from "@/server/pi/config";
+import { getPiRunUsage, assertPiToolSupport } from "@/server/pi/config";
 import { eventBus } from "@/server/event-bus";
 import { consumeStream } from "@/server/consume-stream";
 import {
@@ -11,6 +11,7 @@ import {
   getAgent,
   getConversation,
   getRun,
+  getMessage,
   isTerminalRunStatus,
   getWorkspaceForConversation,
   listMessages,
@@ -105,6 +106,10 @@ export interface RunHandle {
   promise: Promise<void>;
 }
 
+function wasCancelled(error: unknown, signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted) && !(error instanceof PiRuntimeError && error.category === "cleanup_failed");
+}
+
 export function startAgentRun(input: StartRunInput): RunHandle {
   const runId = input.runId ?? newRunId();
   const promise = executeRun({ ...input, runId }).catch(async (error: unknown) => {
@@ -116,7 +121,8 @@ export function startAgentRun(input: StartRunInput): RunHandle {
       const message = listMessages(input.conversationId).find(message => message.runId === runId && message.role === "agent") ??
         createMessage({ id: newMessageId(), conversationId: input.conversationId, role: "agent", agentId: input.agentId, runId,
           parts: [{ type: "text", content: "Pi execution could not be initialized." }], status: "error", now });
-      completeRun(run, message, activeRuns.get(runId)?.signal.aborted ? "aborted" : "failed", "Pi execution setup failed.", {}, "startup");
+      const cancelled = wasCancelled(error, activeRuns.get(runId)?.signal);
+      completeRun(run, message, cancelled ? "aborted" : "failed", error instanceof PiRuntimeError ? error.message : "Pi execution setup failed.", {}, cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "startup");
     }
   }).finally(() => {
     activeRuns.delete(runId);
@@ -250,6 +256,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   });
 
   // 6. Conductor branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
+  assertPiToolSupport(agent.toolNames);
   if (agent.isConductor && conversation.mode === "group") {
     try {
       await executeConductor({
@@ -271,9 +278,9 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       });
     } catch (error) {
       const errorText = error instanceof Error ? error.message : "Conductor failed.";
+      const cancelled = wasCancelled(error, abortController.signal);
       await cancelJobsForRun(run.id);
-      if (!abortController.signal.aborted) createErrorMessage(input.conversationId, message.id, `Conductor error: ${errorText}`, input.agentId);
-      completeRun(run, message, abortController.signal.aborted ? "aborted" : "failed", errorText, { modelId: agent.modelId ?? "conductor" }, error instanceof PiRuntimeError ? error.category : "runtime");
+      completeRun(run, message, cancelled ? "aborted" : "failed", errorText, { modelId: agent.modelId ?? "conductor" }, cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "runtime");
     }
     activeRuns.delete(run.id);
     return;
@@ -418,6 +425,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     } else completeRun(run, message, abortController.signal.aborted ? "aborted" : "complete", null, finalUsage);
   } catch (error) {
     const errorText = error instanceof Error ? error.message : "Unknown adapter error.";
+    const cancelled = wasCancelled(error, abortController.signal);
     await cancelJobsForRun(run.id);
     const fallbackUsage: NonNullable<AgentRun["usage"]> = { modelId: agent.modelId ?? "unknown" };
     // Ensure the agent message has visible error content, not empty parts
@@ -426,9 +434,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       parts: message.parts.length > 0 ? message.parts : [{ type: "text", content: `⚠️ Agent 运行失败：${errorText}` }],
       updatedAt: Date.now()
     };
-    if (!abortController.signal.aborted) createErrorMessage(input.conversationId, message.id, `Agent run failed: ${errorText}`, input.agentId);
-    completeRun(run, message, abortController.signal.aborted ? "aborted" : "failed", errorText, fallbackUsage,
-      error instanceof PiRuntimeError ? error.category : "runtime");
+    completeRun(run, message, cancelled ? "aborted" : "failed", errorText, fallbackUsage,
+      cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "runtime");
   }
   await cancelJobsForRun(run.id);
   activeRuns.delete(run.id);
@@ -447,17 +454,18 @@ function completeRun(
   errorCategory?: string | null,
   retryable?: boolean
 ): void {
-  // A run ends once. The conductor publishes its own `run.end` when planning
-  // fails and then returns normally rather than throwing, so without this the
-  // recorded failure would be overwritten with "complete" and a SECOND
-  // `run.end` would go out — the web UI saying the run finished while the group
-  // was told it failed. Found by the channel's failure announcement, which
-  // believed the first event.
+  // All invocation paths settle here; terminal state must never be overwritten.
   const current = getRun(run.id);
   if (current && isTerminalRunStatus(current.status)) return;
 
   const now = Date.now();
   usage = getPiRunUsage(run.id) ?? usage;
+  if ((status === "failed" || status === "aborted") && !getMessage(message.id)?.parts.length) {
+    const part = { type: "text" as const, content: status === "aborted" ? "运行已取消。" : error ?? "Pi 运行失败。" };
+    updateMessageParts(message.id, [part], now);
+    eventBus.publish({ type: "part.start", conversationId: run.conversationId, timestamp: now, messageId: message.id, partIndex: 0, part });
+    eventBus.publish({ type: "part.end", conversationId: run.conversationId, timestamp: now, messageId: message.id, partIndex: 0 });
+  }
   updateMessageStatus(message.id, status === "failed" ? "error" : "complete", now);
   updateRunStatus(run.id, status, usage, now, errorCategory ?? null, retryable ?? false);
   // Consumers observing run.end must not see a phantom active execution.

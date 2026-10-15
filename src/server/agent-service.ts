@@ -2,7 +2,7 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
-import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
+import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT, PI_RETIRED_TOOLS } from "@/shared/agent-constants";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
@@ -153,6 +153,7 @@ function validateCustomAgentConfig(
   allowInternalTools: boolean
 ) {
   if (adapterName !== "pi") throw new Error("The selected execution engine has been retired.");
+  if (toolNames.some(name => PI_RETIRED_TOOLS.includes(name))) throw new Error("Pi uses native bash for verification. Remove retired job_* tool grants.");
   if (!modelProvider) {
     throw new Error("Pi Agents must specify a model provider.");
   }

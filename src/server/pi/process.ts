@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { encodePiCommand, PiEventQueue, PiJsonLines, type PiRecord } from "./protocol";
-import { captureWindowsDescendants, stopWindowsDescendants, type ProcessReceipt } from "./windows-process-tree";
+import fs from "node:fs";
+import path from "node:path";
 
 export class PiRuntimeError extends Error {
   constructor(message: string, readonly category: string) { super(message); }
@@ -32,19 +33,27 @@ export class PiProcess {
   private closing: Promise<void> | null = null;
   private stderr = "";
   private readonly externalTools = new Set<string>();
+  private readonly windowsJob = process.platform === "win32";
+  private jobExitConfirmed = false;
+  private nativeExitCode: number | null = null;
+  private hostExitCode: number | null = null;
 
   constructor(private readonly options: PiProcessOptions) {
-    this.child = spawn(process.execPath, [options.cliPath, "--mode", "rpc", ...options.args], {
-      cwd: options.cwd, env: options.env, shell: false, windowsHide: true,
+    const args = [options.cliPath, "--mode", "rpc", ...options.args];
+    const hostScript = this.windowsJob ? fs.readFileSync(path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "pi", "windows-job-host.ps1"), "utf8") : "";
+    this.child = spawn(this.windowsJob ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : process.execPath,
+      this.windowsJob ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", hostScript] : args, {
+      cwd: options.cwd, env: this.windowsJob ? { ...options.env, AGENTMELD_PI_NODE_BINARY: process.execPath, AGENTMELD_PI_NODE_ARGV: JSON.stringify(args) } : options.env, shell: false, windowsHide: true,
       detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = new PiJsonLines();
     this.exited = new Promise<void>((resolve) => {
       this.child.once("close", (code, signal) => {
         this.exitObserved = true;
+        this.hostExitCode = code;
         let error: Error | undefined;
         try { lines.finish(); } catch (failure) { error = asError(failure); }
-        if (!this.closing) error ??= new PiRuntimeError(`Pi exited unexpectedly (${code ?? signal ?? "unknown"}).`, "process_exit");
+        if (!this.closing) error ??= new PiRuntimeError(`Pi exited unexpectedly (${this.nativeExitCode ?? code ?? signal ?? "unknown"}).`, "process_exit");
         this.rejectRequests(error ?? new PiRuntimeError("Pi process closed.", "process_exit"));
         this.events.end(error);
         resolve();
@@ -93,24 +102,13 @@ export class PiProcess {
   get pid(): number | undefined { return this.child.pid; }
 
   private async stop(): Promise<void> {
-    let receipts: ProcessReceipt[] = [];
-    let ownershipFailure: unknown;
-    if (process.platform === "win32" && this.externalTools.size && this.child.pid !== undefined) {
-      try { receipts = await captureWindowsDescendants(this.child.pid); }
-      catch { ownershipFailure = new PiRuntimeError("Windows native process ownership could not be inspected; workspace remains locked.", "cleanup_failed"); }
-    }
-    let processFailure: unknown;
-    try { await this.stopProcess(); } catch (error) { processFailure = error; }
-    // Pi's Windows taskkill is asynchronous. An abort response alone is not an
-    // exit receipt for grandchildren; confirm them before releasing workspace.
-    if (receipts.length) await stopWindowsDescendants(receipts);
-    if (ownershipFailure) throw ownershipFailure;
-    if (processFailure) throw processFailure;
+    await this.stopProcess();
+    if (this.windowsJob && (!this.jobExitConfirmed || this.hostExitCode !== 0)) throw new PiRuntimeError("Windows Pi job exit could not be confirmed; workspace remains locked.", "cleanup_failed");
   }
 
   private async stopProcess(): Promise<void> {
     if (this.exitObserved) {
-      if (this.externalTools.size) throw new PiRuntimeError("Pi exited during a native command; descendant termination is unconfirmed.", "cleanup_failed");
+      if (this.externalTools.size && !this.jobExitConfirmed) throw new PiRuntimeError("Pi exited during a native command; descendant termination is unconfirmed.", "cleanup_failed");
       return;
     }
     // EOF disposes the runtime, but Pi's abort command first stops active native
@@ -118,8 +116,9 @@ export class PiProcess {
     let abortAcknowledged = false;
     try { await this.sendRequest("abort", {}, 1000); abortAcknowledged = true; } catch { /* Escalate below if Pi cannot acknowledge. */ }
     this.child.stdin.end();
-    if (await waitFor(this.exited, this.options.shutdownTimeoutMs ?? 2000)) {
-      if (!abortAcknowledged && this.externalTools.size) throw new PiRuntimeError("Native command teardown was not acknowledged; workspace remains locked.", "cleanup_failed");
+    const shutdownWait = this.windowsJob ? Math.max(2000, this.options.shutdownTimeoutMs ?? 2000) : this.options.shutdownTimeoutMs ?? 2000;
+    if (await waitFor(this.exited, shutdownWait)) {
+      if (!abortAcknowledged && this.externalTools.size && !this.jobExitConfirmed) throw new PiRuntimeError("Native command teardown was not acknowledged; workspace remains locked.", "cleanup_failed");
       return;
     }
     const pid = this.child.pid;
@@ -142,6 +141,11 @@ export class PiProcess {
   }
 
   private accept(record: PiRecord): void {
+    if (this.windowsJob && record.type === "agentmeld_process_exit" && typeof record.code === "number") {
+      this.nativeExitCode = record.code;
+      this.jobExitConfirmed = true;
+      return;
+    }
     if (record.type === "tool_execution_start" && ["bash", "grep", "find"].includes(String(record.toolName))) this.externalTools.add(String(record.toolCallId));
     if (record.type === "tool_execution_end") this.externalTools.delete(String(record.toolCallId));
     if (record.type !== "response") { this.events.push(record); return; }

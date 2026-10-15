@@ -58,44 +58,46 @@ export async function consumeStream(
   const partSlots = new Map<number, number>();
   let usage: StreamUsage | null = null;
 
-  for await (const event of input.stream) {
-    if (input.signal?.aborted) break;
+  try {
+    for await (const event of input.stream) {
+      if (input.signal?.aborted) break;
 
     // 1. Fill missing IDs, then resolve part indices to real message slots
-    const filled = resolvePartIndex(fillEventIds(event, input.messageId, input.runId), partSlots, parts);
+      const filled = resolvePartIndex(fillEventIds(event, input.messageId, input.runId), partSlots, parts);
 
     // 2. Callback can inspect the event and request that no later events are consumed.
     // The current event is still persisted/published so tool results never disappear from the UI.
-    let shouldStop = false;
-    if (input.onEvent) {
-      const decision = input.onEvent(filled);
-      shouldStop = Boolean(decision?.stop);
-    }
+      let shouldStop = false;
+      if (input.onEvent) {
+        const decision = input.onEvent(filled);
+        shouldStop = Boolean(decision?.stop);
+      }
 
     // 3. Persistence side-effects — accumulate parts + update DB at key events
-    const flush = getFlushEvents(filled);
-    const { parts: newParts, sideEvents } = applyPartsState(parts, filled);
-    parts = newParts;
-    if (flush) {
-      updateMessageParts(input.messageId, parts, Date.now());
-    }
+      const flush = getFlushEvents(filled);
+      const { parts: newParts, sideEvents } = applyPartsState(parts, filled);
+      parts = newParts;
+      if (flush) {
+        updateMessageParts(input.messageId, parts, Date.now());
+      }
 
     // 4. Broadcast main event + any synthetic side events (e.g. part.start for artifact_ref)
-    eventBus.publish(filled);
-    for (const side of sideEvents) {
-      eventBus.publish(side);
-    }
+      eventBus.publish(filled);
+      for (const side of sideEvents) {
+        eventBus.publish(side);
+      }
 
     // 5. Track usage
-    if (filled.type === "run.usage") {
-      usage = filled.usage;
+      if (filled.type === "run.usage") {
+        usage = filled.usage;
+      }
+
+      if (shouldStop) break;
     }
-
-    if (shouldStop) break;
+  } finally {
+    // Also flush a partial response when Pi fails before a part.end event.
+    updateMessageParts(input.messageId, parts, Date.now());
   }
-
-  // Final flush — ensure all accumulated parts are persisted
-  updateMessageParts(input.messageId, parts, Date.now());
 
   return { parts, usage };
 }

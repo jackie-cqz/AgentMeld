@@ -38,6 +38,10 @@ but cannot execute until explicitly migrated in the editor. There is no silent
 fallback. Execution-related edits are rejected while that Agent has a running
 or queued platform run.
 
+After upgrading, stop and restart the AgentMeld server. Development hot reload
+does not rerun database bootstrap migrations. Existing unfinished executions are
+marked interrupted at startup; they are not silently resumed in a new engine.
+
 ## Tools And Permissions
 
 | Existing grant | Pi native capability |
@@ -64,6 +68,17 @@ This is **not MCP**. The token is revoked at teardown and is removed from native
 Bash command environments. Unlisted tools and replayed call IDs are rejected.
 An accepted plan or task report ends the invocation's business-tool activity.
 Artifact bindings are committed before Pi can submit the final task report.
+
+The legacy `job_start`/`job_read`/`job_wait`/`job_cancel` command kernel is not
+exposed to Pi. Long verification uses native `bash` and waits for completion.
+Existing grants are retained in storage for history but fail with an explicit
+migration error; the Agent editor explains that saving removes them. New presets
+do not grant them. Historical job display and platform cleanup helpers remain,
+but this is not a second production Agent command engine.
+
+Native `grep`/`find` require `rg`/`fd` on PATH. Offline execution does not silently
+download missing binaries. Installation status does not validate those optional
+helpers or claim that every model supports images.
 
 Native commands use **Bash**, including on Windows. The existing command policy
 admits verification commands and approved dependency operations; source edits
@@ -103,10 +118,13 @@ Turn and tool-call budgets are platform supervision limits, not a second loop.
 Cancellation stops Pi, approvals and platform-owned background jobs. Teardown
 waits for process exit; uncertain cleanup poisons the durable workspace lease.
 Another task cannot start writing that workspace while ownership is uncertain.
-On Windows, cancellation snapshots owned descendants through the built-in
-PowerShell/CIM interface and verifies creation-time-matched processes after Pi's
-abort. If process ownership cannot be inspected or exit cannot be confirmed,
-cleanup fails closed. Windows requires this standard OS interface and Git Bash.
+On Windows, a small built-in PowerShell/.NET host places Pi in a Windows Job
+Object before its main thread runs. Descendants remain in that job even after
+intermediate shells exit. EOF or termination drains the job, and the host confirms
+its active process count is zero before exit. An unconfirmed host exit fails
+closed. This is lifecycle supervision, not an OS security sandbox. Windows
+requires built-in Windows PowerShell/.NET and Git Bash.
+See Microsoft's [Job Objects documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) for the underlying lifecycle primitive.
 
 The database contains `agent_execution_bindings`, `harness_executions` and
 `harness_workspace_leases`. Session files live under

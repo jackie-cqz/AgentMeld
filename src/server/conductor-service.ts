@@ -5,7 +5,8 @@ import { consumeStream } from "@/server/consume-stream";
 import { runPiInvocation } from "@/server/pi/runtime";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
-import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { PiRuntimeError } from "@/server/pi/process";
+import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -117,7 +118,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       createSystemMessage(input.conversationId, `❌ Plan 校验失败：${validationResult}`);
       // Through the shared helper, so recording the failure cannot be forgotten
       // by one call site while others do it.
-      publishConductorFailed(input, `Plan validation failed: ${validationResult}`);
+      failConductor(`Plan validation failed: ${validationResult}`);
       return;
     }
 
@@ -1929,31 +1930,10 @@ export function buildContinuationPrompt(
   return `${basePrompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${lastError}. Fix the issues and try again.`;
 }
 
-/**
- * Announce a conductor failure — and record it.
- *
- * Exported because it is the seam that keeps the announcement and the record
- * from drifting apart; a test drives it directly rather than reproducing the
- * shape it used to have.
- */
-export function publishConductorFailed(input: ConductorInput, error: string) {
-  const now = Date.now();
-
-  // Record it, not just announce it. Announcing a failure without writing it
-  // left the run row "running" while the channel had already told the group the
-  // task failed — and the runner, which follows this function by returning
-  // rather than throwing, then wrote "complete" over the top. The web UI and the
-  // group disagreed about the same run.
-  updateRunStatus(input.conductorRunId, "failed", null, now);
-
-  eventBus.publish({
-    type: "run.end",
-    conversationId: input.conversationId,
-    timestamp: now,
-    runId: input.conductorRunId,
-    status: "failed",
-    error
-  });
+/** Forward a planning failure to the sole terminal-state owner. */
+export function failConductor(error: string, category = "conductor_contract"): never {
+  // Only agent-runner owns terminal publication, message settlement and cleanup.
+  throw new PiRuntimeError(error, category);
 }
 
 type AssessResult =
@@ -1968,7 +1948,7 @@ async function runConductorAssess(
   const agent = agents.find((a) => a.id === input.conductorAgentId);
   if (!agent || agent.adapterName !== "pi") {
     createSystemMessage(input.conversationId, "⚠️ Conductor 需要配置 Pi 执行引擎。");
-    publishConductorFailed(input, "Conductor requires the Pi execution engine.");
+    failConductor("Conductor requires the Pi execution engine.", "migration_required");
     return { mode: "direct" };
   }
 
@@ -1976,7 +1956,7 @@ async function runConductorAssess(
   const workspace = getWorkspaceForConversation(input.conversationId);
   if (!conversation || !workspace) {
     createSystemMessage(input.conversationId, "⚠️ 会话或工作区未找到。");
-    publishConductorFailed(input, "Conversation or workspace not found.");
+    failConductor("Conversation or workspace not found.", "configuration");
     return { mode: "direct" };
   }
 
@@ -1995,7 +1975,7 @@ async function runConductorAssess(
         ? `⚠️ 该 Conductor 使用 provider "openai-compatible"，其 API Key 只能配置在 Agent 上（不会读取全局设置或环境变量）。请编辑该 Agent 填入 Key。`
         : `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
     );
-    publishConductorFailed(input, "No API key configured.");
+    failConductor("No API key configured.", "authentication");
     return { mode: "direct" };
   }
 
@@ -2084,7 +2064,7 @@ async function runConductorAssess(
     const planResult = parsePlanArgs(capturedPlan);
     if (typeof planResult === "string") {
       createSystemMessage(input.conversationId, `⚠️ Plan 校验失败：${planResult}`);
-      publishConductorFailed(input, `invalid_plan: ${planResult}`);
+      failConductor(`invalid_plan: ${planResult}`);
       return { mode: "direct" };
     }
     return { mode: "plan", plan: planResult };
@@ -2093,7 +2073,7 @@ async function runConductorAssess(
   // Plan was attempted but failed — fail the run
   if (planWasAttempted) {
     createSystemMessage(input.conversationId, "⚠️ Conductor 未能生成有效计划，请重试或简化需求。");
-    publishConductorFailed(input, "conductor_contract: plan_tasks failed");
+    failConductor("conductor_contract: plan_tasks failed");
     return { mode: "direct" };
   }
 

@@ -8,6 +8,7 @@ import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import type { PiInvocationInput, PiProviderSnapshot } from "./types";
 import type { Agent } from "@/shared/types";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { PI_RETIRED_TOOLS } from "@/shared/agent-constants";
 import { PiRuntimeError } from "./process";
 import type { UsagePayload } from "@/shared/types";
 
@@ -98,11 +99,17 @@ export function preparePiInvocation(input: PiInvocationInput) {
 }
 
 export function capturePiConfiguration(input: PiInvocationInput): PiInvocationInput {
+  assertPiToolSupport([...input.agent.toolNames, ...input.toolNames]);
   const resolved = input.providerRevision !== undefined ? input : snapshotPiProvider(input.agent);
   return { ...input, agent: { ...input.agent, capabilities: [...input.agent.capabilities], toolNames: [...input.agent.toolNames] },
     toolNames: [...input.toolNames], providerRevision: resolved.providerRevision, catalogProvider: resolved.catalogProvider,
     apiKey: input.providerRevision !== undefined ? input.apiKey : input.apiKey ?? resolved.apiKey,
     apiBaseUrl: input.providerRevision !== undefined ? input.apiBaseUrl : input.apiBaseUrl ?? resolved.apiBaseUrl };
+}
+
+export function assertPiToolSupport(toolNames: readonly string[]): void {
+  const retired = toolNames.filter(name => PI_RETIRED_TOOLS.includes(name));
+  if (retired.length) throw new PiRuntimeError(`Legacy background tools are unavailable under Pi: ${[...new Set(retired)].join(", ")}. Edit the Agent to remove those grants and use native bash for verification.`, "migration_required");
 }
 
 export function snapshotPiProvider(agent: Agent): PiProviderSnapshot {

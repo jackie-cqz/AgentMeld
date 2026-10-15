@@ -24,6 +24,7 @@ import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
 import {
   DEFAULT_CUSTOM_PROMPT,
   TOOL_PRESETS,
+  PI_RETIRED_TOOLS,
   type ToolPresetName
 } from "@/shared/agent-constants";
 
@@ -124,7 +125,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [toolSearch, setToolSearch] = useState("");
   const [selectedOnly, setSelectedOnly] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const visibleGroups = TOOL_GROUPS.map(group => ({ ...group, visible: group.tools.filter(tool => (!selectedOnly || toolNames.includes(tool)) && `${tool} ${TOOL_META[tool]?.label} ${TOOL_META[tool]?.description}`.toLowerCase().includes(toolSearch.trim().toLowerCase())) })).filter(group => group.visible.length > 0);
+  const visibleGroups = TOOL_GROUPS.map(group => ({ ...group, tools: group.tools.filter(tool => !PI_RETIRED_TOOLS.includes(tool) || toolNames.includes(tool)) })).map(group => ({ ...group, visible: group.tools.filter(tool => (!selectedOnly || toolNames.includes(tool)) && `${tool} ${TOOL_META[tool]?.label} ${TOOL_META[tool]?.description}`.toLowerCase().includes(toolSearch.trim().toLowerCase())) })).filter(group => group.visible.length > 0);
 
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
@@ -265,7 +266,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         apiKey: apiKey.trim() || null,
         apiBaseUrl: apiBaseUrl.trim() || null,
         systemPrompt: systemPrompt.trim() || undefined,
-        toolNames
+        toolNames: toolNames.filter(tool => !PI_RETIRED_TOOLS.includes(tool))
       });
       resetCreateForm();
       onClose();
@@ -395,6 +396,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
             原执行引擎已退役。确认模型和工具权限后保存，将迁移到 Pi；已有历史与身份不变。
           </div>
         ) : null}
+        {toolNames.some(tool => PI_RETIRED_TOOLS.includes(tool)) ? <Feedback tone="info">旧 job_* 后台工具不再用于 Pi。保存时会移除这些权限，验证命令请使用 Pi 原生 bash；历史记录保留。</Feedback> : null}
 
         {draftBasis ? (
           <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
