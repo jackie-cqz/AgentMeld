@@ -504,6 +504,83 @@ describe("small things a review measured", () => {
   });
 });
 
+describe("the positive scan must not fire on a file's own name", () => {
+  // A review found every one of these refusing a perfectly foldable page: the
+  // scan read the inlined bodies too, so a banner comment mentioning the file
+  // looked like a reference to a file that is not there.
+  const base = {
+    "index.html": '<link rel="stylesheet" href="style.css"><script src="script.js"></script><div id="app"></div>',
+    "style.css": "body{color:red}"
+  };
+
+  it("folds a script that names itself in a banner or a pragma", () => {
+    for (const ownMention of [
+      "// script.js — main entry\nconsole.log(1);",
+      "/* script.js */\nconsole.log(1);",
+      "console.log(1);\n//# sourceURL=script.js",
+      "console.log(1);\n//# sourceMappingURL=script.js.map"
+    ]) {
+      const result = inlineWebApp({ ...base, "script.js": ownMention }, "index.html");
+      expect(result.ok, ownMention).toBe(true);
+    }
+  });
+
+  it("folds an entry that merely mentions its own name", () => {
+    for (const markup of ['<title>index.html</title>', "<!-- index.html -->"]) {
+      const result = inlineWebApp(
+        { "index.html": `${markup}<link rel="stylesheet" href="style.css">`, "style.css": "body{}" },
+        "index.html"
+      );
+      expect(result.ok, markup).toBe(true);
+    }
+  });
+
+  it("still refuses a real reference to the entry", () => {
+    const result = inlineWebApp(
+      { "index.html": '<p>x</p><a href="index.html">home</a><link rel="stylesheet" href="style.css">', "style.css": "body{}" },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("does not match a name inside a longer name", () => {
+    // The longer name lives in the ENTRY, not in the packaged file's own body:
+    // a mention inside its own body is excluded anyway, which would have made
+    // this test pass for the wrong reason (a bare-substring scan survived it).
+    const files = {
+      "index.html": '<link rel="stylesheet" href="s.css"><script src="app.js"></script><p>webapp.js</p>',
+      "s.css": "body{}",
+      "app.js": "console.log(1);"
+    };
+    const result = inlineWebApp(files, "index.html");
+    expect(result.ok).toBe(true);
+  });
+
+  it("still catches another file's name mentioned by a body", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<link rel="stylesheet" href="a.css"><script src="app.js"></script>',
+        "a.css": "body{}",
+        "app.js": 'const name = "a.css";'
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("catches a basename-only reference to a nested file", () => {
+    // The map key is "assets/style.css"; markup writes "style.css".
+    const result = inlineWebApp(
+      {
+        "index.html": '<link rel="stylesheet" href="assets/style.css"><a href="style.css">x</a>',
+        "assets/style.css": "body{}"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("references no enumeration can finish", () => {
   it("refuses the forms a review found one at a time", () => {
     // Each of these survived the attribute-by-attribute scan; the positive
@@ -568,6 +645,30 @@ describe("module specifiers, both directions", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("recognises a quoted or unquoted importmap", () => {
+    for (const type of ["type='importmap'", 'type="importmap"', "type=importmap"]) {
+      const result = inlineWebApp(
+        {
+          "index.html": `<script ${type}>{"imports":{"three":"https://cdn.example/three.js"}}</script><script type="module" src="m.js"></script>`,
+          "m.js": "import * as THREE from 'three';"
+        },
+        "index.html"
+      );
+      expect(result.ok, type).toBe(true);
+    }
+  });
+
+  it("does not treat a commented-out importmap as one", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<!-- <script type="importmap">{"imports":{}}</script> --><script type="module" src="m.js"></script>',
+        "m.js": "import x from 'lodash';"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
   it("still refuses a relative specifier, importmap or not", () => {
     const result = inlineWebApp(
       {
@@ -613,6 +714,12 @@ describe("delivered names force the extension", () => {
     // delivered as a file named "Dashboard 2.0" with none.
     expect(inlineWebAppName("Dashboard 2.0")).toMatch(/\.html$/);
     expect(zipWebAppName("我的应用 v1.0")).toMatch(/\.zip$/);
+  });
+
+  it("forces the extension even when the title is only punctuation", () => {
+    // safeFileName saw the "." in "..." and called it an extension.
+    expect(inlineWebAppName("...")).toMatch(/\.html$/);
+    expect(zipWebAppName("...")).toMatch(/\.zip$/);
   });
 
   it("keeps stripping when the title has several dots", () => {

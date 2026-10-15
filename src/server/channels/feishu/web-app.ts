@@ -73,12 +73,17 @@ export function inlineWebApp(
   }
 
   const used = new Set<string>();
+  // The exact block text emitted for each inlined file. A file that mentions
+  // its own name — a banner comment, a sourceURL pragma — is not a reference to
+  // a missing file, so its own body is excluded when scanning (below).
+  const inlinedBlocks = new Map<string, string>();
   let html = entryHtml;
   let refusal: string | null = null;
   // A document carrying an importmap resolves bare specifiers itself, so those
   // are the one non-absolute form an inline module CAN keep; relative
   // specifiers are still refused (nothing maps them).
-  const hasImportMap = /<script\b[^>]*type\s*=\s*["']?importmap/i.test(entryHtml);
+  const withoutComments = entryHtml.replace(/<!--[\s\S]*?-->/g, "");
+  const hasImportMap = /<script\b[^>]*type\s*=\s*["']?importmap/i.test(withoutComments);
 
   // <link rel="stylesheet" href="style.css"> -> <style>…</style>
   html = html.replace(/<link\b[^>]*>/gi, (tag) => {
@@ -100,7 +105,9 @@ export function inlineWebApp(
       return tag;
     }
     used.add(file.name);
-    return `<style>\n${body}\n</style>`;
+    const block = `<style>\n${body}\n</style>`;
+    inlinedBlocks.set(file.name, block);
+    return block;
   });
 
   // <script src="app.js"></script> -> <script>…</script>
@@ -141,7 +148,9 @@ export function inlineWebApp(
         return tag;
       }
       used.add(file.name);
-      return `<script type="module">\n${body}\n</script>`;
+      const moduleBlock = `<script type="module">\n${body}\n</script>`;
+      inlinedBlocks.set(file.name, moduleBlock);
+      return moduleBlock;
     }
     if (type && !/javascript/i.test(type)) {
       // text/javascript and application/javascript mean exactly what no type
@@ -151,7 +160,9 @@ export function inlineWebApp(
       return tag;
     }
     used.add(file.name);
-    return `<script>\n${body}\n</script>`;
+    const scriptBlock = `<script>\n${body}\n</script>`;
+    inlinedBlocks.set(file.name, scriptBlock);
+    return scriptBlock;
   });
 
   if (refusal) return { ok: false, reason: refusal };
@@ -160,7 +171,7 @@ export function inlineWebApp(
   // This is what catches a reference the regexes above did not rewrite — an
   // unquoted attribute, a mention inside a comment or a string — which the
   // previous "was this file inlined somewhere?" rule could not see.
-  const leftover = leftoverReference(html, files);
+  const leftover = leftoverReference(html, files, inlinedBlocks, normalizedEntry, entry);
   if (leftover?.kind === "base") {
     return { ok: false, reason: "the document sets a <base href>, which this fold cannot follow" };
   }
@@ -180,11 +191,20 @@ export function inlineWebApp(
 
 /** Names to send the two shapes under, with the extension forced. */
 export function inlineWebAppName(title: string): string {
-  return safeFileName(stripExtension(title), "web-app", ".html");
+  return forceExtension(safeFileName(stripExtension(title), "web-app", ".html"), ".html");
 }
 
 export function zipWebAppName(title: string): string {
-  return safeFileName(stripExtension(title), "web-app", ".zip");
+  return forceExtension(safeFileName(stripExtension(title), "web-app", ".zip"), ".zip");
+}
+
+/**
+ * The extension is decided by the content, so it is appended if the sanitiser
+ * left something else — a title of "..." produced "web-app." because
+ * safeFileName saw a "." and believed it was one.
+ */
+function forceExtension(name: string, extension: string): string {
+  return name.toLowerCase().endsWith(extension) ? name : `${name}${extension}`;
 }
 
 /**
@@ -316,20 +336,64 @@ export function zipWebApp(files: Record<string, string>): Buffer {
  */
 type Leftover = { kind: "file"; name: string } | { kind: "base" } | null;
 
-function leftoverReference(html: string, files: Record<string, string>): Leftover {
+function leftoverReference(
+  html: string,
+  files: Record<string, string>,
+  inlinedBlocks: Map<string, string>,
+  entry: string,
+  originalEntry: string
+): Leftover {
   // A <base> changes what every relative reference means and this fold cannot
   // follow it.
   if (/<base\b[^>]*\bhref\s*=/i.test(html)) return { kind: "base" };
 
   for (const name of Object.keys(files)) {
-    // The full key and the last segment: markup usually writes "style.css",
-    // while the map may hold "assets/style.css".
     const candidates = new Set([name, name.split("/").pop() ?? name]);
+    // A file's own body is not a reference to it. Without this, the code the
+    // tool just inlined refuses its own output whenever it carries a banner
+    // comment (`// script.js`), a `//# sourceURL=script.js` pragma, or a bundle
+    // `//# sourceMappingURL=script.js.map`.
+    const ownBlock = inlinedBlocks.get(name);
+    const haystack = ownBlock ? html.split(ownBlock).join("") : html;
+
+    if (name === entry || name === originalEntry) {
+      // The entry is special: the delivered file carries the artifact's title,
+      // so a REFERENCE to the entry is broken and refuses, while merely
+      // mentioning it (`<title>index.html</title>`, a comment) folds fine.
+      for (const candidate of candidates) {
+        if (referenceTo(candidate).test(haystack)) return { kind: "file", name };
+      }
+      continue;
+    }
+
     for (const candidate of candidates) {
-      if (candidate && html.includes(candidate)) return { kind: "file", name };
+      if (mentions(haystack, candidate)) return { kind: "file", name };
     }
   }
   return null;
+}
+
+/**
+ * Does the text mention this name as a name?
+ *
+ * Word boundaries, not a bare substring: with a bare `includes`, a packaged
+ * `a.js` matched the ordinary text `data.js`, and `app.js` matched `webapp.js`.
+ */
+function mentions(haystack: string, name: string): boolean {
+  return new RegExp(`(?<![\\w./-])${escapeRegExp(name)}(?![\\w./-])`).test(haystack);
+}
+
+/** The same name, but in a position that fetches it. */
+function referenceTo(name: string): RegExp {
+  const escaped = escapeRegExp(name);
+  return new RegExp(
+    `(?:\\b(?:src|href|srcset|poster|data|action|formaction|cite|ping|srcdoc)\\s*=\\s*[\"']?[^\"'>]*${escaped}|url\\(\\s*[\"']?[^\"')]*${escaped})`,
+    "i"
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Read one attribute out of a tag, quoted or not, without matching `data-type`. */
