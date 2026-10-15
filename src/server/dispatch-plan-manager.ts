@@ -71,16 +71,30 @@ export function getPendingPlansForConversation(conversationId: string): PendingD
   return getAllPendingPlans().filter((p) => p.conversationId === conversationId);
 }
 
-export function approvePlan(id: string, plan?: DispatchPlanItem[], resolvedBy?: string | null): boolean {
-  return resolvePlan(id, { approved: true, plan, resolvedBy });
+export function approvePlan(
+  id: string,
+  plan?: DispatchPlanItem[],
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePlan(id, { approved: true, plan, resolvedBy, resolvedByLabel });
 }
 
-export function rejectPlan(id: string, resolvedBy?: string | null): boolean {
-  return resolvePlan(id, { approved: false, resolvedBy });
+export function rejectPlan(
+  id: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePlan(id, { approved: false, resolvedBy, resolvedByLabel });
 }
 
-export function revisePlanWithFeedback(id: string, feedback: string, resolvedBy?: string | null): boolean {
-  return resolvePlan(id, { approved: true, feedback, resolvedBy });
+export function revisePlanWithFeedback(
+  id: string,
+  feedback: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePlan(id, { approved: true, feedback, resolvedBy, resolvedByLabel });
 }
 
 export function cancelPendingPlansForRun(runId: string): void {
@@ -113,13 +127,19 @@ export function clearPendingPlansForTests(): void {
 
 function resolvePlan(
   id: string,
-  outcome: { approved: boolean; feedback?: string; plan?: DispatchPlanItem[]; resolvedBy?: string | null }
+  outcome: {
+    approved: boolean;
+    feedback?: string;
+    plan?: DispatchPlanItem[];
+    resolvedBy?: string | null;
+    resolvedByLabel?: string | null;
+  }
 ): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
   const now = Date.now();
-  if (!resolveApproval(id, outcome.approved, now, outcome.resolvedBy ?? null)) return false;
+  if (!resolveApproval(id, outcome.approved, now, outcome.resolvedBy ?? null, outcome.resolvedByLabel ?? null)) return false;
 
   // P1: Record approval evidence — use real planId from conductor_plans table
   const p = entry.plan;

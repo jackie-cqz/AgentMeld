@@ -161,6 +161,7 @@ export function ensureDatabase() {
       status TEXT NOT NULL DEFAULT 'pending',
       payload_json TEXT NOT NULL,
       resolved_by TEXT,
+      resolved_by_label TEXT,
       resolved_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -526,6 +527,7 @@ function migrateLegacyTables() {
   renameColumnIfPresent("conductor_output_bindings", legacyRoleKey("", "_run_id"), "conductor_run_id");
   renameColumnIfPresent("conductor_conflicts", legacyRoleKey("", "_run_id"), "conductor_run_id");
 
+  ensureColumn("pending_approvals", "resolved_by_label", "TEXT");
   ensureColumn("agents", "avatar", "TEXT NOT NULL DEFAULT '🤖'");
   ensureColumn("agents", "capabilities", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("agents", "api_key", "TEXT");

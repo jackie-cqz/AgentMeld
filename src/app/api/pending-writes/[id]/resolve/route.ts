@@ -4,16 +4,16 @@ import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { gateRequest } from "@/server/api-gate";
+import { describePrincipal } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
   approved: z.boolean(),
-  // Caller-declared attribution label (not authenticated). Omit it, or send
-  // null, when the operator is unknown. Note the deliberate split with the
-  // server side: this boundary rejects an over-long label (400) while
-  // normalizeResolvedBy truncates, because an internal caller may hold a
-  // longer identifier than the HTTP contract allows.
+  // Display label only. The identity recorded in `resolved_by` is derived from
+  // the authenticated principal below. This boundary rejects an over-long label
+  // (400) while normalizeResolvedByLabel truncates, because an internal caller
+  // may hold a longer string than the HTTP contract allows.
   resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional()
 });
 
@@ -28,6 +28,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const resolvedBy = describePrincipal(gate.principal);
+
   const entry = getPendingWrite(id);
   if (!entry) {
     // See the bash route: consult the record of this type so a second surface
@@ -40,7 +42,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   if (parsed.data.approved) {
-    if (!approvePendingWrite(id, parsed.data.resolvedBy)) {
+    if (!approvePendingWrite(id, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Pending write was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -53,7 +55,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, applied: true });
   }
 
-  if (!rejectPendingWrite(id, parsed.data.resolvedBy)) {
+  if (!rejectPendingWrite(id, resolvedBy, parsed.data.resolvedBy)) {
     return conflictAlreadyResolved("Pending write was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({

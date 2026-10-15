@@ -14,6 +14,7 @@ import {
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 import { escapeLarkMd } from "@/server/channels/feishu/card-text";
+import { feishuOperatorRef } from "@/server/auth";
 import type {
   DispatchPlanItem,
   PendingBashCommand,
@@ -292,11 +293,43 @@ function sanitizeCommand(command: string): string {
  * everyone. That state should not exist, and failing closed is the only safe
  * reading of "we do not know who owns this".
  */
-export function isAuthorisedOperator(agentId: string, openId: string | undefined): boolean {
-  if (!openId) return false;
+/**
+ * May this operator act for this agent?
+ *
+ * Two things must hold, and the second is the one #24 is about: the open_id
+ * must be the bound owner's, AND the app that DELIVERED this action must be
+ * the app the agent is bound to right now. The delivering app is not
+ * decoration — an open_id is only meaningful inside the app that issued it, so
+ * a click arriving through some other app is a different person's word, even
+ * when the string matches. `deliveringAppId` is required: a caller that cannot
+ * say which app delivered the action cannot authorize it.
+ */
+export function isAuthorisedOperator(
+  agentId: string,
+  openId: string | undefined,
+  deliveringAppId: string | undefined
+): boolean {
+  if (!openId || !deliveringAppId) return false;
   const binding = getChannelBindingForAgent(agentId, "feishu");
   if (!binding?.boundByOpenId) return false;
+  if (binding.appId !== deliveringAppId) return false;
   return binding.boundByOpenId === openId;
+}
+
+/**
+ * The audit identity for a card action: the operator's open_id SCOPED BY THE
+ * APP THAT DELIVERED THE CLICK (issue #24).
+ *
+ * Deliberately the delivering app, not `getChannelBindingForAgent(...).appId`:
+ * the binding row is mutable, and a click that outlives its binding (an old
+ * socket still delivering) would otherwise be attributed to whatever app the
+ * agent is bound to NOW — naming someone else. Authorization already refuses
+ * any app but the bound one (`isAuthorisedOperator`), so by the time this runs
+ * the two agree; this function does not need to re-read the row to be correct.
+ */
+function operatorRef(deliveringAppId: string, openId: string | null | undefined): string | null {
+  if (!openId) return null;
+  return feishuOperatorRef(deliveringAppId, openId);
 }
 
 /** A card this bot put in a room, kept so it can be updated when it is settled. */
@@ -348,29 +381,31 @@ function getAnswerBuffer(): Map<string, Record<string, string>> {
  * alongside — a display name is set by its owner and cannot be an identity.
  */
 export async function handleCardAction(
-  event: CardActionEvent
+  event: CardActionEvent,
+  deliveringAppId: string
 ): Promise<Record<string, unknown> | undefined> {
   const value = decodeCardActionValue(event.action?.value);
   if (!value) return undefined;
 
-  if (value.kind === "ask_user") return handleQuestionAnswer(value, event);
-  if (value.kind === "approval") return handleApprovalDecision(value, event);
+  if (value.kind === "ask_user") return handleQuestionAnswer(value, event, deliveringAppId);
+  if (value.kind === "approval") return handleApprovalDecision(value, event, deliveringAppId);
   if (value.kind === "run_status") {
     return handleRunStatusClick({ runId: value.runId, chatId: event.chatId });
   }
-  return handleCancelRun(value, event);
+  return handleCancelRun(value, event, deliveringAppId);
 }
 
 async function handleQuestionAnswer(
   value: Extract<CardActionValue, { kind: "ask_user" }>,
-  event: CardActionEvent
+  event: CardActionEvent,
+  deliveringAppId: string
 ): Promise<Record<string, unknown> | undefined> {
   const entry = getPendingQuestion(value.pendingId);
   if (!entry) {
     return { toast: { type: "info", content: "这个问题已经处理过了。" } };
   }
 
-  if (!isAuthorisedOperator(entry.question.agentId, event.operator?.openId)) {
+  if (!isAuthorisedOperator(entry.question.agentId, event.operator?.openId, deliveringAppId)) {
     return { toast: { type: "error", content: "只有绑定这个应用的账号可以回答。" } };
   }
 
@@ -426,10 +461,14 @@ async function handleQuestionAnswer(
       answer
     ])
   );
-  // The operator id, not their display name. A display name is chosen by its
-  // owner, and this codebase says so in two other places; recording one as the
-  // resolver would make the audit answer forgeable.
-  const resolved = answerQuestion(question.id, byText, event.operator?.openId ?? null);
+  // The operator id, not their display name, and scoped by the app that
+  // issued it — the same person carries a different open_id in every app, so
+  // an unscoped one would conflate operators across apps (#24).
+  const resolved = answerQuestion(
+    question.id,
+    byText,
+    operatorRef(deliveringAppId, event.operator?.openId)
+  );
   if (!resolved) {
     return { toast: { type: "info", content: "这个问题已经处理过了。" } };
   }
@@ -474,7 +513,8 @@ function publishApprovalResolved(
 
 async function handleCancelRun(
   value: Extract<CardActionValue, { kind: "cancel_run" }>,
-  event: CardActionEvent
+  event: CardActionEvent,
+  deliveringAppId: string
 ): Promise<Record<string, unknown> | undefined> {
   const run = getRun(value.runId);
   if (!run) return { toast: { type: "info", content: "这次运行已经结束了。" } };
@@ -487,7 +527,7 @@ async function handleCancelRun(
     return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
   }
 
-  const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId);
+  const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId, deliveringAppId);
   if (!outcome.ok) {
     // Not an error tone for a finished run — nothing went wrong, the moment
     // passed.
@@ -532,13 +572,14 @@ function decideApproval(
 
 async function handleApprovalDecision(
   value: Extract<CardActionValue, { kind: "approval" }>,
-  event: CardActionEvent
+  event: CardActionEvent,
+  deliveringAppId: string
 ): Promise<Record<string, unknown> | undefined> {
   const item = findApproval(value.pendingType, value.pendingId);
   if (!item) return { toast: { type: "info", content: "这条已经处理过了。" } };
 
   const agentId = approvalAgentId(value.pendingType, item);
-  if (!agentId || !isAuthorisedOperator(agentId, event.operator?.openId)) {
+  if (!agentId || !isAuthorisedOperator(agentId, event.operator?.openId, deliveringAppId)) {
     return { toast: { type: "error", content: "只有绑定这个应用的账号可以批准。" } };
   }
 
@@ -549,9 +590,9 @@ async function handleApprovalDecision(
     return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
   }
 
-  // The record's resolver is the operator id, not their display name: a display
-  // name is chosen by its owner and cannot identify anyone.
-  const resolvedBy = event.operator?.openId ?? null;
+  // The record's resolver is the operator id, not their display name, scoped
+  // by the app that issued it (#24) — see operatorRef.
+  const resolvedBy = operatorRef(deliveringAppId, event.operator?.openId);
   const decided = decideApproval(value.pendingType, value.pendingId, value.decision, resolvedBy);
   if (!decided) return { toast: { type: "info", content: "这条已经处理过了。" } };
 

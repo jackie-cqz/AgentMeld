@@ -76,12 +76,20 @@ export function getPendingWritesForConversation(conversationId: string): Pending
   return getAllPendingWrites().filter((w) => w.conversationId === conversationId);
 }
 
-export function approvePendingWrite(id: string, resolvedBy?: string | null): boolean {
-  return resolvePendingWrite(id, true, resolvedBy);
+export function approvePendingWrite(
+  id: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePendingWrite(id, true, resolvedBy, resolvedByLabel);
 }
 
-export function rejectPendingWrite(id: string, resolvedBy?: string | null): boolean {
-  return resolvePendingWrite(id, false, resolvedBy);
+export function rejectPendingWrite(
+  id: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePendingWrite(id, false, resolvedBy, resolvedByLabel);
 }
 
 export function cancelPendingWritesForRun(runId: string): void {
@@ -111,11 +119,16 @@ export function clearPendingWritesForTests(): void {
   store.clear();
 }
 
-function resolvePendingWrite(id: string, approved: boolean, resolvedBy?: string | null): boolean {
+function resolvePendingWrite(
+  id: string,
+  approved: boolean,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
-  if (!resolveApproval(id, approved, Date.now(), resolvedBy ?? null)) return false;
+  if (!resolveApproval(id, approved, Date.now(), resolvedBy ?? null, resolvedByLabel ?? null)) return false;
   store.delete(id);
   entry.resolver(approved);
   return true;

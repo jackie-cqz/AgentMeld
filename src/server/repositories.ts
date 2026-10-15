@@ -413,7 +413,20 @@ export interface ApprovalRecord {
   runId: string;
   approvalType: string;
   status: string;
+  /**
+   * WHO resolved it, as an authenticated principal (issue #24):
+   * `owner:session:<id>`, `device:companion`, `feishu:<appId>:<openId>`, or
+   * `system` for test teardown.
+   *
+   * Rows written BEFORE that change may hold a caller-declared string in this
+   * column instead — the column was write-only and unverified then, and the
+   * migration does not rewrite history. So this is a trustworthy identity for
+   * anything written since, and a historical label for anything older; nothing
+   * in the codebase authorizes on it either way.
+   */
   resolvedBy: string | null;
+  /** What the caller SAID it was. Display only; grants nothing. */
+  resolvedByLabel: string | null;
   resolvedAt: number | null;
   createdAt: number;
   updatedAt: number;
@@ -440,6 +453,7 @@ function mapApprovalRow(row: Record<string, unknown>): ApprovalRecord {
     approvalType: row.approval_type as string,
     status: row.status as string,
     resolvedBy: (row.resolved_by as string | null) ?? null,
+    resolvedByLabel: (row.resolved_by_label as string | null) ?? null,
     resolvedAt: (row.resolved_at as number | null) ?? null,
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number
@@ -470,30 +484,47 @@ function normalizeResolvedBy(resolvedBy: string | null | undefined): string | nu
   return trimmed.slice(0, MAX_RESOLVED_BY_LENGTH);
 }
 
+/** Same cap, different meaning: this one is never identity. */
+function normalizeResolvedByLabel(label: string | null | undefined): string | null {
+  const trimmed = label?.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, MAX_RESOLVED_BY_LENGTH);
+}
+
 /**
  * Conditionally resolve an approval. Returns true only if the approval
  * was still 'pending' — prevents duplicate resolution.
  *
- * `resolvedBy` is a caller-declared attribution label, **not** an
- * authenticated identity: nothing in this codebase verifies it. It exists so
- * that an operator (a Feishu user's open_id, the web UI, the runtime itself)
- * can be recorded for audit. Omit it — or pass null — when the operator is
- * unknown, so the column stays NULL rather than guessing. Do not use it as an
- * authorization control.
+ * `resolvedBy` must come from the authenticated principal (see
+ * `describePrincipal` in server/auth.ts) — the resolve routes derive it from
+ * the request's session/device token, and the Feishu path from the callback's
+ * app-scoped operator id. Callers that only have a display string pass it as
+ * `resolvedByLabel`, which sits in its own column and grants nothing.
+ *
+ * Omit both — or pass null — when the operator is unknown, so the columns stay
+ * NULL rather than guessing.
  */
 export function resolveApproval(
   id: string,
   approved: boolean,
   now: number,
-  resolvedBy: string | null = null
+  resolvedBy: string | null = null,
+  resolvedByLabel: string | null = null
 ): boolean {
   const result = getDatabase()
     .prepare(`
       UPDATE pending_approvals
-      SET status = ?, resolved_by = ?, resolved_at = ?, updated_at = ?
+      SET status = ?, resolved_by = ?, resolved_by_label = ?, resolved_at = ?, updated_at = ?
       WHERE id = ? AND status = 'pending'
     `)
-    .run(approved ? "approved" : "rejected", normalizeResolvedBy(resolvedBy), now, now, id) as {
+    .run(
+      approved ? "approved" : "rejected",
+      normalizeResolvedBy(resolvedBy),
+      normalizeResolvedByLabel(resolvedByLabel),
+      now,
+      now,
+      id
+    ) as {
       changes?: number;
     };
   return (result.changes ?? 0) > 0;

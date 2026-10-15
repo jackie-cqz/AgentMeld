@@ -213,12 +213,15 @@ describe("approval operator attribution", () => {
     const promise = registerPendingBash("conv_op_1", "ag_1", "run_op_1", "npm install", "/ws", "Reason");
     const id = getAllPendingBashCommands()[0].id;
 
-    expect(approvePendingBash(id, "ou_feishu_operator_1")).toBe(true);
+    // The module API is (identity, label): a principal in the identity slot,
+    // the display string in the label slot (#24).
+    expect(approvePendingBash(id, "feishu:cli_pm:ou_feishu_operator_1", "灰灰")).toBe(true);
     await promise;
 
     const record = getApprovalRecord(id);
     expect(record?.status).toBe("approved");
-    expect(record?.resolvedBy).toBe("ou_feishu_operator_1");
+    expect(record?.resolvedBy).toBe("feishu:cli_pm:ou_feishu_operator_1");
+    expect(record?.resolvedByLabel).toBe("灰灰");
     // Regression: the column used to be written with the *status* value.
     expect(record?.resolvedBy).not.toBe("approved");
     expect(typeof record?.resolvedAt).toBe("number");
@@ -241,11 +244,11 @@ describe("approval operator attribution", () => {
     registerPendingBash("conv_op_3", "ag_1", "run_op_3", "rm -rf /", "/ws", "Reason");
     const id = getAllPendingBashCommands()[0].id;
 
-    expect(rejectPendingBash(id, "ou_feishu_operator_2")).toBe(true);
+    expect(rejectPendingBash(id, "feishu:cli_pm:ou_feishu_operator_2")).toBe(true);
 
     const record = getApprovalRecord(id);
     expect(record?.status).toBe("rejected");
-    expect(record?.resolvedBy).toBe("ou_feishu_operator_2");
+    expect(record?.resolvedBy).toBe("feishu:cli_pm:ou_feishu_operator_2");
     expect(record?.resolvedBy).not.toBe("rejected");
   });
 
@@ -253,8 +256,8 @@ describe("approval operator attribution", () => {
     registerPendingWrite("conv_op_4", "ag_1", "run_op_4", "a.txt", "/ws/a.txt", null, "x");
     const id = getAllPendingWrites()[0].id;
 
-    expect(approvePendingWrite(id, "ou_feishu_operator_3")).toBe(true);
-    expect(getApprovalRecord(id)?.resolvedBy).toBe("ou_feishu_operator_3");
+    expect(approvePendingWrite(id, "feishu:cli_pm:ou_feishu_operator_3")).toBe(true);
+    expect(getApprovalRecord(id)?.resolvedBy).toBe("feishu:cli_pm:ou_feishu_operator_3");
   });
 
   it("trims the operator and bounds its length", () => {

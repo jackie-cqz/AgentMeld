@@ -274,7 +274,7 @@ describe("run progress in a room", () => {
       const run = seedRun();
       abortRunMock.mockReturnValue(true);
 
-      expect(cancelRunFromCard(run.id, "ou_user", AGENT)).toEqual({ ok: true });
+      expect(cancelRunFromCard(run.id, "ou_user", AGENT, "cli_pm")).toEqual({ ok: true });
       expect(abortRunMock).toHaveBeenCalledWith(run.id);
     });
 
@@ -283,7 +283,20 @@ describe("run progress in a room", () => {
       const run = seedRun();
       abortRunMock.mockReturnValue(true);
 
-      const outcome = cancelRunFromCard(run.id, "ou_stranger", AGENT);
+      const outcome = cancelRunFromCard(run.id, "ou_stranger", AGENT, "cli_pm");
+
+      expect(outcome.ok).toBe(false);
+      expect(abortRunMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a click delivered by an app the agent is no longer bound to", () => {
+      // Same open_id string, different app: the stale-delivery case the
+      // question and approval cards already refuse. Cancelling is owner-gated,
+      // so it gets the same rule.
+      const run = seedRun();
+      abortRunMock.mockReturnValue(true);
+
+      const outcome = cancelRunFromCard(run.id, "ou_user", AGENT, "cli_old");
 
       expect(outcome.ok).toBe(false);
       expect(abortRunMock).not.toHaveBeenCalled();
@@ -291,7 +304,7 @@ describe("run progress in a room", () => {
 
     it("refuses a click carrying no operator", () => {
       const run = seedRun();
-      expect(cancelRunFromCard(run.id, undefined, AGENT).ok).toBe(false);
+      expect(cancelRunFromCard(run.id, undefined, AGENT, "cli_pm").ok).toBe(false);
       expect(abortRunMock).not.toHaveBeenCalled();
     });
 
@@ -299,7 +312,7 @@ describe("run progress in a room", () => {
       const run = seedRun();
       abortRunMock.mockReturnValue(false);
 
-      const outcome = cancelRunFromCard(run.id, "ou_user", AGENT);
+      const outcome = cancelRunFromCard(run.id, "ou_user", AGENT, "cli_pm");
 
       expect(outcome).toEqual({ ok: false, message: "这次运行已经结束了。" });
     });

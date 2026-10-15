@@ -156,7 +156,9 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
     // requires: the SDK runs card actions and messages on the same per-chat
     // queue, so a handler that gave the work back to that queue would wait for
     // itself.
-    return handleCardAction(event).catch((error: unknown) => {
+    // The app that delivered this click, not the one the agent happens to
+    // be bound to now: an open_id only means something inside its own app.
+    return handleCardAction(event, entry.binding.appId).catch((error: unknown) => {
       console.error("[feishu] failed to handle a card action:", error);
       return { toast: { type: "error", content: "处理失败，请在 AgentMeld 网页操作。" } };
     });

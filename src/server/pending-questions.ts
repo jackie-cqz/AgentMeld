@@ -77,13 +77,14 @@ export function getAllPendingQuestions(): PendingQuestion[] {
 export function answerQuestion(
   id: string,
   answers: Record<string, string>,
-  resolvedBy?: string | null
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
 ): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
   const now = Date.now();
-  if (!resolveApproval(id, true, now, resolvedBy ?? null)) return false;
+  if (!resolveApproval(id, true, now, resolvedBy ?? null, resolvedByLabel ?? null)) return false;
 
   // P1: Record user_answer evidence — must use a real task_attempt row for FK
   try {

@@ -208,6 +208,9 @@ export const pendingApprovals = sqliteTable(
     status: text("status").notNull().default("pending"),
     payloadJson: text("payload_json", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     resolvedBy: text("resolved_by"),
+    // Caller-declared display label. Never identity: `resolvedBy` above is the
+    // authenticated principal (#24), this is whatever string the caller sent.
+    resolvedByLabel: text("resolved_by_label"),
     resolvedAt: integer("resolved_at"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull()

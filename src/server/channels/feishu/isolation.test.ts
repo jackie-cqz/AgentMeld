@@ -238,7 +238,7 @@ describe("two groups sharing one set of agents", () => {
     const refused = await handleCardAction({
       messageId: "om_card", chatId: CHAT_B, operator: { openId: "ou_user", name: "张三" },
       action: { value: { kind: "ask_user", pendingId, questionIndex: 0, answer: "是" }, tag: "button" }
-    } as never);
+    }, "cli_pm");
     expect(refused).toMatchObject({ toast: { type: "error" } });
 
     let settled = false;
@@ -252,8 +252,9 @@ describe("two groups sharing one set of agents", () => {
     const accepted = await handleCardAction({
       messageId: "om_card", chatId: CHAT_A, operator: { openId: "ou_user", name: "张三" },
       action: { value: { kind: "ask_user", pendingId, questionIndex: 0, answer: "是" }, tag: "button" }
-    } as never);
+    }, "cli_pm");
     expect(accepted).toMatchObject({ toast: { type: "success" } });
+
     await expect(pending).resolves.toEqual({ "继续吗？": "是" });
     expect(conversationA).not.toBe(conversationB);
   });
