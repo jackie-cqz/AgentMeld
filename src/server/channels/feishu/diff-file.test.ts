@@ -78,6 +78,79 @@ describe("rendering a change as a unified diff", () => {
     }
   });
 
+  it("cannot be escaped into a second file header", () => {
+    // A newline inside a "line" used to render a real `--- a/victim.txt` block,
+    // and `git apply` then wrote to that path. The content is model-supplied.
+    const result = renderUnifiedDiff([
+      {
+        lines: [
+          " const a = 1;",
+          "+x\n--- a/victim.txt\n+++ b/victim.txt\n@@ -1,1 +1,1 @@\n-innocent\n+pwned"
+        ]
+      }
+    ]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    // The text survives, flattened onto one line: what must not survive is a
+    // LINE that opens a file header.
+    expect(result.text).not.toMatch(/^--- a\//m);
+    // Exactly one `--- `/`+++ ` pair: ours.
+    expect(result.text.match(/^--- /gm)?.length).toBe(1);
+    expect(result.text.match(/^\+\+\+ /gm)?.length).toBe(1);
+    // And exactly one hunk header.
+    expect(result.text.match(/^@@ /gm)?.length).toBe(1);
+  });
+
+  it("demotes a line that would open a file header to context", () => {
+    const result = renderUnifiedDiff([{ lines: ["--- a/victim.txt", "+++ b/victim.txt"] }]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    expect(result.text).not.toMatch(/^--- a\/victim/m);
+    expect(result.text).toContain("\n --- a/victim.txt");
+  });
+
+  it("renders a hundred thousand lines without throwing", () => {
+    // `push(...lines)` becomes an argument spread, and V8 throws a RangeError
+    // past ~110k — with the row already stored, the room would see nothing and
+    // no not-delivering line would be written.
+    const lines = Array.from({ length: 150_000 }, () => "+x");
+    const result = renderUnifiedDiff([{ lines }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.text.split("\n").length).toBeGreaterThan(150_000);
+  });
+
+  it("counts the lines itself when the declared counts disagree", () => {
+    // A wrong declared count makes the reader finish the hunk early and re-read
+    // the surplus as a new file header — the structural escape, not just a
+    // corrupt patch.
+    const result = renderUnifiedDiff([
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [" ctx", "-a", "+b", " ctx2"] }
+    ]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    // Two context lines and one deletion/addition each side: the declared
+    // "1,1" is ignored because it does not match the lines.
+    expect(result.text).toContain("@@ -1,3 +1,3 @@");
+  });
+
+  it("does not count the no-newline marker as a line", () => {
+    const result = renderUnifiedDiff([
+      { lines: [" kept", "-gone", "+added", "\\ No newline at end of file"] }
+    ]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    expect(result.text).toContain("@@ -1,2 +1,2 @@");
+    // The marker itself is preserved: it tells the reader something true.
+    expect(result.text).toContain("\\ No newline at end of file");
+  });
+
+  it("refuses to interpolate a start or count that is not a whole number", () => {
+    const result = renderUnifiedDiff([
+      { oldStart: Number.NaN, oldLines: -1, newStart: 1.5, newLines: Number.POSITIVE_INFINITY, lines: [" ctx", "+x"] }
+    ]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    expect(result.text).toContain("@@ -1,1 +1,2 @@");
+    expect(result.text).not.toContain("NaN");
+    expect(result.text).not.toContain("Infinity");
+  });
+
   it("carries non-string lines past without inventing them", () => {
     const result = renderUnifiedDiff([{ lines: ["+ok", 42, null, "+also"] }]);
     if (!result.ok) throw new Error("expected a rendered diff");

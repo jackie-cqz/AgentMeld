@@ -246,6 +246,40 @@ describe("artifactFileFor", () => {
     expect("reason" in file && file.reason).toContain("over the");
   });
 
+  it("sends a change as a .diff file that says whether it was applied", () => {
+    // The positive path had no test at all: only the empty diff was exercised,
+    // so nothing asserted the name, the bytes, or the applied marker.
+    const file = artifactFileFor(
+      artifact({
+        title: "登录页改动",
+        content: {
+          type: "diff",
+          targetArtifactId: "art_1",
+          applied: true,
+          hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [" const a = 1;", "+const b = 2;"] }]
+        }
+      }),
+      null
+    );
+    if (!("name" in file)) throw new Error("expected a file");
+    expect(file.name).toBe("登录页改动.diff");
+    const text = file.content.toString("utf-8");
+    expect(text).toContain("已应用");
+    expect(text).toContain("+const b = 2;");
+    expect(text).toContain("@@ -1,1 +1,2 @@");
+  });
+
+  it("refuses a change that renders past the byte ceiling", () => {
+    // The cap exists for diffs too, and deleting it used to leave every test
+    // green.
+    const lines = Array.from({ length: 60_000 }, () => `+${"x".repeat(40)}`);
+    const file = artifactFileFor(
+      artifact({ content: { type: "diff", targetArtifactId: "art_1", applied: false, hunks: [{ lines }] } }),
+      null
+    );
+    expect("reason" in file && file.reason).toContain("over the");
+  });
+
   it("says why an empty change is not sent", () => {
     // This used to be the example of a type that cannot be sent at all; a diff
     // is deliverable now, and what is left is malformed content — which must
