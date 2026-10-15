@@ -1,7 +1,7 @@
 "use client";
 
 import { Circle, FileSearch, Folder, GitBranch, Layers, Loader2, MessageSquare, Pencil, Pin, Reply, RotateCcw, UserPlus, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
 import { MessageParts } from "@/components/message-parts";
@@ -65,7 +65,7 @@ export function ChatPanel() {
 
   // P1: Find attemptId from a child runId.
   // Try store first (instant for active runs), fall back to API (works after refresh).
-  const handleOpenTrace = async (runId: string) => {
+  const handleOpenTrace = useCallback(async (runId: string) => {
     // Try store lookup first
     for (const dispatch of Object.values(dispatchesByRunId)) {
       for (const [taskId, childRunId] of Object.entries(dispatch.childRunIds)) {
@@ -87,9 +87,9 @@ export function ChatPanel() {
         }
       }
     } catch { /* silent — drawer will show error state */ }
-  };
+  }, [dispatchesByRunId]);
 
-  const handleViewAgent = (agent: Agent, event: ReactMouseEvent<HTMLElement>) => {
+  const handleViewAgent = useCallback((agent: Agent, event: ReactMouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const cardWidth = 380;
     const cardHeight = 340;
@@ -100,7 +100,7 @@ export function ChatPanel() {
       x: Math.min(Math.max(rect.left, 12), maxX),
       y: Math.min(Math.max(rect.bottom + 10, 12), maxY)
     });
-  };
+  }, []);
 
   const handleEditAgent = (agent: Agent) => setEditingAgent(agent);
 
@@ -259,7 +259,7 @@ export function ChatPanel() {
                   </div>
                 ) : null}
                 {visibleMessages.map((message) => (
-                  <MessageBubble
+                  <MemoMessageBubble
                     key={message.id}
                     message={message}
                     agent={message.agentId ? agents[message.agentId] : null}
@@ -523,6 +523,17 @@ function MessageBubble({
     </article>
   );
 }
+
+/**
+ * The bubble, memoized.
+ *
+ * A conversation here holds 100+ messages and a streaming answer arrives a
+ * token at a time. Without memo the whole transcript re-rendered per token —
+ * markdown, artifact cards, tool cards and all — and the main thread spent tens
+ * of seconds on it; the stuck probe measured a 41-second timer drift, which is
+ * what "卡住" actually was. With memo only the message that changed re-renders.
+ */
+const MemoMessageBubble = memo(MessageBubble);
 
 function formatTime(timestamp: number) {
   return new Intl.DateTimeFormat("zh-CN", {
