@@ -206,10 +206,23 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
 
   const workspace = getWorkspaceForConversation(artifact.conversationId);
   const file = artifactFileFor(artifact, workspace ?? null);
-  if ("reason" in file) return { status: "skipped", reason: file.reason };
+  if ("reason" in file) {
+    // A skip nobody can see is indistinguishable from a bug, and these skips
+    // happen BEFORE deliverSend, so they leave no trace in delivery health
+    // either. This line is what the operations guide tells an operator to grep.
+    console.info(`[feishu] not delivering ${artifact.id}: ${file.reason}`);
+    return { status: "skipped", reason: file.reason };
+  }
 
   // The file is the same whoever carries it, so it is built once and offered to
   // each candidate until one succeeds.
+  //
+  // The cost of trying the next candidate: a send that the platform accepted
+  // but reported as failed (a timeout, a lost response) is retried by the next
+  // bot, and the room can receive the file twice. At-most-once would drop the
+  // file whenever the FIRST candidate happens to be a bot that is not in the
+  // group, which is the case this loop exists for; the trade is documented in
+  // the operations guide rather than left implicit.
   let lastReason = "no agent observed in this group has a live channel";
   for (const agentId of candidates) {
     const channel = getFeishuChannelForAgent(agentId);
@@ -233,8 +246,10 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
       return { status: "delivered", chatId: channelConversation.chatId, fileName: file.name };
     } catch (error) {
       lastReason = error instanceof Error ? error.message : "the send failed";
+      console.error(`[feishu] failed to deliver ${artifact.id} as ${agentId}:`, error);
     }
   }
+  console.info(`[feishu] not delivering ${artifact.id}: ${lastReason}`);
   return { status: "skipped", reason: lastReason };
 }
 

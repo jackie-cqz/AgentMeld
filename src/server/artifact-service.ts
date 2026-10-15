@@ -95,14 +95,6 @@ export function createNewArtifactVersion(artifactId: string, input: UpdateArtifa
 }
 
 /**
- * Announce a created artifact to the room.
- *
- * Publishing belongs next to the write, not at each call site: the web routes
- * forgot it entirely for a long time, and a listener that throws must not be
- * reported to the caller as a failed creation (the row is already stored, and
- * the client would retry into a duplicate).
- */
-/**
  * Would this update change anything?
  *
  * Both routes that create a new version ask this first: an edit that changes
@@ -113,8 +105,11 @@ export function createNewArtifactVersion(artifactId: string, input: UpdateArtifa
  * content with its keys in another order is not making a change.
  */
 export function isNoOpArtifactUpdate(existing: Artifact, input: UpdateArtifactInput): boolean {
-  const titleUnchanged = input.title === undefined || input.title === existing.title;
-  const contentUnchanged = input.content === undefined || canonical(input.content) === canonical(existing.content);
+  // `==` on purpose: the schema accepts null, and a client sending
+  // {"content": null} means "unchanged" just as much as omitting it — while the
+  // write path (`input.content ?? existing.content`) already treats it that way.
+  const titleUnchanged = input.title == null || input.title === existing.title;
+  const contentUnchanged = input.content == null || canonical(input.content) === canonical(existing.content);
   return titleUnchanged && contentUnchanged;
 }
 
@@ -129,6 +124,14 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+/**
+ * Announce a created artifact to the room.
+ *
+ * Publishing belongs next to the write, not at each call site: the web routes
+ * forgot it entirely for a long time, and a listener that throws must not be
+ * reported to the caller as a failed creation (the row is already stored, and
+ * the client would retry into a duplicate).
+ */
 export function announceArtifactCreated(artifact: Artifact): void {
   try {
     eventBus.publish({

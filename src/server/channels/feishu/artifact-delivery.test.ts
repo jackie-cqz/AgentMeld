@@ -18,13 +18,16 @@ import {
   createChannelConversation,
   addChannelConversationMember,
   createConversation,
+  getConversation,
   upsertChannelBinding
 } from "@/server/repositories";
+import { getDatabase } from "@/db/client";
 import type { Artifact, Workspace } from "@/shared/types";
 
-const { channelsByAgent, sent } = vi.hoisted(() => ({
+const { channelsByAgent, sent, failingAgents } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
-  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>
+  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>,
+  failingAgents: new Set<string>()
 }));
 
 vi.mock("@/server/channels/feishu/registry", () => ({
@@ -32,6 +35,7 @@ vi.mock("@/server/channels/feishu/registry", () => ({
     if (!channelsByAgent.has(agentId)) return null;
     return {
       send: async (chatId: string, input: unknown) => {
+        if (failingAgents.has(agentId)) throw new Error(`bot ${agentId} is not a member of ${chatId}`);
         sent.push({ agentId, chatId, input });
         return { messageId: `om_${sent.length}` };
       }
@@ -273,6 +277,7 @@ describe("delivering an artifact into the room", () => {
     teardown = setupTestDatabase("agentmeld-channel-artifact-");
     sent.length = 0;
     channelsByAgent.clear();
+    failingAgents.clear();
     stopChannelArtifactDeliveryForTests();
     // The rate limit is a rolling window per conversation, and it lives in
     // globalThis — so a test that spends the budget leaves the next one unable
@@ -343,6 +348,7 @@ describe("delivering an artifact into the room", () => {
 
   it("stays silent rather than delivering as the wrong agent", async () => {
     channelsByAgent.clear();
+    failingAgents.clear();
     const outcome = await projectArtifact(artifact());
     expect(outcome).toEqual({ status: "skipped", reason: "agent has no live channel" });
   });
@@ -354,9 +360,49 @@ describe("delivering an artifact into the room", () => {
     expect(delivered).toMatchObject({ status: "delivered" });
   });
 
+  it("carries an authorless artifact with a bot OBSERVED in the group", async () => {
+    // conversation.agentIds says who may speak; the member table says who is in
+    // the room. A bot that is only in the first list is not a carrier.
+    const outsider = "ag_not_in_group";
+    // Has a live channel, is in the conversation's agentIds — and was never
+    // OBSERVED in the group, so it is not a carrier.
+    channelsByAgent.set(outsider, {});
+    // The outsider comes FIRST in agentIds; the bot actually in the group is
+    // second, and the member table is the only source that says so.
+    // The conversation already exists; make the outsider its FIRST agent, so a
+    // carrier list taken from agentIds would pick the wrong bot.
+    getDatabase()
+      .prepare("UPDATE conversations SET agent_ids = ? WHERE id = ?")
+      .run(JSON.stringify([outsider, AGENT]), "conv_1");
+    expect(getConversation("conv_1")?.agentIds).toEqual([outsider, AGENT]);
+
+    await projectArtifact(artifact({ createdByAgentId: null }));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].agentId).toBe(AGENT);
+  });
+
+  it("tries the next observed member when the first cannot send", async () => {
+    const second = "ag_designer";
+    channelsByAgent.set(second, {});
+    // Later first_seen_at, so the member order is definitely [failing, second]
+    // (the list is ordered by first_seen_at, and equal timestamps leave the
+    // order unspecified — which made an earlier version of this test pass even
+    // with the fallback removed).
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: second, now: 2 });
+    failingAgents.add(AGENT);
+
+    const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+
+    expect(outcome).toMatchObject({ status: "delivered" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].agentId).toBe(second);
+  });
+
   it("stays silent for an artifact nobody authored when no bot can carry it", async () => {
     // Nobody observed in the group has a channel any more.
     channelsByAgent.clear();
+    failingAgents.clear();
     const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
     expect(outcome).toEqual({
       status: "skipped",

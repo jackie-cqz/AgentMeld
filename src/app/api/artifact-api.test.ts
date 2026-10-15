@@ -385,6 +385,47 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
     }
   });
 
+  it("treats an explicit null content as unchanged", async () => {
+    // The guard tested `=== undefined` while the write path used `??`, so
+    // {"content": null} slipped past the guard and created the duplicate row it
+    // exists to prevent.
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "document",
+      title: "第一版",
+      content: { type: "document", content: "# one" }
+    });
+    const { seen, unsubscribe } = collect();
+    try {
+      const patched = await patchArtifact(
+        authedRequest(`http://localhost/api/artifacts/${original.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: null })
+        }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(patched.status).toBe(200);
+      expect(((await patched.json()) as { artifact: { id: string } }).artifact.id).toBe(original.id);
+
+      const versioned = await postArtifactVersion(
+        authedRequest(`http://localhost/api/artifacts/${original.id}/versions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: null })
+        }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(versioned.status).toBe(200);
+      expect(((await versioned.json()) as { artifact: { id: string } }).artifact.id).toBe(original.id);
+
+      expect(seen).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("publishes on an edit, as a new version row", async () => {
     const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
     const original = createNewArtifact({
