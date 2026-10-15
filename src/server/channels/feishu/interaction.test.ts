@@ -13,7 +13,11 @@ import {
   startChannelInteractions,
   stopChannelInteractionsForTests
 } from "@/server/channels/feishu/interaction";
-import { registerPendingQuestion, clearPendingQuestionsForTests } from "@/server/pending-questions";
+import {
+  clearPendingQuestionsForTests,
+  getPendingQuestion,
+  registerPendingQuestion
+} from "@/server/pending-questions";
 import { registerPendingBash, clearPendingBashForTests } from "@/server/pending-bash";
 import {
   createChannelConversation,
@@ -350,14 +354,105 @@ describe("handleCardAction", () => {
       click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "React" }, { openId: "ou_user", name: "甲" })
     );
 
-    // The card the second click returns shows React, because React is now the
-    // answer — not the device's own earlier choice.
-    expect(JSON.stringify(second)).toContain("React");
+    // The card the second click returns shows React as CHOSEN. The assertion used
+    // to be `toContain("React")`, which the button label satisfies on its own, so
+    // it passed while the card showed no selection at all.
+    expect(JSON.stringify(second)).toContain("已选择：**React**");
 
     await handleCardAction(
       click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }, { openId: "ou_user", name: "甲" })
     );
     await expect(pending).resolves.toEqual({ "用哪个框架？": "React", "部署到哪？": "预览" });
+  });
+
+  /** Every button on a question card, one row per question, as the platform would hand it back. */
+  function questionRows(card: object): Array<Array<{ label: string; value?: unknown }>> {
+    const elements = (card as {
+      elements: Array<{ tag: string; actions?: Array<{ text: { content: string }; value?: unknown }> }>;
+    }).elements;
+    return elements
+      .filter((element) => element.tag === "action")
+      .map((element) =>
+        (element.actions ?? []).map((button) => ({ label: button.text.content, value: button.value }))
+      );
+  }
+
+  function postedCard(pendingId: string): object {
+    const entry = getPendingQuestion(pendingId);
+    if (!entry) throw new Error("expected a pending question");
+    return buildQuestionCard(entry.question);
+  }
+
+  it("keeps the rest of a card answerable after one question is answered", async () => {
+    // The card used to strip EVERY button the moment any question had an answer,
+    // so answering the first of two left the second with nothing to press — the
+    // run waited, and only the web could finish it. The test that should have
+    // caught it clicked the second question with a hand-built value, never with
+    // one taken from the card that came back.
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", [
+      { question: "用哪个框架？", header: "一", options: [{ label: "Vue" }, { label: "React" }] },
+      { question: "部署到哪？", header: "二", options: [{ label: "预览" }, { label: "线上" }] }
+    ]);
+    const pendingId = latestKey();
+    const fresh = questionRows(postedCard(pendingId));
+
+    const partial = await handleCardAction(click(fresh[0][0].value));
+    const returned = (partial as { card: { data: object } }).card.data;
+    const rows = questionRows(returned);
+
+    // The question that was answered shows what was chosen and is no longer
+    // clickable...
+    expect(JSON.stringify(returned)).toContain("已选择：**Vue**");
+    for (const button of rows[0]) expect(button.value).toBeUndefined();
+    // ...and the other one is exactly as it was.
+    expect(rows[1].map((button) => button.label)).toEqual(["预览", "线上"]);
+    for (const button of rows[1]) {
+      expect(decodeCardActionValue(button.value)).toMatchObject({ kind: "ask_user", questionIndex: 1 });
+    }
+
+    // Answering it with a value taken from the card that came BACK finishes it.
+    await handleCardAction(click(rows[1][0].value));
+    await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue", "部署到哪？": "预览" });
+  });
+
+  it("shows every choice and nothing clickable once the card is complete", async () => {
+    registerPendingQuestion("conv_1", AGENT, "run_1", [
+      { question: "用哪个框架？", header: "一", options: [{ label: "Vue" }] },
+      { question: "部署到哪？", header: "二", options: [{ label: "预览" }] }
+    ]);
+    const pendingId = latestKey();
+    const fresh = questionRows(postedCard(pendingId));
+
+    const partial = await handleCardAction(click(fresh[0][0].value));
+    const rows = questionRows((partial as { card: { data: object } }).card.data);
+    const done = await handleCardAction(click(rows[1][0].value));
+
+    const finalCard = (done as { card: { data: object } }).card.data;
+    expect(JSON.stringify(finalCard)).toContain("已选择：**Vue**");
+    expect(JSON.stringify(finalCard)).toContain("已选择：**预览**");
+    for (const row of questionRows(finalCard)) {
+      for (const button of row) expect(button.value).toBeUndefined();
+    }
+  });
+
+  it("tells two questions with identical text apart", async () => {
+    // Keyed by text, answering one marked BOTH answered, and the second could
+    // never be answered from the card.
+    registerPendingQuestion("conv_1", AGENT, "run_1", [
+      { question: "继续吗？", header: "一", options: [{ label: "是" }] },
+      { question: "继续吗？", header: "二", options: [{ label: "否" }] }
+    ]);
+    const pendingId = latestKey();
+    const fresh = questionRows(postedCard(pendingId));
+
+    const partial = await handleCardAction(click(fresh[0][0].value));
+    const rows = questionRows((partial as { card: { data: object } }).card.data);
+
+    expect(rows[0][0].value).toBeUndefined();
+    expect(decodeCardActionValue(rows[1][0].value)).toMatchObject({
+      kind: "ask_user",
+      questionIndex: 1
+    });
   });
 
   it("says so, rather than failing silently, when the question is already gone", async () => {
