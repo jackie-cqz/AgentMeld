@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import { getArtifact } from "@/server/repositories";
 import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 import { cancelJobsForRun } from "@/server/tools/command-jobs";
@@ -16,6 +17,10 @@ import { assertRealPathWithinWorkspace } from "@/server/workspace-utils";
 export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSignal): PiInvocationStream {
   // Freeze provider resolution before waiting behind another workspace owner.
   input = capturePiConfiguration(input);
+  // Pi and its native write callback must use the same physical root as the
+  // admission bridge (Windows 8.3 names and directory aliases can differ).
+  try { input = { ...input, workspacePath: fs.realpathSync(input.workspacePath) }; }
+  catch { throw new PiRuntimeError("The Pi workspace directory is not accessible.", "configuration"); }
   const budget = new AbortController();
   const timeoutMs = Number(process.env.AGENTMELD_PI_RUN_TIMEOUT_MS ?? 20 * 60 * 1000);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 24 * 60 * 60 * 1000) throw new PiRuntimeError("Invalid Pi invocation timeout configuration.", "configuration");
@@ -137,7 +142,7 @@ export function buildPiTaskPacket(input: PiInvocationInput): string {
     const attachment = getAttachment(part.attachmentId);
     if (!attachment || attachment.conversationId !== input.conversationId) return [];
     let workspacePath: string | undefined;
-    try { workspacePath = path.relative(input.workspacePath, assertRealPathWithinWorkspace(input.workspacePath, attachment.filePath)); }
+    try { workspacePath = path.relative(input.workspacePath, assertRealPathWithinWorkspace(input.workspacePath, fs.realpathSync(attachment.filePath))); }
     catch { /* Out-of-workspace attachments are only accessible through the scoped platform tool. */ }
     return [{ id: attachment.id, fileName: attachment.fileName, mimeType: attachment.mimeType, workspacePath }];
   });

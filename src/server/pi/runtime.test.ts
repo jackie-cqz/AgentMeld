@@ -87,6 +87,25 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
   }, 30000);
 
+  it("authorizes native writes when the workspace is reached through a directory alias", async () => {
+    let requests = 0;
+    let nativePath = "";
+    const url = await modelServer((_request, response) => {
+      requests++;
+      complete(response, requests === 1 ? { tool_calls: [{ index: 0, id: "alias-write", type: "function", function: { name: "write", arguments: JSON.stringify({ path: nativePath, content: "same physical workspace" }) } }] } : { content: "Done" }, requests === 1 ? "tool_calls" : "stop");
+    });
+    const input = invocation(url, ["fs_write"]);
+    const target = input.workspacePath;
+    nativePath = path.join(fs.realpathSync(target), "alias.txt");
+    const alias = `${target}-alias`;
+    fs.symlinkSync(target, alias, "junction");
+    input.workspacePath = alias;
+    const events: StreamEvent[] = [];
+    for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(events.filter(event => event.type === "tool.result" && event.isError)).toEqual([]);
+    expect(fs.readFileSync(path.join(target, "alias.txt"), "utf8")).toBe("same physical workspace");
+  }, 30000);
+
   it("uses Pi's batch edit algorithm and preserves BOM and CRLF bytes", async () => {
     let requests = 0;
     const url = await modelServer((_request, response) => {
