@@ -53,6 +53,16 @@ export type ApprovalKind = "plan" | "bash" | "write";
  */
 export type CardActionValue =
   | { kind: "ask_user"; pendingId: string; questionIndex: number; answer: string }
+  /**
+   * A multi-select question is answered in two moves: each click toggles one
+   * option, and a confirm commits the set. `v` is a version stamped into the
+   * value because the platform deduplicates identical card actions — select,
+   * deselect, select again sends the same `toggle` three times, and without the
+   * version the third click would be silently dropped (the same trap the status
+   * button hit).
+   */
+  | { kind: "ask_user"; pendingId: string; questionIndex: number; toggle: string; v: number }
+  | { kind: "ask_user"; pendingId: string; questionIndex: number; confirm: true; v: number }
   | {
       kind: "approval";
       pendingType: ApprovalKind;
@@ -76,6 +86,26 @@ export function decodeCardActionValue(value: unknown): CardActionValue | null {
   if (raw.kind === "ask_user") {
     if (typeof raw.pendingId !== "string" || !raw.pendingId) return null;
     if (typeof raw.questionIndex !== "number" || !Number.isInteger(raw.questionIndex)) return null;
+    if (typeof raw.toggle === "string" && raw.toggle) {
+      if (typeof raw.v !== "number" || !Number.isInteger(raw.v)) return null;
+      return {
+        kind: "ask_user",
+        pendingId: raw.pendingId,
+        questionIndex: raw.questionIndex,
+        toggle: raw.toggle,
+        v: raw.v
+      };
+    }
+    if (raw.confirm === true) {
+      if (typeof raw.v !== "number" || !Number.isInteger(raw.v)) return null;
+      return {
+        kind: "ask_user",
+        pendingId: raw.pendingId,
+        questionIndex: raw.questionIndex,
+        confirm: true,
+        v: raw.v
+      };
+    }
     if (typeof raw.answer !== "string") return null;
     return {
       kind: "ask_user",
@@ -212,6 +242,9 @@ export function buildQuestionCard(
     // answer up by question text in a buffer keyed by index, so it never found
     // it: the card that came back showed no selection at all.
     const chosen = answeredByIndex[String(index)] ?? answered[item.question];
+    const multi = item.multiSelect === true && chosen === undefined && state.cancelled !== true;
+    // Ticked so far, before confirming.
+    const selected = multi ? selectedOptions(question, index) : [];
     // Nobody may click an answered question again, or any question on a card
     // that has been cancelled — which has no answers, and was the reason the
     // flag existed.
@@ -222,29 +255,55 @@ export function buildQuestionCard(
         tag: "lark_md",
         content:
           `**${escapeLarkMd(item.header)}**\n${escapeLarkMd(item.question)}` +
-          (chosen ? `\n\n已选择：**${escapeLarkMd(chosen)}**` : "")
+          (chosen ? `\n\n已选择：**${escapeLarkMd(chosen)}**` : "") +
+          (multi
+            ? selected.length > 0
+              ? `\n\n已选：**${selected.map(escapeLarkMd).join("、")}**（可多选，选好后点「确认」）`
+              : "\n\n可多选：点选项选择，选好后点「确认」"
+            : "")
       }
     });
     // Answered questions keep their buttons visible but inert: the card stays a
     // readable record of what was asked, rather than turning into a bare label.
-    elements.push({
-      tag: "action",
-      actions: item.options.map((option) => ({
+    const version = getCardVersions().get(question.id) ?? 0;
+    const actions: object[] = item.options.map((option) => ({
+      tag: "button",
+      text: { tag: "plain_text", content: option.label },
+      type: chosen === option.label || selected.includes(option.label) ? "primary" : "default",
+      ...(inert
+        ? {}
+        : {
+            value: (multi
+              ? {
+                  kind: "ask_user",
+                  pendingId: question.id,
+                  questionIndex: index,
+                  toggle: option.label,
+                  v: version
+                }
+              : {
+                  kind: "ask_user",
+                  pendingId: question.id,
+                  questionIndex: index,
+                  answer: option.label
+                }) satisfies CardActionValue
+          })
+    }));
+    if (multi) {
+      actions.push({
         tag: "button",
-        text: { tag: "plain_text", content: option.label },
-        type: chosen === option.label ? "primary" : "default",
-        ...(inert
-          ? {}
-          : {
-              value: {
-                kind: "ask_user",
-                pendingId: question.id,
-                questionIndex: index,
-                answer: option.label
-              } satisfies CardActionValue
-            })
-      }))
-    });
+        text: { tag: "plain_text", content: "确认" },
+        type: selected.length > 0 ? "primary" : "default",
+        value: {
+          kind: "ask_user",
+          pendingId: question.id,
+          questionIndex: index,
+          confirm: true,
+          v: version
+        } satisfies CardActionValue
+      });
+    }
+    elements.push({ tag: "action", actions });
   });
 
   if (state.cancelled) {
@@ -351,6 +410,8 @@ interface PostedApproval {
 
 declare global {
   var __agentMeldChannelAnswers: Map<string, Record<string, string>> | undefined;
+  var __agentMeldChannelDrafts: Map<string, Record<string, string[]>> | undefined;
+  var __agentMeldChannelVersions: Map<string, number> | undefined;
   var __agentMeldChannelCards: Map<string, PostedCard> | undefined;
   var __agentMeldChannelApprovalCards: Map<string, PostedApproval> | undefined;
   var __agentMeldChannelInteractionStop: (() => void) | undefined;
@@ -369,6 +430,34 @@ function getPostedApprovals(): Map<string, PostedApproval> {
 function getAnswerBuffer(): Map<string, Record<string, string>> {
   globalThis.__agentMeldChannelAnswers ??= new Map<string, Record<string, string>>();
   return globalThis.__agentMeldChannelAnswers;
+}
+
+/** What has been ticked so far on a multi-select question, before confirming. */
+function getSelectionDrafts(): Map<string, Record<string, string[]>> {
+  globalThis.__agentMeldChannelDrafts ??= new Map<string, Record<string, string[]>>();
+  return globalThis.__agentMeldChannelDrafts;
+}
+
+/** Bumped on every toggle: identical card actions are deduplicated upstream. */
+function getCardVersions(): Map<string, number> {
+  globalThis.__agentMeldChannelVersions ??= new Map<string, number>();
+  return globalThis.__agentMeldChannelVersions;
+}
+
+function bumpVersion(pendingId: string): number {
+  const versions = getCardVersions();
+  const next = (versions.get(pendingId) ?? 0) + 1;
+  versions.set(pendingId, next);
+  return next;
+}
+
+/** The selected labels for one question, in the order the card offered them. */
+export function selectedOptions(question: PendingQuestion, index: number): string[] {
+  const draft = getSelectionDrafts().get(question.id)?.[String(index)] ?? [];
+  const offered = question.questions[index]?.options.map((option) => option.label) ?? [];
+  // Card order, not click order: the answer a person reads back should be the
+  // order they saw, and the same set must always produce the same string.
+  return offered.filter((label) => draft.includes(label));
 }
 
 /**
@@ -423,6 +512,50 @@ async function handleQuestionAnswer(
   const asked = question.questions[value.questionIndex];
   if (!asked) return { toast: { type: "error", content: "这张卡片已经过期。" } };
 
+  // A multi-select question is answered by ticking options and confirming. The
+  // two moves are separate so the card can show what is ticked; without this a
+  // click resolved the whole question with one label, which is what "multiSelect
+  // degrades to single-select" meant.
+  if ("toggle" in value || "confirm" in value) {
+    if (asked.multiSelect !== true) {
+      return { toast: { type: "error", content: "这个问题只能选一个选项。" } };
+    }
+    const option = "toggle" in value ? value.toggle : null;
+    if (option && !asked.options.some((candidate) => candidate.label === option)) {
+      return { toast: { type: "error", content: "这个选项已经失效，请重新点击卡片。" } };
+    }
+
+    const drafts = getSelectionDrafts();
+    const forQuestion = { ...(drafts.get(question.id) ?? {}) };
+    const current = forQuestion[String(value.questionIndex)] ?? [];
+    if (option) {
+      forQuestion[String(value.questionIndex)] = current.includes(option)
+        ? current.filter((label) => label !== option)
+        : [...current, option];
+    } else if (current.length === 0) {
+      return { toast: { type: "error", content: "请先选择至少一个选项。" } };
+    }
+    drafts.set(question.id, forQuestion);
+
+    // Stamp a new version: the platform drops a repeated identical action, so
+    // without this a select → deselect → select sequence would lose its third
+    // click.
+    bumpVersion(question.id);
+
+    if (option) {
+      return {
+        card: { type: "raw", data: buildQuestionCard(question, { answeredByIndex: getAnswerBuffer().get(question.id) ?? {} }) }
+      };
+    }
+    // Confirmed: the answer is the ticked labels, in the order the card offered
+    // them, joined the way the web page joins a multi-select answer.
+    const confirmed = selectedOptions(question, value.questionIndex).join("; ");
+    if (!confirmed) {
+      return { toast: { type: "error", content: "请先选择至少一个选项。" } };
+    }
+    return completeQuestion(question, value.questionIndex, confirmed, event, deliveringAppId);
+  }
+
   // The answer must be one the card offered. Without this any string is
   // accepted, so a forwarded or hand-crafted card value can put arbitrary text
   // into the run as though the user had chosen it.
@@ -430,7 +563,6 @@ async function handleQuestionAnswer(
     return { toast: { type: "error", content: "这个选项已经失效，请重新点击卡片。" } };
   }
 
-  const buffer = getAnswerBuffer();
   // Keyed by the question's INDEX, not its text: two questions with identical
   // text collapse into one key and the count can never reach the number of
   // questions, so the run waits forever for an answer it already has.
@@ -443,16 +575,25 @@ async function handleQuestionAnswer(
   // meant. Writing a first-wins rule for the other case would be a branch
   // nothing can reach; if the owner check is ever loosened, this is the
   // invariant that has to be decided then.
-  const answers = { ...(buffer.get(question.id) ?? {}), [String(value.questionIndex)]: value.answer };
-  buffer.set(question.id, answers);
+  return completeQuestion(question, value.questionIndex, value.answer, event, deliveringAppId);
+}
 
-  if (Object.keys(answers).length < question.questions.length) {
-    return {
-      card: { type: "raw", data: buildQuestionCard(question, { answeredByIndex: answers }) }
-    };
-  }
-
-  buffer.delete(question.id);
+/**
+ * Record the collected answers and return the card that shows them.
+ *
+ * Shared by the single-select path and the multi-select confirm so both end the
+ * question the same way: the record, the events, and the card a person sees
+ * must not depend on which kind of question they answered.
+ */
+function finishQuestion(
+  question: PendingQuestion,
+  answers: Record<string, string>,
+  event: CardActionEvent,
+  deliveringAppId: string
+): Record<string, unknown> {
+  getAnswerBuffer().delete(question.id);
+  getSelectionDrafts().delete(question.id);
+  getCardVersions().delete(question.id);
   // `answerQuestion` keys its record by the question's TEXT, so the buffered
   // indices are translated back here.
   const byText = Object.fromEntries(
@@ -480,6 +621,25 @@ async function handleQuestionAnswer(
     },
     toast: { type: "success", content: "已回答。" }
   };
+}
+
+/** One answer, into the buffer, finishing the question when it is complete. */
+function completeQuestion(
+  question: PendingQuestion,
+  index: number,
+  answer: string,
+  event: CardActionEvent,
+  deliveringAppId: string
+): Record<string, unknown> {
+  const buffer = getAnswerBuffer();
+  const answers = { ...(buffer.get(question.id) ?? {}), [String(index)]: answer };
+  buffer.set(question.id, answers);
+  if (Object.keys(answers).length < question.questions.length) {
+    return {
+      card: { type: "raw", data: buildQuestionCard(question, { answeredByIndex: answers }) }
+    };
+  }
+  return finishQuestion(question, answers, event, deliveringAppId);
 }
 
 /**

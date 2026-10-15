@@ -227,8 +227,17 @@ describe("handleCardAction", () => {
     return [...store.keys()][store.size - 1] as string;
   }
 
-  function ask(options: { twoQuestions?: boolean } = {}) {
-    const questions: PendingQuestion["questions"] = options.twoQuestions
+  function ask(options: { twoQuestions?: boolean; multi?: boolean } = {}) {
+    const questions: PendingQuestion["questions"] = options.multi
+      ? [
+          {
+            question: "要哪些能力？",
+            header: "范围",
+            multiSelect: true,
+            options: [{ label: "搜索" }, { label: "翻译" }, { label: "总结" }]
+          }
+        ]
+      : options.twoQuestions
       ? [
           { question: "用哪个框架？", header: "技术栈", options: [{ label: "Vue" }, { label: "React" }] },
           { question: "部署到哪？", header: "环境", options: [{ label: "预览" }, { label: "线上" }] }
@@ -253,6 +262,95 @@ describe("handleCardAction", () => {
 
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
     expect(response).toMatchObject({ toast: { type: "success" } });
+  });
+
+  it("collects several ticks and resolves them as one answer on confirm", async () => {
+    // multiSelect used to degrade to a single choice: one click resolved the
+    // whole question, and the other ticks were impossible to express.
+    const { pending, pendingId } = ask({ multi: true });
+
+    const first = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "翻译", v: 0 }),
+      "cli_pm"
+    );
+    // Ticking does not answer anything yet — the card comes back with the tick
+    // visible so the person can keep going.
+    expect(first).toHaveProperty("card");
+    expect(JSON.stringify(first)).toContain("已选");
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 1 }),
+      "cli_pm"
+    );
+    const confirmed = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 2 }),
+      "cli_pm"
+    );
+
+    // Card order, joined the way the web page joins a multi-select answer.
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "搜索; 翻译" });
+    expect(confirmed).toMatchObject({ toast: { type: "success" } });
+  });
+
+  it("unticks an option that was already ticked", async () => {
+    const { pending, pendingId } = ask({ multi: true });
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }), "cli_pm");
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 1 }), "cli_pm");
+    const confirmed = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 2 }),
+      "cli_pm"
+    );
+
+    // Nothing ticked, so the confirm is refused rather than answering with "".
+    expect(confirmed).toMatchObject({ toast: { type: "error" } });
+    await expect(Promise.race([pending, Promise.resolve("pending")])).resolves.toBe("pending");
+  });
+
+  it("refuses a tick on a single-choice question", async () => {
+    const { pending, pendingId } = ask();
+    const response = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "Vue", v: 0 }),
+      "cli_pm"
+    );
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    await expect(Promise.race([pending, Promise.resolve("pending")])).resolves.toBe("pending");
+  });
+
+  it("refuses a tick for an option the card never offered", async () => {
+    const { pendingId } = ask({ multi: true });
+    const response = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "删库", v: 0 }),
+      "cli_pm"
+    );
+    expect(response).toMatchObject({ toast: { type: "error" } });
+  });
+
+  it("stamps a new version into the buttons so a repeated tick is not deduplicated", async () => {
+    // The platform drops a card action whose value it has already seen. Select,
+    // deselect, select again sends the same payload three times, so without a
+    // version the third click would vanish.
+    const { pendingId } = ask({ multi: true });
+    const question = getPendingQuestion(pendingId)!.question;
+    // The TOGGLE button's own value, not the confirm button's: asserting on the
+    // whole card let a mutation that froze the toggle's version stay green,
+    // because the confirm button carries a fresh version either way.
+    const toggleValue = (card: object) => {
+      const elements = (card as { elements: Array<Record<string, unknown>> }).elements;
+      for (const element of elements) {
+        const actions = (element.actions ?? []) as Array<{ value?: { toggle?: string; v?: number } }>;
+        for (const action of actions) {
+          if (action.value?.toggle) return action.value.v;
+        }
+      }
+      return undefined;
+    };
+
+    const before = toggleValue(buildQuestionCard(question));
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }), "cli_pm");
+    const after = toggleValue(buildQuestionCard(question));
+
+    expect(before).toBe(0);
+    expect(after).toBe(1);
   });
 
   it("does not resolve a multi-question pending until every answer is in", async () => {
