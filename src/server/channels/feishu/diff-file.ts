@@ -57,23 +57,19 @@ function impliedCounts(lines: string[]): { oldLines: number; newLines: number } 
  * and a line that would start a hunk or a file header is demoted to context.
  */
 function normalizeLine(line: string): string {
-  const flattened = line.replace(/[\r\n]+/g, " ");
-  // Markers that carry structure. `\\` (no newline at end of file) is kept as
-  // it is only when it is the whole line; anything else becomes context.
-  if (/^\\/.test(flattened)) return flattened;
-  // Looks like structure rather than content: defuse it. The counts already
-  // stop a reader from being tricked into re-reading one of these as a header,
-  // and this stops a reader that does not use the counts (a grep, a person).
-  if (/^(?:--- |\+\+\+ |diff |@@ )/.test(flattened)) return ` ${flattened}`;
+  // A trailing CR is a line TERMINATOR the producer split off, not content:
+  // turning it into a space would append one to every line of a CRLF patch.
+  const flattened = line.replace(/[\r\n]+$/, "").replace(/[\r\n]+/g, " ");
+  // A line that already carries a marker is CONTENT. `-` followed by
+  // `-- old comment` makes `--- old comment`, which is a deletion of a
+  // SQL/Lua/Haskell comment, not a file header — demoting it to context would
+  // silently change what the change says.
   if (/^[+\- ]/.test(flattened)) return flattened;
+  // No marker and it looks like structure: this is the only place a forged
+  // header could live, so it becomes context. A `\\`-prefixed marker line is
+  // let through — it tells the reader something true about the previous line.
+  if (/^\\/.test(flattened)) return flattened;
   return ` ${flattened}`;
-}
-
-/** The declared count is used only when it agrees with the lines. */
-function agreedCount(declared: unknown, implied: number): number {
-  return typeof declared === "number" && Number.isInteger(declared) && declared >= 0
-    ? declared
-    : implied;
 }
 
 /** A start line the reader can use; anything else falls back to 1. */
@@ -104,12 +100,13 @@ export function renderUnifiedDiff(
     // The lines are the authority: a declared count that disagrees with them
     // either produces a corrupt patch or — worse — makes the reader finish the
     // hunk early and re-read the surplus as a new file header.
-    const declaredOld = typeof hunk.oldLines === "number" ? hunk.oldLines : undefined;
-    const declaredNew = typeof hunk.newLines === "number" ? hunk.newLines : undefined;
     const oldStart = safeStart(hunk.oldStart);
     const newStart = safeStart(hunk.newStart);
-    const oldLines = declaredOld === implied.oldLines ? agreedCount(declaredOld, implied.oldLines) : implied.oldLines;
-    const newLines = declaredNew === implied.newLines ? agreedCount(declaredNew, implied.newLines) : implied.newLines;
+    // The lines are the authority. A declared count that disagrees with them is
+    // not used: it would let a reader finish the hunk early and re-read the
+    // surplus as a header.
+    const oldLines = implied.oldLines;
+    const newLines = implied.newLines;
     const header = typeof hunk.header === "string" && hunk.header.trim().length > 0
       ? ` ${hunk.header.replace(/[\r\n]+/g, " ").trim()}`
       : "";

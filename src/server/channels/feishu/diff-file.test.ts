@@ -72,6 +72,47 @@ describe("rendering a change as a unified diff", () => {
     }
   });
 
+  it("reproduces a real diff -u faithfully, including -- and ++ content", () => {
+    // The regression a review caught: a deletion of a line whose content starts
+    // with "-- " renders as "--- old comment", and demoting that to context
+    // silently turns a deletion into "it was already there".
+    const hunks = [
+      {
+        oldStart: 1,
+        newStart: 1,
+        header: "sql",
+        lines: [" keep", "--- old comment", "+-- new comment", " tail"]
+      },
+      {
+        oldStart: 40,
+        newStart: 40,
+        lines: [" ctx", "+++ extra", " ctx2"]
+      }
+    ];
+    const result = renderUnifiedDiff(hunks);
+    if (!result.ok) throw new Error("expected a rendered diff");
+
+    // First hunk: one deletion, one addition, two context lines.
+    expect(result.text).toContain("@@ -1,3 +1,3 @@ sql");
+    // Second: one addition, two context lines.
+    expect(result.text).toContain("@@ -40,2 +40,3 @@");
+    // The marker is preserved exactly: it is a deletion of that text.
+    expect(result.text.split("\n")).toContain("--- old comment");
+    expect(result.text.split("\n")).toContain("+++ extra");
+  });
+
+  it("strips a line terminator instead of turning it into trailing space", () => {
+    // A CRLF patch split on "\n" leaves a CR on every line; folding it to a
+    // space would append a trailing space to every line of the delivered file.
+    const result = renderUnifiedDiff([{ lines: ["+x\r", "+y\r", " z\r"] }]);
+    if (!result.ok) throw new Error("expected a rendered diff");
+    for (const line of result.text.split("\n")) {
+      expect(line.endsWith(" ")).toBe(false);
+    }
+    expect(result.text).toContain("+x");
+    expect(result.text).toContain("+y");
+  });
+
   it("never throws, whatever it is given", () => {
     for (const hunks of [42, {}, [null], [undefined], [{ lines: [1, 2, null] }], [""]]) {
       expect(() => renderUnifiedDiff(hunks as never)).not.toThrow();
@@ -100,11 +141,19 @@ describe("rendering a change as a unified diff", () => {
     expect(result.text.match(/^@@ /gm)?.length).toBe(1);
   });
 
-  it("demotes a line that would open a file header to context", () => {
+  it("keeps a header-looking line inside the hunk, where the counts hold it", () => {
+    // `--- a/victim.txt` as a line means "delete a line whose content is
+    // `-- a/victim.txt`" — a SQL/Lua/Haskell comment — so it must stay a
+    // deletion, not be demoted to context. It is safe because the hunk's counts
+    // are exact: a reader finishes the hunk there and never looks for a file
+    // header inside it.
     const result = renderUnifiedDiff([{ lines: ["--- a/victim.txt", "+++ b/victim.txt"] }]);
     if (!result.ok) throw new Error("expected a rendered diff");
-    expect(result.text).not.toMatch(/^--- a\/victim/m);
-    expect(result.text).toContain("\n --- a/victim.txt");
+    expect(result.text.match(/^@@ /gm)?.length).toBe(1);
+    // One deletion, one addition — exactly the two lines given.
+    expect(result.text).toContain("@@ -1,1 +1,1 @@");
+    const body = result.text.split("\n").filter((line) => /^[+-]/.test(line));
+    expect(body).toContain("--- a/victim.txt");
   });
 
   it("renders a hundred thousand lines without throwing", () => {
