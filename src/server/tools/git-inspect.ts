@@ -5,11 +5,12 @@ import { z } from "zod";
 import { safeWorkspacePath, toolProcessEnv } from "@/server/tools/workspace-access";
 import { isPathWithin } from "@/server/workspace-utils";
 import type { ToolDef } from "@/server/tools/types";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 
 async function git(args: string[], cwd: string, root: string, signal: AbortSignal) {
   return new Promise<string>((resolve, reject) => {
     const nullFile = process.platform === "win32" ? "NUL" : "/dev/null";
-    const child = spawn("git", ["--no-pager", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", "diff.ignoreSubmodules=all", "-c", `core.hooksPath=${nullFile}`, "-c", "diff.external=", ...args], {
+    const child = spawn("git", ["--no-pager", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", "diff.ignoreSubmodules=all", "-c", `core.hooksPath=${nullFile}`, "-c", `core.attributesFile=${nullFile}`, "-c", `core.excludesFile=${nullFile}`, "-c", "diff.external=", ...args], {
       cwd, windowsHide: true, env: { ...toolProcessEnv(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_SYSTEM: nullFile, GIT_CONFIG_GLOBAL: nullFile, GIT_CEILING_DIRECTORIES: root,
         GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" }, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
     });
@@ -21,6 +22,7 @@ async function git(args: string[], cwd: string, root: string, signal: AbortSigna
 }
 
 export const gitInspectTool: ToolDef = {
+  capabilities: TOOL_CAPABILITIES.git_inspect,
   name: "git_inspect", description: "Read-only Git status, working/staged diff or recent log inside a workspace-owned repository. Never stages, commits, resets or pushes. No arbitrary Git arguments or hooks/external diff execution. Output capped at 50k characters.",
   parameters: { type: "object", required: ["action"], properties: { action: { type: "string", enum: ["status", "diff", "log"] }, path: { type: "string" }, staged: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 20 } } },
   async handler(args, ctx) {
@@ -40,6 +42,14 @@ export const gitInspectTool: ToolDef = {
         if (++entries > 10000) throw new Error("Repository metadata is too large for bounded inspection.");
         if (entry.isSymbolicLink()) throw new Error("Repository metadata links are not allowed.");
         if (entry.isDirectory()) pending.push(path.join(entry.parentPath, entry.name));
+      }
+      // Git resolves includes before command-line overrides. Refuse them before launching it.
+      for (const filename of ["config", "config.worktree"]) {
+        const config = path.join(marker, filename);
+        if (!fs.existsSync(config)) continue;
+        if (fs.statSync(config).size > 65536) throw new Error("Repository config exceeds the inspection limit.");
+        const text = fs.readFileSync(config, "utf8").replace(/\\\r?\n/g, "");
+        if (/^\s*\[\s*include(?:if)?(?:[\s\]"])/im.test(text)) throw new Error("Git config includes are not supported by workspace inspection.");
       }
       const actualRoot = (await git(["rev-parse", "--show-toplevel"], cwd, root, ctx.abortSignal)).trim();
       if (fs.realpathSync(actualRoot) !== repo) throw new Error("Git repository boundary mismatch.");

@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { z } from "zod";
 import { safeWorkspacePath, SEARCH_EXCLUDES } from "@/server/tools/workspace-access";
 import type { ToolDef } from "@/server/tools/types";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 
 const schema = z.object({ path: z.string().default("."), glob: z.string().min(1).max(200).default("**/*"),
   query: z.string().min(1).max(300).optional(), caseSensitive: z.boolean().default(false), limit: z.number().int().min(1).max(200).default(50) });
@@ -11,6 +12,7 @@ const schema = z.object({ path: z.string().default("."), glob: z.string().min(1)
 function discovery(name: "fs_glob" | "fs_search"): ToolDef {
   return { name, description: name === "fs_glob" ? "Find workspace files by glob, respecting .gitignore and excluding secrets/build/dependency directories. Results are bounded; narrow the glob when truncated."
     : "Search workspace text for a literal query (not regex). Returns paths, 1-based line numbers, and bounded snippets. Respects .gitignore and excludes secrets/build/dependency directories.",
+    capabilities: TOOL_CAPABILITIES[name],
     parameters: { type: "object", required: name === "fs_search" ? ["query"] : [], properties: {
       path: { type: "string", description: "Directory or file within the workspace; default ." }, glob: { type: "string", description: "File glob, default **/*" },
       query: { type: "string", description: "Literal text to find; required for fs_search." }, caseSensitive: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 200 }

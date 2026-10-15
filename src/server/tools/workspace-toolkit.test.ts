@@ -56,7 +56,7 @@ describe("file discovery and paged reads", () => {
   });
   it("rejects realpath escapes via a directory link", () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-outside-"));
-    try { fs.writeFileSync(path.join(outside, "secret.txt"), "secret"); fs.symlinkSync(outside, path.join(root, "escape"), process.platform === "win32" ? "junction" : "dir"); expect(() => safeWorkspacePath(root, "escape/secret.txt")).toThrow(/symlink/); }
+    try { fs.writeFileSync(path.join(outside, "secret.txt"), "secret"); fs.symlinkSync(outside, path.join(root, "escape"), process.platform === "win32" ? "junction" : "dir"); expect(() => safeWorkspacePath(root, "escape/secret.txt")).toThrow(/escapes the workspace/); }
     finally { fs.rmSync(path.join(root, "escape"), { force: true, recursive: true }); fs.rmSync(outside, { force: true, recursive: true }); }
   });
   it("enforces admitted run permissions at registry execution, not just model schema", async () => {
@@ -107,6 +107,14 @@ describe("run-owned background jobs", () => {
 });
 
 describe("read-only Git inspection", () => {
+  it("rejects repository config includes before invoking Git", async () => {
+    expect(spawnSync("git", ["init", root], { windowsHide: true }).status).toBe(0);
+    for (const section of ["[include]", '[includeIf "gitdir:*"]', "[INCLUDE]"]) {
+      fs.writeFileSync(path.join(root, ".git", "config"), `${section}\npath = ../private-config\n`);
+      expect(await gitInspectTool.handler({ action: "status" }, ctx)).toMatchObject({ ok: false, error: expect.stringContaining("config includes") });
+    }
+  });
+
   it("reads repository status/diff but cannot execute arbitrary actions", async () => {
     expect(spawnSync("git", ["init", root], { windowsHide: true }).status).toBe(0);
     fs.writeFileSync(path.join(root, "app.txt"), "new file");

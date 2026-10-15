@@ -52,7 +52,7 @@ Proxy fake-IP DNS (often `198.18.0.0/15`) is intentionally rejected as reserved 
 
 `git_inspect` accepts `action: status | diff | log`, a repository-directory `path`, optional `staged` for diff and `limit` for log. It uses fixed argv, bounded output/time, and disables hooks, fsmonitor, external diff, textconv, signatures, prompts and global/system Git config. It never stages, commits, resets, checks out or pushes.
 
-The repository must have a physical `.git` directory inside the workspace. Host repositories above a generated workspace, symlinked repositories and linked external worktrees are rejected. Linked-worktree support would need explicit repository ownership authorization; it is not implied by a path string.
+The repository must have a physical `.git` directory inside the workspace. Host repositories above a generated workspace, symlinked repositories and linked external worktrees are rejected. Repository config includes are not supported, and external attributes/ignore files are disabled. Linked-worktree support would need explicit repository ownership authorization; it is not implied by a path string.
 
 ## Static Web App Acceptance
 

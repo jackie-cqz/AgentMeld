@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getDataDir } from "@/db/client";
 import { safeWorkspacePath } from "@/server/tools/workspace-access";
 import type { ToolDef } from "@/server/tools/types";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 
 const stepSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("click"), selector: z.string().min(1).max(500) }),
@@ -36,6 +37,7 @@ function saveScreenshot(buffer: Buffer) {
 }
 
 export const browserCheckTool: ToolDef = {
+  capabilities: TOOL_CAPABILITIES.browser_check,
   name: "browser_check",
   description: "Verify a built, static workspace web app in a fresh isolated headless Chromium (no user cookies). path must contain index.html. Optional click/fill/assert_visible/assert_text/reload steps, max 20; desktop/mobile screenshots, console errors and failed requests are returned. All external network is blocked: build/bundle dependencies locally first. No arbitrary URLs, shell or browser JavaScript. Checks only the specified interactions, not full app correctness.",
   parameters: {
