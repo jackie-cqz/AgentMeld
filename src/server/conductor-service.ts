@@ -1,5 +1,6 @@
 import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
+import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
@@ -910,8 +911,7 @@ async function runChildTask(
         sourceAgentId: parentRun?.agentId ?? "",
         targetAgentId: task.agentId,
         taskId: task.id,
-        attempt,
-        sourceRunStatus: parentRun?.status ?? "unknown"
+        attempt
       });
       if (!delegation.ok) {
         console.error(`[conductor] delegation refused for task ${task.id} attempt ${attempt}: ${delegation.error}`);
@@ -946,6 +946,24 @@ async function runChildTask(
         await promise;
       } catch {
         // Run failed — continue to evaluation
+      }
+
+      // The delegation gate refuses BEFORE a run row exists, so the reason
+      // cannot come from the database — the runner hands it back explicitly.
+      // Without this the attempt was reported as "the agent never called
+      // report_task_result", blaming the agent for a wiring refusal.
+      const refusal = takeRunRefusalReason(attemptRunId);
+      if (refusal) {
+        console.error(`[conductor] task ${task.id} attempt ${attempt}: ${refusal}`);
+        finalEvaluation = { status: "blocked", error: `delegation_refused: ${refusal}` };
+        finishTaskAttempt(attemptId, "blocked", Date.now());
+        updateTaskAttemptVerification(
+          attemptId,
+          "rejected",
+          JSON.stringify({ error: finalEvaluation.error }),
+          Date.now()
+        );
+        break;
       }
 
       const report = getTaskReport(attemptRunId);

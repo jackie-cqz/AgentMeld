@@ -86,8 +86,7 @@ function grantFor(task: TaskExecutionIdentity, targetAgentId = "ag_mock_builder"
     sourceAgentId: "ag_mock_conductor",
     targetAgentId,
     taskId: task.taskId,
-    attempt: task.attempt,
-    sourceRunStatus: "running"
+    attempt: task.attempt
   });
   if (!issued.ok) throw new Error(issued.error);
   return issued.correlationId;
@@ -97,7 +96,7 @@ function grantFor(task: TaskExecutionIdentity, targetAgentId = "ag_mock_builder"
 function refusalNotice(conversationId: string): string | undefined {
   return listMessages(conversationId)
     .map((message) => message.parts.map((part) => (part.type === "text" ? part.content : "")).join(""))
-    .find((content) => content.includes("Delegation refused") || content.includes("without a delegation grant") || content.includes("must name the task"));
+    .find((content) => content.includes("Delegation refused") || content.includes("without a delegation grant") || content.includes("must name the task") || content.includes("different conductor run"));
 }
 
 describe("delegated child runs", () => {
@@ -154,6 +153,48 @@ describe("delegated child runs", () => {
     await promise;
 
     expect(getRun(runId)).toBeNull();
+  });
+
+  it("refuses a falsy grant just as firmly as a missing one", async () => {
+    // The gate tests truthiness, not `=== undefined`: null and "" are refused
+    // too, and each refusal is recorded rather than silently starting work.
+    const { conversation, trigger } = world();
+    for (const [index, correlationId] of [null, "", undefined].entries()) {
+      const runId = `run_child_falsy_${index}`;
+      const { promise } = startAgentRun({
+        conversationId: conversation.id,
+        agentId: "ag_mock_builder",
+        triggerMessage: trigger,
+        runId,
+        parentRunId: "run_parent",
+        delegationCorrelationId: correlationId,
+        taskExecution: taskExecution()
+      });
+      await promise;
+      expect(getRun(runId)).toBeNull();
+    }
+  });
+
+  it("refuses a task identity that belongs to a different conductor run", async () => {
+    // A valid grant for this parent, but the taskExecution claims another
+    // conductor run: starting it would file evidence against that run's plan.
+    const { conversation, trigger } = world();
+    const execution = taskExecution();
+    const correlationId = grantFor(execution);
+
+    const { runId, promise } = startAgentRun({
+      conversationId: conversation.id,
+      agentId: "ag_mock_builder",
+      triggerMessage: trigger,
+      runId: "run_child_otherconductor",
+      parentRunId: "run_parent",
+      delegationCorrelationId: correlationId,
+      taskExecution: { ...execution, conductorRunId: "run_someone_else" }
+    });
+    await promise;
+
+    expect(getRun(runId)).toBeNull();
+    expect(refusalNotice(conversation.id)).toContain("different conductor run");
   });
 
   it("refuses delegated work that does not name the task and attempt", async () => {

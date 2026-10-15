@@ -31,6 +31,7 @@ import { newMessageId, newRunId } from "@/shared/ids";
 import type { Agent, AgentRun, Conversation, Message } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import { consumeDelegation } from "@/server/delegation";
+import { recordRunRefusal } from "@/server/run-refusals";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
@@ -122,28 +123,31 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
 
   // 0. Delegation gate. A child run is delegated work: it must present a
   // one-time grant issued for exactly this source run, target agent, task and
-  // attempt, and spending it here is what makes a replay impossible. This is
-  // checked before anything is written, so a refused delegation leaves no run
-  // row, no message, and no partial work behind.
+  // attempt, and spending it here is what makes a replay impossible. Nothing
+  // is run before this check, so a refused delegation leaves no run row and no
+  // partial work behind — only a notice in the conversation saying why, plus
+  // the reason handed back to the caller through run-refusals (the conductor
+  // cannot see a row that was never written, and must not guess).
   if (input.parentRunId) {
+    const refuse = (reason: string) => {
+      recordRunRefusal(input.runId, reason);
+      createErrorMessage(input.conversationId, input.triggerMessage.id, reason, input.agentId);
+    };
     const correlationId = input.delegationCorrelationId;
     if (!correlationId) {
-      createErrorMessage(
-        input.conversationId,
-        input.triggerMessage.id,
-        "This run was started as delegated work without a delegation grant.",
-        input.agentId
-      );
+      refuse("This run was started as delegated work without a delegation grant.");
       return;
     }
     const taskExecution = input.taskExecution;
     if (!taskExecution) {
-      createErrorMessage(
-        input.conversationId,
-        input.triggerMessage.id,
-        "Delegated work must name the task and attempt it was delegated for.",
-        input.agentId
-      );
+      refuse("Delegated work must name the task and attempt it was delegated for.");
+      return;
+    }
+    if (taskExecution.conductorRunId !== input.parentRunId) {
+      // The task identity must belong to the run that is delegating. Without
+      // this a valid grant could start work whose evidence lands against
+      // another plan's task row.
+      refuse("Delegated work names a different conductor run than the one starting it.");
       return;
     }
     const consumed = consumeDelegation({
@@ -155,12 +159,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       childRunId: input.runId
     });
     if (!consumed.ok) {
-      createErrorMessage(
-        input.conversationId,
-        input.triggerMessage.id,
-        `Delegation refused: ${consumed.error}`,
-        input.agentId
-      );
+      refuse(`Delegation refused: ${consumed.error}`);
       return;
     }
   }

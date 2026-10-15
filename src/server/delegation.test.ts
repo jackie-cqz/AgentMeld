@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests } from "@/db/client";
+import { createConversation } from "@/server/conversation-service";
+import { createRun, updateRunStatus } from "@/server/repositories";
 import { eventBus } from "@/server/event-bus";
 import {
   MAX_OUTSTANDING_GRANTS_PER_RUN,
@@ -23,6 +25,7 @@ beforeEach(() => {
   eventBus.clearForTests();
   ensureDatabase();
   clearDelegationsForTests();
+  seedParentRun();
 });
 
 afterEach(() => {
@@ -36,12 +39,32 @@ afterEach(() => {
 
 const base = {
   sourceRunId: "run_parent",
-  sourceAgentId: "ag_conductor",
+  sourceAgentId: "ag_mock_conductor",
   targetAgentId: "ag_builder",
   taskId: "task_1",
-  attempt: 1,
-  sourceRunStatus: "running"
+  attempt: 1
 };
+
+/**
+ * A parent run row, because the state check reads the run rather than trusting
+ * a caller-supplied status string.
+ */
+function seedParentRun(status: "running" | "complete" | "failed" = "running") {
+  const conversation = createConversation({ title: "delegation", mode: "single", agentIds: ["ag_mock_builder"] });
+  createRun({
+    id: "run_parent",
+    conversationId: conversation.id,
+    agentId: "ag_mock_conductor",
+    triggerMessageId: null,
+    parentRunId: null,
+    status: "running",
+    now: Date.now()
+  });
+  if (status !== "running") {
+    updateRunStatus("run_parent", status, null, Date.now());
+  }
+  return conversation;
+}
 
 function issue(overrides: Partial<typeof base> = {}) {
   const result = issueDelegation({ ...base, ...overrides });
@@ -55,7 +78,7 @@ describe("issuing", () => {
     const grant = getDelegationByCorrelationId(correlationId);
     expect(grant).toMatchObject({
       sourceRunId: "run_parent",
-      sourceAgentId: "ag_conductor",
+      sourceAgentId: "ag_mock_conductor",
       targetAgentId: "ag_builder",
       taskId: "task_1",
       attempt: 1,
@@ -77,14 +100,28 @@ describe("issuing", () => {
   });
 
   it("refuses to mint for a run that is not running", () => {
-    // State is checked where the context still exists, not trusted from the
-    // caller's intent: a finished parent must not spawn work.
-    for (const status of ["complete", "failed", "aborted"]) {
-      const result = issueDelegation({ ...base, sourceRunStatus: status });
+    // State comes from the run row, not from what the caller says: flipping
+    // the row is what makes this fail, and passing no status at all cannot
+    // talk it back into a grant.
+    for (const status of ["complete", "failed", "aborted"] as const) {
+      updateRunStatus("run_parent", status, null, Date.now());
+      const result = issueDelegation({ ...base });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.code).toBe("not_running");
     }
     expect(getDatabase().prepare("SELECT COUNT(*) AS count FROM delegations").get()).toMatchObject({ count: 0 });
+  });
+
+  it("refuses to mint for a run that does not exist", () => {
+    const result = issueDelegation({ ...base, sourceRunId: "run_never_existed" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("not_running");
+  });
+
+  it("refuses a source agent that is not the run's own agent", () => {
+    const result = issueDelegation({ ...base, sourceAgentId: "ag_someone_else" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("invalid");
   });
 
   it("refuses an incomplete delegation rather than minting a loose one", () => {
@@ -147,7 +184,7 @@ describe("consuming", () => {
     if (!replay.ok) expect(replay.code).toBe("consumed");
   });
 
-  it("lets only one of two concurrent spends win", () => {
+  it("refuses the second spend (consumption is synchronous, so this is not a race test)", () => {
     const correlationId = issue();
     const attempt = () =>
       consumeDelegation({

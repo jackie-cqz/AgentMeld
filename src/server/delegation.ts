@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
+import { getRun } from "@/server/repositories";
 
 /**
  * Trusted delegation (issue #24).
@@ -39,7 +40,7 @@ export interface DelegationGrant {
   targetAgentId: string;
   taskId: string;
   attempt: number;
-  status: "issued" | "consumed" | "expired" | "revoked";
+  status: "issued" | "consumed" | "expired";
   issuedAt: number;
   expiresAt: number;
   consumedAt: number | null;
@@ -93,8 +94,6 @@ export interface IssueDelegationInput {
   targetAgentId: string;
   taskId: string;
   attempt: number;
-  /** Parent run status, as the caller knows it. Only a running run delegates. */
-  sourceRunStatus: string;
   now?: number;
   ttlMs?: number;
 }
@@ -115,15 +114,36 @@ export function issueDelegation(input: IssueDelegationInput): IssueDelegationRes
   if (!input.sourceRunId || !input.sourceAgentId || !input.targetAgentId || !input.taskId) {
     return { ok: false, error: "A delegation needs a source run, source agent, target agent and task.", code: "invalid" };
   }
-  // State: a finished or failed parent must not spawn new work. Checked here
-  // rather than trusted from the caller's intent.
-  if (input.sourceRunStatus !== "running") {
+  // State: a finished or failed parent must not spawn new work. Read from the
+  // run row itself — a caller that says "it's running" is not evidence, and a
+  // caller that has already decided to dispatch will say exactly that.
+  const sourceRun = getRun(input.sourceRunId);
+  if (!sourceRun) {
+    return { ok: false, error: `Run ${input.sourceRunId} does not exist.`, code: "not_running" };
+  }
+  if (sourceRun.status !== "running") {
     return {
       ok: false,
-      error: `Run ${input.sourceRunId} is ${input.sourceRunStatus}; only a running run may delegate.`,
+      error: `Run ${input.sourceRunId} is ${sourceRun.status}; only a running run may delegate.`,
       code: "not_running"
     };
   }
+  if (input.sourceAgentId !== sourceRun.agentId) {
+    // The recorded source agent is checked, not just stored: a grant that
+    // names an agent other than the run's own would make "who delegated this"
+    // unanswerable.
+    return {
+      ok: false,
+      error: "The source agent does not match the run that is delegating.",
+      code: "invalid"
+    };
+  }
+
+  // Expired grants stop being spendable at consume time; retiring them here
+  // also keeps them out of the table's 'issued' population for good.
+  getDatabase()
+    .prepare("UPDATE delegations SET status = 'expired' WHERE status = 'issued' AND expires_at <= ?")
+    .run(now);
 
   const outstanding = getDatabase()
     .prepare(
@@ -196,9 +216,13 @@ export type ConsumeDelegationResult =
  * against what was issued: a grant for task A cannot start task B, and one
  * source run cannot spend another run's grant.
  *
- * The status transition is the one-time guarantee — `WHERE status = 'issued'`
- * means two concurrent dispatches cannot both win, in the same shape as
- * `resolveApproval`'s conditional update.
+ * One-time is enforced twice on purpose: the status check above, and the
+ * `WHERE status = 'issued'` in the update itself, in the same shape as
+ * `resolveApproval`. Consumption is synchronous today, so a test cannot make
+ * two spends interleave and the second layer is not reachable from a test —
+ * it is there so that a future async or multi-process caller cannot double
+ * spend. The tests pin the observable property (the second spend fails); they
+ * do not claim to drive the SQL guard.
  */
 export function consumeDelegation(input: ConsumeDelegationInput): ConsumeDelegationResult {
   ensureDatabase();
