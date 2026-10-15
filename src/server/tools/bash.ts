@@ -12,6 +12,7 @@ import {
   BASH_TIMEOUT_MS,
   isPathWithin
 } from "@/server/workspace-utils";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -379,6 +380,7 @@ const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
 
 export const bashTool: ToolDef = {
   name: "bash",
+  capabilities: TOOL_CAPABILITIES.bash,
   description: PLATFORM_DESCRIPTIONS[currentPlatform()],
   parameters: {
     type: "object",

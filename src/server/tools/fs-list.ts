@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { assertPathWithinWorkspace } from "@/server/workspace-utils";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -10,6 +11,7 @@ const ArgsSchema = z.object({
 
 export const fsListTool: ToolDef = {
   name: "fs_list",
+  capabilities: TOOL_CAPABILITIES.fs_list,
   description:
     "List files and directories inside the workspace. Returns name, relative path, and type (file/directory) for each entry.",
   parameters: {

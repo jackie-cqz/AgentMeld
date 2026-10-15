@@ -39,6 +39,7 @@ import {
   insertContextSnapshot,
   listEvidenceForAttempt,
 } from "@/server/repositories/evidence-repository";
+import { workspaceModeLabel, workspaceNoteFor } from "@/server/tools/capabilities";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -1603,10 +1604,9 @@ export function buildConductorPlanPrompt(
   // Block 1: Workspace context
   blocks.push(`<workspace_info>
   <cwd>${workspacePath}</cwd>
-  <mode>sandbox</mode>
+  <mode>${workspaceModeLabel(agent.toolNames)}</mode>
   <note>
-    This is an isolated sandbox directory. Files you write here are only visible
-    inside this conversation.
+${workspaceNoteFor(agent.toolNames).map((line) => `    ${line}`).join("\n")}
   </note>
 </workspace_info>`);
 

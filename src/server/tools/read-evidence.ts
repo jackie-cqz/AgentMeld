@@ -6,6 +6,7 @@
 // specific evidence by ID when they need more context (e.g. error output).
 // ---------------------------------------------------------------------------
 
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef, ToolContext, ToolResult } from "@/server/tools/types";
 import {
   getEvidence,
@@ -23,6 +24,7 @@ const MAX_PAGE_SIZE = 5;
 
 export const readEvidenceTool: ToolDef = {
   name: "read_evidence",
+  capabilities: TOOL_CAPABILITIES.read_evidence,
   description:
     "Read sanitized evidence details from the Evidence Ledger. " +
     "Supports reading by evidenceId, or listing evidence for the current task attempt. " +

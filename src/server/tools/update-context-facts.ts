@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef, ToolContext, ToolResult } from "@/server/tools/types";
 import { resolveFacts } from "@/server/context-facts/fact-service";
 import { generateCanonicalKey } from "@/server/context-facts/fact-key-generator";
@@ -52,6 +53,7 @@ const UpdateContextFactsArgsSchema = z.object({
 
 export const updateContextFactsTool: ToolDef = {
   name: "update_context_facts",
+  capabilities: TOOL_CAPABILITIES.update_context_facts,
   description:
     "Update project context facts (e.g. theme color, framework, auth requirements). " +
     "Provide 'updates' for known definitionIds or proposedKeys, and 'proposals' for " +

@@ -11,6 +11,7 @@ import {
   scanWorkspaceUsage
 } from "@/server/workspace-utils";
 import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 
 const ArgsSchema = z.object({
   path: z.string().min(1),
@@ -21,6 +22,7 @@ const ArgsSchema = z.object({
 
 export const fsPatchTool: ToolDef = {
   name: "fs_patch",
+  capabilities: TOOL_CAPABILITIES.fs_patch,
   description:
     "Modify an existing workspace text file by replacing an exact oldText snippet with newText. " +
     "oldText and newText must differ; a no-op replacement is rejected. " +

@@ -11,6 +11,7 @@ import {
   MAX_FILE_WRITE_BYTES,
   scanWorkspaceUsage
 } from "@/server/workspace-utils";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -20,6 +21,7 @@ const ArgsSchema = z.object({
 
 export const fsWriteTool: ToolDef = {
   name: "fs_write",
+  capabilities: TOOL_CAPABILITIES.fs_write,
   description:
     "Write a text file inside the workspace. Creates parent directories automatically. " +
     "Rejects rewriting an existing file with identical content. " +

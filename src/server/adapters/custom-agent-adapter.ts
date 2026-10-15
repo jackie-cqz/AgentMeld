@@ -10,6 +10,7 @@ import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import { getArtifact } from "@/server/repositories";
 import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 import { buildPromptLayout } from "@/server/prompt-layout/prompt-layout-builder";
+import { workspaceModeLabel, workspaceNoteFor } from "@/server/tools/capabilities";
 
 export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 48;
 export const TASK_REPORT_FINALIZATION_ROUNDS = 1;
@@ -1302,7 +1303,7 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
       roleContractVersion: "role-contracts-v1",
       platformPromptVersion: "agentmeld-p0-v1",
       stableSections: [
-        { id: "workspace_info", title: "Workspace", content: `<workspace_info>\n  <cwd>${input.workspacePath}</cwd>\n  <mode>sandbox</mode>\n</workspace_info>`, tokenEstimate: 30 },
+        { id: "workspace_info", title: "Workspace", content: `<workspace_info>\n  <cwd>${input.workspacePath}</cwd>\n  <mode>${workspaceModeLabel(input.toolNames)}</mode>\n  <note>\n${workspaceNoteFor(input.toolNames).map((line) => `    ${line}`).join("\n")}\n  </note>\n</workspace_info>`, tokenEstimate: 60 },
         { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
         { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 },
       ],

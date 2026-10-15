@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { registerPendingQuestion } from "@/server/pending-questions";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const questionSchema = z.object({
@@ -18,6 +19,7 @@ const ArgsSchema = z.object({
 
 export const askUserTool: ToolDef = {
   name: "ask_user",
+  capabilities: TOOL_CAPABILITIES.ask_user,
   description:
     "Ask the user structured multiple-choice questions to clarify requirements. " +
     "Use this before planning when the model judges that unresolved high-impact choices would " +

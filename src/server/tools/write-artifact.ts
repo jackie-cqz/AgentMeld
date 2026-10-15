@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createArtifact } from "@/server/repositories";
 import { newArtifactId } from "@/shared/ids";
 import type { ArtifactContent, ArtifactType } from "@/shared/types";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -13,6 +14,7 @@ const ArgsSchema = z.object({
 
 export const writeArtifactTool: ToolDef = {
   name: "write_artifact",
+  capabilities: TOOL_CAPABILITIES.write_artifact,
   description: `Create an artifact (document, web app, image, or presentation) in the current conversation.
 
 For document type, use strict JSON like:

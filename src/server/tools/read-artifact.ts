@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getArtifact } from "@/server/repositories";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -8,6 +9,7 @@ const ArgsSchema = z.object({
 
 export const readArtifactTool: ToolDef = {
   name: "read_artifact",
+  capabilities: TOOL_CAPABILITIES.read_artifact,
   description:
     "Read the full content of an artifact in the current conversation. Use this when you need to reuse or reference an artifact produced earlier in this session.",
   parameters: {
