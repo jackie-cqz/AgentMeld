@@ -190,6 +190,7 @@ function childRunsRefusedByTheGate(reason: string) {
 interface AttemptRow {
   task_id: string;
   attempt: number;
+  child_run_id: string | null;
   execution_status: string;
   verification_status: string;
   failure_context_json: string | null;
@@ -198,7 +199,7 @@ interface AttemptRow {
 function attemptRows(conversationId: string): AttemptRow[] {
   return getDatabase()
     .prepare(
-      `SELECT task_id, attempt, execution_status, verification_status, failure_context_json
+      `SELECT task_id, attempt, child_run_id, execution_status, verification_status, failure_context_json
          FROM task_attempts WHERE conversation_id = ? ORDER BY attempt`
     )
     .all(conversationId) as AttemptRow[];
@@ -261,6 +262,42 @@ describe("conductor attempt bookkeeping", () => {
     expect(rows[0].verification_status).toBe("rejected");
     expect(rows[0].failure_context_json).toContain("delegation_refused");
     expect(rows[0].failure_context_json).not.toContain("没有调用 report_task_result");
+    // R2: the pointer to a run the gate never created is cleared, not left for
+    // an investigator to chase.
+    expect(rows[0].child_run_id).toBeNull();
+  });
+
+  it("does not let a later refusal overwrite the earlier attempt's failure", async () => {
+    // Attempt 1 fails on its own merits; attempt 2 is refused by the gate. The
+    // post-loop verification pass runs against finalAttemptId, which still
+    // points at attempt 1 when a break happens without a new attempt — so
+    // without clearing it, attempt 1's recorded reason is replaced by attempt
+    // 2's refusal and the history lies.
+    const { conversationId, conductorRunId, messageId, triggerMessage } = seedConversationAndRun();
+    let calls = 0;
+    startAgentRunMock.mockImplementation((input: { runId?: string }) => {
+      calls += 1;
+      const runId = input.runId ?? `run_child_${calls}`;
+      if (calls === 2) recordRunRefusal(runId, "Delegation refused: This delegation expired.");
+      return { runId, promise: Promise.resolve() };
+    });
+
+    await executeConductorPlan(
+      conversationId,
+      [taskWith({ maxAttempts: 2 })],
+      [WORKER],
+      conductorRunId,
+      `plan_${conductorRunId}_init`,
+      triggerMessage,
+      CONDUCTOR,
+      messageId
+    );
+
+    const rows = attemptRows(conversationId).filter((row) => row.task_id === "t1");
+    expect(rows.map((row) => row.attempt)).toEqual([1, 2]);
+    expect(rows[0].failure_context_json).toContain("没有调用 report_task_result");
+    expect(rows[0].failure_context_json).not.toContain("delegation_refused");
+    expect(rows[1].failure_context_json).toContain("delegation_refused");
   });
 
   // The post-loop update already covered the single-attempt case, so this pins the

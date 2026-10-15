@@ -145,6 +145,24 @@ export function startTaskAttempt(attemptId: string, childRunId: string, now: num
     .run(childRunId, now, now, attemptId);
 }
 
+/**
+ * Undo the child-run pointer for an attempt whose run never came into being.
+ *
+ * `startTaskAttempt` runs before the child is started, so a delegation the
+ * runner refused leaves task_attempts.child_run_id naming a run that does not
+ * exist. That row is what an investigator reads; a dangling id reads as "the
+ * run exists, go look for it".
+ */
+export function clearTaskAttemptChildRun(attemptId: string, now: number) {
+  getDatabase()
+    .prepare(`
+      UPDATE task_attempts
+      SET child_run_id = NULL, updated_at = ?
+      WHERE id = ?
+    `)
+    .run(now, attemptId);
+}
+
 export function finishTaskAttempt(
   attemptId: string,
   executionStatus: string,

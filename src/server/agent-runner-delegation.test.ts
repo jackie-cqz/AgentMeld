@@ -172,6 +172,10 @@ describe("delegated child runs", () => {
       });
       await promise;
       expect(getRun(runId)).toBeNull();
+      // "No run row" is also what a CRASH produces, so assert the refusal was
+      // actually taken: a gate that lets null through throws inside the hash
+      // and the error is swallowed upstream, leaving this undefined.
+      expect(refusalNotice(conversation.id)).toBeDefined();
     }
   });
 

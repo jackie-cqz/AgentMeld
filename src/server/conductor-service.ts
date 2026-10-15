@@ -30,6 +30,7 @@ import type { Message, MessagePart, StreamEvent, DispatchPlanItem, Agent } from 
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, ContextManifestItem } from "@/shared/task-context-types";
 import {
+  clearTaskAttemptChildRun,
   createTaskAttempt,
   startTaskAttempt,
   finishTaskAttempt,
@@ -956,6 +957,10 @@ async function runChildTask(
       if (refusal) {
         console.error(`[conductor] task ${task.id} attempt ${attempt}: ${refusal}`);
         finalEvaluation = { status: "blocked", error: `delegation_refused: ${refusal}` };
+        // The attempt row was opened with a child run id before the child
+        // existed; the runner refused, so that id names nothing. Clear it
+        // rather than leave an investigator chasing a run that was never made.
+        clearTaskAttemptChildRun(attemptId, Date.now());
         finishTaskAttempt(attemptId, "blocked", Date.now());
         updateTaskAttemptVerification(
           attemptId,
@@ -963,6 +968,11 @@ async function runChildTask(
           JSON.stringify({ error: finalEvaluation.error }),
           Date.now()
         );
+        // Do not let the post-loop verification rewrite an EARLIER attempt's
+        // failure context with this refusal: finalAttemptId still points at the
+        // previous attempt, and this break means there is no new one.
+        finalAttemptId = "";
+        finalRunId = "";
         break;
       }
 
