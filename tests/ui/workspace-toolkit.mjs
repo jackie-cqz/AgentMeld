@@ -69,7 +69,8 @@ try {
   await page.getByRole('button', { name: /工具调用 × 5/ }).click();
   for (const label of ['搜索内容', '启动后台命令', '等待命令完成', '联网搜索', '网页验收']) await page.getByRole('button', { name: new RegExp(label) }).click();
   await page.getByAltText('网页验收截图', { exact: true }).waitFor();
-  assert.equal(await page.getByText('命令运行中', { exact: true }).count(), 1);
+  assert.equal(await page.getByText('命令运行中', { exact: true }).count(), 0, 'A later terminal observation resolves the initial job state');
+  assert((await page.getByRole('button', { name: /工具调用 × 5/ }).innerText()).includes('成功 5'));
   assert.equal(await page.getByText('验收通过', { exact: true }).count(), 1);
   assert.equal(await page.getByText('外部资料 · 未验证', { exact: true }).count(), 1);
   for (const [width, height, theme] of [[1440, 1000, 'light'], [1440, 1000, 'dark'], [390, 844, 'light'], [390, 844, 'dark']]) {

@@ -5,6 +5,7 @@ import { Modal } from "@/components/ui/modal";
 import { Tabs } from "@/components/ui/controls";
 import { XCircle, Loader2, AlertTriangle, CheckCircle2, Eye, EyeOff, FileText, ShieldCheck, Link, Copy, ExternalLink } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
+import { traceLabel } from "@/lib/context-trace-display";
 import type { ContextTraceResponse, ContextTraceWarning } from "@/server/context-trace/context-trace-types";
 
 export function ContextTraceDrawer({
@@ -23,7 +24,7 @@ export function ContextTraceDrawer({
   useEffect(() => {
     if (!open || !attemptId) return;
     const controller = new AbortController();
-    fetch(`/api/context-trace/${attemptId}`)
+    fetch(`/api/context-trace/${attemptId}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((d) => {
         if (controller.signal.aborted) return;
@@ -37,7 +38,7 @@ export function ContextTraceDrawer({
       })
       .catch(() => {
         if (!controller.signal.aborted) {
-          setRequestError({ attemptId, message: "Failed to load trace data" });
+          setRequestError({ attemptId, message: "加载上下文追踪失败" });
         }
       });
     return () => controller.abort();
@@ -66,8 +67,8 @@ export function ContextTraceDrawer({
   ];
 
   return (
-    <Modal open onClose={onClose} title="上下文追踪" description={attemptId ?? "未关联任务尝试"} size="drawer"
-      navigation={<Tabs label="上下文追踪视图" value={tab} onChange={setTab} items={tabs.map(item => ({ value: item.key, label: item.label }))} />}
+    <Modal open onClose={onClose} title="上下文追踪" description={data?.attempt.attemptId === attemptId ? `任务 ${data.attempt.taskId}` : "任务执行详情"} size="drawer" className="context-trace-view"
+      navigation={<Tabs label="上下文追踪视图" value={tab} onChange={setTab} items={tabs.map(item => ({ value: item.key, label: `${item.label}${item.count !== undefined && !loading ? ` ${item.count}` : ""}`, shortLabel: `${item.key === "inputs" ? "上游" : item.key === "manifest" ? "上下文" : item.label}${item.count !== undefined && !loading ? ` ${item.count}` : ""}` }))} />}
       footer={<button className="ui-button" onClick={onClose}>完成</button>}>
       {/* Loading / Error / No-attempt / Content */}
       {loading ? (
@@ -88,6 +89,11 @@ export function ContextTraceDrawer({
         </div>
       ) : data ? (
         <>
+          <div className="trace-overview" aria-label="上下文摘要">
+            <button onClick={() => setTab("inputs")}><span>上游已读取</span><strong>{data.upstreamInputs.filter(input => input.bindingVerified && input.readByCurrentAttempt).length}/{data.upstreamInputs.length}</strong></button>
+            <button onClick={() => setTab("verdicts")}><span>验收通过</span><strong>{data.verdicts.length ? `${data.verdicts.filter(verdict => verdict.status === "passed").length}/${data.verdicts.length}` : "未评估"}</strong></button>
+            <button onClick={() => setTab("warnings")}><span>警告</span><strong>{data.warnings.length}</strong></button>
+          </div>
           {/* P0: Diagnostic summary bar */}
           <div className="border-b px-4 py-2 space-y-1">
             <div className="flex items-center gap-3 text-[11px]">
@@ -116,11 +122,7 @@ export function ContextTraceDrawer({
           </div>
 
           {/* Footer */}
-          <div className="border-t px-4 py-2 text-[10px] text-slate-400 truncate">
-            {data.attempt.contextSnapshotId
-              ? `snapshot: ${data.attempt.contextSnapshotId}`
-              : "no snapshot"}
-          </div>
+          <details className="trace-identifiers"><summary>技术标识</summary><dl><dt>任务尝试</dt><dd>{data.attempt.attemptId}</dd><dt>运行</dt><dd>{data.attempt.conductorRunId}</dd><dt>上下文快照</dt><dd>{data.attempt.contextSnapshotId ?? "无快照"}</dd></dl></details>
         </>
       ) : null}
     </Modal>
@@ -166,13 +168,13 @@ function UpstreamInputsTab({ data }: { data: ContextTraceResponse }) {
               </div>
               <p className="mt-0.5 text-[10px]">
                 {ui.readByCurrentAttempt
-                  ? <span className="text-emerald-600">✓ read_artifact called</span>
-                  : <span className="text-amber-600">⚠ not read</span>}
+                  ? <span className="text-emerald-600">已读取上游产物</span>
+                  : <span className="text-amber-600">尚未读取</span>}
               </p>
             </>
           )}
           {!ui.bindingVerified && (
-            <p className="mt-1 text-red-600">Output binding not found for this input</p>
+            <p className="mt-1 text-red-600">未找到该输入的已验证输出绑定</p>
           )}
         </div>
       ))}
@@ -215,11 +217,11 @@ function ManifestRow({ item: m }: { item: NonNullable<ContextTraceResponse>["inc
       {m.included ? <Eye className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" /> : <EyeOff className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-slate-400">{m.category}</span>
+          <span className="text-slate-400">{traceLabel(m.category)}</span>
           <span className="font-mono text-slate-600 truncate max-w-[160px]">{m.sourceId}</span>
-          <span className={`rounded px-1 py-0 text-[9px] ${trustColor(m.trustLevel)}`}>{m.trustLevel}</span>
+          <span className={`rounded px-1 py-0 text-[9px] ${trustColor(m.trustLevel)}`}>{traceLabel(m.trustLevel)}</span>
         </div>
-        <p className="text-slate-500">{m.included ? m.reason : `${m.omittedReason}: ${m.reason}`}</p>
+        <p className="text-slate-500">{m.included ? m.reason : `${traceLabel(m.omittedReason ?? "unknown")}: ${m.reason}`}</p>
       </div>
     </div>
   );
@@ -234,9 +236,9 @@ function EvidenceTab({ data }: { data: ContextTraceResponse }) {
           <FileText className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="font-medium text-slate-700">{ev.type}</span>
-              <span className={`rounded px-1 py-0 text-[9px] ${ev.status === "valid" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>{ev.status}</span>
-              <span className="text-slate-400">{ev.trustLevel}</span>
+              <span className="font-medium text-slate-700">{traceLabel(ev.type)}</span>
+              <span className={`rounded px-1 py-0 text-[9px] ${ev.status === "valid" ? "bg-emerald-100 text-emerald-700" : ev.status === "diagnostic" ? "bg-slate-100 text-slate-600" : "bg-red-100 text-red-700"}`}>{traceLabel(ev.status)}</span>
+              <span className="text-slate-400">{traceLabel(ev.trustLevel)}</span>
             </div>
             <p className="mt-0.5 text-slate-500 truncate">{ev.excerpt}</p>
             <p className="font-mono text-[10px] text-slate-400 truncate">{ev.subjectType}:{ev.subjectId}</p>
@@ -256,10 +258,10 @@ function VerdictsTab({ data }: { data: ContextTraceResponse }) {
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="h-3 w-3 text-slate-400" />
             <span className="font-medium">{v.criterionId}</span>
-            <span className={`rounded px-1 py-0 text-[9px] font-medium ${v.status === "passed" ? "bg-emerald-100 text-emerald-700" : v.status === "failed" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{v.status}</span>
+            <span className={`rounded px-1 py-0 text-[9px] font-medium ${v.status === "passed" ? "bg-emerald-100 text-emerald-700" : v.status === "failed" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{traceLabel(v.status)}</span>
           </div>
           <p className="mt-0.5 text-slate-600">{v.reason}</p>
-          {v.evidenceIds.length > 0 && <p className="mt-0.5 text-slate-400">evidence: {v.evidenceIds.join(", ")}</p>}
+          {v.evidenceIds.length > 0 && <details className="mt-2 text-slate-400"><summary>关联证据 {v.evidenceIds.length}</summary><p className="break-all">{v.evidenceIds.join(", ")}</p></details>}
         </div>
       ))}
     </div>
@@ -316,6 +318,8 @@ function buildDiagnostic(
     return { label: "正在加载…", color: "text-slate-400" };
   }
 
+  if (!data.snapshot) return { label: "缺少上下文快照，无法确认上下文链路完整", color: "text-amber-600" };
+
   const missingInputs = data.upstreamInputs.filter((u) => !u.bindingVerified).length;
   const unreadVerified = data.upstreamInputs.filter((u) => u.bindingVerified && !u.readByCurrentAttempt).length;
   const hasArtifactEvidence = data.evidence.some((e) => e.type === "artifact_created");
@@ -349,7 +353,7 @@ function StatusBadge({ label, kind }: { label: string; kind: "execution" | "veri
   const success = kind === "execution" ? label === "reported_complete" : label === "verified";
   const fail = kind === "execution" ? label === "failed" : label === "rejected";
   const color = success ? "bg-emerald-100 text-emerald-700" : fail ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600";
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${color}`}>{label}</span>;
+  return <span title={label} className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${color}`}>{traceLabel(label)}</span>;
 }
 
 function Empty({ text }: { text: string }) {

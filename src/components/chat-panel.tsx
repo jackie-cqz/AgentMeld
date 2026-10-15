@@ -235,7 +235,7 @@ export function ChatPanel() {
 
       <ConversationTabBar conversationId={conversation.id} />
 
-      <div className="relative flex-1 overflow-hidden">
+      <div className="workspace-conversation-content relative flex-1 overflow-hidden">
         {activeTab === "chat" ? (
           <>
             <div

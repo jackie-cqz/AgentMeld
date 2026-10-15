@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Cpu, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, Settings2, SlidersHorizontal } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Cpu, Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, Settings2, SlidersHorizontal } from "lucide-react";
 import type { ModelProviderProfile } from "@/shared/types";
 import { useAppStore } from "@/stores/app-store";
 import { requestJson } from "@/lib/request-json";
 import { agentProviderChoices, selectAgentProvider, type AgentModelValue, type AgentProviderChoice } from "@/lib/agent-model-config";
 import type { ProviderSnapshot } from "@/lib/model-provider-settings";
-import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
-import { SettingsDialog } from "@/components/settings-dialog";
+import { ModelProviderSettings } from "@/components/model-provider-settings";
 
 export function AgentModelConfig({ open, value, onChange, sdk = false }: {
   open: boolean; value: AgentModelValue; onChange: (value: AgentModelValue) => void; sdk?: boolean;
@@ -26,6 +25,15 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
   const [showKey, setShowKey] = useState(false);
   const [manager, setManager] = useState(false);
   const [pendingProvider, setPendingProvider] = useState<AgentProviderChoice | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (pendingProvider) panelRef.current?.querySelector<HTMLElement>(".agent-model-confirm button")?.focus();
+    else if (picker || manager) panelRef.current?.querySelector<HTMLElement>("[data-model-focus]")?.focus();
+    else if (triggerRef.current?.isConnected) triggerRef.current.focus({ preventScroll: true });
+    else panelRef.current?.querySelector<HTMLElement>(".agent-model-select")?.focus({ preventScroll: true });
+  }, [picker, manager, pendingProvider]);
 
   useEffect(() => {
     if (!open || sdk) return;
@@ -53,22 +61,22 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
     if (choice.id !== value.provider && (value.apiKey || value.apiBaseUrl)) { setPendingProvider(choice); return; }
     onChange(selectAgentProvider(value, choice)); setPicker(null); setShowKey(false);
   };
-  const openPicker = (next: "provider" | "model") => { setSearch(""); setManual(false); setModelDraft(value.modelId); setPicker(next); };
-  const manage = () => { setPicker(null); setManager(true); };
+  const openPicker = (next: "provider" | "model") => { triggerRef.current = document.activeElement as HTMLElement; setSearch(""); setManual(false); setModelDraft(value.modelId); setPicker(next); };
+  const manage = () => { triggerRef.current = document.activeElement as HTMLElement; setPicker(null); setManager(true); };
 
-  return <>
-    <div className="agent-model-config">
+  return <div ref={panelRef}>
+    <div className="agent-model-config" hidden={picker !== null || manager}>
       {!sdk ? <>
         <div className="agent-model-heading"><Cpu size={19} /><h3>模型配置</h3><button className="ui-button ui-button--quiet" onClick={manage}><Settings2 size={14} />管理供应商</button></div>
         {error ? <div className="agent-model-notice"><Feedback>{error}</Feedback><button className="ui-button" disabled={loading} onClick={reload}><RefreshCw size={14} />重新加载</button></div> : null}
         <div className="agent-model-field"><label id="agent-provider-label">供应商 <span>*</span></label>
-          <button className="agent-model-select" aria-labelledby="agent-provider-label" aria-haspopup="dialog" onClick={() => openPicker("provider")}>
+          <button className="agent-model-select" aria-labelledby="agent-provider-label" onClick={() => openPicker("provider")}>
             <span className="provider-mark">{selected?.name.slice(0, 1) ?? <Plus size={16} />}</span>
             <span><strong>{selected?.name ?? (value.provider ? "原供应商配置" : "选择供应商")}</strong><small>{loading ? "正在读取配置…" : selected?.baseUrl || value.provider || "未选择"}</small></span><ChevronDown size={16} />
           </button>
         </div>
         <div className="agent-model-field"><label id="agent-model-label">模型 <span>*</span></label>
-          <button className="agent-model-select" aria-labelledby="agent-model-label" aria-haspopup="dialog" disabled={!value.provider} onClick={() => openPicker("model")}>
+          <button className="agent-model-select" aria-labelledby="agent-model-label" disabled={!value.provider} onClick={() => openPicker("model")}>
             <Cpu size={18} /><span><strong>{value.modelId || "选择模型"}</strong><small>{value.modelId && value.modelId === selected?.defaultModel ? "供应商默认模型" : value.modelId ? "Agent 当前模型" : "未选择"}</small></span><ChevronDown size={16} />
           </button>
         </div>
@@ -81,9 +89,11 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
         <label className="ui-field">API 地址<input aria-label="Agent API 地址" type="url" disabled={sdk} value={value.apiBaseUrl} placeholder={sdk ? "SDK 自动管理" : selected?.baseUrl || "继承供应商地址"} onChange={event => onChange({ ...value, apiBaseUrl: event.target.value })} /></label>
       </details>
     </div>
-    <Modal open={picker !== null} onClose={() => setPicker(null)} title={picker === "provider" ? "选择供应商" : "选择模型"} description={picker === "model" ? selected?.name : undefined} className="agent-model-picker"
-      navigation={<div className="agent-model-search"><Search size={16} /><input data-autofocus aria-label={picker === "provider" ? "搜索已配置供应商" : "搜索模型"} placeholder="搜索" value={search} onChange={event => setSearch(event.target.value)} /></div>}
-      footer={picker === "provider" ? <button className="ui-button" onClick={manage}><Plus size={14} />添加或管理供应商</button> : <><button className="ui-button ui-button--quiet mr-auto" onClick={() => { setManual(!manual); setModelDraft(value.modelId); }}>{manual ? "返回模型列表" : "手动填写模型 ID"}</button>{manual ? <button className="ui-button ui-button--primary" disabled={!modelDraft.trim() || modelDraft.trim().length > 100} onClick={() => { onChange({ ...value, modelId: modelDraft.trim() }); setPicker(null); }}>使用此模型</button> : null}</>}>
+    {picker ? <section className="agent-model-inline" aria-label={picker === "provider" ? "选择供应商" : "选择模型"} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (pendingProvider) setPendingProvider(null); else setPicker(null); } }}>
+      <header><button type="button" className="ui-icon-button" title="返回模型配置" aria-label="返回模型配置" onClick={() => { setPendingProvider(null); setPicker(null); }}><ArrowLeft size={17} /></button><h3>{picker === "provider" ? "选择供应商" : "选择模型"}</h3>{picker === "model" ? <span className="ui-muted">{selected?.name}</span> : null}</header>
+      <div className="agent-model-search"><Search size={16} /><input data-model-focus aria-label={picker === "provider" ? "搜索已配置供应商" : "搜索模型"} placeholder="搜索" value={search} onChange={event => setSearch(event.target.value)} /></div>
+      {pendingProvider ? <div className="agent-model-confirm" role="alert"><strong>切换到 {pendingProvider.name}？</strong><p>将清除该 Agent 的独立密钥和 API 地址，改用供应商默认模型。</p><div><button className="ui-button" onClick={() => setPendingProvider(null)}>保留当前配置</button><button className="ui-button ui-button--primary" onClick={() => { onChange(selectAgentProvider(value, pendingProvider)); setPendingProvider(null); setPicker(null); setShowKey(false); }}>切换并清除覆盖</button></div></div> : null}
+      <div inert={pendingProvider !== null}>
       {picker === "provider" ? <>
         {loading ? <p className="ui-muted">正在加载供应商…</p> : error ? <><Feedback>{error}</Feedback><button className="ui-button" onClick={reload}><RefreshCw size={14} />重试</button></> : <div className="agent-model-options">
           {choices.filter(choice => `${choice.name} ${choice.baseUrl}`.toLowerCase().includes(query)).map(choice => <button key={choice.id} aria-label={`选择供应商 ${choice.name}`} aria-pressed={choice.id === value.provider} disabled={choice.source === "missing" && choice.id !== value.provider} onClick={() => chooseProvider(choice)}>
@@ -95,8 +105,9 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
         {models.filter(model => model.toLowerCase().includes(query)).map(model => <button key={model} aria-label={`选择模型 ${model}`} aria-pressed={model === value.modelId} onClick={() => { onChange({ ...value, modelId: model }); setPicker(null); }}><Cpu size={17} /><span><strong>{model}</strong><small>{model === selected?.defaultModel ? selected?.legacy ? "全局配置参考模型" : "供应商默认" : selected?.models.includes(model) ? selected.legacy ? "现有 Agent 使用" : "供应商模型列表" : "当前自定义模型"}</small></span>{model === value.modelId ? <Check size={16} /> : null}</button>)}
         {!models.some(model => model.toLowerCase().includes(query)) ? <p className="agent-model-empty">未找到模型</p> : null}
       </div>}
-    </Modal>
-    <Modal open={pendingProvider !== null} onClose={() => setPendingProvider(null)} title="切换供应商？" size="small" footer={<><button className="ui-button" onClick={() => setPendingProvider(null)}>保留当前配置</button><button className="ui-button ui-button--primary" onClick={() => { if (pendingProvider) onChange(selectAgentProvider(value, pendingProvider)); setPendingProvider(null); setPicker(null); setShowKey(false); }}>切换并清除覆盖</button></>}><p className="ui-muted">切换到 {pendingProvider?.name} 会清除这个 Agent 独立设置的 API Key 和地址，并使用新供应商的默认模型。</p></Modal>
-    {manager ? <SettingsDialog open onClose={() => { setManager(false); reload(); }} /> : null}
-  </>;
+      </div>
+      <footer>{picker === "provider" ? <button className="ui-button" onClick={manage}><Plus size={14} />添加或管理供应商</button> : <><button className="ui-button ui-button--quiet" onClick={() => { setManual(!manual); setModelDraft(value.modelId); }}>{manual ? "返回模型列表" : "手动填写模型 ID"}</button>{manual ? <button className="ui-button ui-button--primary" disabled={!modelDraft.trim() || modelDraft.trim().length > 100} onClick={() => { onChange({ ...value, modelId: modelDraft.trim() }); setPicker(null); }}>使用此模型</button> : null}</>}</footer>
+    </section> : null}
+    {manager ? <section className="agent-model-inline" aria-label="管理供应商" onKeyDown={event => { if (event.key === "Escape" && event.currentTarget.contains(event.target as Node)) { event.preventDefault(); event.stopPropagation(); setManager(false); reload(); } }}><header><button type="button" data-model-focus className="ui-icon-button" title="返回模型配置" aria-label="返回模型配置" onClick={() => { setManager(false); reload(); }}><ArrowLeft size={17} /></button><h3>管理供应商</h3></header>{catalog ? <ModelProviderSettings settings={catalog.snapshot.settings} sources={catalog.snapshot.keySources} onSaved={snapshot => setCatalog(current => current ? { ...current, snapshot } : current)} /> : <Feedback>供应商尚未加载。<button className="ui-button" onClick={reload}>重新加载</button></Feedback>}</section> : null}
+  </div>;
 }

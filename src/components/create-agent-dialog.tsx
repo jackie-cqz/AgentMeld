@@ -6,6 +6,8 @@ import {
   ArrowRight,
   Cpu,
   FileText,
+  ChevronDown,
+  Search,
   SlidersHorizontal,
   Sparkles,
   User,
@@ -118,6 +120,10 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const [error, setError] = useState<string | null>(null);
   const [draftBasis, setDraftBasis] = useState<string | null>(null);
   const [editTab, setEditTab] = useState<AgentEditTab>("basic");
+  const [toolSearch, setToolSearch] = useState("");
+  const [selectedOnly, setSelectedOnly] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const visibleGroups = TOOL_GROUPS.map(group => ({ ...group, visible: group.tools.filter(tool => (!selectedOnly || toolNames.includes(tool)) && `${tool} ${TOOL_META[tool]?.label} ${TOOL_META[tool]?.description}`.toLowerCase().includes(toolSearch.trim().toLowerCase())) })).filter(group => group.visible.length > 0);
 
   const isChoice = !isEdit && createStage === "choice";
   const isQuick = !isEdit && createStage === "quick";
@@ -150,6 +156,9 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     setError(null);
     setDraftBasis(null);
     setEditTab("basic");
+    setToolSearch("");
+    setSelectedOnly(false);
+    setCollapsedGroups({});
   };
 
   const handleClose = () => {
@@ -411,7 +420,6 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium text-stone-800">工具权限</div>
-                  <p className="mt-0.5 text-xs text-stone-500">先选择预设，再按需微调高风险工具。</p>
                 </div>
                 <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
                   {toolNames.length} 已选
@@ -422,21 +430,20 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                 <option value="" disabled>选择权限预设</option>
                 {Object.entries(TOOL_PRESETS).map(([key, preset]) => <option key={key} value={key}>{preset.label} · {preset.tools.length} 个工具</option>)}
               </select>
+              <div className="tool-permission-filters">
+                <label className="ui-search-field"><Search size={15} /><input aria-label="搜索工具" placeholder="搜索工具" value={toolSearch} onChange={event => setToolSearch(event.target.value)} /></label>
+                <label className="tool-selected-filter"><input type="checkbox" checked={selectedOnly} onChange={event => setSelectedOnly(event.target.checked)} />仅看已授权</label>
+              </div>
             </div>
 
             <div className="mt-3 space-y-3">
-              {TOOL_GROUPS.map((group) => (
+              {visibleGroups.map((group) => (
                 <div key={group.label} className="ui-tool-group">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className={`text-xs font-semibold ${group.tone === "danger" ? "text-red-600" : "text-slate-600"}`}>{group.label}</div>
-                    {group.tone === "danger" ? (
-                      <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-600">谨慎授权</span>
-                    ) : (
-                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">低风险</span>
-                    )}
-                  </div>
-                  <div className="ui-tool-options">
-                    {group.tools.map((tool) => (
+                  <button type="button" className="tool-group-heading" aria-expanded={!!toolSearch || selectedOnly || !collapsedGroups[group.label]} onClick={() => setCollapsedGroups(current => ({ ...current, [group.label]: !current[group.label] }))}>
+                    <ChevronDown size={14} /><strong>{group.label}</strong><span>{group.tools.filter(tool => toolNames.includes(tool)).length}/{group.tools.length}</span>{group.tone === "danger" ? <small>需授权</small> : null}
+                  </button>
+                  <div className="ui-tool-options" hidden={!toolSearch && !selectedOnly && !!collapsedGroups[group.label]}>
+                    {group.visible.map((tool) => (
                       <label
                         key={tool}
                         className="ui-tool-option"
@@ -449,13 +456,14 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
                         />
                         <span className="min-w-0">
                           <span className="block font-medium">{TOOL_META[tool]?.label ?? tool}</span>
-                          <span className="mt-0.5 block text-[10px] leading-4 opacity-70">{TOOL_META[tool]?.description}</span>
+                          <span className="mt-0.5 block text-xs leading-5 text-[var(--ui-muted)]">{TOOL_META[tool]?.description}</span>
                         </span>
                       </label>
                     ))}
                   </div>
                 </div>
               ))}
+              {visibleGroups.length === 0 ? <p className="ui-muted py-6 text-center">没有匹配的工具</p> : null}
             </div>
           </>
         ) : (

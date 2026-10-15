@@ -88,7 +88,7 @@ export function ArtifactPanel() {
       >
         <div className="mx-auto h-full w-px bg-transparent transition group-hover:bg-[#4264ff]" />
       </div>
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--ui-line)] px-4">
+      <header className="artifact-panel-heading">
         <div className="min-w-0">
           <div className="flex items-center gap-2 truncate text-[13px] font-medium text-[var(--foreground)]"><FileText size={15} />产物库</div>
         </div>
@@ -111,10 +111,12 @@ export function ArtifactPanel() {
         </div>
       </header>
 
-      {artifacts.length > 1 ? (
-        <div className="flex h-11 shrink-0 items-center border-b border-slate-200 px-4">
+      {selectedArtifact ? (
+        <div className="artifact-panel-selection">
           <div className="relative w-full">
+            {artifacts.length > 1 ? <>
             <select
+              aria-label="选择产物"
               className="h-8 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 text-xs font-medium text-slate-700 outline-none hover:border-slate-300"
               value={selectedArtifact?.id ?? ""}
               onChange={(e) => setActiveArtifact(e.target.value)}
@@ -127,17 +129,13 @@ export function ArtifactPanel() {
               ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            </> : <strong title={selectedArtifact.title}>{selectedArtifact.title}</strong>}
           </div>
+          <span className="artifact-panel-version">{formatArtifactType(selectedArtifact.type)} · v{selectedArtifact.version}</span>
         </div>
       ) : null}
 
-      {selectedArtifact ? (
-        <div className="flex h-9 shrink-0 items-center border-b border-slate-200 px-4 text-xs text-slate-500">
-          {formatArtifactType(selectedArtifact.type)} · v{selectedArtifact.version}
-        </div>
-      ) : null}
-
-      <div className="flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-slate-200 px-3">
+      <div className="artifact-panel-toolbar">
         <div className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 p-1">
           <button
             className={`flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition ${
@@ -172,7 +170,7 @@ export function ArtifactPanel() {
         <VersionHistoryButton artifact={selectedArtifact} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--ui-subtle)]">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--ui-surface)]">
         {selectedArtifact ? (
           <ArtifactPreview artifact={selectedArtifact} mode={effectiveMode} />
         ) : (
@@ -393,14 +391,9 @@ function DocumentPreview({ artifact }: { artifact: Artifact }) {
   const doc = artifact.content as Extract<ArtifactContent, { type: "document" }>;
   const content = doc?.content ?? "";
   return (
-    <div className="p-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-900">
-          <FileText className="h-4 w-4" />{artifact.title}
-        </div>
+    <article className="artifact-document">
         <div className="prose prose-sm max-w-none text-slate-700"><MarkdownRenderer content={content} /></div>
-      </div>
-    </div>
+    </article>
   );
 }
 
