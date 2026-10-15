@@ -387,7 +387,7 @@ function mentions(haystack: string, name: string): boolean {
 function referenceTo(name: string): RegExp {
   const escaped = escapeRegExp(name);
   return new RegExp(
-    `(?:\\b(?:src|href|srcset|poster|data|action|formaction|cite|ping|srcdoc)\\s*=\\s*[\"']?[^\"'>]*${escaped}|url\\(\\s*[\"']?[^\"')]*${escaped})`,
+    `(?:\\b(?:src|href|srcset|poster|data|action|formaction|cite|ping|srcdoc)\\s*=\\s*["']?[^"'>]*${escaped}|url\\(\\s*["']?[^"')]*${escaped})`,
     "i"
   );
 }
