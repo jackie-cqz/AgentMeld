@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { POST as retryCompaction } from "@/app/api/context-compaction-jobs/[id]/retry/route";
@@ -25,8 +26,10 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   eventBus.clearForTests();
   ensureDatabase();
+  pairTestOwner();
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({
     choices: [{ message: { content: "## 用户请求\n- 完成上下文压缩" } }]
@@ -41,6 +44,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -115,7 +119,7 @@ describe("context compaction runner", () => {
     failCompactionJob(oldJobId, "provider_server", "temporary failure", true, Date.now());
 
     const response = await retryCompaction(
-      new Request(`http://localhost/api/context-compaction-jobs/${oldJobId}/retry`, { method: "POST" }),
+      authedRequest(`http://localhost/api/context-compaction-jobs/${oldJobId}/retry`, { method: "POST" }),
       { params: Promise.resolve({ id: oldJobId }) }
     );
     expect(response.status).toBe(202);
