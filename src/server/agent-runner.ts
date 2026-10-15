@@ -30,6 +30,7 @@ import { getModelLimits } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { Agent, AgentRun, Conversation, Message } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
+import { consumeDelegation } from "@/server/delegation";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
@@ -84,6 +85,13 @@ interface StartRunInput {
   triggerMessage: Message;
   runId?: string;
   parentRunId?: string | null;
+  /**
+   * The one-time grant that authorizes this child run (#24). Required whenever
+   * `parentRunId` is set: an agent starting another agent is a delegation, and
+   * a delegation has to be issued and verifiable — never implied by a message
+   * that looks like a request.
+   */
+  delegationCorrelationId?: string | null;
   taskExecution?: import("@/shared/evidence-types").TaskExecutionIdentity | null;
   taskContract?: import("@/shared/evidence-types").TaskExecutionContract | null;
 }
@@ -111,6 +119,51 @@ interface ExecuteRunInput extends StartRunInput {
 
 async function executeRun(input: ExecuteRunInput): Promise<void> {
   ensureDatabase();
+
+  // 0. Delegation gate. A child run is delegated work: it must present a
+  // one-time grant issued for exactly this source run, target agent, task and
+  // attempt, and spending it here is what makes a replay impossible. This is
+  // checked before anything is written, so a refused delegation leaves no run
+  // row, no message, and no partial work behind.
+  if (input.parentRunId) {
+    const correlationId = input.delegationCorrelationId;
+    if (!correlationId) {
+      createErrorMessage(
+        input.conversationId,
+        input.triggerMessage.id,
+        "This run was started as delegated work without a delegation grant.",
+        input.agentId
+      );
+      return;
+    }
+    const taskExecution = input.taskExecution;
+    if (!taskExecution) {
+      createErrorMessage(
+        input.conversationId,
+        input.triggerMessage.id,
+        "Delegated work must name the task and attempt it was delegated for.",
+        input.agentId
+      );
+      return;
+    }
+    const consumed = consumeDelegation({
+      correlationId,
+      sourceRunId: input.parentRunId,
+      targetAgentId: input.agentId,
+      taskId: taskExecution.taskId,
+      attempt: taskExecution.attempt,
+      childRunId: input.runId
+    });
+    if (!consumed.ok) {
+      createErrorMessage(
+        input.conversationId,
+        input.triggerMessage.id,
+        `Delegation refused: ${consumed.error}`,
+        input.agentId
+      );
+      return;
+    }
+  }
 
   // 1. Look up entities
   const agent = getAgent(input.agentId);

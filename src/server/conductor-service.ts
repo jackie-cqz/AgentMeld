@@ -3,7 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -14,6 +14,7 @@ import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agen
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
 import { buildContractGuidance } from "@/server/agent-contracts/contract-resolver";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
+import { issueDelegation } from "@/server/delegation";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
@@ -899,12 +900,34 @@ async function runChildTask(
         break;
       }
 
+      // Trusted delegation (#24): this child run is work one agent is handing
+      // to another, so it starts with a one-time grant naming this exact
+      // source run, target agent, task and attempt. Nothing else can start
+      // delegated work — not a message that mentions an agent, not a replay.
+      const parentRun = getRun(parentRunId);
+      const delegation = issueDelegation({
+        sourceRunId: parentRunId,
+        sourceAgentId: parentRun?.agentId ?? "",
+        targetAgentId: task.agentId,
+        taskId: task.id,
+        attempt,
+        sourceRunStatus: parentRun?.status ?? "unknown"
+      });
+      if (!delegation.ok) {
+        console.error(`[conductor] delegation refused for task ${task.id} attempt ${attempt}: ${delegation.error}`);
+        finalEvaluation = { status: "blocked", error: `delegation_refused: ${delegation.error}` };
+        finishTaskAttempt(attemptId, "blocked", Date.now());
+        updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ error: finalEvaluation.error }), Date.now());
+        break;
+      }
+
       // P0: Pass taskExecution identity into the child run
       const { runId: attemptRunId, promise } = startAgentRun({
         conversationId,
         agentId: task.agentId,
         triggerMessage: attemptMsg,
         parentRunId,
+        delegationCorrelationId: delegation.correlationId,
         taskExecution,
         taskContract: {
           acceptanceCriteria: task.acceptanceCriteria ?? [],

@@ -218,6 +218,34 @@ export const pendingApprovals = sqliteTable(
   ]
 );
 
+/**
+ * One-time grants that authorize a child run (#24 trusted delegation).
+ *
+ * `correlation_id` holds a HASH: the value itself is a bearer capability and
+ * is only ever returned once, to the caller that minted it.
+ */
+export const delegations = sqliteTable(
+  "delegations",
+  {
+    id: text("id").primaryKey(),
+    correlationId: text("correlation_id").notNull(),
+    sourceRunId: text("source_run_id").notNull(),
+    sourceAgentId: text("source_agent_id").notNull(),
+    targetAgentId: text("target_agent_id").notNull(),
+    taskId: text("task_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    status: text("status").notNull().default("issued"),
+    issuedAt: integer("issued_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    consumedAt: integer("consumed_at"),
+    consumedByRunId: text("consumed_by_run_id")
+  },
+  (table) => [
+    uniqueIndex("idx_delegations_correlation").on(table.correlationId),
+    index("idx_delegations_source_run").on(table.sourceRunId, table.status)
+  ]
+);
+
 export const conductorPlans = sqliteTable(
   "conductor_plans",
   {
