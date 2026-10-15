@@ -98,10 +98,16 @@ export function ClientStuckProbe() {
         `stream=${stream}`,
         `driftMs=${drift}`,
         `dialogs=${document.querySelectorAll("dialog[open]").length}`,
+        `hidden=${document.hidden}`,
         `title=${document.title}`
       ].join(" | ");
       // Only when something looks wrong: a healthy page should not fill the log.
-      if (drift > 2000 || covering.length > 0 || stream === "error") {
+      // A backgrounded tab has its timers throttled to about once a minute, so
+      // drift alone proves nothing there: it reported a 41s "stall" for a page
+      // that was merely behind another window. Only a VISIBLE page can be
+      // judged by its own timer.
+      const stalled = !document.hidden && drift > 2000;
+      if (stalled || covering.length > 0 || stream === "error") {
         void fetch("/api/client-errors", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
