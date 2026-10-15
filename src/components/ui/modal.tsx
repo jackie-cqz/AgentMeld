@@ -38,6 +38,14 @@ export function Modal({ open, onClose, title, description, children, footer, nav
     };
   }, [mounted, open]);
 
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    if (!mounted || !open || busy || !dialog?.open || dialog.contains(document.activeElement)) return;
+    // Disabling a focused save button can move focus to <body>. Restore it after a failed save.
+    const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+    if (dialogs[dialogs.length - 1] === dialog) dialog.querySelector<HTMLElement>("[data-autofocus], button:not(:disabled)")?.focus();
+  }, [mounted, open, busy]);
+
   if (!mounted || !open) return null;
   return createPortal(
     <dialog ref={ref} aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} aria-busy={busy}
@@ -53,7 +61,7 @@ export function Modal({ open, onClose, title, description, children, footer, nav
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }}
-      onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+      onCancel={event => { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }}
       onClick={event => {
         if (event.target !== event.currentTarget || busy) return;
         const bounds = event.currentTarget.getBoundingClientRect();

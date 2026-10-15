@@ -119,7 +119,7 @@ try {
       await noOverflow(page, `${width}-${theme}-panel-closed`);
       assert(Math.abs(await railGap(page) - openGap) <= 1, 'Opening the pane preserves rail/avatar spacing');
       await page.getByTitle('设置', { exact: true }).click();
-      await page.getByLabel('DeepSeek API Key').waitFor();
+      await page.getByRole('heading', { name: '模型供应商', exact: true }).waitFor();
       await modalCheck(page, `${width}-${theme}-settings`);
       await screenshot(page, `${width}-${theme}-settings`);
       await page.keyboard.press('Escape');
@@ -137,11 +137,15 @@ try {
   const page = await newPage(1280, 600);
   await page.getByTitle('关闭预览', { exact: true }).click();
   await page.getByTitle('设置', { exact: true }).click();
-  await page.getByLabel('DeepSeek API Key').fill('ui-test-not-a-real-key');
+  await page.getByRole('heading', { name: '模型供应商', exact: true }).waitFor();
+  await page.getByRole('button', { name: '发布与预览', exact: true }).click();
+  const publishSwitch = page.getByRole('switch', { name: '外部静态发布', exact: true });
+  if (await publishSwitch.getAttribute('aria-checked') !== 'true') await publishSwitch.click();
+  await page.getByLabel('发布根目录', { exact: true }).fill('UI unsaved publishing draft');
   await page.keyboard.press('Escape');
   await modalCheck(page, 'unsaved-confirmation');
   await page.getByRole('button', { name: '继续编辑', exact: true }).click();
-  assert.equal(await page.getByLabel('DeepSeek API Key').inputValue(), 'ui-test-not-a-real-key');
+  assert.equal(await page.getByLabel('发布根目录', { exact: true }).inputValue(), 'UI unsaved publishing draft');
   for (let index = 0; index < 16; index++) {
     await page.keyboard.press('Tab');
     assert(await page.locator('dialog[open]').evaluate(node => node.contains(document.activeElement)), 'Tab must be trapped in modal');
@@ -191,8 +195,8 @@ try {
   await page.keyboard.press('ArrowRight');
   const smallerWidth = (await page.locator('.ui-right-pane').boundingBox()).width;
   assert(smallerWidth < originalWidth, 'Keyboard resizing must change actual pane width');
-  await page.getByTitle('工作区文件', { exact: true }).click();
   await page.route('**/workspace-files?**', route => route.fulfill({ json: route.request().url().includes('read=1') ? { content: '# Workspace acceptance\n\nNo stale scroll position.', truncated: false } : { entries: [{ name: 'acceptance.md', type: 'file' }] } }));
+  await page.getByTitle('工作区文件', { exact: true }).click();
   await page.getByTitle('刷新文件树', { exact: true }).click();
   await page.getByRole('button', { name: 'acceptance.md', exact: true }).click();
   await page.getByText('Workspace acceptance', { exact: false }).waitFor();

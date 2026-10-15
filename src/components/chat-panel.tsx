@@ -683,6 +683,7 @@ function formatProvider(provider: ModelProvider | null) {
   if (provider === "openai") return "OpenAI";
   if (provider === "volcano-ark") return "火山方舟";
   if (provider === "openai-compatible") return "OpenAI-Compatible";
+  if (provider?.startsWith("profile:")) return "自定义供应商";
   return "SDK";
 }
 

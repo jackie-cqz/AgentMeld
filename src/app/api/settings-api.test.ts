@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -20,6 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   resetBootstrapForTests();
   resetClientForTests();
   delete process.env.AGENTMELD_DATA_DIR;
@@ -61,6 +62,30 @@ describe("GET /api/settings", () => {
 });
 
 describe("PATCH /api/settings", () => {
+  it("returns confirmed credential sources without exposing the new key", async () => {
+    const response = await PATCH(jsonRequest("PATCH", { deepseekApiKey: "test-provider-1234" }));
+    const body = await response.json();
+    expect(body.keySources.deepseek).toBe("app_settings");
+    expect(body.settings.deepseekApiKey).toMatch(/^\*+1234$/);
+    expect(JSON.stringify(body)).not.toContain("test-provider-1234");
+  });
+
+  it("reports environment fallback after a local credential is removed", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-environment-fallback-secret");
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "test-local-secret" }));
+    const response = await PATCH(jsonRequest("PATCH", { deepseekApiKey: null }));
+    const body = await response.json();
+    expect(body.settings.deepseekApiKey).toBeNull();
+    expect(body.keySources.deepseek).toBe("environment");
+    expect(JSON.stringify(body)).not.toContain("test-environment-fallback-secret");
+  });
+
+  it("a single-provider save retains unrelated credentials and publishing settings", async () => {
+    await PATCH(jsonRequest("PATCH", { openaiApiKey: "test-openai-retained", deploymentPublishEnabled: true, deploymentPublishDir: "test-publish" }));
+    await PATCH(jsonRequest("PATCH", { deepseekApiKey: "test-deepseek-added" }));
+    expect(getSettings()).toMatchObject({ openaiApiKey: "test-openai-retained", deepseekApiKey: "test-deepseek-added", deploymentPublishEnabled: true, deploymentPublishDir: "test-publish" });
+  });
+
   it("rejects invalid body with 400", async () => {
     const req = jsonRequest("PATCH", { openaiApiKey: 123 }); // should be string|null
     const res = await PATCH(req);

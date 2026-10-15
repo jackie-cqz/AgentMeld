@@ -4,6 +4,7 @@ import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
 import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
+import { requireModelProviderProfile } from "@/server/model-provider-service";
 
 export { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
 export type { ToolPresetName } from "@/shared/agent-constants";
@@ -172,6 +173,7 @@ function validateCustomAgentConfig(
       throw new Error("OpenAI-compatible agents must specify an API base URL.");
     }
   }
+  if (modelProvider.startsWith("profile:")) requireModelProviderProfile(modelProvider);
   const allowedTools = allowInternalTools
     ? new Set([...ALL_TOOL_NAMES, "plan_tasks", "report_task_result", "update_context_facts"])
     : new Set<string>(ALL_TOOL_NAMES);

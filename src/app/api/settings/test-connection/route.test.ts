@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/settings/test-connection/route";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
@@ -11,6 +11,7 @@ let tempDir: string;
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
+  vi.stubEnv("DEEPSEEK_API_KEY", "");
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-conf-connection-test-"));
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
@@ -20,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   globalThis.fetch = originalFetch;
   resetBootstrapForTests();
   resetClientForTests();

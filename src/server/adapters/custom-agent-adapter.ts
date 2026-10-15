@@ -97,6 +97,7 @@ function buildClient(agent: AdapterInput["agent"]): OpenAI {
   const apiKey = resolveApiKey(provider, agent.apiKey, settings);
 
   if (!apiKey) {
+    if (provider.startsWith("profile:")) throw new Error("供应商配置缺少 API Key，请在设置的模型供应商中更新凭据或对应的环境变量。");
     throw new Error(
       `No API key configured for provider "${provider}". ` +
       `Set it in Settings, on the agent, or via the ${provider.toUpperCase()}_API_KEY environment variable.`

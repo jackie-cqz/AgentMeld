@@ -2,6 +2,10 @@ import { nanoid } from "nanoid";
 
 const ID_SIZE = 12;
 
+export function newModelProviderId() {
+  return `mp_${nanoid(ID_SIZE)}`;
+}
+
 export function newAgentId() {
   return `ag_${nanoid(ID_SIZE)}`;
 }

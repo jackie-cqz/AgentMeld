@@ -74,9 +74,11 @@ try {
 
   await page.route('**/api/settings/test-connection', route => route.fulfill({ json: { ok: true, latencyMs: 42 } }));
   await page.getByTitle('设置', { exact: true }).click();
+  await page.getByRole('button', { name: '配置 DeepSeek', exact: true }).click();
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await page.getByText('连接成功，42 ms', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await page.getByRole('button', { name: '关闭配置 DeepSeek', exact: true }).click();
+  await page.getByRole('button', { name: '完成', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'detached' });
 
   // External Feishu creation is mocked; assert UI lifecycle and exact requests.
