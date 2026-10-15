@@ -167,6 +167,23 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS delegations (
+      id TEXT PRIMARY KEY,
+      correlation_id TEXT NOT NULL,
+      source_run_id TEXT NOT NULL,
+      source_agent_id TEXT NOT NULL,
+      target_agent_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'issued',
+      issued_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      consumed_at INTEGER,
+      consumed_by_run_id TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_delegations_correlation ON delegations(correlation_id);
+    CREATE INDEX IF NOT EXISTS idx_delegations_source_run ON delegations(source_run_id, status);
+
     CREATE TABLE IF NOT EXISTS conductor_plans (
       id TEXT PRIMARY KEY,
       conductor_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,

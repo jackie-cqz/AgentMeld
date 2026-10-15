@@ -1,9 +1,10 @@
 import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
+import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
 import { getAdapter } from "@/server/adapters/registry";
 import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -14,6 +15,7 @@ import { getFilteredDefinitionsForAgent } from "@/server/context-facts/fact-agen
 import { buildFactExtractionGuidance } from "@/server/context-facts/conductor-fact-extraction";
 import { buildContractGuidance } from "@/server/agent-contracts/contract-resolver";
 import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
+import { issueDelegation } from "@/server/delegation";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
@@ -28,6 +30,7 @@ import type { Message, MessagePart, StreamEvent, DispatchPlanItem, Agent } from 
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { TaskContextEnvelope, ContextManifestItem } from "@/shared/task-context-types";
 import {
+  clearTaskAttemptChildRun,
   createTaskAttempt,
   startTaskAttempt,
   finishTaskAttempt,
@@ -899,12 +902,33 @@ async function runChildTask(
         break;
       }
 
+      // Trusted delegation (#24): this child run is work one agent is handing
+      // to another, so it starts with a one-time grant naming this exact
+      // source run, target agent, task and attempt. Nothing else can start
+      // delegated work — not a message that mentions an agent, not a replay.
+      const parentRun = getRun(parentRunId);
+      const delegation = issueDelegation({
+        sourceRunId: parentRunId,
+        sourceAgentId: parentRun?.agentId ?? "",
+        targetAgentId: task.agentId,
+        taskId: task.id,
+        attempt
+      });
+      if (!delegation.ok) {
+        console.error(`[conductor] delegation refused for task ${task.id} attempt ${attempt}: ${delegation.error}`);
+        finalEvaluation = { status: "blocked", error: `delegation_refused: ${delegation.error}` };
+        finishTaskAttempt(attemptId, "blocked", Date.now());
+        updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ error: finalEvaluation.error }), Date.now());
+        break;
+      }
+
       // P0: Pass taskExecution identity into the child run
       const { runId: attemptRunId, promise } = startAgentRun({
         conversationId,
         agentId: task.agentId,
         triggerMessage: attemptMsg,
         parentRunId,
+        delegationCorrelationId: delegation.correlationId,
         taskExecution,
         taskContract: {
           acceptanceCriteria: task.acceptanceCriteria ?? [],
@@ -923,6 +947,33 @@ async function runChildTask(
         await promise;
       } catch {
         // Run failed — continue to evaluation
+      }
+
+      // The delegation gate refuses BEFORE a run row exists, so the reason
+      // cannot come from the database — the runner hands it back explicitly.
+      // Without this the attempt was reported as "the agent never called
+      // report_task_result", blaming the agent for a wiring refusal.
+      const refusal = takeRunRefusalReason(attemptRunId);
+      if (refusal) {
+        console.error(`[conductor] task ${task.id} attempt ${attempt}: ${refusal}`);
+        finalEvaluation = { status: "blocked", error: `delegation_refused: ${refusal}` };
+        // The attempt row was opened with a child run id before the child
+        // existed; the runner refused, so that id names nothing. Clear it
+        // rather than leave an investigator chasing a run that was never made.
+        clearTaskAttemptChildRun(attemptId, Date.now());
+        finishTaskAttempt(attemptId, "blocked", Date.now());
+        updateTaskAttemptVerification(
+          attemptId,
+          "rejected",
+          JSON.stringify({ error: finalEvaluation.error }),
+          Date.now()
+        );
+        // Do not let the post-loop verification rewrite an EARLIER attempt's
+        // failure context with this refusal: finalAttemptId still points at the
+        // previous attempt, and this break means there is no new one.
+        finalAttemptId = "";
+        finalRunId = "";
+        break;
       }
 
       const report = getTaskReport(attemptRunId);
