@@ -13,9 +13,12 @@ import {
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import {
+  claimChannelInboundMessage,
   createChannelConversation,
   createConversation,
-  createMessage
+  createMessage,
+  createRun,
+  setChannelInboundMessageId
 } from "@/server/repositories";
 import type { Message, MessagePart, MessageStatus } from "@/shared/types";
 
@@ -23,9 +26,10 @@ import type { Message, MessagePart, MessageStatus } from "@/shared/types";
  * `getFeishuChannelForAgent` is stubbed: this suite is about WHICH channel a
  * message is routed to and WHETHER it goes, not about the platform client.
  */
-const { channelsByAgent, sent } = vi.hoisted(() => ({
+const { channelsByAgent, sent, replied } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, { send: (chatId: string, input: unknown) => Promise<unknown> }>(),
-  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>
+  sent: [] as Array<{ agentId: string; chatId: string; input: unknown }>,
+  replied: [] as Array<{ agentId: string; target: unknown; input: unknown }>
 }));
 
 vi.mock("@/server/channels/feishu/registry", () => ({
@@ -36,6 +40,10 @@ vi.mock("@/server/channels/feishu/registry", () => ({
       send: (chatId: string, input: unknown) => {
         sent.push({ agentId, chatId, input });
         return channel.send(chatId, input);
+      },
+      reply: (target: unknown, input: unknown) => {
+        replied.push({ agentId, target, input });
+        return Promise.resolve({ messageId: `om_reply_${replied.length}` });
       }
     };
   }
@@ -165,6 +173,7 @@ describe("projectMessage", () => {
   beforeEach(() => {
     teardown = setupTestDatabase("agentmeld-channel-projection-");
     sent.length = 0;
+    replied.length = 0;
     channelsByAgent.clear();
     stopChannelProjectionForTests();
 
@@ -196,6 +205,179 @@ describe("projectMessage", () => {
   function connect(agentId: string) {
     channelsByAgent.set(agentId, { send: async () => ({ messageId: "om_out" }) });
   }
+
+  it("answers inside the topic the question was asked in", async () => {
+    // Feishu topics: a question asked in one should not be answered at the top
+    // of the group, where it loses its context.
+    linkChat();
+    connect("ag_pm");
+    claimChannelInboundMessage({
+      id: "cim_1",
+      channel: "feishu",
+      chatId: "oc_1",
+      externalMessageId: "om_question",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      threadId: "omt_topic_1",
+      now: 1
+    });
+    // The inbound record points at the local message it became, which is what
+    // the run was triggered by.
+    setChannelInboundMessageId("cim_1", "msg_trigger");
+    createRun({
+      id: "run_1",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: "msg_trigger",
+      parentRunId: null,
+      status: "running",
+      now: 1
+    });
+
+    const outcome = await projectMessage(agentMessage());
+
+    expect(outcome.status).toBe("sent");
+    expect(sent).toHaveLength(0);
+    expect(replied).toHaveLength(1);
+    expect(replied[0].target).toMatchObject({
+      chatId: "oc_1",
+      messageId: "om_question",
+      threadId: "omt_topic_1"
+    });
+  });
+
+  it("uses the topic of ITS OWN trigger when several inbound rows exist", async () => {
+    // Two rows with different topics: a query that ignores the local message id
+    // (or takes the newest row) still passes every single-row test, and answers
+    // in the wrong topic in production.
+    linkChat();
+    connect("ag_pm");
+    claimChannelInboundMessage({
+      id: "cim_other",
+      channel: "feishu",
+      chatId: "oc_1",
+      externalMessageId: "om_other",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      threadId: "omt_other_topic",
+      now: 1
+    });
+    setChannelInboundMessageId("cim_other", "msg_other");
+    claimChannelInboundMessage({
+      id: "cim_mine",
+      channel: "feishu",
+      chatId: "oc_1",
+      externalMessageId: "om_mine",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      threadId: "omt_my_topic",
+      now: 2
+    });
+    setChannelInboundMessageId("cim_mine", "msg_trigger");
+    createRun({
+      id: "run_1",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: "msg_trigger",
+      parentRunId: null,
+      status: "running",
+      now: 2
+    });
+
+    await projectMessage(agentMessage());
+
+    expect(replied).toHaveLength(1);
+    expect(replied[0].target).toMatchObject({ messageId: "om_mine", threadId: "omt_my_topic" });
+  });
+
+  it("does not put a dispatched sub-task's answer in the parent's topic", async () => {
+    // A child run's trigger message is created by the conductor and never
+    // recorded as inbound, so there is no topic to find. Resolving one through
+    // parentRunId would post the sub-task's answer next to the question — the
+    // safety of this depends on the conductor's message staying out of the
+    // inbound table, which is exactly what a test should hold still.
+    linkChat();
+    connect("ag_pm");
+    claimChannelInboundMessage({
+      id: "cim_parent",
+      channel: "feishu",
+      chatId: "oc_1",
+      externalMessageId: "om_question",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      threadId: "omt_parent_topic",
+      now: 1
+    });
+    setChannelInboundMessageId("cim_parent", "msg_parent_trigger");
+    createRun({
+      id: "run_parent",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: "msg_parent_trigger",
+      parentRunId: null,
+      status: "running",
+      now: 1
+    });
+    // The child: its trigger is a fresh message the conductor made, not the
+    // human's question.
+    createMessage({
+      id: "msg_child_trigger",
+      conversationId: "conv_1",
+      role: "system",
+      origin: "internal",
+      agentId: "ag_pm",
+      runId: "run_parent",
+      parts: [{ type: "text", content: "派发的子任务" }],
+      status: "complete",
+      mentionedAgentIds: [],
+      parentMessageId: null,
+      now: 2
+    });
+    createRun({
+      id: "run_child",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: "msg_child_trigger",
+      parentRunId: "run_parent",
+      status: "running",
+      now: 2
+    });
+
+    await projectMessage(agentMessage({ runId: "run_child" }));
+
+    expect(replied).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("posts at the top level when the question was not in a topic", async () => {
+    linkChat();
+    connect("ag_pm");
+    claimChannelInboundMessage({
+      id: "cim_2",
+      channel: "feishu",
+      chatId: "oc_1",
+      externalMessageId: "om_plain",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      threadId: null,
+      now: 1
+    });
+    setChannelInboundMessageId("cim_2", "msg_trigger");
+    createRun({
+      id: "run_1",
+      conversationId: "conv_1",
+      agentId: "ag_pm",
+      triggerMessageId: "msg_trigger",
+      parentRunId: null,
+      status: "running",
+      now: 1
+    });
+
+    await projectMessage(agentMessage());
+
+    expect(replied).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
 
   it("posts agent output through that agent's own bot", async () => {
     linkChat();
@@ -295,6 +477,7 @@ describe("projectRunFailure", () => {
   beforeEach(() => {
     teardown = setupTestDatabase("agentmeld-channel-failure-");
     sent.length = 0;
+    replied.length = 0;
     channelsByAgent.clear();
     stopChannelProjectionForTests();
 
@@ -421,6 +604,7 @@ describe("startChannelProjection", () => {
   beforeEach(() => {
     teardown = setupTestDatabase("agentmeld-channel-projection-sub-");
     sent.length = 0;
+    replied.length = 0;
     channelsByAgent.clear();
     stopChannelProjectionForTests();
 

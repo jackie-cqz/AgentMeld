@@ -917,13 +917,14 @@ export function claimChannelInboundMessage(input: {
   externalMessageId: string;
   conversationId: string;
   agentId: string;
+  threadId?: string | null;
   now: number;
 }): boolean {
   const result = getDatabase()
     .prepare(`
       INSERT INTO channel_inbound_messages (
-        id, channel, chat_id, external_message_id, conversation_id, message_id, agent_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+        id, channel, chat_id, external_message_id, conversation_id, message_id, thread_id, agent_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
       ON CONFLICT(channel, external_message_id) DO NOTHING
     `)
     .run(
@@ -932,6 +933,7 @@ export function claimChannelInboundMessage(input: {
       input.chatId,
       input.externalMessageId,
       input.conversationId,
+      input.threadId ?? null,
       input.agentId,
       input.now
     ) as { changes?: number };
@@ -943,6 +945,26 @@ export function setChannelInboundMessageId(id: string, messageId: string): void 
   getDatabase()
     .prepare("UPDATE channel_inbound_messages SET message_id = ? WHERE id = ?")
     .run(messageId, id);
+}
+
+/**
+ * The Feishu context of the message that triggered a run, so the answer can go
+ * back into the topic the question was asked in.
+ *
+ * Looked up through the LOCAL message id the inbound record became, which is
+ * what a run points at.
+ */
+export function getChannelInboundThread(
+  localMessageId: string
+): { externalMessageId: string; threadId: string | null } | null {
+  const row = getDatabase()
+    .prepare(
+      "SELECT external_message_id, thread_id FROM channel_inbound_messages WHERE message_id = ?"
+    )
+    .get(localMessageId) as { external_message_id: string; thread_id: string | null } | undefined;
+  return row
+    ? { externalMessageId: row.external_message_id, threadId: row.thread_id ?? null }
+    : null;
 }
 
 export function getChannelInboundMessage(

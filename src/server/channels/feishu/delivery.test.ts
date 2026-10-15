@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearDeliveryHealthForTests,
   deliverCardUpdate,
@@ -12,6 +12,70 @@ import {
  * cannot be asked — the scopes a one-click app is granted cannot read group
  * messages back.
  */
+describe("a reply target on a channel that cannot reply", () => {
+  it("still posts through send", async () => {
+    // The capability check: a channel stub (or an SDK without `reply`) must not
+    // turn a reply target into a TypeError that loses the message.
+    const sends: Array<{ chatId: string; input: unknown }> = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const channel = {
+      send: async (chatId: string, input: unknown) => {
+        sends.push({ chatId, input });
+        return { messageId: "om_out" };
+      }
+    };
+    try {
+      const result = await deliverSend<{ messageId: string }>(
+        channel,
+        "conv_1",
+        "ag_pm",
+        "oc_1",
+        { text: "回答" },
+        { chatId: "oc_1", messageId: "om_question", threadId: "omt_1" }
+      );
+
+      expect(result.messageId).toBe("om_out");
+      expect(sends).toHaveLength(1);
+      expect(sends[0].chatId).toBe("oc_1");
+      // And it did not go through the failure path: a channel that cannot reply
+      // is not a reply that failed, and the log has to say which happened.
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("falls back to send when the reply itself fails", async () => {
+    // A withdrawn question, a closed topic, an app without reply permission:
+    // losing the answer entirely is the worst outcome, so the top level is used.
+    const sends: unknown[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const channel = {
+      send: async () => {
+        sends.push("sent");
+        return { messageId: "om_fallback" };
+      },
+      reply: async () => {
+        throw new Error("message withdrawn");
+      }
+    };
+    try {
+      const result = await deliverSend<{ messageId: string }>(
+        channel,
+        "conv_1",
+        "ag_pm",
+        "oc_1",
+        { text: "回答" },
+        { chatId: "oc_1", messageId: "om_question", threadId: "omt_1" }
+      );
+      expect(result.messageId).toBe("om_fallback");
+      expect(sends).toHaveLength(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
 describe("delivery health", () => {
   beforeEach(() => {
     clearDeliveryHealthForTests();

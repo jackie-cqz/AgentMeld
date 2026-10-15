@@ -89,15 +89,45 @@ async function attempt<T>(
 
 /** Send, and remember whether it worked. */
 export function deliverSend<T>(
-  channel: Pick<LarkChannel, "send">,
+  channel: Pick<LarkChannel, "send"> & Partial<Pick<LarkChannel, "reply">>,
   conversationId: string,
   agentId: string,
   chatId: string,
-  input: Parameters<LarkChannel["send"]>[1]
+  input: Parameters<LarkChannel["send"]>[1],
+  /**
+   * Where the question was asked. When the trigger came from inside a Feishu
+   * topic, the answer goes back into that topic instead of starting a new one at
+   * the top of the group; the SDK's `reply` is what keeps it there.
+   *
+   * Optional and capability-checked: a channel stub that only implements `send`
+   * (and an app whose SDK predates `reply`) still posts, just not in-thread.
+   */
+  replyTo?: { chatId: string; messageId: string; threadId: string } | null
 ): Promise<T> {
-  return attempt(conversationId, agentId, () =>
-    channel.send(chatId, input) as unknown as Promise<T>
-  );
+  return attempt(conversationId, agentId, async () => {
+    if (replyTo && typeof channel.reply === "function") {
+      try {
+        return (await channel.reply(replyTo, input)) as unknown as T;
+      } catch (error) {
+        // A withdrawn message, a closed topic, an app without reply permission:
+        // failing here would lose the answer entirely, and this module calls
+        // silence the worst of the available outcomes. Post it at the top level
+        // instead — what would have happened without any of this.
+        //
+        // The cost, which the operations guide states as well: when the reply's
+        // outcome is UNCERTAIN (a timeout, or an `unknown` that exhausted its
+        // retries) the platform may have accepted it, and the room would then
+        // see the answer twice — once in the topic and once at the top. The SDK
+        // already handles the common `target_revoked` case internally by
+        // resending without replyTo, so what reaches here is mostly a definite
+        // failure (safe to fall back) or one of those uncertain ones. Choosing
+        // "possibly twice" over "silently never" matches what the artifact
+        // delivery path already does for the same reason.
+        console.error("[feishu] reply failed; posting at the top level instead:", error);
+      }
+    }
+    return channel.send(chatId, input) as unknown as Promise<T>;
+  });
 }
 
 /** Update a card in place, and remember whether it worked. */
