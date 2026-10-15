@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase } from "@/db/bootstrap";
+import { createConversation } from "@/server/conversation-service";
 import { eventBus } from "@/server/event-bus";
 import { setupTestDatabase } from "@/test/test-database";
 import { getApprovalRecord } from "@/server/repositories";
@@ -168,6 +169,21 @@ describe("POST /api/pending-bash/[id]/resolve", () => {
     // a 409 claiming a pending write was resolved.
     const wrongRoute = await resolveWrite(jsonRequest({ approved: true }), ctx(id));
     expect(wrongRoute.status).toBe(404);
+  });
+
+  it("attributes a rejection to the principal, not the label", async () => {
+    // The reject success path was never driven with a label, so swapping the
+    // two arguments here left the whole suite green.
+    registerPendingBash("conv_reject", "ag_1", "run_reject", "rm -rf build", "/ws", "Reason");
+    const id = getAllPendingBashCommands()[0].id;
+
+    const res = await resolveBash(jsonRequest({ approved: false, resolvedBy: "ou_mallory" }), ctx(id));
+    expect(res.status).toBe(200);
+
+    const record = getApprovalRecord(id);
+    expect(record?.status).toBe("rejected");
+    expect(record?.resolvedBy).toMatch(OWNER_PRINCIPAL);
+    expect(record?.resolvedByLabel).toBe("ou_mallory");
   });
 
   it("records the principal even when the caller sends no label", async () => {
@@ -357,6 +373,45 @@ describe("POST /api/dispatch-plans/[id]/resolve", () => {
     expect(record?.status).toBe("rejected");
     expect(record?.resolvedBy).toMatch(OWNER_PRINCIPAL);
     expect(record?.resolvedByLabel).toBe("ou_frank");
+  });
+
+  it("attributes an approval of a plan to the principal, not the label", async () => {
+    // The approval gate re-validates against the real conversation members, so
+    // this one needs a conversation whose agents can actually take the task.
+    const conversation = createConversation({
+      title: "审批群", mode: "group",
+      agentIds: ["ag_mock_conductor", "ag_mock_builder"]
+    });
+    registerPendingPlan(conversation.id, "run_approve", [
+      { id: "t1", agentId: "ag_mock_builder", task: "Do the thing", dependsOn: [] }
+    ]);
+    const id = getAllPendingPlans()[0].id;
+
+    const res = await resolvePlan(jsonRequest({ action: "approve", resolvedBy: "ou_heidi" }), ctx(id));
+    expect(res.status).toBe(200);
+    expect((await res.clone().json()) as { approved?: boolean }).toMatchObject({ approved: true });
+
+    const record = getApprovalRecord(id);
+    expect(record?.status).toBe("approved");
+    expect(record?.resolvedBy).toMatch(OWNER_PRINCIPAL);
+    expect(record?.resolvedByLabel).toBe("ou_heidi");
+  });
+
+  it("attributes a revision of a plan to the principal, not the label", async () => {
+    registerPendingPlan("conv_revise", "run_revise", [
+      { id: "t1", agentId: "ag_1", task: "Do the thing", dependsOn: [] }
+    ]);
+    const id = getAllPendingPlans()[0].id;
+
+    const res = await resolvePlan(
+      jsonRequest({ action: "revise", feedback: "先写测试", resolvedBy: "ou_ivan" }),
+      ctx(id)
+    );
+    expect(res.status).toBe(200);
+
+    const record = getApprovalRecord(id);
+    expect(record?.resolvedBy).toMatch(OWNER_PRINCIPAL);
+    expect(record?.resolvedByLabel).toBe("ou_ivan");
   });
 
   it("records the principal with a null label when the caller omits one", async () => {

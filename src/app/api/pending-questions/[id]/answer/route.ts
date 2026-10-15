@@ -9,11 +9,10 @@ export const dynamic = "force-dynamic";
 
 const answerSchema = z.object({
   answers: z.record(z.string(), z.string()),
-  // Caller-declared attribution label (not authenticated). Omit it, or send
-  // null, when the operator is unknown. Note the deliberate split with the
-  // server side: this boundary rejects an over-long label (400) while
-  // normalizeResolvedBy truncates, because an internal caller may hold a
-  // longer identifier than the HTTP contract allows.
+  // Display label only. The identity recorded in `resolved_by` is derived from
+  // the authenticated principal below. This boundary rejects an over-long label
+  // (400) while normalizeResolvedByLabel truncates, because an internal caller
+  // may hold a longer string than the HTTP contract allows.
   resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional()
 });
 

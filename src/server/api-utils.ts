@@ -46,7 +46,10 @@ export function conflict(message: string): Response {
 
 /** Attribution of an approval that some other actor already resolved. */
 export interface ResolvedAttribution {
-  /** Authenticated principal that resolved it (#24); never a caller string. */
+  /**
+   * Authenticated principal that resolved it (#24). Rows written before that
+   * change may hold a legacy caller-declared string; see ApprovalRecord.
+   */
   resolvedBy: string | null;
   /** Whatever display string that caller sent. Grants nothing. */
   resolvedByLabel: string | null;

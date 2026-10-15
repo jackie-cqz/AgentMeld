@@ -16,11 +16,10 @@ import { getDatabase } from "@/db/client";
  *   what the web UI runs on.
  * - `device-token`   — the companion device's long-lived token from settings
  *   (`mobileDeviceToken`). Rotatable, revocable.
- * - `feishu-binding` — an inbound Feishu event or card action. Identified by
- *   the binding's owner check elsewhere; here it only needs to reach the
- *   routes the channel owns. It is NOT a session: an open_id from one app
- *   means nothing in another app's namespace, so it never becomes an
- *   owner-session.
+ * - `feishu-binding` — an inbound Feishu event or card action, carrying the
+ *   app that delivered it AND the operator's open_id. It is NOT a session: an
+ *   open_id from one app means nothing in another app's namespace, so it never
+ *   becomes an owner-session, and the app id stays part of the identity.
  *
  * Everything else is anonymous. What an anonymous request may do is decided by
  * `requireAuth`/`requireAnonymous` at the route, never by the caller.
@@ -29,7 +28,7 @@ import { getDatabase } from "@/db/client";
 export type AuthPrincipal =
   | { kind: "owner-session"; sessionId: string; createdAt: number }
   | { kind: "device-token"; label: string }
-  | { kind: "feishu-binding"; appId: string }
+  | { kind: "feishu-binding"; appId: string; openId: string }
   | { kind: "anonymous" };
 
 const SESSION_COOKIE = "agentmeld_session";
@@ -275,7 +274,10 @@ export function describePrincipal(principal: AuthPrincipal): string | null {
     case "device-token":
       return `device:${principal.label}`;
     case "feishu-binding":
-      return `feishu:${principal.appId}`;
+      // One format for Feishu identities, shared with the card-action path:
+      // the operator's open_id scoped by the app that issued it. An app-only
+      // string here would put an application where a person belongs.
+      return feishuOperatorRef(principal.appId, principal.openId);
     case "anonymous":
       return null;
   }

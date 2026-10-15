@@ -416,7 +416,13 @@ export interface ApprovalRecord {
   /**
    * WHO resolved it, as an authenticated principal (issue #24):
    * `owner:session:<id>`, `device:companion`, `feishu:<appId>:<openId>`, or
-   * `system` for test teardown. Never a caller-supplied string.
+   * `system` for test teardown.
+   *
+   * Rows written BEFORE that change may hold a caller-declared string in this
+   * column instead — the column was write-only and unverified then, and the
+   * migration does not rewrite history. So this is a trustworthy identity for
+   * anything written since, and a historical label for anything older; nothing
+   * in the codebase authorizes on it either way.
    */
   resolvedBy: string | null;
   /** What the caller SAID it was. Display only; grants nothing. */

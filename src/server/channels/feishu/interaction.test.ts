@@ -103,7 +103,7 @@ describe("isAuthorisedOperator", () => {
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
       boundByOpenId: "ou_owner", now: 1
     });
-    expect(isAuthorisedOperator(AGENT, "ou_owner")).toBe(true);
+    expect(isAuthorisedOperator(AGENT, "ou_owner", "cli_pm")).toBe(true);
   });
 
   it("refuses anyone else", () => {
@@ -111,8 +111,8 @@ describe("isAuthorisedOperator", () => {
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
       boundByOpenId: "ou_owner", now: 1
     });
-    expect(isAuthorisedOperator(AGENT, "ou_other")).toBe(false);
-    expect(isAuthorisedOperator(AGENT, undefined)).toBe(false);
+    expect(isAuthorisedOperator(AGENT, "ou_other", "cli_pm")).toBe(false);
+    expect(isAuthorisedOperator(AGENT, undefined, "cli_pm")).toBe(false);
   });
 
   it("fails closed when the owner is not recorded", () => {
@@ -121,11 +121,11 @@ describe("isAuthorisedOperator", () => {
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
       boundByOpenId: null, now: 1
     });
-    expect(isAuthorisedOperator(AGENT, "ou_anyone")).toBe(false);
+    expect(isAuthorisedOperator(AGENT, "ou_anyone", "cli_pm")).toBe(false);
   });
 
   it("refuses an agent that is not bound at all", () => {
-    expect(isAuthorisedOperator("ag_not_bound", "ou_owner")).toBe(false);
+    expect(isAuthorisedOperator("ag_not_bound", "ou_owner", "cli_pm")).toBe(false);
   });
 });
 
@@ -247,8 +247,9 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     const response = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }),
+      "cli_pm"
+  );
 
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
     expect(response).toMatchObject({ toast: { type: "success" } });
@@ -264,8 +265,9 @@ describe("handleCardAction", () => {
     });
 
     const partial = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }),
+      "cli_pm"
+  );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(partial).toMatchObject({ card: { type: "raw" } });
@@ -273,8 +275,9 @@ describe("handleCardAction", () => {
     expect(settled).toBe(false);
 
     const complete = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }),
+      "cli_pm"
+  );
     expect(complete).toMatchObject({ toast: { type: "success" } });
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue", "部署到哪？": "预览" });
   });
@@ -336,10 +339,11 @@ describe("handleCardAction", () => {
     ]);
     const pendingId = latestKey();
 
-    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "是" }));
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "是" }), "cli_pm");
     const response = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "否" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "否" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "success" } });
     await expect(pending).resolves.toEqual({ "继续吗？": "否" });
@@ -356,11 +360,13 @@ describe("handleCardAction", () => {
     const pendingId = latestKey();
 
     await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "甲" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "甲" }),
+      "cli_pm"
+  );
     const second = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "React" }, { openId: "ou_user", name: "甲" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "React" }, { openId: "ou_user", name: "甲" }),
+      "cli_pm"
+  );
 
     // The card the second click returns shows React as CHOSEN. The assertion used
     // to be `toContain("React")`, which the button label satisfies on its own, so
@@ -368,8 +374,9 @@ describe("handleCardAction", () => {
     expect(JSON.stringify(second)).toContain("已选择：**React**");
 
     await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }, { openId: "ou_user", name: "甲" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }, { openId: "ou_user", name: "甲" }),
+      "cli_pm"
+  );
     await expect(pending).resolves.toEqual({ "用哪个框架？": "React", "部署到哪？": "预览" });
   });
 
@@ -404,7 +411,7 @@ describe("handleCardAction", () => {
     const pendingId = latestKey();
     const fresh = questionRows(postedCard(pendingId));
 
-    const partial = await handleCardAction(click(fresh[0][0].value));
+    const partial = await handleCardAction(click(fresh[0][0].value), "cli_pm");
     const returned = (partial as { card: { data: object } }).card.data;
     const rows = questionRows(returned);
 
@@ -419,7 +426,7 @@ describe("handleCardAction", () => {
     }
 
     // Answering it with a value taken from the card that came BACK finishes it.
-    await handleCardAction(click(rows[1][0].value));
+    await handleCardAction(click(rows[1][0].value), "cli_pm");
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue", "部署到哪？": "预览" });
   });
 
@@ -431,9 +438,9 @@ describe("handleCardAction", () => {
     const pendingId = latestKey();
     const fresh = questionRows(postedCard(pendingId));
 
-    const partial = await handleCardAction(click(fresh[0][0].value));
+    const partial = await handleCardAction(click(fresh[0][0].value), "cli_pm");
     const rows = questionRows((partial as { card: { data: object } }).card.data);
-    const done = await handleCardAction(click(rows[1][0].value));
+    const done = await handleCardAction(click(rows[1][0].value), "cli_pm");
 
     const finalCard = (done as { card: { data: object } }).card.data;
     expect(JSON.stringify(finalCard)).toContain("已选择：**Vue**");
@@ -453,7 +460,7 @@ describe("handleCardAction", () => {
     const pendingId = latestKey();
     const fresh = questionRows(postedCard(pendingId));
 
-    const partial = await handleCardAction(click(fresh[0][0].value));
+    const partial = await handleCardAction(click(fresh[0][0].value), "cli_pm");
     const rows = questionRows((partial as { card: { data: object } }).card.data);
 
     expect(rows[0][0].value).toBeUndefined();
@@ -467,8 +474,9 @@ describe("handleCardAction", () => {
     // A card left in the room after the run moved on: the click must land as a
     // visible message, not as nothing happening.
     const response = await handleCardAction(
-      click({ kind: "ask_user", pendingId: "pq_missing", questionIndex: 0, answer: "Vue" })
-    );
+      click({ kind: "ask_user", pendingId: "pq_missing", questionIndex: 0, answer: "Vue" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "info" } });
   });
@@ -481,8 +489,9 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" }),
+      "cli_pm"
+  );
 
     const row = getDatabase()
       .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
@@ -493,10 +502,28 @@ describe("handleCardAction", () => {
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
   });
 
-  it("scopes the identity by app, so one open_id in another app is someone else", async () => {
+  it("scopes the identity by the app that delivered the click", async () => {
     // #24: an open_id is only meaningful inside the app that issued it. The
-    // same person carries different open_ids per app, and the same open_id
-    // string under a different app must not read as the same operator.
+    // identity records the DELIVERING app, which authorization has already
+    // proved is the bound one.
+    const { pending, pendingId } = ask();
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" }),
+      "cli_pm"
+    );
+
+    const row = getDatabase()
+      .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
+      .get(pendingId) as { resolved_by: string | null } | undefined;
+    expect(row?.resolved_by).toBe("feishu:cli_pm:ou_user");
+    await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
+  });
+
+  it("follows the delivering app when the agent is rebound", async () => {
+    // Same open_id string, a different app: bound to cli_other and delivered
+    // by cli_other, the identity names that app — the app is part of who this
+    // is, not a lookup performed against whatever the row says later.
     upsertChannelBinding({
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_other", appSecret: "s",
       boundByOpenId: "ou_user", now: 2
@@ -504,15 +531,42 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" })
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" }),
+      "cli_other"
     );
 
     const row = getDatabase()
       .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
       .get(pendingId) as { resolved_by: string | null } | undefined;
     expect(row?.resolved_by).toBe("feishu:cli_other:ou_user");
-    expect(row?.resolved_by).not.toBe("feishu:cli_pm:ou_user");
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
+  });
+
+  it("refuses a click delivered by an app the agent is no longer bound to", async () => {
+    // The stale-delivery case: a card from the old app keeps working after a
+    // rebind. The open_id string is identical, so the old check would have
+    // accepted it and attributed the decision to the CURRENT app — naming
+    // someone else. Authorization now requires the delivering app to be the
+    // bound one, so this fails closed.
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_other", appSecret: "s",
+      boundByOpenId: "ou_user", now: 2
+    });
+    const { pending, pendingId } = ask();
+
+    const response = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" }),
+      "cli_pm"
+    );
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    const row = getDatabase()
+      .prepare("SELECT resolved_by, status FROM pending_approvals WHERE id = ?")
+      .get(pendingId) as { resolved_by: string | null; status: string } | undefined;
+    expect(row?.status).toBe("pending");
+    expect(row?.resolved_by).toBeNull();
+    // The question is still pending, so the run is still waiting on it.
+    void pending.catch(() => undefined);
   });
 
   it("refuses an answer the card never offered", async () => {
@@ -522,8 +576,9 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     const response = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "我编的" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "我编的" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     let settled = false;
@@ -540,7 +595,7 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     const event = click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" });
-    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" }, "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     let settled = false;
@@ -558,8 +613,9 @@ describe("handleCardAction", () => {
     const { pending, pendingId } = ask();
 
     const response = await handleCardAction(
-      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_stranger", name: "别人" })
-    );
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_stranger", name: "别人" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     // Still unanswered, and nothing buffered for it under the stranger.
@@ -575,15 +631,16 @@ describe("handleCardAction", () => {
     const { pendingId } = ask();
     const response = await handleCardAction(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { messageId: "om", chatId: "oc_1", action: { value: { kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, tag: "button" } } as any
+      { messageId: "om", chatId: "oc_1", action: { value: { kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, tag: "button" } } as any,
+      "cli_pm"
     );
 
     expect(response).toMatchObject({ toast: { type: "error" } });
   });
 
   it("ignores a click it cannot attribute to one of its own cards", async () => {
-    expect(await handleCardAction(click({ kind: "something_else" }))).toBeUndefined();
-    expect(await handleCardAction(click(null))).toBeUndefined();
+    expect(await handleCardAction(click({ kind: "something_else" }), "cli_pm")).toBeUndefined();
+    expect(await handleCardAction(click(null), "cli_pm")).toBeUndefined();
   });
 });
 
@@ -716,7 +773,7 @@ describe("projectPendingQuestion", () => {
     expect(buffer.has(id)).toBe(false);
 
     // Settle the run's promise so nothing is left hanging.
-    await handleCardAction(click({ kind: "ask_user", pendingId: id, questionIndex: 0, answer: "是" }));
+    await handleCardAction(click({ kind: "ask_user", pendingId: id, questionIndex: 0, answer: "是" }), "cli_pm");
     void pending;
   });
 
@@ -766,7 +823,7 @@ describe("projectPendingQuestion", () => {
     // Answer it so the promise settles and nothing is left hanging.
     const id = [...((globalThis as unknown as { __agentMeldPendingQuestions: Map<string, unknown> })
       .__agentMeldPendingQuestions.keys())][0];
-    await handleCardAction(click({ kind: "ask_user", pendingId: id, questionIndex: 0, answer: "是" }));
+    await handleCardAction(click({ kind: "ask_user", pendingId: id, questionIndex: 0, answer: "是" }), "cli_pm");
     await expect(pending).resolves.toEqual({ "继续吗？": "是" });
   });
 });
@@ -865,8 +922,9 @@ describe("approval cards", () => {
       .__agentMeldPendingBash.keys())][0];
 
     const response = await handleCardAction(
-      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" })
-    );
+      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" }),
+      "cli_pm"
+  );
 
     await expect(pending).resolves.toBe(true);
     expect(response).toMatchObject({ toast: { type: "success" } });
@@ -883,8 +941,9 @@ describe("approval cards", () => {
       .__agentMeldPendingBash.keys())][0];
 
     const response = await handleCardAction(
-      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" }, { openId: "ou_stranger", name: "别人" })
-    );
+      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" }, { openId: "ou_stranger", name: "别人" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     let settled = false;
@@ -930,7 +989,7 @@ describe("approval cards", () => {
       .__agentMeldPendingBash.keys())][0];
 
     const event = click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" });
-    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" }, "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     let settled = false;
@@ -943,8 +1002,9 @@ describe("approval cards", () => {
 
   it("says so when the approval is already gone", async () => {
     const response = await handleCardAction(
-      click({ kind: "approval", pendingType: "bash", pendingId: "pb_missing", decision: "approve" })
-    );
+      click({ kind: "approval", pendingType: "bash", pendingId: "pb_missing", decision: "approve" }),
+      "cli_pm"
+  );
     expect(response).toMatchObject({ toast: { type: "info" } });
   });
 
@@ -961,8 +1021,9 @@ describe("approval cards", () => {
     const unsub = eventBus.subscribe((entry) => seen.push(entry.event.type));
 
     await handleCardAction(
-      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" })
-    );
+      click({ kind: "approval", pendingType: "bash", pendingId: id, decision: "approve" }),
+      "cli_pm"
+  );
     unsub();
 
     expect(seen).toContain("bash_command.resolved");
@@ -1080,7 +1141,7 @@ describe("run card actions through the card handler", () => {
   it("routes a status click to the status handler", async () => {
     const run = seedRun();
 
-    const response = await handleCardAction(click({ kind: "run_status", runId: run.id }));
+    const response = await handleCardAction(click({ kind: "run_status", runId: run.id }), "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "info" } });
     expect(JSON.stringify(response)).toContain("已运行");
@@ -1091,8 +1152,9 @@ describe("run card actions through the card handler", () => {
     const run = seedRun();
 
     const response = await handleCardAction(
-      click({ kind: "run_status", runId: run.id }, { openId: "ou_stranger", name: "别人" })
-    );
+      click({ kind: "run_status", runId: run.id }, { openId: "ou_stranger", name: "别人" }),
+      "cli_pm"
+  );
 
     expect(response).toMatchObject({ toast: { type: "info" } });
   });
@@ -1101,7 +1163,7 @@ describe("run card actions through the card handler", () => {
     const run = seedRun();
     const event = click({ kind: "run_status", runId: run.id });
 
-    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" }, "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "error" } });
   });
@@ -1113,7 +1175,7 @@ describe("run card actions through the card handler", () => {
     const run = seedRun();
     const event = click({ kind: "cancel_run", runId: run.id });
 
-    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" }, "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     expect(JSON.stringify(response)).toContain("不属于这个群");
@@ -1132,7 +1194,7 @@ describe("run card actions through the card handler", () => {
       triggerMessageId: null, parentRunId: null, status: "running", now: Date.now()
     });
 
-    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }));
+    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }), "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "error" } });
     expect(JSON.stringify(response)).toContain("不属于这个群");
@@ -1143,7 +1205,7 @@ describe("run card actions through the card handler", () => {
     // the chat guard. Nothing is actually running, so it lands on "already over".
     const run = seedRun();
 
-    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }));
+    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }), "cli_pm");
 
     expect(response).toMatchObject({ toast: { type: "info" } });
     expect(JSON.stringify(response)).toContain("已经结束");
