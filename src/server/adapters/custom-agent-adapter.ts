@@ -207,7 +207,15 @@ export const customAgentAdapter: AgentPlatformAdapter = {
             : undefined,
           stream: true,
           stream_options: { include_usage: true },
-          max_tokens: provider === "deepseek" ? 8192 : undefined
+          // Reasoning models spend output tokens on `reasoning_content` before
+          // they write an answer, and this budget covers BOTH. At 8192 a
+          // reasoning pass can consume the whole allowance and finish without
+          // ever emitting content: the run then looks complete, the message
+          // carries only a thinking part, the room and the desktop show
+          // nothing, and the task is retried — which repeats it. The gateway
+          // accepts 65536 for these models (verified directly), which leaves
+          // room for the reasoning AND the answer.
+          max_tokens: provider === "deepseek" ? 65536 : undefined
         });
       } catch (err: unknown) {
         const errorText = formatApiError(
