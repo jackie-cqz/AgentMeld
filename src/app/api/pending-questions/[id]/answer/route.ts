@@ -3,6 +3,7 @@ import { answerQuestion, getPendingQuestion } from "@/server/pending-questions";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { gateRequest } from "@/server/api-gate";
+import { describePrincipal } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const resolvedBy = describePrincipal(gate.principal);
+
   const entry = getPendingQuestion(id);
   if (!entry) {
     // See the bash route: consult the record of this type so a second surface
@@ -39,7 +42,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: "Pending question not found." }, { status: 404 });
   }
 
-  if (!answerQuestion(id, parsed.data.answers, parsed.data.resolvedBy)) {
+  if (!answerQuestion(id, parsed.data.answers, resolvedBy, parsed.data.resolvedBy)) {
     return conflictAlreadyResolved("Pending question was already settled.", getApprovalRecord(id));
   }
   return Response.json({ answered: true });

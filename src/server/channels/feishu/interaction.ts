@@ -14,6 +14,7 @@ import {
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 import { escapeLarkMd } from "@/server/channels/feishu/card-text";
+import { feishuOperatorRef } from "@/server/auth";
 import type {
   DispatchPlanItem,
   PendingBashCommand,
@@ -299,6 +300,19 @@ export function isAuthorisedOperator(agentId: string, openId: string | undefined
   return binding.boundByOpenId === openId;
 }
 
+/**
+ * The audit identity for a card action: the operator's open_id SCOPED BY THE
+ * APP that issued it (issue #24). The same person has a different open_id in
+ * every app, so an unscoped open_id in `resolved_by` would let two apps'
+ * operators look like one identity.
+ */
+function operatorRef(agentId: string, openId: string | null | undefined): string | null {
+  if (!openId) return null;
+  const binding = getChannelBindingForAgent(agentId, "feishu");
+  if (!binding) return null;
+  return feishuOperatorRef(binding.appId, openId);
+}
+
 /** A card this bot put in a room, kept so it can be updated when it is settled. */
 interface PostedCard {
   chatId: string;
@@ -426,10 +440,14 @@ async function handleQuestionAnswer(
       answer
     ])
   );
-  // The operator id, not their display name. A display name is chosen by its
-  // owner, and this codebase says so in two other places; recording one as the
-  // resolver would make the audit answer forgeable.
-  const resolved = answerQuestion(question.id, byText, event.operator?.openId ?? null);
+  // The operator id, not their display name, and scoped by the app that
+  // issued it — the same person carries a different open_id in every app, so
+  // an unscoped one would conflate operators across apps (#24).
+  const resolved = answerQuestion(
+    question.id,
+    byText,
+    operatorRef(question.agentId, event.operator?.openId)
+  );
   if (!resolved) {
     return { toast: { type: "info", content: "这个问题已经处理过了。" } };
   }
@@ -549,9 +567,9 @@ async function handleApprovalDecision(
     return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
   }
 
-  // The record's resolver is the operator id, not their display name: a display
-  // name is chosen by its owner and cannot identify anyone.
-  const resolvedBy = event.operator?.openId ?? null;
+  // The record's resolver is the operator id, not their display name, scoped
+  // by the app that issued it (#24) — see operatorRef.
+  const resolvedBy = operatorRef(agentId, event.operator?.openId);
   const decided = decideApproval(value.pendingType, value.pendingId, value.decision, resolvedBy);
   if (!decided) return { toast: { type: "info", content: "这条已经处理过了。" } };
 

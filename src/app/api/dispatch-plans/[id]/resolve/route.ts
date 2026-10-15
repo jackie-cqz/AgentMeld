@@ -5,17 +5,18 @@ import { getApprovalRecord, getConversation, getAgent, MAX_RESOLVED_BY_LENGTH } 
 import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { gateRequest } from "@/server/api-gate";
+import { describePrincipal } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
 const resolveSchema = z.object({
   action: z.enum(["approve", "reject", "revise"]),
   feedback: z.string().optional(),
-  // Caller-declared attribution label (not authenticated). Omit it, or send
-  // null, when the operator is unknown. Note the deliberate split with the
-  // server side: this boundary rejects an over-long label (400) while
-  // normalizeResolvedBy truncates, because an internal caller may hold a
-  // longer identifier than the HTTP contract allows.
+  // Display label only. `resolved_by` is filled from the authenticated
+  // principal below; this string never becomes identity. Note the deliberate
+  // split with the server side: this boundary rejects an over-long label (400)
+  // while normalizeResolvedByLabel truncates, because an internal caller may
+  // hold a longer identifier than the HTTP contract allows.
   resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional(),
   plan: z.array(z.object({
     id: z.string().min(1),
@@ -57,6 +58,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const resolvedBy = describePrincipal(gate.principal);
+
   const entry = getPendingPlan(id);
   if (!entry) {
     // See the bash route: consult the record of this type so a second surface
@@ -71,7 +74,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { action, feedback } = parsed.data;
 
   if (action === "reject") {
-    if (!rejectPlan(id, parsed.data.resolvedBy)) {
+    if (!rejectPlan(id, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -87,7 +90,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (action === "revise") {
     const effectiveFeedback = feedback?.trim() || "请调整计划。";
-    if (!revisePlanWithFeedback(id, effectiveFeedback, parsed.data.resolvedBy)) {
+    if (!revisePlanWithFeedback(id, effectiveFeedback, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -136,7 +139,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   if (typeof validationResult === "string") {
     // Plan fails validation at approval gate — reject it
-    if (!rejectPlan(id, parsed.data.resolvedBy)) {
+    if (!rejectPlan(id, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -155,7 +158,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   // Plan validated — approve
-  if (!approvePlan(id, validationResult, parsed.data.resolvedBy)) {
+  if (!approvePlan(id, validationResult, resolvedBy, parsed.data.resolvedBy)) {
     return conflictAlreadyResolved("Plan was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({

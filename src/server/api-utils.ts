@@ -46,7 +46,10 @@ export function conflict(message: string): Response {
 
 /** Attribution of an approval that some other actor already resolved. */
 export interface ResolvedAttribution {
+  /** Authenticated principal that resolved it (#24); never a caller string. */
   resolvedBy: string | null;
+  /** Whatever display string that caller sent. Grants nothing. */
+  resolvedByLabel: string | null;
   resolvedAt: number | null;
   status: string | null;
 }
@@ -61,10 +64,13 @@ export interface ResolvedAttribution {
  */
 export function conflictAlreadyResolved(
   message: string,
-  record: { resolvedBy: string | null; resolvedAt: number | null; status: string } | undefined
+  record:
+    | { resolvedBy: string | null; resolvedByLabel: string | null; resolvedAt: number | null; status: string }
+    | undefined
 ): Response {
   const attribution: ResolvedAttribution = {
     resolvedBy: record?.resolvedBy ?? null,
+    resolvedByLabel: record?.resolvedByLabel ?? null,
     resolvedAt: record?.resolvedAt ?? null,
     status: record?.status ?? null
   };

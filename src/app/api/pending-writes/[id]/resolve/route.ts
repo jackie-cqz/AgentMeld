@@ -4,6 +4,7 @@ import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { gateRequest } from "@/server/api-gate";
+import { describePrincipal } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const resolvedBy = describePrincipal(gate.principal);
+
   const entry = getPendingWrite(id);
   if (!entry) {
     // See the bash route: consult the record of this type so a second surface
@@ -40,7 +43,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   if (parsed.data.approved) {
-    if (!approvePendingWrite(id, parsed.data.resolvedBy)) {
+    if (!approvePendingWrite(id, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Pending write was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -53,7 +56,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, applied: true });
   }
 
-  if (!rejectPendingWrite(id, parsed.data.resolvedBy)) {
+  if (!rejectPendingWrite(id, resolvedBy, parsed.data.resolvedBy)) {
     return conflictAlreadyResolved("Pending write was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({

@@ -487,7 +487,31 @@ describe("handleCardAction", () => {
     const row = getDatabase()
       .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
       .get(pendingId) as { resolved_by: string | null } | undefined;
-    expect(row?.resolved_by).toBe("ou_user");
+    // App-scoped (#24): the open_id alone is meaningless outside the app that
+    // issued it, so the binding's appId is part of the recorded identity.
+    expect(row?.resolved_by).toBe("feishu:cli_pm:ou_user");
+    await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
+  });
+
+  it("scopes the identity by app, so one open_id in another app is someone else", async () => {
+    // #24: an open_id is only meaningful inside the app that issued it. The
+    // same person carries different open_ids per app, and the same open_id
+    // string under a different app must not read as the same operator.
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_other", appSecret: "s",
+      boundByOpenId: "ou_user", now: 2
+    });
+    const { pending, pendingId } = ask();
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, answer: "Vue" }, { openId: "ou_user", name: "任意昵称" })
+    );
+
+    const row = getDatabase()
+      .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
+      .get(pendingId) as { resolved_by: string | null } | undefined;
+    expect(row?.resolved_by).toBe("feishu:cli_other:ou_user");
+    expect(row?.resolved_by).not.toBe("feishu:cli_pm:ou_user");
     await expect(pending).resolves.toEqual({ "用哪个框架？": "Vue" });
   });
 
@@ -850,7 +874,7 @@ describe("approval cards", () => {
     const row = getDatabase()
       .prepare("SELECT resolved_by FROM pending_approvals WHERE id = ?")
       .get(id) as { resolved_by: string | null } | undefined;
-    expect(row?.resolved_by).toBe("ou_user");
+    expect(row?.resolved_by).toBe("feishu:cli_pm:ou_user");
   });
 
   it("refuses a decision from someone other than the owner", async () => {

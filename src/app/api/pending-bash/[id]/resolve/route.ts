@@ -4,6 +4,7 @@ import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { gateRequest } from "@/server/api-gate";
+import { describePrincipal } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ const resolveSchema = z.object({
   // server side: this boundary rejects an over-long label (400) while
   // normalizeResolvedBy truncates, because an internal caller may hold a
   // longer identifier than the HTTP contract allows.
+  // Display label only. The identity recorded in `resolved_by` is derived from
+  // the authenticated principal below — a caller cannot name itself into it.
   resolvedBy: z.string().trim().max(MAX_RESOLVED_BY_LENGTH).nullable().optional()
 });
 
@@ -27,6 +30,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+
+  // Identity from the session/device token, never from the body.
+  const resolvedBy = describePrincipal(gate.principal);
 
   const entry = getPendingBash(id);
   if (!entry) {
@@ -44,7 +50,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   if (parsed.data.approved) {
-    if (!approvePendingBash(id, parsed.data.resolvedBy)) {
+    if (!approvePendingBash(id, resolvedBy, parsed.data.resolvedBy)) {
       return conflictAlreadyResolved("Pending bash command was already resolved.", getApprovalRecord(id));
     }
     eventBus.publish({
@@ -57,7 +63,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ resolved: true, approved: true });
   }
 
-  if (!rejectPendingBash(id, parsed.data.resolvedBy)) {
+  if (!rejectPendingBash(id, resolvedBy, parsed.data.resolvedBy)) {
     return conflictAlreadyResolved("Pending bash command was already resolved.", getApprovalRecord(id));
   }
   eventBus.publish({

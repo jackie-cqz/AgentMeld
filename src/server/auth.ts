@@ -262,6 +262,34 @@ export async function clearDeviceToken(): Promise<void> {
   updateSettings({ mobileDeviceToken: null });
 }
 
+/**
+ * How a principal is written into audit columns (`resolved_by`).
+ *
+ * `null` for anonymous: an unauthenticated caller must leave the column NULL
+ * rather than have "anonymous" read later as if it identified someone.
+ */
+export function describePrincipal(principal: AuthPrincipal): string | null {
+  switch (principal.kind) {
+    case "owner-session":
+      return `owner:session:${principal.sessionId}`;
+    case "device-token":
+      return `device:${principal.label}`;
+    case "feishu-binding":
+      return `feishu:${principal.appId}`;
+    case "anonymous":
+      return null;
+  }
+}
+
+/**
+ * A Feishu operator's audit identity, scoped by the app that issued the
+ * open_id (issue #24: an app-scoped open_id is not the same person across
+ * apps, so the app id is part of the identity, not decoration).
+ */
+export function feishuOperatorRef(appId: string, openId: string): string {
+  return `feishu:${appId}:${openId}`;
+}
+
 export function sessionCookieHeader(token: string): string {
   return sessionCookie(token);
 }

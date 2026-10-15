@@ -71,12 +71,20 @@ export function getPendingBashCommandsForConversation(conversationId: string): P
   return getAllPendingBashCommands().filter((c) => c.conversationId === conversationId);
 }
 
-export function approvePendingBash(id: string, resolvedBy?: string | null): boolean {
-  return resolvePendingBash(id, true, resolvedBy);
+export function approvePendingBash(
+  id: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePendingBash(id, true, resolvedBy, resolvedByLabel);
 }
 
-export function rejectPendingBash(id: string, resolvedBy?: string | null): boolean {
-  return resolvePendingBash(id, false, resolvedBy);
+export function rejectPendingBash(
+  id: string,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
+  return resolvePendingBash(id, false, resolvedBy, resolvedByLabel);
 }
 
 export function cancelPendingBashForRun(runId: string): void {
@@ -106,11 +114,16 @@ export function clearPendingBashForTests(): void {
   store.clear();
 }
 
-function resolvePendingBash(id: string, approved: boolean, resolvedBy?: string | null): boolean {
+function resolvePendingBash(
+  id: string,
+  approved: boolean,
+  resolvedBy?: string | null,
+  resolvedByLabel?: string | null
+): boolean {
   const store = getStore();
   const entry = store.get(id);
   if (!entry) return false;
-  if (!resolveApproval(id, approved, Date.now(), resolvedBy ?? null)) return false;
+  if (!resolveApproval(id, approved, Date.now(), resolvedBy ?? null, resolvedByLabel ?? null)) return false;
   store.delete(id);
   entry.resolver(approved);
   return true;
