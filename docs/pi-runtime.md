@@ -86,6 +86,11 @@ must use `write`/`edit`, not shell mutation. Existing web and authenticated Feis
 approval routes resolve the same pending IDs. Cancellation releases pending
 questions, plans, writes and commands without approving them.
 
+Windows process ownership also requires Windows PowerShell with `Add-Type` and
+permission to run the repository's local Job Object host script. The launcher
+does not bypass execution policy. Host diagnostics report only fixed stage names
+and numeric error codes, never provider credentials or raw subprocess stderr.
+
 These controls are **not an OS sandbox**. Approved project scripts execute host
 code and can reach host resources. Only run trusted workspaces and dependencies.
 Native tools do not supply an organizational secret vault or kernel isolation.

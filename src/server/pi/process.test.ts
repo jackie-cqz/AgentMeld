@@ -20,6 +20,10 @@ function processFixture(source: string): PiProcess {
 }
 
 describe("Pi subprocess failure contract", () => {
+  it("delivers RPC stdin unchanged to the child", async () => {
+    const child = processFixture('require("node:readline").createInterface({input:process.stdin}).on("line",line=>{const command=JSON.parse(line);console.log(JSON.stringify({type:"response",id:command.id,command:command.type,success:true,data:{echo:"RPC_RECEIVED"}}));});');
+    await expect(child.request("get_state")).resolves.toMatchObject({ data: { echo: "RPC_RECEIVED" } });
+  }, 15000);
   it("rejects corrupt stdout and confirms exit even if the process ignores stdin EOF", async () => {
     const child = processFixture('process.stdout.write("broken json\\n"); process.stdin.resume(); setInterval(()=>{},1000);');
     await expect(child.request("get_state")).rejects.toMatchObject({ category: "protocol" });

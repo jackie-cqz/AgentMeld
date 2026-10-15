@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { encodePiCommand, PiEventQueue, PiJsonLines, type PiRecord } from "./protocol";
-import fs from "node:fs";
 import path from "node:path";
 
 export class PiRuntimeError extends Error {
@@ -37,12 +36,13 @@ export class PiProcess {
   private jobExitConfirmed = false;
   private nativeExitCode: number | null = null;
   private hostExitCode: number | null = null;
+  private hostStage = "starting";
 
   constructor(private readonly options: PiProcessOptions) {
     const args = [options.cliPath, "--mode", "rpc", ...options.args];
-    const hostScript = this.windowsJob ? fs.readFileSync(path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "pi", "windows-job-host.ps1"), "utf8") : "";
+    const hostScript = this.windowsJob ? path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "pi", "windows-job-host.ps1") : "";
     this.child = spawn(this.windowsJob ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : process.execPath,
-      this.windowsJob ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", hostScript] : args, {
+      this.windowsJob ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", hostScript] : args, {
       cwd: options.cwd, env: this.windowsJob ? { ...options.env, AGENTMELD_PI_NODE_BINARY: process.execPath, AGENTMELD_PI_NODE_ARGV: JSON.stringify(args) } : options.env, shell: false, windowsHide: true,
       detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
     });
@@ -103,7 +103,7 @@ export class PiProcess {
 
   private async stop(): Promise<void> {
     await this.stopProcess();
-    if (this.windowsJob && (!this.jobExitConfirmed || this.hostExitCode !== 0)) throw new PiRuntimeError("Windows Pi job exit could not be confirmed; workspace remains locked.", "cleanup_failed");
+    if (this.windowsJob && (!this.jobExitConfirmed || this.hostExitCode !== 0)) throw new PiRuntimeError(`Windows Pi job exit could not be confirmed (${this.hostStage}); workspace remains locked.`, "cleanup_failed");
   }
 
   private async stopProcess(): Promise<void> {
@@ -141,6 +141,10 @@ export class PiProcess {
   }
 
   private accept(record: PiRecord): void {
+    if (this.windowsJob && ["agentmeld_host_stage", "agentmeld_host_error"].includes(record.type) && typeof record.stage === "string" && /^[a-z_]+$/.test(record.stage)) {
+      this.hostStage = `${record.stage}${typeof record.code === "number" ? `:${record.code}` : ""}`;
+      return;
+    }
     if (this.windowsJob && record.type === "agentmeld_process_exit" && typeof record.code === "number") {
       this.nativeExitCode = record.code;
       this.jobExitConfirmed = true;

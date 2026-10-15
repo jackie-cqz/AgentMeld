@@ -7,6 +7,12 @@ using System.Text;
 using System.Threading;
 
 public static class AgentMeldPiJob {
+  public static string Stage = "initialize";
+  static void At(string stage) {
+    Stage = stage;
+    Console.Out.WriteLine("{\"type\":\"agentmeld_host_stage\",\"stage\":\"" + stage + "\"}");
+    Console.Out.Flush();
+  }
   [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
     public long ProcessTime, JobTime;
     public uint Flags;
@@ -77,11 +83,13 @@ public static class AgentMeldPiJob {
     throw new Exception("Native job exit could not be confirmed.");
   }
   public static void Run(string node, string[] args, string cwd) {
+    At("create_job");
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     Check(job != IntPtr.Zero);
     ProcessInfo child = new ProcessInfo();
     bool assigned = false;
     try {
+      At("configure_job");
       var limits = new ExtendedLimits();
       limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; no breakaway.
       Check(SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimits))));
@@ -89,15 +97,19 @@ public static class AgentMeldPiJob {
       startup.Size = Marshal.SizeOf(typeof(Startup));
       startup.Flags = 0x100;
       startup.Input = GetStdHandle(-10); startup.Output = GetStdHandle(-11); startup.Error = GetStdHandle(-12);
+      At("inherit_handles");
       Check(SetHandleInformation(startup.Input, 1, 1));
       Check(SetHandleInformation(startup.Output, 1, 1));
       Check(SetHandleInformation(startup.Error, 1, 1));
       var command = new StringBuilder(Quote(node));
       foreach (string arg in args) command.Append(" ").Append(Quote(arg));
+      At("create_child");
       Check(CreateProcess(node, command, IntPtr.Zero, IntPtr.Zero, true, 0x08000004, IntPtr.Zero, cwd, ref startup, out child));
+      At("assign_job");
       Check(AssignProcessToJobObject(job, child.Process));
       assigned = true;
       Check(ResumeThread(child.Thread) != UInt32.MaxValue);
+      At("running");
       DateTime? eof = null;
       while (WaitForSingleObject(child.Process, 50) == 258) {
         uint available;
@@ -111,6 +123,7 @@ public static class AgentMeldPiJob {
       }
       uint code;
       Check(GetExitCodeProcess(child.Process, out code));
+      At("drain_job");
       DrainJob(job);
       Console.Out.WriteLine("{\"type\":\"agentmeld_process_exit\",\"code\":" + code + "}");
       Console.Out.Flush();
@@ -128,6 +141,13 @@ try {
   [AgentMeldPiJob]::Run($env:AGENTMELD_PI_NODE_BINARY, [string[]]($env:AGENTMELD_PI_NODE_ARGV | ConvertFrom-Json), (Get-Location).Path)
   exit 0
 } catch {
+  $stage = 'compile'
+  if ('AgentMeldPiJob' -as [type]) { $stage = [AgentMeldPiJob]::Stage }
+  $failure = $_.Exception
+  while ($failure.InnerException) { $failure = $failure.InnerException }
+  $code = 0
+  if ($failure -is [System.ComponentModel.Win32Exception]) { $code = $failure.NativeErrorCode }
+  [Console]::Out.WriteLine('{"type":"agentmeld_host_error","stage":"' + $stage + '","code":' + $code + '}')
   [Console]::Error.WriteLine('AgentMeld Windows Pi job startup or cleanup failed.')
   exit 126
 }

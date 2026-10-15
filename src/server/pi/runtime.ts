@@ -117,7 +117,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
       finally { lease?.poison(); }
       // Do not release a workspace if the previous writer may still be alive.
       // eslint-disable-next-line no-unsafe-finally -- Unconfirmed cleanup must override even a successful return.
-      throw new PiRuntimeError("Pi resource teardown could not be confirmed; workspace remains locked.", "cleanup_failed");
+      throw new PiRuntimeError(cleanupFailure.reason instanceof PiRuntimeError ? cleanupFailure.reason.message : "Pi resource teardown could not be confirmed; workspace remains locked.", "cleanup_failed");
     }
     try {
       if (execution) {
