@@ -129,6 +129,7 @@ export async function routeChannelInbound(
     externalMessageId: inbound.messageId,
     conversationId: channelConversation.conversationId,
     agentId: inbound.agentId,
+    threadId: inbound.threadId,
     now
   });
   if (!claimed) return { status: "duplicate" };

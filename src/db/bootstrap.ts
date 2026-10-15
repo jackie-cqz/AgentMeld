@@ -462,6 +462,7 @@ export function ensureDatabase() {
       external_message_id TEXT NOT NULL,
       conversation_id TEXT NOT NULL,
       message_id TEXT,
+      thread_id TEXT,
       agent_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       UNIQUE(channel, external_message_id)
@@ -545,6 +546,9 @@ function migrateLegacyTables() {
   renameColumnIfPresent("conductor_conflicts", legacyRoleKey("", "_run_id"), "conductor_run_id");
 
   ensureColumn("pending_approvals", "resolved_by_label", "TEXT");
+  // Feishu topics: kept so a reply can go back into the thread the question
+  // was asked in, instead of starting a new one at the top of the group.
+  ensureColumn("channel_inbound_messages", "thread_id", "TEXT");
   ensureColumn("agents", "avatar", "TEXT NOT NULL DEFAULT '🤖'");
   ensureColumn("agents", "capabilities", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("agents", "api_key", "TEXT");

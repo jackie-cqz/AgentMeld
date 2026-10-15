@@ -1,5 +1,8 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
-import { getChannelConversationByConversationId, getMessage, getRun } from "@/server/repositories";
+import {
+  getChannelInboundThread,
+  getChannelConversationByConversationId, getMessage, getRun
+} from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import type { SendResult } from "@larksuite/channel";
 import type { AgentRun, Message, MessagePart } from "@/shared/types";
@@ -184,6 +187,24 @@ export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcom
   return { status: "sent", chatId: channelConversation.chatId, agentId: run.agentId };
 }
 
+/**
+ * The topic this message's answer belongs in, if the question came from one.
+ *
+ * The chain is message -> its run -> the run's trigger message -> the inbound
+ * record, which is the only place the Feishu thread id was ever kept.
+ */
+function replyTargetForMessage(
+  message: Message,
+  chatId: string
+): { chatId: string; messageId: string; threadId: string | null } | null {
+  if (!message.runId) return null;
+  const run = getRun(message.runId);
+  if (!run?.triggerMessageId) return null;
+  const inbound = getChannelInboundThread(run.triggerMessageId);
+  if (!inbound?.threadId) return null;
+  return { chatId, messageId: inbound.externalMessageId, threadId: inbound.threadId };
+}
+
 export async function projectMessage(message: Message, now = Date.now()): Promise<ProjectionOutcome> {
   if (isChannelProjectionPaused()) return { status: "skipped", reason: "paused" };
 
@@ -243,7 +264,8 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
     message.conversationId,
     agentId,
     channelConversation.chatId,
-    { text }
+    { text },
+    replyTargetForMessage(message, channelConversation.chatId)
   );
   recordSend(message.conversationId, now);
   // Logged because this is the one place in the channel that has an effect

@@ -89,15 +89,30 @@ async function attempt<T>(
 
 /** Send, and remember whether it worked. */
 export function deliverSend<T>(
-  channel: Pick<LarkChannel, "send">,
+  channel: Pick<LarkChannel, "send"> & Partial<Pick<LarkChannel, "reply">>,
   conversationId: string,
   agentId: string,
   chatId: string,
-  input: Parameters<LarkChannel["send"]>[1]
+  input: Parameters<LarkChannel["send"]>[1],
+  /**
+   * Where the question was asked. When the trigger came from inside a Feishu
+   * topic, the answer goes back into that topic instead of starting a new one at
+   * the top of the group; the SDK's `reply` is what keeps it there.
+   *
+   * Optional and capability-checked: a channel stub that only implements `send`
+   * (and an app whose SDK predates `reply`) still posts, just not in-thread.
+   */
+  replyTo?: { chatId: string; messageId: string; threadId: string | null } | null
 ): Promise<T> {
-  return attempt(conversationId, agentId, () =>
-    channel.send(chatId, input) as unknown as Promise<T>
-  );
+  return attempt(conversationId, agentId, () => {
+    if (replyTo && typeof channel.reply === "function") {
+      return channel.reply(
+        { chatId: replyTo.chatId, messageId: replyTo.messageId, threadId: replyTo.threadId ?? undefined },
+        input
+      ) as unknown as Promise<T>;
+    }
+    return channel.send(chatId, input) as unknown as Promise<T>;
+  });
 }
 
 /** Update a card in place, and remember whether it worked. */

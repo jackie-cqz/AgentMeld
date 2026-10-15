@@ -8,6 +8,8 @@ import {
 } from "@/server/channels/feishu/router";
 import { eventBus } from "@/server/event-bus";
 import {
+  getChannelInboundThread,
+
   getChannelConversationByChat,
   getChannelInboundMessage,
   listChannelConversationMembers,
@@ -123,6 +125,16 @@ describe("routeChannelInbound", () => {
 
     const messages = listMessages(outcome.conversationId);
     expect(messages.some((message) => message.id === outcome.messageId)).toBe(true);
+  });
+
+  it("records the topic a message was posted in", async () => {
+    // Without this the thread id is dropped at the door, and an answer can
+    // never find its way back into the topic the question came from.
+    const outcome = await routeChannelInbound(inbound({ threadId: "omt_topic_9" }));
+    if (outcome.status !== "routed") throw new Error("expected routed");
+
+    const stored = getChannelInboundThread(outcome.messageId);
+    expect(stored).toMatchObject({ externalMessageId: "om_1", threadId: "omt_topic_9" });
   });
 
   it("lets a human message start a run", async () => {

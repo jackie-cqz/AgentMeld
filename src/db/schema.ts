@@ -675,6 +675,7 @@ export const channelInboundMessages = sqliteTable(
     externalMessageId: text("external_message_id").notNull(),
     conversationId: text("conversation_id").notNull(),
     messageId: text("message_id"),
+    threadId: text("thread_id"),
     agentId: text("agent_id").notNull(),
     createdAt: integer("created_at").notNull()
   },
