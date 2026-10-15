@@ -13,10 +13,12 @@ import {
   isPathWithin
 } from "@/server/workspace-utils";
 import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
-import type { ToolDef } from "@/server/tools/types";
+import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
+import { startCommandJob } from "@/server/tools/command-jobs";
 
 const ArgsSchema = z.object({
-  command: z.string().min(1).max(4000)
+  command: z.string().min(1).max(4000),
+  timeoutMs: z.number().int().min(1000).max(600000).optional()
 });
 
 // Commands that require user approval but are not banned
@@ -396,7 +398,10 @@ export const bashTool: ToolDef = {
       }
     }
   },
-  async handler(args, ctx) {
+  handler: (args, ctx) => runValidatedBash(args, ctx)
+};
+
+export async function runValidatedBash(args: unknown, ctx: ToolContext, background = false): Promise<ToolResult> {
     const parsed = ArgsSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid args: ${parsed.error.message}` };
@@ -519,6 +524,10 @@ export const bashTool: ToolDef = {
       shellArgs = [...shell.args, command];
     }
 
+    if (background) {
+      try { return { ok: true, value: startCommandJob(shellCommand, shellArgs, cwd, command, ctx, parsed.data.timeoutMs ?? 300000) }; }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Job could not start." }; }
+    }
     const result = await executeCommand(shellCommand, shellArgs, cwd, ctx.abortSignal);
     if (ctx.parentRunId) {
       recordCommandEvidence(ctx.runId, {
@@ -540,8 +549,7 @@ export const bashTool: ToolDef = {
         timedOut: result.timedOut
       }
     };
-  }
-};
+}
 
 interface CommandResult {
   exitCode: number | null;

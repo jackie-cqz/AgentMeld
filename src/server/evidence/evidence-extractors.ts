@@ -7,6 +7,8 @@ import { sanitizeCommand, sanitizeOutput } from "@/server/evidence/evidence-sani
 import { hashContent, hashCommandOutput } from "@/server/evidence/evidence-hash";
 
 export interface ExtractedEvidence {
+  trustLevel?: "reported" | "verified";
+  status?: "valid" | "invalid" | "diagnostic";
   type: string;
   subjectType: string;
   subjectId: string;
@@ -48,15 +50,15 @@ function inferWebAppOutputKey(ctx: ToolContext): string {
 
 // ── fs_read ────────────────────────────────────────────────────────────────
 
-export const extractFileRead: EvidenceExtractor = (ctx, args) => {
+export const extractFileRead: EvidenceExtractor = (ctx, args, result) => {
   const path = getStr(args, "path") || getStr(args, "file_path");
   if (!path) return null;
   return {
     type: "file_read",
     subjectType: "file",
     subjectId: path,
-    payload: { path, agentId: ctx.agentId },
-    contentHash: null,
+    payload: { path, agentId: ctx.agentId, startLine: getStr(args, "startLine") || "1", startColumn: getStr(args, "startColumn") || "1", limit: getStr(args, "limit") || null },
+    contentHash: getResultValueStr(result, "contentHash") || null,
   };
 };
 
@@ -109,9 +111,9 @@ export const extractCommand: EvidenceExtractor = (ctx, args, _result, durationMs
   if (!command) return null;
 
   const normalizedCmd = sanitizeCommand(command);
-  const resultObj = _result as { ok?: boolean; value?: { stdout?: string; stderr?: string; output?: string; exitCode?: number; timedOut?: boolean } } | undefined;
+  const resultObj = _result as { ok?: boolean; value?: { stdout?: string; stderr?: string; output?: string; exitCode?: number | null; timedOut?: boolean } } | undefined;
   const value = resultObj?.value;
-  const exitCode = value?.exitCode ?? (resultObj?.ok ? 0 : 1);
+  const exitCode = value && "exitCode" in value ? value.exitCode ?? null : (resultObj?.ok ? 0 : 1);
   const timedOut = value?.timedOut ?? false;
   // Bash tool returns merged 'output'; also try stdout/stderr
   const stdout = value?.stdout ?? "";
@@ -124,6 +126,7 @@ export const extractCommand: EvidenceExtractor = (ctx, args, _result, durationMs
 
   return {
     type: isTest ? "test_executed" : "command_executed",
+    status: resultObj?.ok && exitCode === 0 && !timedOut ? "valid" : "invalid",
     subjectType: "command",
     subjectId: normalizedCmd.slice(0, 120),
     payload: {
@@ -246,12 +249,38 @@ export const extractTaskReport: EvidenceExtractor = (ctx, args) => {
 
 // ── Tool → extractor map ──────────────────────────────────────────────────
 
+function observation(type: string, subjectType: string, reported = false): EvidenceExtractor {
+  return (ctx, args, result) => {
+    const value = (result as { value?: Record<string, unknown> } | null)?.value;
+    const payload: Record<string, unknown> = { agentId: ctx.agentId };
+    for (const key of ["url", "query", "provider", "retrievedAt", "contentHash", "truncated", "results", "paths", "matches", "scannedFiles", "action", "repository", "jobId", "status", "exitCode", "timedOut", "sourcePath", "viewport", "passed", "errors", "failedRequests", "blockedRequests", "screenshotUrl", "checkedAt", "horizontalOverflow"]) {
+      if (value?.[key] !== undefined) payload[key] = value[key];
+    }
+    const subjectId = getStr(value, "jobId") || getStr(value, "url") || getStr(args, "path") || getStr(args, "query") || ".";
+    return { type, subjectType, subjectId: subjectId.slice(0, 1000), payload,
+      contentHash: typeof value?.contentHash === "string" ? value.contentHash : hashContent(JSON.stringify(payload)),
+      trustLevel: reported ? "reported" : "verified",
+      status: !isToolResultOk(result) || value?.passed === false ? "invalid" : type === "job_status" ? "diagnostic" : "valid" };
+  };
+}
+
 export const EXTRACTOR_MAP: Record<string, EvidenceExtractor> = {
   fs_read: extractFileRead,
   fs_list: extractFileList,
   fs_write: extractFileWrite,
   fs_patch: extractFileWrite,
   bash: extractCommand,
+  job_completion: extractCommand,
+  job_start: observation("job_status", "job"),
+  job_read: observation("job_status", "job"),
+  job_wait: observation("job_status", "job"),
+  job_cancel: observation("job_status", "job"),
+  fs_glob: observation("files_discovered", "path"),
+  fs_search: observation("files_searched", "path"),
+  git_inspect: observation("git_inspected", "repository"),
+  web_fetch: observation("web_source_read", "web_source", true),
+  web_search: observation("web_searched", "web_source", true),
+  browser_check: observation("browser_checked", "web_app"),
   read_artifact: extractArtifactRead,
   write_artifact: extractArtifactCreated,
   deploy_artifact: extractDeployment,

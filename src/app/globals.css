@@ -208,13 +208,12 @@ button:disabled {
 .ui-choice svg { color: var(--ui-accent); }
 .ui-agent-form { min-height: 360px; }
 .ui-agent-form > section { max-width: 640px; margin: 0 auto; }
-.ui-agent-form > .agent-tools-layout { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); align-items: start; gap: 28px; }
+.ui-agent-form > :is(.agent-tools-panel, .ui-prompt-panel) { max-width: none; }
 .ui-agent-form > .hidden { display: none; }
-.ui-prompt-panel { grid-column: 2; grid-row: 1; position: sticky; top: 0; }
-.ui-prompt-panel textarea { min-height: 360px; resize: vertical; font-size: 12px; font-family: ui-monospace, monospace; }
-.ui-tool-permissions { grid-column: 1; grid-row: 1; }
+.ui-form .ui-prompt-panel textarea { height: clamp(280px, calc(100dvh - 360px), 560px); min-height: 240px; resize: vertical; font-size: 13px; line-height: 1.8; font-family: ui-monospace, monospace; }
 .ui-tool-group { padding: 16px 0; border-bottom: 1px solid var(--ui-line); }
 .ui-tool-group > header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 10px; }
+.ui-tool-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
 .ui-tool-option { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; font-size: 12px; }
 .ui-tool-option input { margin-top: 3px; flex-shrink: 0; }
 .ui-tool-option strong { display: block; font-size: 12px; font-weight: 500; }
@@ -253,8 +252,10 @@ button:disabled {
   .ui-settings-layout { grid-template-columns: 1fr; gap: 20px; min-height: 0; }
   .ui-settings-rail { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--ui-line); padding: 0 0 12px; }
   .ui-settings-rail button { padding: 7px 10px; }
-  .ui-agent-form > .agent-tools-layout { grid-template-columns: 1fr; }
-  .ui-prompt-panel { grid-column: 1; grid-row: 2; position: static; }
+  .ui-tool-options { grid-template-columns: 1fr; }
+  .agent-editor-dialog .ui-tabs { gap: 12px; justify-content: space-between; }
+  .agent-editor-dialog .ui-tabs > button { padding: 0; font-size: 12px; }
+  .agent-editor-dialog .ui-tabs > button > svg { display: none; }
   .ui-choice { grid-template-columns: 1fr; }
   .ui-tabs { gap: 14px; }
 }

@@ -126,9 +126,12 @@ try {
       await page.getByTitle('Agents', { exact: true }).click();
       await page.getByTitle('新建 Agent', { exact: true }).click();
       await page.getByRole('button', { name: '详细配置', exact: false }).click();
-      await page.getByRole('tab', { name: '工具与提示词', exact: true }).click();
+      await page.getByRole('tab', { name: '工具权限', exact: true }).click();
       await modalCheck(page, `${width}-${theme}-tools`);
       await screenshot(page, `${width}-${theme}-tools`);
+      await page.getByRole('tab', { name: '系统提示词', exact: true }).click();
+      await modalCheck(page, `${width}-${theme}-prompt`);
+      await screenshot(page, `${width}-${theme}-prompt`);
       await page.keyboard.press('Escape');
       await page.close();
       results.push({ width, theme, result: 'passed' });

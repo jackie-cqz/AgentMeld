@@ -23,7 +23,7 @@
     "auth:reset": "node scripts/auth-reset.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
@@ -32,14 +32,17 @@
     "@openai/codex-sdk": "latest",
     "@tailwindcss/postcss": "latest",
     "better-sqlite3": "latest",
+    "cheerio": "^1.2.0",
     "class-variance-authority": "latest",
     "clsx": "latest",
     "drizzle-orm": "latest",
+    "globby": "^16.2.4",
     "immer": "latest",
     "lucide-react": "latest",
     "nanoid": "latest",
     "next": "16.2.6",
     "openai": "latest",
+    "playwright": "^1.61.1",
     "qrcode.react": "^4.2.0",
     "react": "latest",
     "react-dom": "latest",
@@ -59,7 +62,6 @@
     "drizzle-kit": "latest",
     "eslint": "9.39.2",
     "eslint-config-next": "16.2.6",
-    "playwright": "^1.61.1",
     "tsx": "latest",
     "typescript": "5.9.3",
     "typescript-eslint": "latest",

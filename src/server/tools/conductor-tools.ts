@@ -5,6 +5,7 @@ import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
 import type { DispatchTaskIntent } from "@/shared/types";
+import { hasRunningJobs } from "@/server/tools/command-jobs";
 
 // ---------------------------------------------------------------------------
 // plan_tasks
@@ -263,6 +264,7 @@ export const reportTaskResultTool: ToolDef = {
     }
   },
   async handler(args, ctx) {
+    if (hasRunningJobs(ctx.runId)) return { ok: false, error: "Background commands are still running. Use job_wait or job_cancel before reporting a final task result." };
     const parsed = reportSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid report: ${parsed.error.message}` };
