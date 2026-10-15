@@ -539,6 +539,30 @@ export const useAppStore = create<AppState>()(
       }
     },
 
+    async bindFeishuWithCredentials(agentId, appId, appSecret) {
+      try {
+        const payload = await requestJson<{
+          data: { claim: { code: string; expiresAt: number } };
+        }>("/api/channels/feishu/bindings/manual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId, appId, appSecret })
+        });
+        // The binding now exists without an owner, so the list has to be pulled:
+        // the row that shows "未绑定" a moment ago is what the person is looking at.
+        await get().loadChannelBindings().catch(() => {});
+        set((state) => {
+          state.channelBindingError = null;
+        });
+        return payload.data.claim;
+      } catch (error) {
+        set((state) => {
+          state.channelBindingError = describeError(error);
+        });
+        throw error;
+      }
+    },
+
     async startFeishuBinding(agentId) {
       try {
         const payload = await requestJson<{ data: { session: ChannelBindingSession } }>(
