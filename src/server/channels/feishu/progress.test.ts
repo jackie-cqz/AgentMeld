@@ -18,7 +18,7 @@ import { clearPendingQuestionsForTests, registerPendingQuestion } from "@/server
 import { clearPendingBashForTests, registerPendingBash } from "@/server/pending-bash";
 import { clearPendingWritesForTests, registerPendingWrite } from "@/server/pending-writes";
 import { clearPendingPlansForTests, registerPendingPlan } from "@/server/dispatch-plan-manager";
-import { setChannelProjectionPaused } from "@/server/channels/feishu/projection";
+import { setChannelProjectionPaused, recordSend, withinSendBudget } from "@/server/channels/feishu/projection";
 import {
   createChannelConversation,
   createConversation,
@@ -139,6 +139,10 @@ describe("run progress in a room", () => {
   let teardown: () => void;
 
   beforeEach(() => {
+    // The send budget window is process-global; reset it here rather than
+    // relying on whichever test happened to create it first.
+    (globalThis as unknown as { __agentMeldProjectionSendLog?: Map<string, number[]> })
+      .__agentMeldProjectionSendLog = undefined;
     teardown = setupTestDatabase("agentmeld-channel-progress-");
     sent.length = 0;
     updated.length = 0;
@@ -515,6 +519,10 @@ describe("the status button", () => {
     failure.next = false;
     abortRunMock.mockReset();
     stopChannelProgressForTests();
+    // The send budget window is process-global; reset it here rather than
+    // relying on whichever test happened to create it first.
+    (globalThis as unknown as { __agentMeldProjectionSendLog?: Map<string, number[]> })
+      .__agentMeldProjectionSendLog = undefined;
     setChannelProjectionPaused(false);
     clearPendingQuestionsForTests();
     clearPendingBashForTests();
@@ -559,6 +567,20 @@ describe("the status button", () => {
   }
 
   const tick = () => new Promise((resolve) => setTimeout(resolve, 15));
+
+  it("counts a progress card as a send, so a burst cannot bypass the limit", async () => {
+    // The card consulted `withinSendBudget` but never called `recordSend`, so a
+    // run posting cards all minute neither counted nor was stopped.
+    const run = seed();
+    // beforeEach clears the process-global window, so this fills from zero and
+    // nothing has to be cleaned up here.
+    for (let i = 0; i < 19; i++) recordSend(run.conversationId, Date.now());
+
+    await projectRunStarted(run);
+
+    // The 20th send was spent by the card, so the budget is now closed.
+    expect(withinSendBudget(run.conversationId, Date.now())).toBe(false);
+  });
 
   /** How many cards the registry still holds, to assert nothing leaks. */
   function getRunCardsSizes(): number {

@@ -334,6 +334,36 @@ describe("feishu connection layer", () => {
     expect(getFeishuChannelForAgent("ag_reviewer")).toBeNull();
   });
 
+  it("closes the old socket before reconnecting an app that errored", async () => {
+    // A live channel that reports `error` keeps its status AND its channel
+    // object. Reconnecting without closing it first would leave two sockets for
+    // one app — the event-splitting hazard this layer exists to prevent.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+    // The channel reports an error while it is still connected.
+    created[0].emit("error", new Error("socket wobble"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The stale socket was closed before the replacement was created — the
+    // ORDER is the whole point: closing after connecting leaves two sockets for
+    // one app, which is the hazard this layer exists to prevent.
+    const stale = created[0];
+    expect(stale.disconnect).toHaveBeenCalledTimes(1);
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+    expect(stale.disconnect.mock.invocationCallOrder[0]).toBeLessThan(
+      createLarkChannelMock.mock.invocationCallOrder[1]
+    );
+  });
+
   it("does not retry a failed app on every read, but does retry it later", async () => {
     // The status route nudges a reconnect, so without a cooldown every page
     // load would launch another attempt at an app known to be bad.
@@ -353,6 +383,52 @@ describe("feishu connection layer", () => {
     } finally {
       vi.useRealTimers();
     }
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not make a second socket when the old one will not close", async () => {
+    // A close that failed means the old socket may still be live; connecting
+    // anyway would be the two-socket hazard.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    created[0].emit("error", new Error("socket wobble"));
+    created[0].disconnect.mockRejectedValueOnce(new Error("close failed"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries closing a socket it failed to close, on the next cooldown", async () => {
+    // Dropping the handle when a close fails means no later attempt can ever
+    // close that socket, and the next retry happily opens a second one beside
+    // it — the hazard this whole block exists for.
+    seedBinding("ag_reviewer", "cli_bad");
+    await startFeishuChannels();
+    created[0].emit("error", new Error("socket wobble"));
+    created[0].disconnect.mockRejectedValueOnce(new Error("close failed"));
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 60_000);
+      await startFeishuChannels();
+      // The close failed: no second socket, and the handle is retained.
+      expect(createLarkChannelMock).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 120_000);
+      await startFeishuChannels();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The next round closed it (second disconnect call) before connecting.
+    expect(created[0].disconnect).toHaveBeenCalledTimes(2);
     expect(createLarkChannelMock).toHaveBeenCalledTimes(2);
   });
 

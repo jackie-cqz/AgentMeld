@@ -317,10 +317,15 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         if (now - existing.lastAttemptAt < RETRY_COOLDOWN_MS) continue;
       }
 
-      const fail = (reason: string) => {
+      const fail = (reason: string, staleChannel: LarkChannel | null = null) => {
         const entry: ConnectionEntry = {
           binding,
           channel: null,
+          // Kept, not dropped: a close that failed leaves a socket that may
+          // still be live, and discarding the only handle to it means no later
+          // retry can ever close it. It is not `channel`, so nothing will try to
+          // send on it in the meantime.
+          staleChannel: staleChannel ?? existing?.staleChannel ?? null,
           status: "error",
           botOpenId: null,
           botName: null,
@@ -334,6 +339,37 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         registry.set(binding.appId, entry);
         publishConnection(binding, "error", reason);
       };
+
+      // A FAILED entry is retried, and its old channel may still be alive: the
+      // error path records the failure without disconnecting, and the SDK can
+      // keep reconnecting on its own. Connecting a second socket for the same
+      // app would split its events (the hazard §3 describes), so the old one is
+      // closed FIRST — before anything below can return early, including the
+      // missing-secret check, or the old socket would be orphaned with no
+      // reference left to close it.
+      //
+      // It leaves the registry before the close, so nothing is handed a channel
+      // that is being torn down; the app is briefly absent from the status list
+      // instead, which is the safe direction (a send is skipped rather than
+      // attempted on a dying socket).
+      const stale = existing?.channel ?? existing?.staleChannel ?? null;
+      if (stale) {
+        registry.delete(binding.appId);
+        try {
+          await stale.disconnect();
+        } catch (error) {
+          // A close that failed means the old socket may still be live; making a
+          // second one would be exactly the hazard this block exists for. Report
+          // and leave the app on the error list — WITH the handle, so the next
+          // cooldown's retry can try to close it again.
+          console.error("[feishu] failed to disconnect a stale connection:", error);
+          fail(
+            `could not close the previous connection: ${error instanceof Error ? error.message : String(error)}`,
+            stale
+          );
+          continue;
+        }
+      }
 
       const secret = getChannelBindingSecret(binding.id);
       if (!secret) {

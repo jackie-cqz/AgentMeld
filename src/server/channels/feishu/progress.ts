@@ -16,7 +16,11 @@ import {
   getFeishuChannelForAgent,
   listFeishuConnections
 } from "@/server/channels/feishu/registry";
-import { isChannelProjectionPaused, withinSendBudget } from "@/server/channels/feishu/projection";
+import {
+  isChannelProjectionPaused,
+  recordSend,
+  withinSendBudget
+} from "@/server/channels/feishu/projection";
 import type { AgentRun, AgentRunStatus } from "@/shared/types";
 import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
 
@@ -294,6 +298,10 @@ export async function projectRunStarted(run: AgentRun): Promise<ProgressOutcome>
       channelConversation.chatId, {
       card: buildProgressCard(run, agentName)
     });
+    // Spend the budget the check above consulted. The card checked but never
+    // recorded, so a burst of progress cards neither counted against the
+    // conversation's allowance nor was stopped by it.
+    recordSend(run.conversationId, Date.now());
     getRunCards().set(run.id, {
       version: 0,
       chatId: channelConversation.chatId,
