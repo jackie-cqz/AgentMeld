@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getAllArtifacts, createNewArtifact } from "@/server/artifact-service";
 import { gateRequest } from "@/server/api-gate";
+import { eventBus } from "@/server/event-bus";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,15 @@ export async function POST(request: Request) {
       type: parsed.data.type,
       title: parsed.data.title,
       content: parsed.data.content as never
+    });
+    // The room learns about an artifact from this event, not from the database.
+    // Web-created artifacts used to be stored silently, so the group never saw
+    // anything made on the web page (the adapters are the only other emitter).
+    eventBus.publish({
+      type: "artifact.create",
+      conversationId: artifact.conversationId,
+      timestamp: Date.now(),
+      artifact
     });
     return Response.json({ artifact }, { status: 201 });
   } catch (error) {

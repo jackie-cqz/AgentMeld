@@ -12,6 +12,7 @@ import { eventBus } from "@/server/event-bus";
 import { GET as getArtifacts, POST as postArtifacts } from "@/app/api/artifacts/route";
 import { GET as getArtifact, PATCH as patchArtifact, DELETE as deleteArtifact } from "@/app/api/artifacts/[id]/route";
 import { GET as previewArtifact } from "@/app/api/artifacts/[id]/preview/route";
+import { POST as postArtifactVersion } from "@/app/api/artifacts/[id]/versions/route";
 import { GET as previewArtifactFile } from "@/app/api/artifacts/[id]/preview/[...path]/route";
 
 let tempDir: string;
@@ -200,5 +201,96 @@ describe("GET /api/artifacts/[id]/preview", () => {
     expect(assetResponse.status).toBe(200);
     expect(assetResponse.headers.get("Content-Type")).toContain("javascript");
     expect(await assetResponse.text()).toContain("previewReady");
+  });
+});
+
+describe("the web artifact routes put their artifacts on the event bus", () => {
+  // The room learns about an artifact from `artifact.create`; the adapters were
+  // the only emitter, so anything created or edited on the web page was stored
+  // silently and the group never saw it.
+  function collectArtifactEvents() {
+    const seen: string[] = [];
+    const unsubscribe = eventBus.subscribe((entry) => {
+      if (entry.event.type === "artifact.create") seen.push(entry.event.artifact.id);
+    });
+    return { seen, unsubscribe };
+  }
+
+  it("publishes on create", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const { seen, unsubscribe } = collectArtifactEvents();
+    try {
+      const response = await postArtifacts(
+        authedRequest("http://localhost/api/artifacts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId: conversation.id,
+            type: "document",
+            title: "网页产物",
+            content: { type: "document", content: "# hi" }
+          })
+        })
+      );
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { artifact: { id: string } };
+      expect(seen).toContain(body.artifact.id);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("publishes on an edit, as a new version row", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "document",
+      title: "第一版",
+      content: { type: "document", content: "# one" }
+    });
+    const { seen, unsubscribe } = collectArtifactEvents();
+    try {
+      const response = await patchArtifact(
+        authedRequest(`http://localhost/api/artifacts/${original.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: { type: "document", content: "# two" } })
+        }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { artifact: { id: string; parentArtifactId: string | null } };
+      expect(body.artifact.id).not.toBe(original.id);
+      expect(body.artifact.parentArtifactId).toBe(original.id);
+      expect(seen).toContain(body.artifact.id);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("publishes on an explicit new version", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "document",
+      title: "第一版",
+      content: { type: "document", content: "# one" }
+    });
+    const { seen, unsubscribe } = collectArtifactEvents();
+    try {
+      const response = await postArtifactVersion(
+        authedRequest(`http://localhost/api/artifacts/${original.id}/versions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: { type: "document", content: "# three" } })
+        }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { artifact: { id: string } };
+      expect(seen).toContain(body.artifact.id);
+    } finally {
+      unsubscribe();
+    }
   });
 });

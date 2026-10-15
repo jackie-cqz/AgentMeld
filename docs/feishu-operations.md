@@ -223,7 +223,7 @@ grep "\[feishu\] not delivering"
 | **`code_file` / `diff` 产物投递** | `code_file` 有分支但**本仓库没有生产者**（`write-artifact` 只接受 `web_app\|document\|image\|ppt`）；`diff` **连投递分支都没有**，走通用失败理由。生产上都走不到 |
 | **`web_app` 产物** | **已实现**：单页且资源可内联 → 发一个自包含 `.html`；否则 → 发 `.zip`（不丢文件）。两者都不需要公网地址。**未验证**：`.html`/`.zip` 在飞书客户端/移动端的呈现方式没有真机确认（§4.4 同类未验证项） |
 | **`ppt` 产物** | 仍不发（需要渲染器）。真实库里 3/12 个产物是 web_app 那一类——**设计真正想要的入口随上面一行一起解决了** |
-| **网页侧产物不同步** | 投递只订阅 `artifact.create`（由 Agent 适配器发出）。网页的 `POST /api/artifacts`、`PATCH /api/artifacts/:id`、`POST /api/artifacts/:id/versions` **都不发事件**，群里全看不见 |
+| **网页侧产物同步** | **已实现**：`POST /api/artifacts`、`PATCH /api/artifacts/:id`、`POST /api/artifacts/:id/versions` 都会发 `artifact.create`，群里因此能看到网页上创建/编辑的产物。注意 PATCH 与 versions 都是**新建一行**（新 id、version+1），所以每次编辑都会在群里投递一份新文件——这是刻意的（新内容就是新产物），但频繁编辑会产生多份文件 |
 | **话题隔离** | 入站事件带 `threadId`，但**当前被丢弃**，群里的话题不会延续到会话 |
 | **群成员只增不减** | 会话成员表只添加，不随退群移除 |
 | **`multiSelect` 提问** | 卡片上退化成单选（网页用 `"; "` 连接多选） |
