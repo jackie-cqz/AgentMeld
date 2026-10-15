@@ -202,16 +202,28 @@ function readZip(zip: Buffer) {
     const name = zip.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf-8");
 
     const localHeaderOk = zip.readUInt32LE(localOffset) === 0x04034b50;
+    const localCrc = zip.readUInt32LE(localOffset + 14);
+    const localCompSize = zip.readUInt32LE(localOffset + 18);
+    const localSize = zip.readUInt32LE(localOffset + 22);
     const localNameLength = zip.readUInt16LE(localOffset + 26);
     const localExtraLength = zip.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
     const content = zip.subarray(dataStart, dataStart + size).toString("utf-8");
     const localName = zip.subarray(localOffset + 30, localOffset + 30 + localNameLength).toString("utf-8");
+    const actualCrc = crc32(Buffer.from(content, "utf-8"));
 
     entries.push({
       name,
       content,
-      crcMatches: crc === crc32(Buffer.from(content, "utf-8")) && localName === name,
+      // Both headers, all three fields: `unzip -t` rejects an archive whose
+      // LOCAL header disagrees even when the central directory is consistent,
+      // and a reader that only walks the central directory would not notice.
+      crcMatches:
+        crc === actualCrc &&
+        localCrc === actualCrc &&
+        localCompSize === size &&
+        localSize === size &&
+        localName === name,
       localHeaderOk
     });
     cursor += 46 + nameLength + extraLength + commentLength;
@@ -365,6 +377,130 @@ describe("fold rules a review proved were missing", () => {
   it("refuses malformed content instead of throwing", () => {
     expect(inlineWebApp({ "index.html": 42 as unknown as string }, "index.html").ok).toBe(false);
     expect(inlineWebApp(undefined as unknown as Record<string, string>, "index.html").ok).toBe(false);
+  });
+});
+
+describe("references the leftover scan has to cover", () => {
+  it("catches srcset, poster, object data and form action", () => {
+    for (const markup of [
+      '<img srcset="s.css 1x">',
+      '<video poster="s.css"></video>',
+      '<object data="s.css"></object>',
+      '<form action="s.css"></form>'
+    ]) {
+      const result = inlineWebApp(
+        { "index.html": `<link rel="stylesheet" href="s.css">${markup}`, "s.css": "body{}" },
+        "index.html"
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("still references");
+    }
+  });
+
+  it("catches url() and @import inside a folded stylesheet", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<link rel="stylesheet" href="a.css">',
+        "a.css": '@import url("b.css"); .x{background:url(b.png)}',
+        "b.css": "body{}",
+        "b.png": "PNG"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("still references");
+  });
+
+  it("refuses a document that re-bases its references with <base>", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<base href="assets/"><link rel="stylesheet" href="style.css">',
+        "style.css": "body{}"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("<base href>");
+  });
+
+  it("still refuses a self-link, because the delivered file has another name", () => {
+    // The single file is delivered under the artifact title, so an app-shell
+    // link to index.html would be broken; the zip keeps it working.
+    const result = inlineWebApp({ "index.html": '<p>x</p><a href="index.html">home</a>' }, "index.html");
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("module specifiers an inline module cannot resolve", () => {
+  it("catches the side-effect import form", () => {
+    const result = inlineWebApp(
+      {
+        "index.html": '<script type="module" src="m.js"></script><script src="dep.js"></script>',
+        "m.js": "import './dep.js';",
+        "dep.js": "export const x = 1;"
+      },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("relative import");
+  });
+
+  it("catches root-relative and bare specifiers too", () => {
+    for (const specifier of ["/dep.js", "dep", "../dep.js"]) {
+      const result = inlineWebApp(
+        {
+          "index.html": '<script type="module" src="m.js"></script><script src="dep.js"></script>',
+          "m.js": `import x from '${specifier}';`,
+          "dep.js": "export const x = 1;"
+        },
+        "index.html"
+      );
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("allows a module whose only import is absolute", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script type="module" src="m.js"></script>', "m.js": 'import x from "https://cdn.example/x.js";' },
+      "index.html"
+    );
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("small things a review measured", () => {
+  it("folds text/javascript and application/javascript like no type at all", () => {
+    for (const type of ["text/javascript", "application/javascript"]) {
+      const result = inlineWebApp(
+        { "index.html": `<script type="${type}" src="a.js"></script>`, "a.js": "1;" },
+        "index.html"
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.html).toContain("<script>");
+    }
+    const other = inlineWebApp(
+      { "index.html": '<script type="application/json" src="d.json"></script>', "d.json": "{}" },
+      "index.html"
+    );
+    expect(other.ok).toBe(false);
+  });
+
+  it("forces the extension even for a trailing dot or a long suffix", () => {
+    expect(inlineWebAppName("app.")).toMatch(/\.html$/);
+    expect(zipWebAppName("site.verylongext")).toMatch(/\.zip$/);
+  });
+
+  it("refuses the double-escape sequence that would swallow the document", () => {
+    const result = inlineWebApp(
+      { "index.html": '<script src="app.js"></script>', "app.js": 'const s = "<!--<script>";' },
+      "index.html"
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses an entry name longer than a zip entry allows, in plain words", () => {
+    const huge = "x".repeat(70_000);
+    expect(() => zipWebApp({ [huge]: "1;" })).toThrow(/longer than a zip entry allows/);
   });
 });
 

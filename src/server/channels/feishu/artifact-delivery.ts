@@ -120,6 +120,18 @@ export function artifactFileFor(
       return { reason: "the web app has no files" };
     }
 
+    // A cheap pre-check before any building: the precise ceiling is on the
+    // DELIVERED bytes below, but there is no reason to assemble a 40 MB input
+    // (folding and zipping both build the whole thing in memory) only to
+    // reject it afterwards.
+    const sourceBytes = fileNames.reduce(
+      (sum, name) => sum + Buffer.byteLength(typeof files[name] === "string" ? files[name] : "", "utf-8"),
+      0
+    );
+    if (sourceBytes > MAX_WEB_APP_BYTES) {
+      return { reason: `the web app is ${sourceBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+
     // A single-page app with text assets becomes ONE self-contained HTML file,
     // which is what "meant to be opened in a browser" actually needs. Anything
     // else is delivered as a zip so the set stays whole (see web-app.ts).

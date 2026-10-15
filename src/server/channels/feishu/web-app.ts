@@ -1,4 +1,3 @@
-import path from "node:path";
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import { normalizeStaticFilePath } from "@/server/static-file-utils";
 import { MAX_FILE_READ_BYTES } from "@/server/workspace-utils";
@@ -122,7 +121,11 @@ export function inlineWebApp(
     }
     const type = attributeValue(tag, "type");
     const body = files[file.name];
-    if (containsBlockTerminator(body, "script")) {
+    if (containsBlockTerminator(body, "script") || body.includes("<!--")) {
+      // `</script` ends the block outright; `<!--` followed by `<script` puts
+      // the HTML tokenizer into its double-escaped state, where a later
+      // `</script>` no longer ends the element and the rest of the document
+      // gets swallowed as script data.
       refusal ??= `"${file.name}" contains text that would end the script block early`;
       return tag;
     }
@@ -136,7 +139,10 @@ export function inlineWebApp(
       used.add(file.name);
       return `<script type="module">\n${body}\n</script>`;
     }
-    if (type) {
+    if (type && !/javascript/i.test(type)) {
+      // text/javascript and application/javascript mean exactly what no type
+      // means, so those fold like the plain case; anything else (a JSON or
+      // importmap script) would change meaning when inlined.
       refusal ??= `"${file.name}" is a ${type} script, which inline cannot keep`;
       return tag;
     }
@@ -181,7 +187,10 @@ export function zipWebAppName(title: string): string {
  */
 function stripExtension(title: string): string {
   const trimmed = title.trim();
-  const withoutExtension = trimmed.replace(/\.[A-Za-z0-9]{1,8}$/, "").trim();
+  // Everything after the last dot goes: a trailing bare "." and a 12-character
+  // suffix both slipped through an {1,8}-character pattern, and safeFileName
+  // then treated the title as already having an extension.
+  const withoutExtension = trimmed.replace(/\.[^.]*$/, "").trim();
   return withoutExtension.length > 0 ? withoutExtension : trimmed;
 }
 
@@ -204,6 +213,9 @@ export function zipWebApp(files: Record<string, string>): Buffer {
     // path and wrong for an archive entry: extractors disagree about what a
     // backslash means, so a name containing one is refused rather than
     // silently reinterpreted.
+    if (Buffer.byteLength(name, "utf-8") > 65535) {
+      throw new Error(`the file name is longer than a zip entry allows (${Buffer.byteLength(name, "utf-8")} bytes)`);
+    }
     if (name.includes("\\") || !normalizeStaticFilePath(name)) {
       throw new Error(`the file name "${name}" is not a safe archive entry`);
     }
@@ -275,16 +287,44 @@ export function zipWebApp(files: Record<string, string>): Buffer {
 
 /**
  * The first reference left in the document that names one of the app's own
- * files. Attribute values are read with or without quotes, because an unquoted
- * `src=app.js` is valid HTML and was invisible to the earlier pattern.
+ * files.
+ *
+ * "Nothing may still point at a file that will not be beside the document" has
+ * to cover every way a document can point at one, not just `src` and `href`:
+ * a `srcset` candidate list, a `poster`, an `object data`, a `form action`,
+ * `url()` or `@import` inside an inlined stylesheet, and a `<base href>` that
+ * re-bases every relative reference in the document. A review found each of
+ * those surviving into a delivered page.
  */
 function leftoverReference(html: string, files: Record<string, string>): string | null {
-  for (const match of html.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
-    const reference = match[1] ?? match[2] ?? match[3] ?? "";
-    if (/^(?:https?:|data:|mailto:|#|\/\/)/i.test(reference)) continue;
+  // A <base> changes what every relative reference means, and this fold cannot
+  // follow it. Refusing is the honest answer.
+  if (/<base\b[^>]*\bhref\s*=/i.test(html)) {
+    return "<base href> re-bases the document";
+  }
+
+  const attributePattern = /\b(?:src|href|poster|data|action|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+  for (const match of html.matchAll(attributePattern)) {
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    // `srcset` is a comma-separated candidate list: "a.png 1x, b.png 2x".
+    for (const candidate of value.split(",")) {
+      const reference = candidate.trim().split(/\s+/)[0] ?? "";
+      if (!reference) continue;
+      if (/^(?:https?:|data:|mailto:|#|\/\/)/i.test(reference)) continue;
+      const file = lookup(files, reference);
+      if (file) return file.name;
+    }
+  }
+
+  // Inside a folded stylesheet, `url(…)` and `@import` are references too.
+  const cssPattern = /(?:url\(\s*["']?([^"')]+)["']?\s*\)|@import\s+["']([^"']+)["'])/gi;
+  for (const match of html.matchAll(cssPattern)) {
+    const reference = (match[1] ?? match[2] ?? "").trim();
+    if (!reference || /^(?:https?:|data:|\/\/)/i.test(reference)) continue;
     const file = lookup(files, reference);
     if (file) return file.name;
   }
+
   return null;
 }
 
@@ -310,14 +350,27 @@ function containsBlockTerminator(body: string, block: "script" | "style"): boole
   return new RegExp(`</${block}`, "i").test(body);
 }
 
-/** A module's bare or relative specifier, which an inline module cannot resolve. */
+/**
+ * Does this module body depend on a specifier that an inline module cannot
+ * resolve?
+ *
+ * An inline `<script type="module">` has no URL, so ONLY an absolute specifier
+ * (http(s):, data:, //) can be resolved at all — a relative one, a root-
+ * relative one and a bare package name all fail. The earlier version matched
+ * the shapes it happened to think of (`import … from './x'`, `import('./x')`),
+ * and missed `import './x';`, which is the idiomatic side-effect form.
+ *
+ * Conservative on purpose: a specifier this cannot classify means the zip.
+ */
 function hasRelativeImport(body: string): boolean {
-  const patterns = [
-    /\bimport\s*\(\s*["']\.{1,2}\//,
-    /\bimport\s+[^;]*?from\s*["']\.{1,2}\//,
-    /\bexport\s+[^;]*?from\s*["']\.{1,2}\//
-  ];
-  return patterns.some((pattern) => pattern.test(body));
+  const specifierPattern = /(?:\bimport\s*\(|\b(?:import|export)\b[^;'"]*?from\s*)["']([^"']+)["']|\bimport\s+["']([^"']+)["']/g;
+  for (const match of body.matchAll(specifierPattern)) {
+    const specifier = (match[1] ?? match[2] ?? "").trim();
+    if (!specifier) continue;
+    if (/^(?:https?:|data:|\/\/)/i.test(specifier)) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Resolve an HTML reference against the file map, tolerating `./` and a leading `/`. */
@@ -353,12 +406,4 @@ export function crc32(data: Buffer): number {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-/** Kept for callers that only want the name shape. */
-export function webAppBaseNames(title: string): { html: string; zip: string } {
-  return {
-    html: path.basename(inlineWebAppName(title)),
-    zip: path.basename(zipWebAppName(title))
-  };
 }
