@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { encodePiCommand, PiEventQueue, PiJsonLines, type PiRecord } from "./protocol";
+import { captureWindowsDescendants, stopWindowsDescendants, type ProcessReceipt } from "./windows-process-tree";
 
 export class PiRuntimeError extends Error {
   constructor(message: string, readonly category: string) { super(message); }
@@ -92,6 +93,22 @@ export class PiProcess {
   get pid(): number | undefined { return this.child.pid; }
 
   private async stop(): Promise<void> {
+    let receipts: ProcessReceipt[] = [];
+    let ownershipFailure: unknown;
+    if (process.platform === "win32" && this.externalTools.size && this.child.pid !== undefined) {
+      try { receipts = await captureWindowsDescendants(this.child.pid); }
+      catch { ownershipFailure = new PiRuntimeError("Windows native process ownership could not be inspected; workspace remains locked.", "cleanup_failed"); }
+    }
+    let processFailure: unknown;
+    try { await this.stopProcess(); } catch (error) { processFailure = error; }
+    // Pi's Windows taskkill is asynchronous. An abort response alone is not an
+    // exit receipt for grandchildren; confirm them before releasing workspace.
+    if (receipts.length) await stopWindowsDescendants(receipts);
+    if (ownershipFailure) throw ownershipFailure;
+    if (processFailure) throw processFailure;
+  }
+
+  private async stopProcess(): Promise<void> {
     if (this.exitObserved) {
       if (this.externalTools.size) throw new PiRuntimeError("Pi exited during a native command; descendant termination is unconfirmed.", "cleanup_failed");
       return;

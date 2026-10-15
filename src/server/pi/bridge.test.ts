@@ -12,12 +12,12 @@ import { createPiBridge } from "./bridge";
 
 const bridges: Array<Awaited<ReturnType<typeof createPiBridge>>> = [];
 afterEach(async () => { await Promise.all(bridges.splice(0).map(bridge => bridge.close())); });
-async function fixture(toolNames: string[] = ["fs_write"]) {
+async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}) {
   const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: toolNames.filter(name => name !== "report_task_result") });
   const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   const runId = newRunId();
-  const bridge = await createPiBridge({ agent, conversationId: conversation.id, runId, workspacePath: workspace.rootPath, toolNames, systemPrompt: "Fixture" } as never, new AbortController().signal, () => {});
+  const bridge = await createPiBridge({ agent, conversationId: conversation.id, runId, workspacePath: workspace.rootPath, toolNames, systemPrompt: "Fixture" } as never, new AbortController().signal, onBudgetExceeded);
   bridges.push(bridge);
   const post = (route: string, body: unknown, token = bridge.token) => fetch(`${bridge.url}${route}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { bridge, post, runId, workspace, conversation };
@@ -35,6 +35,21 @@ describe("private Pi bridge admission", () => {
     expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(400);
     expect(bridge.result("escape")?.ok).toBe(false);
     expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "npm test" } })).status).toBe(400);
+  });
+  it("rejects writes through a directory link outside the workspace", async () => {
+    const { post, workspace } = await fixture();
+    const outside = path.join(workspace.rootPath, "..", "outside-pi-bridge-fixture");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(workspace.rootPath, "linked"), "junction");
+    expect((await post("/native/authorize", { callId: "linked", name: "write", args: { path: "linked/escape.txt", content: "no" } })).status).toBe(400);
+    expect(fs.existsSync(path.join(outside, "escape.txt"))).toBe(false);
+  });
+  it("rejects turns past the runtime budget instead of declaring completion", async () => {
+    let exceeded = false;
+    const { post } = await fixture([], () => { exceeded = true; });
+    for (let n = 0; n < 64; n++) expect((await post("/turn", {})).status).toBe(200);
+    expect((await post("/turn", {})).status).toBe(409);
+    expect(exceeded).toBe(true);
   });
   it("invalidates approval if the file changes before the decision", async () => {
     const { post, runId, workspace, conversation } = await fixture();

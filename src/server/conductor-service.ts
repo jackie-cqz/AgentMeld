@@ -1527,6 +1527,8 @@ function rebuildFtsForConversation(conversationId: string): void {
 
 /** Tools available to the Conductor during the PLAN (assess) stage only */
 export const CONDUCTOR_PLAN_TOOLS = [
+  "list_team_members",
+  "update_context_facts",
   "plan_tasks",
   "ask_user",
   "read_artifact",

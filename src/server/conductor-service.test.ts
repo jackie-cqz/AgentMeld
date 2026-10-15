@@ -126,6 +126,8 @@ describe("buildConductorPlanPrompt", () => {
 describe("CONDUCTOR_PLAN_TOOLS", () => {
   it("contains the 6 allowed PLAN-stage tools", () => {
     expect(CONDUCTOR_PLAN_TOOLS).toEqual([
+      "list_team_members",
+      "update_context_facts",
       "plan_tasks",
       "ask_user",
       "read_artifact",

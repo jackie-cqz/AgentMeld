@@ -13,6 +13,10 @@ task DAGs, cross-task context and facts, authorization, approvals, artifacts,
 evidence and run lifecycle. The connection layer does not contain another LLM
 loop or a JSON-repair fallback.
 
+Invocations sharing one workspace are serialized, including read-only roles.
+The DAG may admit multiple tasks, but they wait for exclusive workspace ownership.
+This initial integration favors deterministic ownership over same-directory parallelism.
+
 ## Configuration And Identity
 
 1. Configure a provider, endpoint, credential and model in AgentMeld Settings.
@@ -99,6 +103,10 @@ Turn and tool-call budgets are platform supervision limits, not a second loop.
 Cancellation stops Pi, approvals and platform-owned background jobs. Teardown
 waits for process exit; uncertain cleanup poisons the durable workspace lease.
 Another task cannot start writing that workspace while ownership is uncertain.
+On Windows, cancellation snapshots owned descendants through the built-in
+PowerShell/CIM interface and verifies creation-time-matched processes after Pi's
+abort. If process ownership cannot be inspected or exit cannot be confirmed,
+cleanup fails closed. Windows requires this standard OS interface and Git Bash.
 
 The database contains `agent_execution_bindings`, `harness_executions` and
 `harness_workspace_leases`. Session files live under

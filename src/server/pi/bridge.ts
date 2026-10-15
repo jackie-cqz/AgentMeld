@@ -53,7 +53,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       if (request.method === "GET" && request.url === "/manifest") {
         const systemPrompt = Object.entries(PI_NATIVE_TO_PLATFORM).reduce((prompt, [native, platform]) =>
           native === platform ? prompt : prompt.replace(new RegExp(`\\b${platform}\\b`, "g"), native), input.systemPrompt);
-        send({ definitions, native, systemPrompt,
+        send({ definitions, native, systemPrompt: `${systemPrompt}${businessNames.includes("list_team_members") ? "\nBefore planning, use list_team_members for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements." : ""}`,
           needsReport: Boolean(input.parentRunId), maxTurns: 64 });
         return;
       }
