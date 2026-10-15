@@ -22,7 +22,7 @@ export type ToolFailureCategory =
 export interface ToolExecutionMeta {
   /** Stable ID from the model/MCP tool call. */
   callId: string;
-  source?: "llm" | "mcp" | "system" | "benchmark";
+  source?: "llm" | "mcp" | "pi" | "system" | "benchmark";
 }
 
 export type ToolResult =

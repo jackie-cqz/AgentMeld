@@ -401,7 +401,7 @@ export const bashTool: ToolDef = {
   handler: (args, ctx) => runValidatedBash(args, ctx)
 };
 
-export async function runValidatedBash(args: unknown, ctx: ToolContext, background = false): Promise<ToolResult> {
+export async function authorizeBashExecution(args: unknown, ctx: ToolContext): Promise<ToolResult> {
     const parsed = ArgsSchema.safeParse(args);
     if (!parsed.success) {
       return { ok: false, error: `Invalid args: ${parsed.error.message}` };
@@ -511,7 +511,17 @@ export async function runValidatedBash(args: unknown, ctx: ToolContext, backgrou
       }
     }
 
-    // 5. Execute
+    if (ctx.abortSignal.aborted) return { ok: false, error: "Command was cancelled before execution.", category: "approval_rejected" };
+    return { ok: true, value: { command, cwd, timeoutMs: parsed.data.timeoutMs ?? 300000 } };
+}
+
+export async function runValidatedBash(args: unknown, ctx: ToolContext, background = false): Promise<ToolResult> {
+    const admission = await authorizeBashExecution(args, ctx);
+    if (!admission.ok) return admission;
+    const { command, cwd, timeoutMs } = admission.value as { command: string; cwd: string; timeoutMs: number };
+    const platform = currentPlatform();
+
+    // Execution is separate so native Harness tools can share the same admission policy.
     const shell = getShell(platform);
 
     let shellCommand: string;
@@ -525,7 +535,7 @@ export async function runValidatedBash(args: unknown, ctx: ToolContext, backgrou
     }
 
     if (background) {
-      try { return { ok: true, value: startCommandJob(shellCommand, shellArgs, cwd, command, ctx, parsed.data.timeoutMs ?? 300000) }; }
+      try { return { ok: true, value: startCommandJob(shellCommand, shellArgs, cwd, command, ctx, timeoutMs) }; }
       catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Job could not start." }; }
     }
     const result = await executeCommand(shellCommand, shellArgs, cwd, ctx.abortSignal);

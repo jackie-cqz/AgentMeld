@@ -12,6 +12,7 @@ import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { clearFileWrites } from "@/server/dispatch-file-writes";
 import { clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { clearRunToolEvidence } from "@/server/dispatch-tool-evidence";
+import { getDatabase } from "@/db/client";
 
 /**
  * P1+P2: Run lifecycle + approval recovery — called at startup.
@@ -30,6 +31,10 @@ import { clearRunToolEvidence } from "@/server/dispatch-tool-evidence";
  */
 export function recoverOrphanedRuns() {
   const now = Date.now();
+  // A durable Pi session is history, not a resumable OS process. Keep workspace
+  // leases: a still-live orphan child must exclude a replacement writer.
+  getDatabase().prepare("UPDATE harness_executions SET status='interrupted', error_category='control_process_interrupted', finished_at=? WHERE finished_at IS NULL")
+    .run(now);
 
   // P2: First, mark all pending approvals in DB as interrupted
   interruptAllPendingApprovals(now);

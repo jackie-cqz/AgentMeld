@@ -10,8 +10,8 @@ import type { ProviderSnapshot } from "@/lib/model-provider-settings";
 import { Feedback } from "@/components/ui/controls";
 import { ModelProviderSettings } from "@/components/model-provider-settings";
 
-export function AgentModelConfig({ open, value, onChange, sdk = false }: {
-  open: boolean; value: AgentModelValue; onChange: (value: AgentModelValue) => void; sdk?: boolean;
+export function AgentModelConfig({ open, value, onChange }: {
+  open: boolean; value: AgentModelValue; onChange: (value: AgentModelValue) => void;
 }) {
   const agents = useAppStore(state => state.agents);
   const [catalog, setCatalog] = useState<{ profiles: ModelProviderProfile[]; snapshot: ProviderSnapshot } | null>(null);
@@ -36,7 +36,7 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
   }, [picker, manager, pendingProvider]);
 
   useEffect(() => {
-    if (!open || sdk) return;
+    if (!open) return;
     const controller = new AbortController();
     Promise.all([
       requestJson<{ providers: ModelProviderProfile[] }>("/api/model-providers", { signal: controller.signal }),
@@ -49,7 +49,7 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "供应商配置读取失败。");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [open, sdk, version]);
+  }, [open, version]);
 
   const reload = () => { setLoading(true); setVersion(current => current + 1); };
   const choices = catalog ? agentProviderChoices(catalog.profiles, catalog.snapshot, Object.values(agents), value) : [];
@@ -66,7 +66,7 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
 
   return <div ref={panelRef}>
     <div className="agent-model-config" hidden={picker !== null || manager}>
-      {!sdk ? <>
+      <>
         <div className="agent-model-heading"><Cpu size={19} /><h3>模型配置</h3><button className="ui-button ui-button--quiet" onClick={manage}><Settings2 size={14} />管理供应商</button></div>
         {error ? <div className="agent-model-notice"><Feedback>{error}</Feedback><button className="ui-button" disabled={loading} onClick={reload}><RefreshCw size={14} />重新加载</button></div> : null}
         <div className="agent-model-field"><label id="agent-provider-label">供应商 <span>*</span></label>
@@ -82,11 +82,11 @@ export function AgentModelConfig({ open, value, onChange, sdk = false }: {
         </div>
         {value.provider ? <div className="agent-model-meta"><span>Chat Completions</span><span><KeyRound size={12} />{source}</span>{value.apiBaseUrl ? <span>独立 API 地址</span> : null}</div> : null}
         {selected?.source === "missing" && !value.apiKey ? <Feedback tone="info">{selected.unavailable ? "原配置未出现在已配置供应商中。" : "供应商密钥不可用。"}现有选择已保留，请检查供应商或独立配置。</Feedback> : null}
-      </> : <div className="agent-model-heading"><Cpu size={19} /><h3>SDK 模型配置</h3></div>}
-      <details className="agent-model-advanced" open={sdk || undefined}>
+      </>
+      <details className="agent-model-advanced">
         <summary><SlidersHorizontal size={15} />Agent 独立配置{value.apiKey || value.apiBaseUrl ? <span>已覆盖</span> : null}<ChevronRight size={14} /></summary>
         <label className="ui-field">API Key<div className="provider-key-input"><input aria-label="Agent API Key" autoComplete="off" type={showKey ? "text" : "password"} value={value.apiKey} placeholder="继承供应商密钥" onChange={event => onChange({ ...value, apiKey: event.target.value })} /><button type="button" className="ui-icon-button" title={showKey ? "隐藏密钥" : "显示密钥"} aria-label={showKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
-        <label className="ui-field">API 地址<input aria-label="Agent API 地址" type="url" disabled={sdk} value={value.apiBaseUrl} placeholder={sdk ? "SDK 自动管理" : selected?.baseUrl || "继承供应商地址"} onChange={event => onChange({ ...value, apiBaseUrl: event.target.value })} /></label>
+        <label className="ui-field">API 地址<input aria-label="Agent API 地址" type="url" value={value.apiBaseUrl} placeholder={selected?.baseUrl || "继承供应商地址"} onChange={event => onChange({ ...value, apiBaseUrl: event.target.value })} /></label>
       </details>
     </div>
     {picker ? <section className="agent-model-inline" aria-label={picker === "provider" ? "选择供应商" : "选择模型"} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (pendingProvider) setPendingProvider(null); else setPicker(null); } }}>

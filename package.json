@@ -23,13 +23,13 @@
     "auth:reset": "node scripts/auth-reset.mjs"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.19.0"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "latest",
     "@anthropic-ai/sdk": "latest",
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
     "@larksuite/channel": "^0.7.1",
-    "@openai/codex-sdk": "latest",
     "@tailwindcss/postcss": "latest",
     "better-sqlite3": "latest",
     "cheerio": "^1.2.0",
@@ -50,6 +50,7 @@
     "remark-gfm": "latest",
     "tailwind-merge": "latest",
     "tailwindcss": "latest",
+    "typebox": "1.3.7",
     "zod": "latest",
     "zustand": "latest"
   },

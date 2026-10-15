@@ -23,7 +23,7 @@ describe("benchmark fault injector", () => {
 
   it("deterministically corrupts the selected tool argument document once", () => {
     active = new FaultInjector([{ id: "json-1", type: "tool_arguments_json", toolName: "write_artifact", occurrence: 1 }]);
-    active.start();
+    expect(() => active!.start()).toThrow("not supported by the Pi runtime");
     const malformed = active.injectToolArguments({
       runId: "run_child",
       toolName: "write_artifact",

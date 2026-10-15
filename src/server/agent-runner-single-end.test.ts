@@ -5,27 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
-import { startAgentRun } from "@/server/agent-runner";
-import { createMessage, createConversation, getRun } from "@/server/repositories";
+import { startAgentRun, isRunActive } from "@/server/agent-runner";
+import { createMessage, createConversation, getRun, listMessages } from "@/server/repositories";
 import { createWorkspace } from "@/server/conversation-service";
-import { publishConductorFailed } from "@/server/conductor-service";
+import { failConductor } from "@/server/conductor-service";
 import type { StreamEvent } from "@/shared/types";
 
-/**
- * A run must end once, with one status.
- *
- * The conductor publishes `run.end` with status "failed" when plan validation
- * fails, and then RETURNS rather than throwing — so the runner used to follow it
- * with an unconditional `completeRun(..., "complete")`. One run emitted
- * `run.end` twice, the second saying "complete", and the row ended complete: the
- * web UI reporting success while the channel had just told the group the task
- * failed.
- *
- * `executeConductor` is stubbed to reproduce that exact shape, because it is the
- * shape that matters and driving a real plan-validation failure is not
- * deterministic. The stub does what the real one does on that path: publish a
- * failure and return.
- */
+/** The run owner alone settles a Conductor failure, including its empty message. */
 const { executeConductorMock } = vi.hoisted(() => ({ executeConductorMock: vi.fn() }));
 
 vi.mock("@/server/conductor-service", async (importOriginal) => {
@@ -47,14 +33,9 @@ beforeEach(() => {
   ensureDatabase();
 
   executeConductorMock.mockReset();
-  // What the real conductor does when plan validation fails: announce the
-  // failure through the shared helper, then RETURN rather than throw. Using the
-  // real helper rather than re-publishing the event by hand is the point — the
-  // helper is what records the status, and an earlier version of this stub
-  // reproduced the old, broken shape and hid the bug it was written for.
   executeConductorMock.mockImplementation(
-    async (input: { conversationId: string; conductorRunId: string }) => {
-      publishConductorFailed(input as never, "Plan validation failed");
+    async () => {
+      failConductor("Plan validation failed");
     }
   );
 });
@@ -78,7 +59,7 @@ describe("a conductor run whose planning fails", () => {
       triggerMessage: seedTriggerMessage(conversationId)
     });
 
-    await waitForRunToSettle(handle.runId);
+    await handle.promise;
     unsub();
 
     const ends = events.filter(
@@ -90,6 +71,9 @@ describe("a conductor run whose planning fails", () => {
 
     // And the record agrees with the group, instead of contradicting it.
     expect(getRun(handle.runId)?.status).toBe("failed");
+    expect(isRunActive(handle.runId)).toBe(false);
+    expect(events.filter(event => event.type === "message.end")).toHaveLength(1);
+    expect(listMessages(conversationId).find(message => message.role === "agent")).toMatchObject({ status: "error", parts: [{ type: "text", content: "Plan validation failed" }] });
   });
 });
 
@@ -119,12 +103,4 @@ function seedTriggerMessage(conversationId: string) {
     status: "complete",
     now: Date.now()
   });
-}
-
-async function waitForRunToSettle(runId: string): Promise<void> {
-  for (let i = 0; i < 200; i += 1) {
-    const run = getRun(runId);
-    if (run && run.status !== "queued" && run.status !== "running") return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
 }

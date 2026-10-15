@@ -2,9 +2,11 @@ import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
 import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
-import { getAdapter } from "@/server/adapters/registry";
-import type { AdapterInput } from "@/server/adapters/types";
-import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, updateRunStatus, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
+import { runPiInvocation } from "@/server/pi/runtime";
+import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
+import { snapshotPiProvider } from "@/server/pi/config";
+import { PiRuntimeError } from "@/server/pi/process";
+import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -54,9 +56,12 @@ export interface ConductorInput {
   /** messageId of the conductor's streaming response bubble, so events can target it */
   messageId: string;
   signal?: AbortSignal;
+  piConfiguration?: PiProviderSnapshot;
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
+  const agent = listAgents().find(agent => agent.id === input.conductorAgentId);
+  if (agent) input.piConfiguration ??= snapshotPiProvider(agent);
   // Stage 0: FACT EXTRACTION — extract structured facts from user message
   const userText = extractTextFromMessage(input.triggerMessage);
   try {
@@ -113,7 +118,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       createSystemMessage(input.conversationId, `❌ Plan 校验失败：${validationResult}`);
       // Through the shared helper, so recording the failure cannot be forgotten
       // by one call site while others do it.
-      publishConductorFailed(input, `Plan validation failed: ${validationResult}`);
+      failConductor(`Plan validation failed: ${validationResult}`);
       return;
     }
 
@@ -210,7 +215,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     await executeConductorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
       input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId,
-      input.messageId, input.signal
+      input.messageId, input.signal, input.piConfiguration
     );
   }
 }
@@ -309,7 +314,8 @@ export async function executeConductorPlan(
   triggerMessage: Message,
   conductorAgentId: string,
   messageId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  piConfiguration?: PiProviderSnapshot
 ): Promise<{ results: Map<string, TaskResult>; completionStatus: CompletionStatus; conflicts: StructuredConflict[] }> {
   plan = enforceExplicitFrameworkContracts(plan, extractTextFromMessage(triggerMessage));
   const results = new Map<string, TaskResult>();
@@ -476,7 +482,7 @@ export async function executeConductorPlan(
     try {
       const recoveryResult = await generateRecoveryPlan(
         conversationId, conductorAgentId, conductorRunId,
-        recoveryPrompt, plan, results, abortSignal
+        recoveryPrompt, plan, results, abortSignal, piConfiguration
       );
 
       if (recoveryResult && recoveryResult.tasks.length > 0) {
@@ -547,7 +553,7 @@ export async function executeConductorPlan(
   await runAggregateStage(
     conversationId, plan, results, outputBindings,
     conductorAgentId, conductorRunId, triggerMessage,
-    completionStatus, messageId, abortSignal
+    completionStatus, messageId, abortSignal, piConfiguration
   );
 
   return { results, completionStatus, conflicts: allConflicts };
@@ -781,6 +787,7 @@ async function runChildTask(
     let finalEvaluation: ReturnType<typeof evaluateChildTaskResult> = { status: "failed", error: "not started" };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (signal.aborted) return { taskId: task.id, status: "aborted", summary: "Parent run cancelled before retry." };
       // P0: Generate task execution identity for this attempt
       const attemptId = newTaskAttemptId();
       const contextSnapshotId = newContextSnapshotId();
@@ -1368,11 +1375,12 @@ async function runAggregateStage(
   triggerMessage: Message,
   completionStatus: CompletionStatus,
   messageId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  piConfiguration?: PiProviderSnapshot
 ): Promise<void> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
-  if (!agent || agent.adapterName !== "custom") {
+  if (!agent || agent.adapterName !== "pi") {
     // Fallback to template summary
     await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
@@ -1386,7 +1394,7 @@ async function runAggregateStage(
   }
 
   const settings = getSettings();
-  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  const apiKey = piConfiguration ? piConfiguration.apiKey : resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
   if (!apiKey) {
     await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
@@ -1405,7 +1413,7 @@ async function runAggregateStage(
   // Tools: remove plan_tasks and ask_user
   const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
 
-  const adapterInput: AdapterInput = {
+  const invocationInput: PiInvocationInput = {
     conversationId,
     runId: conductorRunId,
     agent: { ...agent, toolNames: aggregateTools, systemPrompt: aggregateSystemPrompt },
@@ -1415,18 +1423,17 @@ async function runAggregateStage(
     recentMessages: [],
     toolNames: aggregateTools,
     systemPrompt: aggregateSystemPrompt,
+    ...piConfiguration,
     workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
     apiKey
   };
-
-  const adapter = getAdapter(agent.adapterName);
 
   // Route the aggregate stream through consumeStream so every event carries the
   // conductor's messageId, its parts are persisted, and the summary survives a refresh.
   // (Previously events were published straight from the adapter with messageId: "",
   // and the client reducer dropped them because state.messages[""] is undefined.)
   await consumeStream({
-    stream: adapter.run(adapterInput, signal),
+    stream: runPiInvocation(invocationInput, signal),
     messageId,
     runId: conductorRunId,
     signal,
@@ -1521,6 +1528,8 @@ function rebuildFtsForConversation(conversationId: string): void {
 
 /** Tools available to the Conductor during the PLAN (assess) stage only */
 export const CONDUCTOR_PLAN_TOOLS = [
+  "list_team_members",
+  "update_context_facts",
   "plan_tasks",
   "ask_user",
   "read_artifact",
@@ -1921,31 +1930,10 @@ export function buildContinuationPrompt(
   return `${basePrompt}\n\n[Retry ${attempt}/${maxAttempts}] Previous attempt failed: ${lastError}. Fix the issues and try again.`;
 }
 
-/**
- * Announce a conductor failure — and record it.
- *
- * Exported because it is the seam that keeps the announcement and the record
- * from drifting apart; a test drives it directly rather than reproducing the
- * shape it used to have.
- */
-export function publishConductorFailed(input: ConductorInput, error: string) {
-  const now = Date.now();
-
-  // Record it, not just announce it. Announcing a failure without writing it
-  // left the run row "running" while the channel had already told the group the
-  // task failed — and the runner, which follows this function by returning
-  // rather than throwing, then wrote "complete" over the top. The web UI and the
-  // group disagreed about the same run.
-  updateRunStatus(input.conductorRunId, "failed", null, now);
-
-  eventBus.publish({
-    type: "run.end",
-    conversationId: input.conversationId,
-    timestamp: now,
-    runId: input.conductorRunId,
-    status: "failed",
-    error
-  });
+/** Forward a planning failure to the sole terminal-state owner. */
+export function failConductor(error: string, category = "conductor_contract"): never {
+  // Only agent-runner owns terminal publication, message settlement and cleanup.
+  throw new PiRuntimeError(error, category);
 }
 
 type AssessResult =
@@ -1958,9 +1946,9 @@ async function runConductorAssess(
 ): Promise<AssessResult> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === input.conductorAgentId);
-  if (!agent || agent.adapterName !== "custom") {
-    createSystemMessage(input.conversationId, "⚠️ Conductor 需要使用 Custom Adapter。");
-    publishConductorFailed(input, "Conductor agent is not a custom adapter.");
+  if (!agent || agent.adapterName !== "pi") {
+    createSystemMessage(input.conversationId, "⚠️ Conductor 需要配置 Pi 执行引擎。");
+    failConductor("Conductor requires the Pi execution engine.", "migration_required");
     return { mode: "direct" };
   }
 
@@ -1968,13 +1956,13 @@ async function runConductorAssess(
   const workspace = getWorkspaceForConversation(input.conversationId);
   if (!conversation || !workspace) {
     createSystemMessage(input.conversationId, "⚠️ 会话或工作区未找到。");
-    publishConductorFailed(input, "Conversation or workspace not found.");
+    failConductor("Conversation or workspace not found.", "configuration");
     return { mode: "direct" };
   }
 
   const settings = getSettings();
   const provider = agent.modelProvider ?? "deepseek";
-  const apiKey = resolveApiKey(provider, agent.apiKey, settings);
+  const apiKey = input.piConfiguration ? input.piConfiguration.apiKey : resolveApiKey(provider, agent.apiKey, settings);
   if (!apiKey) {
     // Name the provider the agent is actually configured with: the Conductor is
     // not necessarily on DeepSeek, and a message that says otherwise sends the
@@ -1987,7 +1975,7 @@ async function runConductorAssess(
         ? `⚠️ 该 Conductor 使用 provider "openai-compatible"，其 API Key 只能配置在 Agent 上（不会读取全局设置或环境变量）。请编辑该 Agent 填入 Key。`
         : `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
     );
-    publishConductorFailed(input, "No API key configured.");
+    failConductor("No API key configured.", "authentication");
     return { mode: "direct" };
   }
 
@@ -1998,25 +1986,23 @@ async function runConductorAssess(
   // Build the PLAN stage system prompt from the extracted pure function
   const assessSystemPrompt = buildConductorPlanPrompt(agent, otherAgents, workspacePath);
   const assessToolNames = [...CONDUCTOR_PLAN_TOOLS];
-  const adapterInput: AdapterInput = {
+  const invocationInput: PiInvocationInput = {
     conversationId: input.conversationId,
     runId: input.conductorRunId,
     agent: { ...agent, toolNames: assessToolNames, systemPrompt: assessSystemPrompt },
     conversation,
     workspace,
-    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
+    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] },
     recentMessages: [],
     toolNames: assessToolNames,
     systemPrompt: assessSystemPrompt,
+    ...input.piConfiguration,
     workspacePath,
     apiKey
   };
 
-  const adapter = getAdapter(agent.adapterName);
-  const requestTimeout = AbortSignal.timeout(60000);
-  const signal = input.signal
-    ? AbortSignal.any([input.signal, requestTimeout])
-    : requestTimeout;
+  // Pi owns model deadlines; approval waits must not inherit a one-minute HTTP timeout.
+  const signal = input.signal ?? new AbortController().signal;
 
   // Stream events AND watch for plan_tasks via onEvent callback
   // We capture on tool.result (success) rather than tool.call, because the tool handler
@@ -2027,7 +2013,7 @@ async function runConductorAssess(
 
   try {
     await consumeStream({
-      stream: adapter.run(adapterInput, signal),
+      stream: runPiInvocation(invocationInput, signal),
       messageId: input.messageId,
       runId: input.conductorRunId,
       signal,
@@ -2052,7 +2038,6 @@ async function runConductorAssess(
           const toolPlan = readPlanToolResult((event as { result: unknown }).result);
           if (toolPlan) {
             capturedPlan = toolPlan;
-            return { stop: true };
           }
         }
 
@@ -2068,16 +2053,10 @@ async function runConductorAssess(
       }
     });
   } catch (err) {
-    // If we already captured a plan, the error after capture is irrelevant
-    if (capturedPlan) {
-      // proceed to plan validation below
-    } else {
-      // Stream error without a plan — fail the run
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      createSystemMessage(input.conversationId, `⚠️ Conductor 调用失败：${errorMsg.slice(0, 200)}`);
-      publishConductorFailed(input, `provider: ${errorMsg.slice(0, 200)}`);
-      return { mode: "direct" };
-    }
+    input.signal?.throwIfAborted();
+    // A plan receipt does not excuse protocol, provider or teardown failure.
+    // The run owner records the one terminal event with the Pi error category.
+    throw err;
   }
 
   // If plan_tasks was captured, validate and return plan mode
@@ -2085,7 +2064,7 @@ async function runConductorAssess(
     const planResult = parsePlanArgs(capturedPlan);
     if (typeof planResult === "string") {
       createSystemMessage(input.conversationId, `⚠️ Plan 校验失败：${planResult}`);
-      publishConductorFailed(input, `invalid_plan: ${planResult}`);
+      failConductor(`invalid_plan: ${planResult}`);
       return { mode: "direct" };
     }
     return { mode: "plan", plan: planResult };
@@ -2094,7 +2073,7 @@ async function runConductorAssess(
   // Plan was attempted but failed — fail the run
   if (planWasAttempted) {
     createSystemMessage(input.conversationId, "⚠️ Conductor 未能生成有效计划，请重试或简化需求。");
-    publishConductorFailed(input, "conductor_contract: plan_tasks failed");
+    failConductor("conductor_contract: plan_tasks failed");
     return { mode: "direct" };
   }
 
@@ -2190,18 +2169,19 @@ async function generateRecoveryPlan(
   recoveryPrompt: string,
   originalPlan: ParsedTask[],
   results: Map<string, TaskResult>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  piConfiguration?: PiProviderSnapshot
 ): Promise<{ reasoning: string; tasks: RecoveryTask[] } | null> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
-  if (!agent || agent.adapterName !== "custom") return null;
+  if (!agent || agent.adapterName !== "pi") return null;
 
   const conversation = getConversation(conversationId);
   const workspace = getWorkspaceForConversation(conversationId);
   if (!conversation || !workspace) return null;
 
   const settings = getSettings();
-  const apiKey = resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
+  const apiKey = piConfiguration ? piConfiguration.apiKey : resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
   if (!apiKey) return null;
 
   const otherAgents = agents.filter(
@@ -2245,7 +2225,7 @@ ${originalPlan
   .map((task) => `- id: "${task.id}", agentId: "${task.agentId}", title: "${task.title}"`)
   .join("\n")}`;
 
-  const adapterInput: AdapterInput = {
+  const invocationInput: PiInvocationInput = {
     conversationId,
     runId: conductorRunId,
     agent: { ...agent, toolNames: ["plan_tasks"], systemPrompt },
@@ -2258,15 +2238,15 @@ ${originalPlan
     toolNames: ["plan_tasks"],
     systemPrompt,
     workspacePath,
-    apiKey
+    apiKey,
+    ...piConfiguration
   };
 
-  const adapter = getAdapter(agent.adapterName);
   let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;
   let planCallId: string | null = null;
 
   try {
-    for await (const event of adapter.run(adapterInput, signal)) {
+    for await (const event of runPiInvocation(invocationInput, signal)) {
       if (
         event.type === "tool.call" &&
         "toolName" in event &&

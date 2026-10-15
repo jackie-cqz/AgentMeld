@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { modelProviderSchema } from "@/shared/model-provider-schema";
-import { createAgent, getAllAgents, DEFAULT_CUSTOM_PROMPT } from "@/server/agent-service";
+import { createAgent, getAllAgents } from "@/server/agent-service";
 import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ const createAgentSchema = z.object({
   avatar: z.string().max(10).optional(),
   description: z.string().max(500).optional(),
   capabilities: z.array(z.string()).max(10).optional(),
-  adapterName: z.enum(["custom", "claude-code", "codex", "mock"]),
+  adapterName: z.literal("pi"),
   modelProvider: modelProviderSchema.nullable().optional(),
   modelId: z.string().max(100).nullable().optional(),
   apiKey: z.string().max(200).nullable().optional(),

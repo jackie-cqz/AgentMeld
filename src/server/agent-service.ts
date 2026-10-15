@@ -2,7 +2,7 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
-import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
+import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT, PI_RETIRED_TOOLS } from "@/shared/agent-constants";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
@@ -28,6 +28,7 @@ export interface CreateAgentInput {
 }
 
 export interface UpdateAgentInput {
+  adapterName?: "pi";
   name?: string;
   avatar?: string;
   description?: string;
@@ -57,21 +58,10 @@ export function createAgent(input: CreateAgentInput): Agent {
   const id = newAgentId();
   const now = Date.now();
 
-  // Adapter-specific defaults
-  const adapterName = input.adapterName;
-  const isClaudeCodeOrCodex = adapterName === "claude-code" || adapterName === "codex";
-  const toolNames = isClaudeCodeOrCodex
-    ? [] // SDK adapters use their own tool sets
-    : (input.toolNames ?? TOOL_PRESETS["all-purpose"].tools);
-
-  const modelProvider = isClaudeCodeOrCodex
-    ? (adapterName === "claude-code" ? "anthropic" : null)
-    : (input.modelProvider ?? "deepseek");
-
-  // Validate: custom adapter must have model
-  if (adapterName === "custom" && !input.modelId?.trim()) {
-    throw new Error("Custom agents must specify a model ID.");
-  }
+  if (input.adapterName !== "pi") throw new Error("New Agents must use the Pi execution engine.");
+  const adapterName = "pi";
+  const toolNames = input.toolNames ?? TOOL_PRESETS["all-purpose"].tools;
+  const modelProvider = input.modelProvider ?? "deepseek";
   validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl, toolNames, false);
 
   db.prepare(`
@@ -95,7 +85,7 @@ export function createAgent(input: CreateAgentInput): Agent {
     JSON.stringify(toolNames),
     0, // is_builtin
     0, // is_conductor
-    adapterName === "custom" ? 1 : 0, // supports_vision (custom agents default to yes)
+    1,
     now,
     now
   );
@@ -121,11 +111,15 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   const apiKey = input.apiKey !== undefined ? (input.apiKey?.trim() || null) : existing.apiKey;
   const apiBaseUrl = input.apiBaseUrl !== undefined ? (input.apiBaseUrl?.trim() || null) : existing.apiBaseUrl;
 
-  // SDK adapters force empty toolNames
-  const isSdk = existing.adapterName === "claude-code" || existing.adapterName === "codex";
-  const toolNames = isSdk ? [] : (input.toolNames ?? existing.toolNames);
+  const adapterName = input.adapterName ?? existing.adapterName;
+  if (adapterName !== "pi") throw new Error("Choose Pi and configure a provider to migrate this retired Agent.");
+  const toolNames = input.toolNames ?? existing.toolNames;
+  const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt, toolNames]) !==
+    JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.systemPrompt, existing.toolNames]);
+  const active = db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE agent_id=? AND status IN ('queued','running')").get(agentId) as { count: number };
+  if (executionChanged && active.count > 0) throw new Error("Stop the Agent's active runs before changing its execution configuration.");
   validateCustomAgentConfig(
-    existing.adapterName,
+    adapterName,
     modelProvider,
     modelId,
     apiKey,
@@ -137,12 +131,12 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   db.prepare(`
     UPDATE agents SET
       name = ?, avatar = ?, description = ?, capabilities = ?, system_prompt = ?,
-      model_provider = ?, model_id = ?, api_key = ?, api_base_url = ?,
+      adapter_name = ?, model_provider = ?, model_id = ?, api_key = ?, api_base_url = ?,
       tool_names = ?, updated_at = ?
     WHERE id = ?
   `).run(
     name, avatar, description, JSON.stringify(capabilities),
-    systemPrompt, modelProvider, modelId, apiKey, apiBaseUrl,
+    systemPrompt, adapterName, modelProvider, modelId, apiKey, apiBaseUrl,
     JSON.stringify(toolNames), now, agentId
   );
 
@@ -158,12 +152,13 @@ function validateCustomAgentConfig(
   toolNames: readonly string[],
   allowInternalTools: boolean
 ) {
-  if (adapterName !== "custom") return;
+  if (adapterName !== "pi") throw new Error("The selected execution engine has been retired.");
+  if (toolNames.some(name => PI_RETIRED_TOOLS.includes(name))) throw new Error("Pi uses native bash for verification. Remove retired job_* tool grants.");
   if (!modelProvider) {
-    throw new Error("Custom agents must specify a model provider.");
+    throw new Error("Pi Agents must specify a model provider.");
   }
   if (!modelId?.trim()) {
-    throw new Error("Custom agents must specify a model ID.");
+    throw new Error("Pi Agents must specify a model ID.");
   }
   if (modelProvider === "openai-compatible") {
     if (!apiKey?.trim()) {

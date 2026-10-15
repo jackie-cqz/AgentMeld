@@ -101,7 +101,7 @@ src/
   app/          Next.js pages and API routes
   components/   Chat, agent, artifact, approval, trace, and workspace UI
   db/           SQLite bootstrap, schema, seed data, and persistence helpers
-  server/       Agent runtime, Conductor, tools, adapters, verification, context, evidence
+  server/       Pi runtime connection, Conductor, tools, verification, context, evidence
   shared/       Shared types, ids, constants, and display helpers
   stores/       Zustand state and SSE event reducers
 ```
@@ -113,8 +113,8 @@ Next.js UI
   -> API route
   -> Conversation service
   -> Agent runner
-  -> OpenAI-compatible adapter
-  -> ToolRegistry
+  -> Pinned Pi RPC subprocess (model requests, Agent Loop, native tools)
+  -> Native tool admission / platform business tool bridge
   -> Evidence Ledger / Artifact store / Workspace
   -> SSE events back to UI
 ```
@@ -124,13 +124,13 @@ Next.js UI
 - Next.js 16, React 19, TypeScript
 - Zustand and Immer for frontend state
 - SQLite, Drizzle ORM, and `better-sqlite3` for local persistence
-- OpenAI-compatible adapter, with DeepSeek as the recommended path
+- Pi 0.84.2 execution engine with configured OpenAI-compatible or Anthropic models
 - Tailwind CSS
 - Vitest, ESLint, and TypeScript checks
 
 ## Requirements
 
-- Node.js 20.19.0 or newer
+- Node.js 22.19.0 or newer
 - pnpm 10 or newer
 - A model provider API key, such as DeepSeek
 
@@ -207,13 +207,19 @@ This directory is ignored by Git. Do not commit `.env.local`, API keys, local da
 
 ## Provider Notes
 
-AgentMeld is currently most practical with DeepSeek or another OpenAI-compatible provider through the custom adapter.
+All production Agents, including Conductor, execute through the project-pinned Pi runtime. Configure the provider and model in AgentMeld Settings, then select them in the Agent editor. The editor shows the installed Pi version; this installation check is not a claim that provider authentication has succeeded.
 
-Claude Code and Codex adapter files are present as integration placeholders, but their complete SDK execution paths are not the recommended runtime path for this release.
+The custom Agent Loop, production Adapter registry and Claude Code/Codex placeholder engines have been retired. Existing Custom/Mock Agent records migrate to Pi without changing their identities, history or channel bindings. Other retired configurations require explicit editing before execution; they do not silently fall back to a different engine.
+
+See [Pi Runtime](docs/pi-runtime.md) for permissions, configuration snapshots, cancellation, session ownership, diagnostics and recovery. Pi's native filesystem tools reuse existing `fs_*` grants; platform tools such as `ask_user`, `plan_tasks`, artifact and deployment operations remain structured platform capabilities. This private extension bridge is not an external MCP server.
 
 ## Known Limitations
 
-- AgentMeld is designed for a local, single-user workflow and does not include multi-user authentication.
+- AgentMeld targets a local, single-owner workflow with device pairing, not multi-tenant organization access control.
+- Each invocation gets a fresh Pi session. Platform history and task context are transferred, but old Custom histories are not converted into native Pi sessions. Interrupted commands are not automatically resumed.
+- Host commands are not OS-sandboxed. Native filesystem admission, write approvals and command policy do not make arbitrary workspace scripts safe to run.
+- Run one AgentMeld control server per data directory. Startup recovery assumes no other control server owns live runs. Unconfirmed Pi teardown keeps a durable workspace lease rather than admitting another writer.
+- Pi is pinned to 0.84.2; arbitrary global versions, user-installed Pi extensions, OAuth/native session import, other Harnesses and standalone server packaging are not supported by this integration.
 - Local deployment previews are static and local; AgentMeld does not publish generated apps to a hosted cloud platform.
 - Tool-call reliability still depends on model behavior, especially for large JSON tool arguments.
 - The benchmark/evaluation scripts are not yet a full automated benchmark platform.

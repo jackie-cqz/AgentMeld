@@ -1,4 +1,10 @@
 const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  read: "读取文件",
+  write: "写入文件",
+  edit: "文件修改",
+  ls: "浏览文件",
+  grep: "搜索内容",
+  find: "查找文件",
   ask_user: "询问用户",
   bash: "执行命令",
   fs_glob: "查找文件",
@@ -21,6 +27,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   fs_write: "写入文件",
   fs_patch: "文件修改",
   plan_tasks: "拆分任务",
+  list_team_members: "查询团队成员",
   read_artifact: "读取产物",
   read_attachment: "读取附件",
   report_task_result: "汇报任务结果",

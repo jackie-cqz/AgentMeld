@@ -80,7 +80,7 @@ describe("database bootstrap", () => {
     const agents = getDatabase()
       .prepare("SELECT adapter_name, is_conductor FROM agents")
       .all() as Array<{ adapter_name: string; is_conductor: number }>;
-    expect(agents.some((agent) => agent.adapter_name === "custom")).toBe(true);
+    expect(agents.every((agent) => agent.adapter_name === "pi")).toBe(true);
     expect(agents.some((agent) => agent.is_conductor === 1)).toBe(true);
 
     const settings = getDatabase().prepare("SELECT id FROM app_settings").get() as { id: string };

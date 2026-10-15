@@ -90,7 +90,7 @@ export function AgentsPanel() {
 
       <div className="agent-library-filters">
         <label className="ui-search-field"><Search size={15} /><input aria-label="搜索 Agent" placeholder="搜索 Agent" value={query} onChange={event => setQuery(event.target.value)} /></label>
-        <select aria-label="筛选适配器" value={adapter} onChange={event => setAdapter(event.target.value)}><option value="">全部适配器</option>{[...new Set(agentList.map(agent => agent.adapterName))].map(name => <option key={name} value={name}>{name}</option>)}</select>
+        <select aria-label="筛选执行引擎" value={adapter} onChange={event => setAdapter(event.target.value)}><option value="">全部执行引擎</option>{[...new Set(agentList.map(agent => agent.adapterName))].map(name => <option key={name} value={name}>{name === "pi" ? "Pi" : `${name}（已退役）`}</option>)}</select>
         <div className="ui-segmented" role="group" aria-label="Agent 显示方式">{([{ value: "grid", label: "卡片视图", Icon: LayoutGrid }, { value: "list", label: "紧凑列表", Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => setView(value)}><Icon size={16} /></button>)}</div>
         <span className="ui-muted">{visibleAgents.length}/{agentList.length}</span>
       </div>
@@ -116,7 +116,7 @@ export function AgentsPanel() {
                 ) : null}
               </div>
               <p className="workspace-agent-description">{agent.description || "未填写职责描述"}</p>
-              <div className="agent-library-config"><span title={`适配器 ${agent.adapterName}`}>{agent.adapterName}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span>{agent.toolNames.length} 工具</span></div>
+              <div className="agent-library-config"><span title={`执行引擎 ${agent.adapterName}`}>{agent.adapterName === "pi" ? "Pi" : "待迁移"}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span>{agent.toolNames.length} 工具</span></div>
             </div>
             <button
               type="button"

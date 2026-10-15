@@ -1,5 +1,4 @@
 import type { BenchmarkFaultRecord, BenchmarkFaultSpec } from "@/server/context-metrics/benchmark-types";
-import { setToolArgumentFaultInterceptorForTests } from "@/server/adapters/custom-agent-adapter";
 import { abortRun } from "@/server/agent-runner";
 import { eventBus, type EventBus } from "@/server/event-bus";
 import { toolRegistry } from "@/server/tools/registry";
@@ -26,11 +25,13 @@ export class FaultInjector {
 
   start(): void {
     if (this.started) throw new Error("FaultInjector is already started.");
+    if (this.faults.some(fault => fault.type === "tool_arguments_json")) {
+      throw new Error("Raw model argument fault injection is not supported by the Pi runtime. Inject malformed responses in the fixture model server instead.");
+    }
     this.started = true;
     if (!this.faults.length) return;
     this.previousFlag = process.env.AGENTMELD_BENCH_FAULT_INJECTION;
     process.env.AGENTMELD_BENCH_FAULT_INJECTION = "1";
-    setToolArgumentFaultInterceptorForTests((input) => this.injectToolArguments(input));
     toolRegistry.setExecutionInterceptorForTests((name, args, context) => this.intercept(name, args, context));
     if (this.faults.some((fault) => fault.type === "child_run_abort")) {
       this.unsubscribe = this.dependencies.bus.subscribe(({ event }) => {
@@ -43,7 +44,6 @@ export class FaultInjector {
   stop(): void {
     if (!this.started) return;
     if (this.faults.length) {
-      setToolArgumentFaultInterceptorForTests(null);
       toolRegistry.setExecutionInterceptorForTests(null);
     }
     this.unsubscribe?.();

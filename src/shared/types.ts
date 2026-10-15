@@ -1,4 +1,5 @@
-export type AdapterName = "claude-code" | "codex" | "custom" | "mock";
+/** Legacy values remain readable for migration; new production agents use Pi only. */
+export type AdapterName = "pi" | "claude-code" | "codex" | "custom" | "mock";
 
 export type ModelProvider =
   | "anthropic"

@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/server/pi/runtime", async () => ({ runPiInvocation: (await import("@/test/pi-runtime-fixture")).fixturePiInvocation }));
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDataDir, getDatabase, resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
+import { isRunActive } from "@/server/agent-runner";
 import {
   createConversation,
   deleteConversation,
@@ -16,6 +18,8 @@ import {
 import type { StreamEvent } from "@/shared/types";
 
 let tempDir: string;
+let runIds: string[];
+let unsubscribeRuns: () => void;
 
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-svc-"));
@@ -23,9 +27,16 @@ beforeEach(() => {
   resetBootstrapForTests();
   resetDatabaseForTests();
   ensureDatabase();
+  runIds = [];
+  unsubscribeRuns = eventBus.subscribe(({ event }) => {
+    if (event.type === "run.start") runIds.push(event.runId);
+  });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // sendMessage starts work asynchronously; keep its database alive until teardown.
+  await vi.waitFor(() => expect(runIds.filter(isRunActive)).toEqual([]), { timeout: 5000 });
+  unsubscribeRuns();
   resetBootstrapForTests();
   resetDatabaseForTests();
   delete process.env.AGENTMELD_DATA_DIR;

@@ -54,6 +54,22 @@ export function ensureDatabase() {
       updated_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS agent_execution_bindings (
+      id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, harness_id TEXT NOT NULL,
+      version TEXT NOT NULL, configuration_json TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS harness_executions (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, binding_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+      task_identity_json TEXT, workspace_path TEXT NOT NULL, session_home TEXT NOT NULL,
+      native_session_id TEXT, native_session_file TEXT, status TEXT NOT NULL,
+      error_category TEXT, usage_json TEXT, started_at INTEGER NOT NULL, finished_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_harness_executions_run ON harness_executions(run_id, started_at);
+    CREATE TABLE IF NOT EXISTS harness_workspace_leases (
+      workspace_key TEXT PRIMARY KEY, token TEXT NOT NULL, owner_pid INTEGER NOT NULL,
+      child_pid INTEGER, status TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -744,6 +760,7 @@ function createIndexes() {
       .run(JSON.stringify(pins.filter((id) => id !== "__pinned__")), row.id);
   }
   ensureColumn("context_compaction_jobs", "previous_job_id", "TEXT");
+  ensureColumn("harness_executions", "usage_json", "TEXT");
 }
 
 function seedBuiltinAgents() {
@@ -778,6 +795,9 @@ function seedBuiltinAgents() {
   migrateLegacyBuiltinToolPresets(now);
   migrateFrontendMkdirTool(now);
   upgradeBuiltinConductorPrompt(now);
+  // Retain identities, channel bindings and history while replacing the retired execution engine.
+  // SDK placeholders are not converted: their incompatible configuration requires explicit action.
+  db.prepare("UPDATE agents SET adapter_name='pi', updated_at=? WHERE adapter_name IN ('custom','mock')").run(now);
 
   db.prepare(`
     UPDATE agents
