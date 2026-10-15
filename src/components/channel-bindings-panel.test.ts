@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveAgentBindingState,
+  bindingNeedsAttention,
   describeConnection,
   describeLauncherWindow,
   formatRemainingMs,
@@ -259,5 +260,30 @@ describe("isSafeLauncherUrl", () => {
     expect(isSafeLauncherUrl(undefined)).toBe(false);
     expect(isSafeLauncherUrl("")).toBe(false);
     expect(isSafeLauncherUrl("not a url")).toBe(false);
+  });
+});
+
+describe("bindingNeedsAttention", () => {
+  const bound = { kind: "bound", appId: "cli_1", bindingId: "cb_1" } as const;
+  const connection = { agentId: "ag_1", appId: "cli_1", botOpenId: null, botName: null, lastError: null, connectedAt: 1 };
+  it("does not treat an unbound Agent or unknown connection as a failure", () => {
+    expect(bindingNeedsAttention({ kind: "unbound" }, undefined, 1000)).toBe(false);
+    expect(bindingNeedsAttention(bound, undefined, 1000)).toBe(false);
+  });
+  it("includes failed binding attempts and expired links, but not unknown deadlines", () => {
+    expect(bindingNeedsAttention({ kind: "failed", session: session("ag_1", "failed") }, undefined, 1000)).toBe(true);
+    expect(bindingNeedsAttention({ kind: "binding", session: session("ag_1", "awaiting_scan") }, undefined, 1000)).toBe(true);
+    expect(bindingNeedsAttention({ kind: "binding", session: session("ag_1", "awaiting_scan", { expiresAt: 0 }) }, undefined, 1000)).toBe(false);
+    expect(bindingNeedsAttention({ kind: "binding", session: session("ag_1", "awaiting_scan", { expiresAt: 2000 }) }, undefined, 1000)).toBe(false);
+  });
+  it.each(["error", "reconnecting", "disconnected"] as const)("includes %s connections", status => {
+    expect(bindingNeedsAttention(bound, { ...connection, status }, 1000)).toBe(true);
+  });
+  it.each(["connected", "reconnected"] as const)("preserves a warning after %s", status => {
+    expect(bindingNeedsAttention(bound, { ...connection, status }, 1000)).toBe(false);
+    const warning = { ...connection, status, lastError: "rejected:bot_loop" };
+    expect(bindingNeedsAttention(bound, warning, 1000)).toBe(true);
+    expect(describeConnection(warning)).toMatchObject({ tone: "warn" });
+    expect(describeConnection(warning)?.text).toContain("rejected:bot_loop");
   });
 });

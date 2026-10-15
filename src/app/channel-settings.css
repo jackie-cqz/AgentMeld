@@ -1,0 +1,91 @@
+.channel-settings { min-width: 0; }
+.channel-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.channel-section-heading h3 { margin: 0; font-size: 17px; font-weight: 600; }
+.channel-section-heading > button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.channel-platform { display: flex; align-items: center; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid var(--ui-line); margin-bottom: 24px; }
+.channel-platform-icon { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; background: var(--ui-accent-soft); color: var(--ui-accent); border: 1px solid color-mix(in srgb, var(--ui-accent) 16%, var(--ui-line)); border-radius: 8px; }
+.channel-platform h4 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.channel-platform h4 span { color: var(--ui-muted); font-size: 11px; font-weight: 400; }
+.channel-platform p { color: var(--ui-muted); font-size: 11px; margin-top: 4px; }
+.channel-platform-counts { display: flex; gap: 26px; margin-left: auto; }
+.channel-platform-counts > span { display: flex; flex-direction: column; gap: 3px; font-size: 10px; color: var(--ui-muted); }
+.channel-platform-counts strong { color: var(--foreground); font-size: 19px; line-height: 24px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.channel-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.channel-filters { display: flex; flex-shrink: 0; gap: 3px; }
+.channel-filters > button { display: inline-flex; align-items: center; gap: 6px; border-radius: 5px; font-size: 11px; padding: 6px 8px; color: var(--ui-muted); white-space: nowrap; }
+.channel-filters > button[aria-pressed=true] { background: var(--ui-subtle); color: var(--foreground); }
+.channel-filters > button > span { color: var(--ui-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.channel-search { display: flex; align-items: center; gap: 7px; width: 210px; min-width: 120px; padding: 0 9px; border: 1px solid var(--ui-line); border-radius: 6px; color: var(--ui-muted); }
+.channel-search svg { flex-shrink: 0; }
+.channel-search:focus-within { border-color: var(--ui-accent); box-shadow: 0 0 0 2px var(--ui-accent-soft); }
+.channel-settings .channel-search input:not([type=checkbox]):not([type=radio]) { border: 0; background: transparent; padding: 6px 0; min-height: 31px; font-size: 11px; outline: 0; box-shadow: none; }
+.channel-table-heading, .channel-agent-row { display: grid; grid-template-columns: minmax(155px, 1.1fr) minmax(130px, 1fr) minmax(100px, .7fr) 100px; align-items: center; gap: 10px; }
+.channel-table-heading { border-bottom: 1px solid var(--ui-line); padding: 0 4px 10px; color: var(--ui-muted); font-size: 10px; }
+.channel-table-heading > span:last-child { text-align: right; padding-right: 10px; }
+.channel-agent-list { margin: 0; padding: 0; list-style: none; }
+.channel-agent-row { padding: 16px 4px; border-bottom: 1px solid var(--ui-line); }
+.channel-agent-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.channel-agent-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; font-size: 10px; font-weight: 600; }
+.channel-agent-identity > div { min-width: 0; }
+.channel-agent-identity strong { display: block; font-size: 12px; font-weight: 550; line-height: 18px; overflow-wrap: anywhere; }
+.channel-agent-identity small { display: block; font-size: 10px; line-height: 15px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.channel-application { display: flex; flex-direction: column; min-width: 0; gap: 3px; font-size: 11px; line-height: 17px; }
+.channel-application > span { overflow-wrap: anywhere; }
+.channel-application code { display: block; font-family: ui-monospace, monospace; font-size: 10px; color: var(--ui-muted); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.channel-muted { color: var(--ui-muted); }
+.channel-status { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; line-height: 17px; color: var(--ui-muted); white-space: nowrap; }
+.channel-status > span { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
+.channel-status--ok { color: var(--ui-success); }
+.channel-status--warn { color: #a96921; }
+.dark .channel-status--warn { color: #d7b477; }
+.channel-status--pending { color: var(--ui-accent); }
+.channel-agent-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.channel-agent-actions .ui-button { min-height: 30px; font-size: 11px; gap: 5px; padding: 4px 8px; white-space: nowrap; }
+.channel-unbind:hover:not(:disabled) { color: var(--ui-danger); background: var(--ui-danger-soft); }
+.channel-row-error { grid-column: 1 / -1; padding-left: 42px; font-size: 11px; min-width: 0; }
+.channel-row-error summary { cursor: pointer; color: var(--ui-muted); width: fit-content; }
+.channel-row-error p { color: var(--ui-danger); font-family: ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin-top: 8px; }
+.channel-error { margin-bottom: 18px; }
+.channel-loading { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ui-muted); margin: 12px 0; }
+.channel-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 180px; color: var(--ui-muted); gap: 12px; font-size: 12px; }
+.channel-empty .ui-button { font-size: 11px; }
+.channel-unbind-identity { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.channel-unbind-identity strong { font-size: 14px; }
+.channel-unbind-identity code { font-size: 11px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.channel-launcher-dialog { width: min(600px, calc(100vw - 32px)); }
+.channel-launcher-dialog .ui-modal-header h2 { font-size: 16px; }
+.channel-launcher-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 28px; align-items: center; padding: 6px 0; }
+.channel-qr { display: grid; place-items: center; width: 208px; aspect-ratio: 1; background: white; border: 1px solid var(--ui-line); border-radius: 8px; color: #989ba0; }
+.channel-qr.is-unavailable { background: var(--ui-subtle); }
+.channel-launcher-details { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.channel-launcher-platform { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-muted); font-size: 11px; margin-bottom: 12px; }
+.channel-launcher-details h3 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; line-height: 1.5; }
+.channel-launcher-agent { font-size: 12px; color: var(--ui-muted); margin-top: 6px; overflow-wrap: anywhere; }
+.channel-launcher-time { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-muted); font-size: 11px; margin-top: 15px; font-variant-numeric: tabular-nums; }
+.channel-launcher-time.is-expired { color: var(--ui-danger); }
+.channel-launcher-details > a { font-size: 11px; min-height: 30px; padding: 5px 9px; margin-top: 18px; }
+.channel-launcher-details .ui-feedback { margin-top: 12px; }
+@media (max-width: 960px) {
+  .channel-table-heading { display: none; }
+  .channel-agent-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; }
+  .channel-agent-identity { grid-column: 1; grid-row: 1; }
+  .channel-application { grid-column: 1; grid-row: 2; padding-left: 42px; }
+  .channel-agent-health { grid-column: 1; grid-row: 3; padding-left: 42px; }
+  .channel-agent-actions { grid-column: 2; grid-row: 1 / span 3; }
+  .channel-row-error { grid-row: 4; }
+  .channel-toolbar { flex-wrap: wrap; gap: 12px; }
+  .channel-search { width: 100%; }
+}
+@media (max-width: 600px) {
+  .channel-section-heading { margin-bottom: 22px; }
+  .channel-platform { padding-bottom: 20px; margin-bottom: 18px; }
+  .channel-platform-counts { gap: 14px; }
+  .channel-filters { width: 100%; justify-content: space-between; gap: 0; }
+  .channel-filters > button { padding: 6px; gap: 5px; }
+  .channel-agent-row { padding-block: 15px; }
+  .channel-agent-actions .ui-button { padding-inline: 7px; font-size: 10px; }
+  .channel-launcher-layout { grid-template-columns: 1fr; justify-items: center; gap: 20px; padding: 0; }
+  .channel-launcher-details { align-items: center; text-align: center; }
+  .channel-launcher-platform { margin-bottom: 8px; }
+  .channel-launcher-time { margin-top: 10px; }
+}

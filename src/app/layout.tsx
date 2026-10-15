@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./workspace.css";
 import "./provider-settings.css";
+import "./channel-settings.css";
 
 export const metadata: Metadata = {
   title: "AgentMeld",
