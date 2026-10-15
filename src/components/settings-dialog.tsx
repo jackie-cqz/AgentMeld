@@ -93,7 +93,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 </div> : null}
               </fieldset>
             </>}
-          <section hidden={tab !== "channels"}><ChannelBindingsPanel /></section>
+          <section hidden={tab !== "channels"}><ChannelBindingsPanel active={tab === "channels"} /></section>
           <section hidden={tab !== "security"}><SessionsPanel /></section>
         </div>
       </div>
