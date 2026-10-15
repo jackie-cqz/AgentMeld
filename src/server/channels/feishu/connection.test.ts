@@ -3,7 +3,13 @@ import { setupTestDatabase } from "@/test/test-database";
 import { resetFeishuConnectionsForTests } from "@/server/channels/feishu/connection";
 import { unbindAgent } from "@/server/channels/feishu/binding";
 import { getDatabase } from "@/db/client";
-import { upsertChannelBinding } from "@/server/repositories";
+import {
+  addChannelConversationMember,
+  createChannelConversation,
+  createConversation,
+  listChannelConversationMembers,
+  upsertChannelBinding
+} from "@/server/repositories";
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
 
@@ -36,6 +42,7 @@ interface FakeChannel {
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
+  getChatBots: ReturnType<typeof vi.fn>;
   getBotIdentity: ReturnType<typeof vi.fn>;
   on: (event: string, handler: Handler) => void;
   emit: (event: string, payload: unknown) => void;
@@ -65,6 +72,7 @@ function makeChannel(options: Record<string, unknown>): FakeChannel {
       }
     }),
     disconnect: vi.fn(async () => {}),
+    getChatBots: vi.fn(async () => []),
     // If anything ever calls this, the loop defence has been broken.
     send: vi.fn(async () => ({ messageId: "om_should_not_happen" })),
     getBotIdentity: vi.fn(() => ({
@@ -251,6 +259,77 @@ describe("feishu connection layer", () => {
 
     // §5.8 layer 1: receiving a message must never produce one.
     expect(created[0].send).not.toHaveBeenCalled();
+  });
+
+  it("records itself and reconciles the group when it is added to a chat", async () => {
+    // The glue around the reconciliation: which chat, who we are, and that a
+    // departed member really goes. Removing the reconciliation call used to
+    // leave the whole suite green, because the fixture's bot id never matched
+    // anything the fake channel reported.
+    seedBinding("ag_pm", "cli_pm");
+    const conversation = createConversation({
+      id: "conv_1",
+      title: "群",
+      mode: "group",
+      agentIds: ["ag_pm", "ag_designer", "ag_reviewer"],
+      fsWriteApprovalMode: "auto",
+      now: 1
+    });
+    createChannelConversation({
+      id: "cc_1",
+      channel: "feishu",
+      chatId: "oc_1",
+      conversationId: conversation.id,
+      now: 1
+    });
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: "ag_pm", now: 1 });
+    // Never seen in the group any more, and once seen: this is the member the
+    // reconciliation has to remove.
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: "ag_reviewer", now: 1 });
+    // In the group and in the list: must survive the reconciliation.
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: "ag_designer", now: 1 });
+
+    // The fake channel reports identities as `ou_<appId>`, and connectOne
+    // writes that into the binding — so the ids here have to be the ones the
+    // fake will report, not ones of our own choosing.
+    upsertChannelBinding({
+      id: "cb_gone",
+      agentId: "ag_reviewer",
+      channel: "feishu",
+      appId: "cli_gone",
+      appSecret: "s",
+      botOpenId: "ou_cli_gone",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+    upsertChannelBinding({
+      id: "cb_stays",
+      agentId: "ag_designer",
+      channel: "feishu",
+      appId: "cli_stays",
+      appSecret: "s",
+      botOpenId: "ou_cli_stays",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+
+    await startFeishuChannels();
+    const mine = created.find((fake) => fake.options.appId === "cli_pm");
+    if (!mine) throw new Error("expected a channel for cli_pm");
+    // The chat now holds the designer's bot — and not ag_reviewer's.
+    mine.getChatBots.mockResolvedValue([
+      { id: "ou_cli_stays", idType: "open_id", name: "D", isBot: true }
+    ]);
+    mine.emit("botAdded", { chatId: "oc_1", operator: { openId: "ou_user" } });
+
+    // Waiting for the DEPARTED member to go is what makes this wait for the
+    // reconciliation: the self-recording happens synchronously, so waiting on
+    // that would pass before the list was ever fetched.
+    await vi.waitFor(() => {
+      expect(listChannelConversationMembers("cc_1")).not.toContain("ag_reviewer");
+    });
+    expect(listChannelConversationMembers("cc_1")).toContain("ag_pm");
+    expect(listChannelConversationMembers("cc_1")).toContain("ag_designer");
   });
 
   it("turns a rejected event into a visible connection event", async () => {

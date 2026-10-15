@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import { setupTestDatabase } from "@/test/test-database";
-import { resolveChannelConversation } from "@/server/channels/feishu/conversation-binding";
+import {
+  pruneObservedAgents,
+  resolveChannelConversation,
+  syncChatMembership,
+  syncChatMembershipKeeping
+} from "@/server/channels/feishu/conversation-binding";
 import {
   getChannelConversationByChat,
   getConversation,
   getWorkspaceForConversation,
-  listChannelConversationMembers
+  listChannelConversationMembers,
+  upsertChannelBinding
 } from "@/server/repositories";
 
 /**
@@ -16,6 +22,212 @@ import {
  * it grows as other bots are observed, and that an observed agent becomes a
  * participant — without which routing to it would be impossible.
  */
+describe("a roster that shrinks", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-channel-prune-");
+  });
+
+  afterEach(() => {
+    teardown();
+  });
+
+  const sorted = (ids: string[]) => [...ids].sort();
+
+  function seedChat(agentIds: string[]) {
+    const { channelConversation } = resolveChannelConversation({
+      channel: "feishu",
+      chatId: "oc_1",
+      chatType: "group",
+      receivingAgentId: agentIds[0],
+      now: 1
+    });
+    for (const agentId of agentIds.slice(1)) {
+      resolveChannelConversation({
+        channel: "feishu",
+        chatId: "oc_1",
+        chatType: "group",
+        receivingAgentId: agentId,
+        now: 1
+      });
+    }
+    return channelConversation;
+  }
+
+  /** A binding with a bot id, so the agent can be matched against the chat. */
+  function identify(agentId: string, openId: string) {
+    upsertChannelBinding({
+      id: `cb_${agentId}_${openId}`,
+      agentId,
+      channel: "feishu",
+      appId: `cli_${agentId}_${openId}`,
+      appSecret: "s",
+      botOpenId: openId,
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+  }
+
+  it("drops an observed agent that is no longer in the chat", () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    // "Not in the list" is only evidence about an agent we can match to a bot.
+    identify("ag_pm", "ou_bot_pm");
+    identify("ag_designer", "ou_bot_designer");
+
+    const removed = pruneObservedAgents(channelConversation.id, ["ag_pm"]);
+
+    expect(removed).toEqual(["ag_designer"]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_pm"]);
+  });
+
+  it("leaves the conversation's participants alone", () => {
+    // `agentIds` is who may speak in the conversation, a choice a person can
+    // also make on the web. A bot leaving the group is not that.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    pruneObservedAgents(channelConversation.id, ["ag_pm"]);
+    expect(getConversation(channelConversation.conversationId)?.agentIds).toContain("ag_designer");
+  });
+
+  it("keeps every agent when the channel cannot say who is in the chat", async () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+
+    // No capability: nothing is learned, nothing is dropped.
+    expect(await syncChatMembership({}, channelConversation.id, "oc_1")).toEqual([]);
+    // A failed call: same.
+    expect(
+      await syncChatMembership(
+        { getChatBots: () => Promise.reject(new Error("api down")) },
+        channelConversation.id,
+        "oc_1"
+      )
+    ).toEqual([]);
+    // An empty answer is not evidence that everyone left.
+    expect(
+      await syncChatMembership({ getChatBots: async () => [] }, channelConversation.id, "oc_1")
+    ).toEqual([]);
+    // A list of bots none of which we can match says nothing about OUR agents
+    // either — pruning on it would empty the roster over an id format we simply
+    // do not recognise.
+    expect(
+      await syncChatMembership(
+        { getChatBots: async () => [{ id: "ou_someone_else", idType: "open_id", name: "Other", isBot: true }] },
+        channelConversation.id,
+        "oc_1"
+      )
+    ).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer", "ag_pm"]);
+  });
+
+  it("keeps a member it cannot match to a bot, even when its bot IS in the list", async () => {
+    // The rule the function documents: no identification, no evidence, no
+    // deletion. `ag_pm` has a binding but no bot id (an identity lookup that
+    // failed once), so nothing said it left — and its bot is in the list.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    identify("ag_designer", "ou_bot_designer");
+
+    const removed = await syncChatMembership(
+      {
+        getChatBots: async () => [
+          { id: "ou_bot_designer", idType: "open_id", name: "D", isBot: true },
+          { id: "ou_bot_pm", idType: "open_id", name: "P", isBot: true }
+        ]
+      },
+      channelConversation.id,
+      "oc_1"
+    );
+
+    expect(removed).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
+  });
+
+  it("keeps the agent it was just told about, even when the list disagrees", async () => {
+    // joinChannelConversation followed by the reconciliation could delete the
+    // agent that was just recorded: the bot was added a moment ago and may not
+    // be in the list yet, or its binding may have no open id to match on.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    upsertChannelBinding({
+      id: "cb_designer_keep",
+      agentId: "ag_designer",
+      channel: "feishu",
+      appId: "cli_designer_keep",
+      appSecret: "s",
+      botOpenId: "ou_bot_designer",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+
+    const removed = await syncChatMembershipKeeping(
+      { getChatBots: async () => [{ id: "ou_bot_designer", idType: "open_id", name: "D", isBot: true }] },
+      channelConversation.id,
+      "oc_1",
+      ["ag_pm"]
+    );
+
+    expect(removed).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
+  });
+
+  it("does not trust a non-array answer", async () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    for (const answer of [null, { id: "ou_bot_pm" }, "ou_bot_pm", 42]) {
+      expect(
+        await syncChatMembership(
+          { getChatBots: async () => answer as never },
+          channelConversation.id,
+          "oc_1"
+        ),
+        JSON.stringify(answer)
+      ).toEqual([]);
+    }
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
+  });
+
+  it("only drops agents it can positively identify among the chat's bots", async () => {
+    // Two agents with known bot ids: one is in the chat, the other is not.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    for (const [agentId, appId, openId] of [
+      ["ag_pm", "cli_pm_prune", "ou_bot_pm"],
+      ["ag_designer", "cli_designer_prune", "ou_bot_designer"]
+    ]) {
+      // botOpenId goes through the upsert: the table is keyed on
+      // (agent_id, channel), so a binding the fixture already seeded keeps its
+      // own id and an update by an invented id would match nothing.
+      upsertChannelBinding({
+        id: `cb_${agentId}`,
+        agentId,
+        channel: "feishu",
+        appId,
+        appSecret: "s",
+        botOpenId: openId,
+        boundByOpenId: "ou_user",
+        now: 1
+      });
+    }
+
+    const removed = await syncChatMembership(
+      { getChatBots: async () => [{ id: "ou_bot_designer", idType: "open_id", name: "Designer", isBot: true }] },
+      channelConversation.id,
+      "oc_1"
+    );
+
+    // ag_pm is identifiable and absent from the list -> dropped.
+    expect(removed).toEqual(["ag_pm"]);
+    // ag_designer was in the list -> kept.
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer"]);
+  });
+
+});
+
 describe("resolveChannelConversation", () => {
   let teardown: () => void;
 

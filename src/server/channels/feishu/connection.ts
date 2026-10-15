@@ -1,11 +1,17 @@
 import {
   createLarkChannel,
+  type BotAddedEvent,
   type LarkChannel,
   type NormalizedMessage,
   type PolicyConfig,
   type RejectEvent
 } from "@larksuite/channel";
 import { ensureDatabase } from "@/db/bootstrap";
+import {
+  joinChannelConversation,
+  syncChatMembershipKeeping
+} from "@/server/channels/feishu/conversation-binding";
+import { getChannelConversationByChat } from "@/server/repositories";
 import { createPersistentCache, type SdkCache } from "@/server/channels/feishu/cache";
 import { handleCardAction } from "@/server/channels/feishu/interaction";
 import {
@@ -175,6 +181,38 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
     entry.status = "error";
     entry.lastError = error instanceof Error ? error.message : String(error);
     publishConnection(binding, "error", entry.lastError);
+  });
+
+  channel.on("botAdded", (event: BotAddedEvent) => {
+    // This bot was just added to (or re-added to) a chat, so the chat's
+    // membership has changed. Feishu sends no counterpart for a bot LEAVING a
+    // group this bot is still in, so this is the one moment a departure becomes
+    // visible: ask who is actually there and drop the agents that are not.
+    void (async () => {
+      try {
+        const channelConversation = getChannelConversationByChat("feishu", event.chatId);
+        if (!channelConversation) return;
+        // Being added is evidence about OURSELVES, and it is the only such
+        // evidence we get without a mention.
+        joinChannelConversation(channelConversation, binding.agentId, Date.now());
+        // `keep` is this bot: we were just told it is in the group, the list may
+        // not say so yet, and its binding may have no open id to match on — the
+        // reconciliation must not undo the line above.
+        const removed = await syncChatMembershipKeeping(
+          channel,
+          channelConversation.id,
+          event.chatId,
+          [binding.agentId]
+        );
+        if (removed.length > 0) {
+          console.info(
+            `[feishu] ${event.chatId}: dropped ${removed.length} agent(s) no longer in the group`
+          );
+        }
+      } catch (error) {
+        console.error("[feishu] failed to reconcile the chat's members:", error);
+      }
+    })();
   });
 
   channel.on("reconnecting", () => {
