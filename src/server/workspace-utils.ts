@@ -235,14 +235,18 @@ export function assertRealPathWithinWorkspace(workspacePath: string, targetPath:
   // judged by its ancestor — while a write to it follows the link and creates
   // the file wherever it points. Where it points cannot be verified, so it is
   // refused rather than guessed at.
+  let danglingLink = false;
   try {
-    if (fs.lstatSync(logical).isSymbolicLink() && !fs.existsSync(logical)) {
-      throw new Error(`Path escapes the workspace: ${targetPath}`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Path escapes")) throw error;
+    danglingLink = fs.lstatSync(logical).isSymbolicLink() && !fs.existsSync(logical);
+  } catch {
     // lstat failing means the path truly does not exist; the ancestor rule below
     // is the right one for that.
+  }
+  if (danglingLink) {
+    // Not "escapes": this link may well point inside. What is missing is the
+    // ability to VERIFY it — a chain of dangling links cannot be resolved — and
+    // a refusal should say what it actually knows.
+    throw new Error(`Cannot verify where this dangling symlink points: ${targetPath}`);
   }
 
   // Existing target: its realpath is what would be opened, so that is what

@@ -134,6 +134,7 @@ describe("the fs_* tools refuse a symlink out of the workspace", () => {
     );
 
     expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("dangling symlink");
     expect(fs.existsSync(outsideTarget)).toBe(false);
   });
 
