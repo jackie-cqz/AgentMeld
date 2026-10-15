@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
 import { GET, POST, PATCH, DELETE } from "@/app/api/model-providers/route";
@@ -20,7 +21,7 @@ beforeEach(() => {
   vi.stubEnv("AGENTMELD_DATA_DIR", tempDir);
   vi.stubEnv("GLM_API_KEY", "");
   vi.stubEnv("GLM_PLAN_API_KEY", "");
-  resetBootstrapForTests(); resetDatabaseForTests(); ensureDatabase();
+  resetBootstrapForTests(); resetDatabaseForTests(); resetTestAuth(); ensureDatabase(); pairTestOwner();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,7 +30,7 @@ afterEach(() => {
 });
 const input = () => ({ name: "GLM 国内", presetId: "glm-cn", protocol: "chat-completions" as const,
   baseUrl: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-5.2", models: ["glm-5.2", "glm-4.7"], apiKey: "test-profile-private-secret" });
-const request = (method: string, body: unknown) => new Request("http://localhost/api/model-providers", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const request = (method: string, body: unknown) => authedRequest("http://localhost/api/model-providers", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 describe("provider profiles", () => {
   it("bootstraps and persists profiles across database reopen without returning credentials", async () => {
@@ -38,7 +39,7 @@ describe("provider profiles", () => {
     const { provider } = await response.json();
     expect(provider.id).toMatch(/^mp_[\w-]{12}$/);
     expect(provider.credentialSource).toBe("app_settings");
-    resetBootstrapForTests(); resetDatabaseForTests();
+    resetBootstrapForTests(); resetDatabaseForTests(); resetTestAuth();
     const result = await (await GET()).json();
     expect(result.providers).toEqual([provider]);
     expect(JSON.stringify(result)).not.toContain(input().apiKey);
