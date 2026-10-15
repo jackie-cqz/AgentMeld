@@ -283,7 +283,7 @@ export function failStreamingMessagesForRun(runId: string, note: string, now: nu
       parts = [];
     }
     getDatabase()
-      .prepare("UPDATE messages SET status = 'failed', parts = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE messages SET status = 'error', parts = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify([...parts, { type: "text", content: note }]), now, row.id);
   }
   return rows.length;

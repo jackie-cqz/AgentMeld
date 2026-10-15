@@ -96,7 +96,12 @@ describe("run-recovery", () => {
     const row = getDatabase()
       .prepare("SELECT status, parts FROM messages WHERE id = ?")
       .get(message.id) as { status: string; parts: string };
-    expect(row.status).toBe("failed");
+    // `error`, not `failed`: a MESSAGE status is one of
+    // streaming | complete | error | aborted, and writing a RUN status here put
+    // a value the client cannot render into the database — which is a white
+    // screen, not a degraded row.
+    expect(["streaming", "complete", "error", "aborted"]).toContain(row.status);
+    expect(row.status).toBe("error");
     // The answer that did arrive is kept, and the row explains itself.
     expect(row.parts).toContain("写了一半");
     expect(row.parts).toContain("中断");
