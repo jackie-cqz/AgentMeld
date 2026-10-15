@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { eventBus } from "@/server/event-bus";
-import { cancelApproval, persistApproval, resolveApproval, SYSTEM_RESOLVED_BY } from "@/server/repositories";
+import { cancelApproval, getRun, persistApproval, resolveApproval, SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import { insertEvidence } from "@/server/repositories/evidence-repository";
 import { getDatabase } from "@/db/client";
 import { newEvidenceId } from "@/shared/ids";
@@ -139,6 +139,33 @@ function resolvePlan(
   const entry = store.get(id);
   if (!entry) return false;
   const now = Date.now();
+
+  // A plan is only meaningful while the run that produced it is alive. A
+  // restart (or any failure) leaves its card sitting in a room, and approving
+  // it later accepted the approval and then delegated nothing: the delegation
+  // gate refused with "only a running run may delegate", the conductor counted
+  // that as a failed task and answered with a recovery plan — which walked into
+  // the same wall, forever. Settle the stale card instead of pretending.
+  const sourceRun = getRun(entry.plan.runId);
+  // Only a run we can SEE and that has ended is conclusive. A plan whose run
+  // row is missing cannot be judged here (the tests drive this store stand-
+  // alone, and a missing row is not evidence of a dead run), so it keeps the
+  // old behaviour rather than being refused on a guess.
+  if (sourceRun && sourceRun.status !== "running") {
+    cancelApproval(id, now);
+    store.delete(id);
+    entry.resolver({ approved: false });
+    eventBus.publish({
+      type: "dispatch.plan.resolved",
+      conversationId: entry.plan.conversationId,
+      timestamp: now,
+      pendingId: id,
+      runId: entry.plan.runId,
+      approved: false
+    });
+    return false;
+  }
+
   if (!resolveApproval(id, outcome.approved, now, outcome.resolvedBy ?? null, outcome.resolvedByLabel ?? null)) return false;
 
   // P1: Record approval evidence — use real planId from conductor_plans table

@@ -35,6 +35,34 @@ const samplePlan: DispatchPlanItem[] = [
 ];
 
 describe("dispatch-plan-manager", () => {
+
+/**
+ * Plans belong to a running run, and approving one whose run has ended is now
+ * refused (it used to be accepted and then fail as "only a running run may
+ * delegate", spawning a recovery plan that hit the same wall). Tests that
+ * approve must therefore give the plan a live run.
+ */
+function seedRunningRun(runId = "run_plan_1", conversationId = "conv_plan_1") {
+  // agent_runs.conversation_id references conversations, so it has to exist too —
+  // and several tests in this file reuse the same conversation id.
+  const exists = getDatabase().prepare("SELECT id FROM conversations WHERE id = ?").get(conversationId);
+  if (!exists) {
+    createConversation({ id: conversationId, title: "plan", mode: "single", agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now: Date.now() });
+  }
+  const runExists = getDatabase().prepare("SELECT id FROM agent_runs WHERE id = ?").get(runId);
+  if (!runExists) {
+    createRun({
+      id: runId,
+      conversationId,
+      agentId: "ag_pm",
+      triggerMessageId: null,
+      parentRunId: null,
+      status: "running",
+      now: Date.now()
+    });
+  }
+}
+
   it("registers a pending plan", () => {
     const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
     expect(promise).toBeInstanceOf(Promise);
@@ -51,6 +79,7 @@ describe("dispatch-plan-manager", () => {
   });
 
   it("approving resolves the promise with approved=true", async () => {
+    seedRunningRun();
     const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
 
     setTimeout(() => {
@@ -64,12 +93,28 @@ describe("dispatch-plan-manager", () => {
   });
 
   it("allows a pending plan to be resolved only once", async () => {
+    seedRunningRun();
     const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
     const id = getAllPendingPlans()[0].id;
 
     expect(approvePlan(id)).toBe(true);
     expect(rejectPlan(id)).toBe(false);
     await expect(promise).resolves.toEqual({ approved: true });
+  });
+
+  it("refuses to approve a plan whose run has already ended", async () => {
+    // The card stays in the room after a restart. Approving it used to be
+    // accepted, then delegated nothing ("only a running run may delegate"),
+    // which the conductor answered with a recovery plan that failed the same
+    // way — an endless ⚠️ loop over a task that no longer exists.
+    seedRunningRun("run_plan_dead", "conv_plan_dead");
+    const promise = registerPendingPlan("conv_plan_dead", "run_plan_dead", samplePlan);
+    const id = getAllPendingPlans()[0].id;
+    getDatabase().prepare("UPDATE agent_runs SET status = 'failed', finished_at = ? WHERE id = ?").run(Date.now(), "run_plan_dead");
+
+    expect(approvePlan(id)).toBe(false);
+    expect(getAllPendingPlans()).toHaveLength(0);
+    await expect(promise).resolves.toEqual({ approved: false });
   });
 
   it("rejecting resolves the promise with approved=false", async () => {
@@ -85,6 +130,7 @@ describe("dispatch-plan-manager", () => {
   });
 
   it("revising returns feedback text", async () => {
+    seedRunningRun();
     const promise = registerPendingPlan("conv_plan_1", "run_plan_1", samplePlan);
 
     setTimeout(() => {
