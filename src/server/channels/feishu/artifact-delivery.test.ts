@@ -246,14 +246,59 @@ describe("artifactFileFor", () => {
     expect("reason" in file && file.reason).toContain("over the");
   });
 
-  it("says why a type it cannot send is not sent", () => {
+  it("sends a change as a .diff file that says whether it was applied", () => {
+    // The positive path had no test at all: only the empty diff was exercised,
+    // so nothing asserted the name, the bytes, or the applied marker.
+    const file = artifactFileFor(
+      artifact({
+        title: "登录页改动",
+        content: {
+          type: "diff",
+          targetArtifactId: "art_1",
+          applied: true,
+          hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [" const a = 1;", "+const b = 2;"] }]
+        }
+      }),
+      null
+    );
+    if (!("name" in file)) throw new Error("expected a file");
+    expect(file.name).toBe("登录页改动.diff");
+    const text = file.content.toString("utf-8");
+    expect(text).toContain("已应用");
+    expect(text).toContain("+const b = 2;");
+    expect(text).toContain("@@ -1,1 +1,2 @@");
+  });
+
+  it("refuses a change that renders past the byte ceiling", () => {
+    // The cap exists for diffs too, and deleting it used to leave every test
+    // green.
+    const lines = Array.from({ length: 60_000 }, () => `+${"x".repeat(40)}`);
+    const file = artifactFileFor(
+      artifact({ content: { type: "diff", targetArtifactId: "art_1", applied: false, hunks: [{ lines }] } }),
+      null
+    );
+    expect("reason" in file && file.reason).toContain("over the");
+  });
+
+  it("says why an empty change is not sent", () => {
+    // This used to be the example of a type that cannot be sent at all; a diff
+    // is deliverable now, and what is left is malformed content — which must
+    // still come back as a reason rather than a throw, because a throw would be
+    // swallowed by the subscriber and leave no not-delivering line.
     const diff = artifactFileFor(
       artifact({ content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } }),
       null
     );
-    // The reason is asserted, not just its presence: a mutation replacing the
-    // whole sentence used to leave this green.
-    expect("reason" in diff && diff.reason).toContain("diff");
+    expect("reason" in diff && diff.reason).toContain("no hunks");
+  });
+
+  it("says why a type it will never send is not sent", () => {
+    // The net for a union member added later, which the compiler cannot check.
+    const unknown = artifactFileFor(
+      artifact({ content: { type: "hologram" } as never }),
+      null
+    );
+    expect("reason" in unknown && unknown.reason).toContain("hologram");
   });
 
   it("says the file is gone rather than sending something empty", () => {
