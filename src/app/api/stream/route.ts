@@ -1,5 +1,6 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,6 +10,8 @@ const HEARTBEAT_MS = 15000;
 const RETRY_MS = 2000;
 
 export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const lastEventId = parseLastEventId(request.headers.get("last-event-id"));
 
   const stream = new ReadableStream<Uint8Array>({

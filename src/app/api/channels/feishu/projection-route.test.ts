@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
+import { ensureDatabase } from "@/db/bootstrap";
 import { GET, POST } from "@/app/api/channels/feishu/projection/route";
 import { isChannelProjectionPaused } from "@/server/channels/feishu/projection";
 
@@ -10,6 +12,7 @@ import { isChannelProjectionPaused } from "@/server/channels/feishu/projection";
  */
 describe("POST /api/channels/feishu/projection", () => {
   afterEach(() => {
+  resetTestAuth();
     // Never leak a paused state into another test file.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).__agentMeldChannelProjectionPaused = undefined;
@@ -18,11 +21,13 @@ describe("POST /api/channels/feishu/projection", () => {
   beforeEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).__agentMeldChannelProjectionPaused = undefined;
-  });
+    ensureDatabase();
+  pairTestOwner();
+});
 
   const post = (body: unknown) =>
     POST(
-      new Request("http://localhost/api/test", {
+      authedRequest("http://localhost/api/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -30,7 +35,7 @@ describe("POST /api/channels/feishu/projection", () => {
     );
 
   it("reports the current state", async () => {
-    const res = await GET();
+    const res = await GET(authedRequest("http://localhost/api/test"));
     expect(await res.json()).toEqual({ data: { paused: false } });
   });
 

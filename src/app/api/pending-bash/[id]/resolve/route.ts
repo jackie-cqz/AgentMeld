@@ -3,6 +3,7 @@ import { approvePendingBash, getPendingBash, rejectPendingBash } from "@/server/
 import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
 import { getApprovalRecord, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,8 @@ const resolveSchema = z.object({
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
 
   const body = await request.json().catch(() => ({}));

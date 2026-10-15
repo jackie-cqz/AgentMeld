@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { createConversation } from "@/server/conversation-service";
@@ -20,20 +21,23 @@ beforeEach(async () => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   eventBus.clearForTests();
   ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 function jsonRequest(method: string, body?: unknown): Request {
-  return new Request("http://localhost/api/test", {
+  return authedRequest("http://localhost/api/test", {
     method,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined
@@ -53,7 +57,7 @@ function createArtForTest() {
 describe("GET /api/artifacts", () => {
   it("returns artifact list", async () => {
     createArtForTest();
-    const res = await getArtifacts();
+    const res = await getArtifacts(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { artifacts: unknown[] };
     expect(body.artifacts.length).toBeGreaterThanOrEqual(1);
@@ -82,14 +86,14 @@ describe("POST /api/artifacts", () => {
 
 describe("GET /api/artifacts/[id]", () => {
   it("returns 404 for unknown id", async () => {
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await getArtifact(req, { params: Promise.resolve({ id: "art_nonexistent" }) });
     expect(res.status).toBe(404);
   });
 
   it("returns artifact with version chain", async () => {
     const art = createArtForTest();
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await getArtifact(req, { params: Promise.resolve({ id: art.id }) });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { artifact: { id: string }; versions: unknown[] };
@@ -118,14 +122,14 @@ describe("PATCH /api/artifacts/[id]", () => {
 
 describe("DELETE /api/artifacts/[id]", () => {
   it("returns 404 for unknown id", async () => {
-    const req = new Request("http://localhost/api/test", { method: "DELETE" });
+    const req = authedRequest("http://localhost/api/test", { method: "DELETE" });
     const res = await deleteArtifact(req, { params: Promise.resolve({ id: "art_nonexistent" }) });
     expect(res.status).toBe(404);
   });
 
   it("deletes and returns 204", async () => {
     const art = createArtForTest();
-    const req = new Request("http://localhost/api/test", { method: "DELETE" });
+    const req = authedRequest("http://localhost/api/test", { method: "DELETE" });
     const res = await deleteArtifact(req, { params: Promise.resolve({ id: art.id }) });
     expect(res.status).toBe(204);
   });
@@ -133,14 +137,14 @@ describe("DELETE /api/artifacts/[id]", () => {
 
 describe("GET /api/artifacts/[id]/preview", () => {
   it("returns 404 for unknown id", async () => {
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await previewArtifact(req, { params: Promise.resolve({ id: "art_nonexistent" }) });
     expect(res.status).toBe(404);
   });
 
   it("returns 400 for non-web_app artifact", async () => {
     const art = createArtForTest(); // document type
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await previewArtifact(req, { params: Promise.resolve({ id: art.id }) });
     expect(res.status).toBe(400);
   });
@@ -154,7 +158,7 @@ describe("GET /api/artifacts/[id]/preview", () => {
       content: { type: "web_app", files: { "index.html": "<html><body><h1>Test</h1></body></html>" }, entry: "index.html" }
     });
 
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await previewArtifact(req, { params: Promise.resolve({ id: art.id }) });
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/html");
@@ -184,13 +188,13 @@ describe("GET /api/artifacts/[id]/preview", () => {
     });
 
     const rootResponse = await previewArtifact(
-      new Request(`http://localhost/api/artifacts/${art.id}/preview`),
+      authedRequest(`http://localhost/api/artifacts/${art.id}/preview`),
       { params: Promise.resolve({ id: art.id }) }
     );
     expect(await rootResponse.text()).toContain(`/preview/pages/`);
 
     const assetResponse = await previewArtifactFile(
-      new Request(`http://localhost/api/artifacts/${art.id}/preview/pages/app.js`),
+      authedRequest(`http://localhost/api/artifacts/${art.id}/preview/pages/app.js`),
       { params: Promise.resolve({ id: art.id, path: ["pages", "app.js"] }) }
     );
     expect(assetResponse.status).toBe(200);

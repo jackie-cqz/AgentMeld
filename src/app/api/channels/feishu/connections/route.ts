@@ -1,5 +1,6 @@
 import { ok } from "@/server/api-utils";
 import { listFeishuConnections, startFeishuChannels } from "@/server/channels/feishu/connection";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,9 @@ export const dynamic = "force-dynamic";
  * not for a connection attempt to finish. Failed apps are retried no more often
  * than the cooldown allows, so polling this route cannot become a retry storm.
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   void startFeishuChannels().catch(() => {
     // Per-app outcomes are reported in the list below; a total failure still
     // answers with whatever state is known.

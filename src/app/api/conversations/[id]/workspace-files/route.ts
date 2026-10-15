@@ -3,6 +3,7 @@ import path from "node:path";
 import { getWorkspaceForConversation } from "@/server/repositories";
 import { resolveStaticFilePath } from "@/server/static-file-utils";
 import { resolveWorkspaceRealPath } from "@/server/workspace-utils";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,8 @@ function hasNulBytes(buffer: Buffer): boolean {
 }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const url = new URL(request.url);
   const dirPath = url.searchParams.get("path") || ".";

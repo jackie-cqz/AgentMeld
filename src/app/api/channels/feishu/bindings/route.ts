@@ -5,6 +5,7 @@ import {
   listFeishuBindings,
   startFeishuBinding
 } from "@/server/channels/feishu/binding";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,8 @@ const startSchema = z.object({
  * it from the stream.
  */
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = startSchema.safeParse(body);
   if (!parsed.success) return badRequest("agentId is required.", parsed.error.flatten());
@@ -43,7 +46,9 @@ export async function POST(request: Request) {
 }
 
 /** Stored bindings (never containing an app secret) plus any in-flight sessions. */
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   // Through the service, which bootstraps. Reaching the repository from here
   // used to answer 500 on a database that had not been bootstrapped yet.
   return ok({ bindings: listFeishuBindings(), sessions: listBindingSessions() });

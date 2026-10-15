@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
+import { ensureDatabase } from "@/db/bootstrap";
 import { eventBus } from "@/server/event-bus";
 import { setupTestDatabase } from "@/test/test-database";
 import { getApprovalRecord } from "@/server/repositories";
@@ -46,9 +48,12 @@ beforeEach(() => {
   clearPendingWritesForTests();
   clearPendingQuestionsForTests();
   clearPendingPlansForTests();
+  ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
+  resetTestAuth();
   clearPendingBashForTests();
   clearPendingWritesForTests();
   clearPendingQuestionsForTests();
@@ -57,7 +62,7 @@ afterEach(() => {
 });
 
 function jsonRequest(body: unknown): Request {
-  return new Request("http://localhost/api/test", {
+  return authedRequest("http://localhost/api/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)

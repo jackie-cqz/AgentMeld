@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getAllArtifacts, createNewArtifact } from "@/server/artifact-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -10,12 +11,16 @@ const createArtifactSchema = z.object({
   content: z.unknown()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const artifacts = getAllArtifacts();
   return Response.json({ artifacts });
 }
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = createArtifactSchema.safeParse(body);
   if (!parsed.success) {

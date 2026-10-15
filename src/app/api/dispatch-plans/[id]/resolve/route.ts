@@ -4,6 +4,7 @@ import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getApprovalRecord, getConversation, getAgent, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
 import { eventBus } from "@/server/event-bus";
 import { conflictAlreadyResolved } from "@/server/api-utils";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,8 @@ const resolveSchema = z.object({
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
   const parsed = resolveSchema.safeParse(body);

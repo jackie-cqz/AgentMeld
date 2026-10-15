@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { POST } from "@/app/api/settings/test-connection/route";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
@@ -16,7 +17,9 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   ensureDatabase();
+  pairTestOwner();
   originalFetch = globalThis.fetch;
 });
 
@@ -25,6 +28,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -58,7 +62,7 @@ describe("POST /api/settings/test-connection", () => {
 });
 
 function jsonRequest(body: unknown) {
-  return new Request("http://localhost/api/settings/test-connection", {
+  return authedRequest("http://localhost/api/settings/test-connection", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)

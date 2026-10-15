@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { GET } from "@/app/api/search/route";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
@@ -15,19 +16,22 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("GET /api/search", () => {
   it("validates required query", async () => {
-    const response = await GET(new Request("http://localhost/api/search"));
+    const response = await GET(authedRequest("http://localhost/api/search"));
     expect(response.status).toBe(400);
   });
 
@@ -43,7 +47,7 @@ describe("GET /api/search", () => {
       now: 10
     });
 
-    const response = await GET(new Request("http://localhost/api/search?q=render*&role=agent"));
+    const response = await GET(authedRequest("http://localhost/api/search?q=render*&role=agent"));
     const body = await response.json() as {
       ok: boolean;
       data: { hits: Array<{ messageId: string; conversationTitle: string }>; total: number };
@@ -71,7 +75,7 @@ describe("GET /api/search", () => {
       });
     }
 
-    const response = await GET(new Request("http://localhost/api/search?q=%E6%A8%A1%E5%9E%8B&fallback=like&limit=1&offset=1"));
+    const response = await GET(authedRequest("http://localhost/api/search?q=%E6%A8%A1%E5%9E%8B&fallback=like&limit=1&offset=1"));
     const body = await response.json() as {
       data: { hits: unknown[]; total: number; mode: string };
     };

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { modelProviderSchema } from "@/shared/model-provider-schema";
 import { deleteAgent, getAgentById, updateAgent } from "@/server/agent-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,9 @@ const patchAgentSchema = z.object({
   toolNames: z.array(z.string()).max(20).optional()
 });
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const agent = getAgentById(id);
   if (!agent) {
@@ -27,6 +30,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
   const parsed = patchAgentSchema.safeParse(body);
@@ -48,7 +53,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   try {
     const deleted = deleteAgent(id);

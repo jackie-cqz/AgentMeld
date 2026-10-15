@@ -3,6 +3,7 @@ import { getSettings, resolveApiKey } from "@/server/settings-service";
 import { modelProviderSchema, providerBaseUrlSchema } from "@/shared/model-provider-schema";
 import { findProviderPreset } from "@/shared/provider-presets";
 import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,8 @@ const PROVIDER_DEFAULTS = {
 } as const;
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = testSchema.safeParse(body);
   if (!parsed.success) {

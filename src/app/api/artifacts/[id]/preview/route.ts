@@ -6,10 +6,13 @@ import {
   resolveStaticFilePath
 } from "@/server/static-file-utils";
 import type { ArtifactContent } from "@/shared/types";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const artifact = getArtifactById(id);
   if (!artifact) {

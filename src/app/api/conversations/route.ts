@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createConversation, getBootstrapPayload } from "@/server/conversation-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +11,15 @@ const createConversationSchema = z.object({
   fsWriteApprovalMode: z.enum(["auto", "review"]).optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   return Response.json(getBootstrapPayload().conversations);
 }
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = createConversationSchema.safeParse(body);
   if (!parsed.success) {

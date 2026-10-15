@@ -1,9 +1,12 @@
 import { getCompactionJob } from "@/server/context-compaction-service";
 import { startConversationCompaction } from "@/server/context-compaction-runner";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const job = getCompactionJob(id);
   if (!job) {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getApiKeySources, getSettings, updateSettings } from "@/server/settings-service";
 import type { AppSettings } from "@/shared/types";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +17,16 @@ const patchSchema = z.object({
   deploymentPublicBaseUrl: z.string().nullable().optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const settings = getSettings();
   return Response.json({ settings: maskSettings(settings), keySources: getApiKeySources(settings) });
 }
 
 export async function PATCH(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {

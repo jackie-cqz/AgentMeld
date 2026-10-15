@@ -1,9 +1,12 @@
 import { notFound, ok } from "@/server/api-utils";
 import { getBindingSession } from "@/server/channels/feishu/binding";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const session = getBindingSession(id);
   if (!session) return notFound("Binding session not found.");

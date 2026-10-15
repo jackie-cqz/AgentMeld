@@ -3,10 +3,13 @@ import path from "node:path";
 import { getDatabase } from "@/db/client";
 import { getWorkspaceForConversation } from "@/server/repositories";
 import { newAttachmentId } from "@/shared/ids";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const conversationId = new URL(request.url).searchParams.get("conversationId");
   if (!conversationId) {
     return Response.json({ error: "Missing conversationId." }, { status: 400 });
@@ -29,6 +32,8 @@ export async function GET(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return Response.json({ error: "Missing attachment id." }, { status: 400 });
   const row = getDatabase()
@@ -45,6 +50,8 @@ export async function DELETE(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const formData = await request.formData().catch(() => null);
   if (!formData) {
     return Response.json({ error: "Expected multipart/form-data." }, { status: 400 });

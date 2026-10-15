@@ -1,9 +1,12 @@
 import { getTaskAttempt, listEvidenceForAttempt } from "@/server/repositories/evidence-repository";
 import { getContextSnapshot } from "@/server/repositories/evidence-repository";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const attempt = getTaskAttempt(id);
   if (!attempt) {

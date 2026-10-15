@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ensureDatabase } from "@/db/bootstrap";
 import { deleteConversation, getConversationPayload, patchConversation } from "@/server/conversation-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,9 @@ const patchSchema = z.object({
   pinnedMessageIds: z.array(z.string()).optional()
 });
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const payload = getConversationPayload(id);
   if (!payload) {
@@ -24,6 +27,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   ensureDatabase();
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
@@ -47,7 +52,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   return Response.json({ conversation: updated });
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const deleted = deleteConversation(id);
   if (!deleted) {
