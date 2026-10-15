@@ -183,6 +183,16 @@ export interface AppState {
   /** Reads the connection health endpoint; also (re)starts anything missing. */
   loadChannelConnections: () => Promise<void>;
   startFeishuBinding: (agentId: string) => Promise<void>;
+  /**
+   * Bind from credentials a person typed. Returns the one-time claim code the
+   * person then sends to the bot in the group: the credentials carry no human
+   * identity, so the binding stays fail-closed until that code comes back.
+   */
+  bindFeishuWithCredentials: (
+    agentId: string,
+    appId: string,
+    appSecret: string
+  ) => Promise<{ code: string; expiresAt: number }>;
   cancelChannelBindingSession: (sessionId: string) => Promise<void>;
   unbindFeishu: (agentId: string) => Promise<void>;
 }
