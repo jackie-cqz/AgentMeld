@@ -11,6 +11,13 @@ import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/works
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
 import { deliverSend } from "@/server/channels/feishu/delivery";
+import {
+  MAX_WEB_APP_BYTES,
+  inlineWebApp,
+  inlineWebAppName,
+  zipWebApp,
+  zipWebAppName
+} from "@/server/channels/feishu/web-app";
 
 /**
  * Deliver an artifact into the room as a file.
@@ -24,10 +31,12 @@ import { deliverSend } from "@/server/channels/feishu/delivery";
  * present it was not). A file needs no URL, so the contradiction simply does
  * not apply to this route.
  *
- * Types that are a set of files (a web app) or a structure (a deck, a diff) are
- * NOT delivered here — sending one file out of a set would be worse than
- * sending nothing. They keep the reference the message projection writes, and
- * the reason is stated rather than left to look like an oversight.
+ * A web app is a set of files, so it is not sent as one arbitrary file out of
+ * the set: it is folded into a single self-contained page when that is
+ * faithful, and zipped when it is not (see web-app.ts). Structures that are not
+ * files at all — a deck's slides, a diff's hunks — keep the reference the
+ * message projection writes, and the reason is stated rather than left to look
+ * like an oversight.
  */
 
 export interface ArtifactFile {
@@ -99,9 +108,31 @@ export function artifactFileFor(
   }
 
   if (content.type === "web_app") {
-    return {
-      reason: "a web app is meant to be opened in a browser, and a .html attachment is not that"
-    };
+    // A single-page app with text assets becomes ONE self-contained HTML file,
+    // which is what "meant to be opened in a browser" actually needs. Anything
+    // else is delivered as a zip so the set stays whole (see web-app.ts).
+    const totalBytes = Object.values(content.files).reduce(
+      (sum, file) => sum + Buffer.byteLength(file, "utf-8"),
+      0
+    );
+    if (totalBytes > MAX_WEB_APP_BYTES) {
+      return { reason: `the web app is ${totalBytes} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+
+    const inlined = inlineWebApp(content.files, content.entry);
+    if (inlined.ok) {
+      return {
+        name: inlineWebAppName(artifact.title),
+        content: Buffer.from(inlined.html, "utf-8")
+      };
+    }
+    try {
+      return { name: zipWebAppName(artifact.title), content: zipWebApp(content.files) };
+    } catch (error) {
+      return {
+        reason: error instanceof Error ? error.message : "the web app could not be packaged"
+      };
+    }
   }
 
   return { reason: `a ${content.type} artifact is not a single file` };
