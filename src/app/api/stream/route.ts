@@ -1,5 +1,6 @@
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,6 +10,8 @@ const HEARTBEAT_MS = 15000;
 const RETRY_MS = 2000;
 
 export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const lastEventId = parseLastEventId(request.headers.get("last-event-id"));
 
   const stream = new ReadableStream<Uint8Array>({
@@ -36,13 +39,25 @@ export async function GET(request: Request) {
       });
 
       const heartbeat = setInterval(() => {
-        const event: StreamEvent = {
-          type: "heartbeat",
-          conversationId: "*",
-          timestamp: Date.now()
-        };
-        const id = eventBus.lastEventId();
-        write(encodeSse(id, event));
+        // A revoked or expired session must not keep its EventSource fed
+        // forever: the gate only runs at connect time, so each heartbeat
+        // re-resolves the principal and closes the stream when it is gone.
+        // The browser reconnects, the gate runs again, and the now-anonymous
+        // connect is refused — that is the loop that makes revocation real
+        // for SSE.
+        void gateRequest(request).then((recheck) => {
+          if (!recheck.allowed) {
+            cleanup();
+            return;
+          }
+          const event: StreamEvent = {
+            type: "heartbeat",
+            conversationId: "*",
+            timestamp: Date.now()
+          };
+          const id = eventBus.lastEventId();
+          write(encodeSse(id, event));
+        }).catch(() => cleanup());
       }, HEARTBEAT_MS);
 
       const cleanup = () => {

@@ -1,10 +1,13 @@
 import { getDatabase } from "@/db/client";
 import { getContextTraceByAttempt } from "@/server/context-trace/context-trace-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
 /** Look up a task attempt by child run ID and redirect to its context trace. */
-export async function GET(_request: Request, context: { params: Promise<{ childRunId: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ childRunId: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { childRunId } = await context.params;
 
   const db = getDatabase();

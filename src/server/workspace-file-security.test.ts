@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -16,13 +17,16 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   eventBus.clearForTests();
   ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -50,7 +54,7 @@ function mockRequest(path: string, read?: boolean): Request {
   const url = read
     ? `http://localhost/api/test?path=${encodeURIComponent(path)}&read=1`
     : `http://localhost/api/test?path=${encodeURIComponent(path)}`;
-  return new Request(url);
+  return authedRequest(url);
 }
 
 describe("workspace file browser security", () => {

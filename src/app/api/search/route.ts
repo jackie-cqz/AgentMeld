@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { searchMessages } from "@/server/search-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,8 @@ const querySchema = z.object({
 });
 
 export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const url = new URL(request.url);
   const parsed = querySchema.safeParse(Object.fromEntries(url.searchParams.entries()));
   if (!parsed.success) {

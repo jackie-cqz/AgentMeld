@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetBootstrapForTests } from "@/db/bootstrap";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
+import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 
@@ -23,7 +24,10 @@ beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-api-"));
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
+  resetTestAuth();
   resetDatabaseForTests();
+  ensureDatabase();
+  pairTestOwner();
   eventBus.clearForTests();
 });
 
@@ -36,7 +40,7 @@ afterEach(() => {
 });
 
 function jsonRequest(method: string, body?: unknown): Request {
-  return new Request("http://localhost/api/test", {
+  return authedRequest("http://localhost/api/test", {
     method,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined
@@ -84,7 +88,7 @@ describe("GET /api/conversations", () => {
       agentIds: ["ag_mock_builder"]
     }));
 
-    const res = await getConversations();
+    const res = await getConversations(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{ id: string }>;
     expect(body.length).toBeGreaterThanOrEqual(1);
@@ -97,7 +101,7 @@ describe("GET /api/conversations", () => {
 
 describe("GET /api/conversations/[id]", () => {
   it("returns 404 for unknown id", async () => {
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await getConversation(req, { params: Promise.resolve({ id: "conv_nonexistent" }) });
     expect(res.status).toBe(404);
   });
@@ -109,7 +113,7 @@ describe("GET /api/conversations/[id]", () => {
     }));
     const { conversation } = (await createRes.json()) as { conversation: { id: string } };
 
-    const req = new Request("http://localhost/api/test");
+    const req = authedRequest("http://localhost/api/test");
     const res = await getConversation(req, { params: Promise.resolve({ id: conversation.id }) });
     expect(res.status).toBe(200);
 
@@ -156,7 +160,7 @@ describe("PATCH /api/conversations/[id]", () => {
 
 describe("DELETE /api/conversations/[id]", () => {
   it("returns 404 for unknown id", async () => {
-    const req = new Request("http://localhost/api/test", { method: "DELETE" });
+    const req = authedRequest("http://localhost/api/test", { method: "DELETE" });
     const res = await deleteConversation(req, { params: Promise.resolve({ id: "conv_nonexistent" }) });
     expect(res.status).toBe(404);
   });
@@ -168,7 +172,7 @@ describe("DELETE /api/conversations/[id]", () => {
     }));
     const { conversation } = (await createRes.json()) as { conversation: { id: string } };
 
-    const req = new Request("http://localhost/api/test", { method: "DELETE" });
+    const req = authedRequest("http://localhost/api/test", { method: "DELETE" });
     const res = await deleteConversation(req, { params: Promise.resolve({ id: conversation.id }) });
     expect(res.status).toBe(200);
   });
@@ -233,7 +237,7 @@ describe("POST /api/conversations/[id]/messages", () => {
 
 describe("POST /api/runs/[id]/abort", () => {
   it("returns 404 for unknown run id", async () => {
-    const req = new Request("http://localhost/api/test", { method: "POST" });
+    const req = authedRequest("http://localhost/api/test", { method: "POST" });
     const res = await abortRun(req, { params: Promise.resolve({ id: "run_nonexistent" }) });
     expect(res.status).toBe(404);
   });

@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
+import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { setupTestDatabase } from "@/test/test-database";
 import { eventBus } from "@/server/event-bus";
@@ -31,15 +33,18 @@ beforeEach(() => {
   clearBindingSessionsForTests();
   registerAppMock.mockReset();
   getDatabase().prepare("DELETE FROM channel_bindings").run();
+  ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
+  resetTestAuth();
   clearBindingSessionsForTests();
   eventBus.clearForTests();
 });
 
 function jsonRequest(body: unknown): Request {
-  return new Request("http://localhost/api/test", {
+  return authedRequest("http://localhost/api/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -113,7 +118,7 @@ describe("GET /api/channels/feishu/bindings", () => {
     await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     await flush();
 
-    const res = await listBindings();
+    const res = await listBindings(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
 
     const raw = await res.text();
@@ -129,7 +134,7 @@ describe("GET /api/channels/feishu/bindings", () => {
     const started = await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     expect(started.status).toBe(200);
 
-    const res = await listBindings();
+    const res = await listBindings(authedRequest("http://localhost/api/test"));
     const body = (await res.json()) as {
       data: { sessions: Array<{ id: string; qrUrl?: string }> };
     };
@@ -145,10 +150,10 @@ describe("GET /api/channels/feishu/bindings/sessions/[id]", () => {
     const started = await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     const sessionId = ((await started.json()) as { data: { session: { id: string } } }).data.session.id;
 
-    const res = await getSession(new Request("http://localhost/api/test"), ctx(sessionId));
+    const res = await getSession(authedRequest("http://localhost/api/test"), ctx(sessionId));
     expect(res.status).toBe(200);
 
-    const missing = await getSession(new Request("http://localhost/api/test"), ctx("cbs_missing"));
+    const missing = await getSession(authedRequest("http://localhost/api/test"), ctx("cbs_missing"));
     expect(missing.status).toBe(404);
   });
 });
@@ -159,13 +164,13 @@ describe("POST /api/channels/feishu/bindings/sessions/[id]/cancel", () => {
     const started = await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     const sessionId = ((await started.json()) as { data: { session: { id: string } } }).data.session.id;
 
-    const res = await cancelSession(new Request("http://localhost/api/test", { method: "POST" }), ctx(sessionId));
+    const res = await cancelSession(authedRequest("http://localhost/api/test", { method: "POST" }), ctx(sessionId));
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as { data: { session: { status: string } } };
     expect(body.data.session.status).toBe("cancelled");
 
-    const missing = await cancelSession(new Request("http://localhost/api/test", { method: "POST" }), ctx("cbs_missing"));
+    const missing = await cancelSession(authedRequest("http://localhost/api/test", { method: "POST" }), ctx("cbs_missing"));
     expect(missing.status).toBe(404);
   });
 
@@ -175,7 +180,7 @@ describe("POST /api/channels/feishu/bindings/sessions/[id]/cancel", () => {
     const sessionId = ((await started.json()) as { data: { session: { id: string } } }).data.session.id;
     await flush();
 
-    const res = await cancelSession(new Request("http://localhost/api/test", { method: "POST" }), ctx(sessionId));
+    const res = await cancelSession(authedRequest("http://localhost/api/test", { method: "POST" }), ctx(sessionId));
     expect(res.status).toBe(200);
 
     // Never claim "cancelled" about a scan that already went through.
@@ -204,17 +209,17 @@ describe("DELETE /api/channels/feishu/bindings/[id]", () => {
     await startBinding(jsonRequest({ agentId: "ag_mock_builder" }));
     await flush();
 
-    const listRes = await listBindings();
+    const listRes = await listBindings(authedRequest("http://localhost/api/test"));
     const bindingId = ((await listRes.json()) as { data: { bindings: Array<{ id: string }> } }).data.bindings[0].id;
 
-    const res = await deleteBinding(new Request("http://localhost/api/test", { method: "DELETE" }), ctx(bindingId));
+    const res = await deleteBinding(authedRequest("http://localhost/api/test", { method: "DELETE" }), ctx(bindingId));
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as { data: { appLeftBehind: string } };
     // Unbinding must not imply the Feishu app was deleted.
     expect(body.data.appLeftBehind).toBe("cli_route_app");
 
-    const again = await deleteBinding(new Request("http://localhost/api/test", { method: "DELETE" }), ctx(bindingId));
+    const again = await deleteBinding(authedRequest("http://localhost/api/test", { method: "DELETE" }), ctx(bindingId));
     expect(again.status).toBe(404);
   });
 });

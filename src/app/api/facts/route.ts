@@ -5,8 +5,11 @@
 import { NextResponse } from "next/server";
 import { loadActiveFacts, loadDynamicDefinitions, listPendingDefinitions, approveDefinition, rejectDefinition } from "@/server/context-facts/fact-service";
 import { BUILTIN_FACT_DEFINITIONS } from "@/shared/builtin-fact-definitions";
+import { gateRequest } from "@/server/api-gate";
 
 export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { searchParams } = new URL(request.url);
   const conversationId = searchParams.get("conversationId");
   const pending = searchParams.get("pending") === "1";
@@ -43,6 +46,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json() as {
     conversationId?: string;
     action?: string;

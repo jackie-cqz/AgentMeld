@@ -5,6 +5,7 @@ import {
   getArtifactVersionFamily
 } from "@/server/artifact-service";
 import type { ArtifactContent } from "@/shared/types";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,9 @@ const createVersionSchema = z.object({
   content: z.unknown().optional()
 });
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const artifact = getArtifactById(id);
   if (!artifact) {
@@ -30,6 +33,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
   const parsed = createVersionSchema.safeParse(body);

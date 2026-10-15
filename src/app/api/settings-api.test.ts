@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -15,21 +16,24 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   eventBus.clearForTests();
   ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 function jsonRequest(method: string, body?: unknown): Request {
-  return new Request("http://localhost/api/settings", {
+  return authedRequest("http://localhost/api/settings", {
     method,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined
@@ -41,7 +45,7 @@ describe("GET /api/settings", () => {
     // Set a key first
     await PATCH(jsonRequest("PATCH", { openaiApiKey: "test-openai-key-6789" }));
 
-    const res = await GET();
+    const res = await GET(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
@@ -55,7 +59,7 @@ describe("GET /api/settings", () => {
   });
 
   it("returns null keys as null in response", async () => {
-    const res = await GET();
+    const res = await GET(authedRequest("http://localhost/api/test"));
     const body = (await res.json()) as { settings: { deepseekApiKey: string | null } };
     expect(body.settings.deepseekApiKey).toBeNull();
   });
@@ -126,7 +130,7 @@ describe("PATCH /api/settings", () => {
     await PATCH(jsonRequest("PATCH", { openaiApiKey: "sk-abc" }));
     await PATCH(jsonRequest("PATCH", { openaiApiKey: null }));
 
-    const res = await GET();
+    const res = await GET(authedRequest("http://localhost/api/test"));
     const body = (await res.json()) as { settings: { openaiApiKey: string | null } };
     expect(body.settings.openaiApiKey).toBeNull();
   });
@@ -146,7 +150,7 @@ describe("PATCH /api/settings", () => {
 
   it("does not overwrite a stored key when the masked value is submitted", async () => {
     await PATCH(jsonRequest("PATCH", { deepseekApiKey: "test-deepseek-api-key" }));
-    const maskedResponse = await GET();
+    const maskedResponse = await GET(authedRequest("http://localhost/api/test"));
     const maskedBody = (await maskedResponse.json()) as { settings: { deepseekApiKey: string } };
 
     await PATCH(jsonRequest("PATCH", { deepseekApiKey: maskedBody.settings.deepseekApiKey }));

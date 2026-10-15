@@ -1,10 +1,13 @@
 import { computeRunMetrics } from "@/server/context-metrics/context-metrics-service";
 import type { FixtureReportEntry, FixtureReportSummary } from "@/server/context-metrics/context-metrics-types";
 import { saveFixtureReport } from "@/server/context-metrics/fixture-report-store";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   let body: { fixtures: Array<{ id: string; runId: string }> };
   try {
     body = await request.json();

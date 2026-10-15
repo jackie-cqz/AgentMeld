@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetBootstrapForTests } from "@/db/bootstrap";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
+import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
 import { GET as listAgents } from "@/app/api/agents/route";
 import { DELETE as deleteBinding } from "@/app/api/channels/feishu/bindings/[id]/route";
@@ -34,7 +35,10 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = dir;
   // Fresh singletons pointing at an empty directory: no schema at all.
   resetBootstrapForTests();
+  resetTestAuth();
   resetDatabaseForTests();
+  ensureDatabase();
+  pairTestOwner();
   clearBindingSessionsForTests();
 });
 
@@ -53,7 +57,7 @@ function ctx(id: string) {
 
 describe("first request against an unbootstrapped database", () => {
   it("lists channel bindings instead of failing with a missing table", async () => {
-    const res = await listBindings();
+    const res = await listBindings(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: { bindings: unknown[] } };
     expect(body.data.bindings).toEqual([]);
@@ -63,19 +67,19 @@ describe("first request against an unbootstrapped database", () => {
     // The GET was fixed first and this path was missed, which is the whole
     // reason the flag lives in the service now rather than in one route.
     const res = await deleteBinding(
-      new Request("http://localhost/api/test", { method: "DELETE" }),
+      authedRequest("http://localhost/api/test", { method: "DELETE" }),
       ctx("cb_missing")
     );
     expect(res.status).toBe(404);
   });
 
   it("lists agents", async () => {
-    const res = await listAgents();
+    const res = await listAgents(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
   });
 
   it("reads settings", async () => {
-    const res = await getSettings();
+    const res = await getSettings(authedRequest("http://localhost/api/test"));
     expect(res.status).toBe(200);
   });
 });

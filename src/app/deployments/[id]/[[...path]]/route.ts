@@ -3,13 +3,16 @@ import {
   resolveDeploymentFile
 } from "@/server/deployment-service";
 import { getStaticResponseHeaders } from "@/server/static-file-utils";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string; path?: string[] }> }
 ) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id, path } = await context.params;
   let filePath: string | null;
   try {

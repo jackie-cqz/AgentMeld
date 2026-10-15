@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { modelProviderSchema } from "@/shared/model-provider-schema";
 import { createAgent, getAllAgents, DEFAULT_CUSTOM_PROMPT } from "@/server/agent-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -18,12 +19,16 @@ const createAgentSchema = z.object({
   toolNames: z.array(z.string()).max(20).optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const agents = getAllAgents();
   return Response.json({ agents });
 }
 
 export async function POST(request: Request) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const body = await request.json().catch(() => ({}));
   const parsed = createAgentSchema.safeParse(body);
   if (!parsed.success) {

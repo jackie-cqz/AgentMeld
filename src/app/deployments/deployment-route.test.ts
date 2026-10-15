@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { GET as getDeploymentFile } from "@/app/deployments/[id]/[[...path]]/route";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
@@ -16,12 +17,15 @@ beforeEach(() => {
   process.env.AGENTMELD_DATA_DIR = tempDir;
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   ensureDatabase();
+  pairTestOwner();
 });
 
 afterEach(() => {
   resetBootstrapForTests();
   resetClientForTests();
+  resetTestAuth();
   delete process.env.AGENTMELD_DATA_DIR;
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
@@ -49,7 +53,7 @@ describe("GET /deployments/[id]/[[...path]]", () => {
     const deployment = deployArtifact(artifact.id, conversation.id);
 
     const rootResponse = await getDeploymentFile(
-      new Request(`http://localhost${deployment.previewPath}`),
+      authedRequest(`http://localhost${deployment.previewPath}`),
       { params: Promise.resolve({ id: deployment.id, path: undefined }) }
     );
     expect(rootResponse.status).toBe(200);
@@ -62,7 +66,7 @@ describe("GET /deployments/[id]/[[...path]]", () => {
     expect(rootHtml).toContain(`src="/deployments/${deployment.id}/assets/app.js"`);
 
     const assetResponse = await getDeploymentFile(
-      new Request(`http://localhost${deployment.previewPath}/assets/app.js`),
+      authedRequest(`http://localhost${deployment.previewPath}/assets/app.js`),
       { params: Promise.resolve({ id: deployment.id, path: ["assets", "app.js"] }) }
     );
     expect(assetResponse.status).toBe(200);
@@ -71,7 +75,7 @@ describe("GET /deployments/[id]/[[...path]]", () => {
     expect(js).toContain(`"/deployments/${deployment.id}/assets/chunk.js"`);
 
     const cssResponse = await getDeploymentFile(
-      new Request(`http://localhost${deployment.previewPath}/assets/app.css`),
+      authedRequest(`http://localhost${deployment.previewPath}/assets/app.css`),
       { params: Promise.resolve({ id: deployment.id, path: ["assets", "app.css"] }) }
     );
     expect(await cssResponse.text()).toContain(`url('/deployments/${deployment.id}/assets/hero.svg')`);
@@ -79,7 +83,7 @@ describe("GET /deployments/[id]/[[...path]]", () => {
 
   it("returns 404 for private deployment metadata", async () => {
     const newPrivateResponse = await getDeploymentFile(
-      new Request("http://localhost/deployments/dep_valid/.agentmeld/manifest.json"),
+      authedRequest("http://localhost/deployments/dep_valid/.agentmeld/manifest.json"),
       { params: Promise.resolve({ id: "dep_valid", path: [".agentmeld", "manifest.json"] }) }
     );
     expect(newPrivateResponse.status).toBe(404);

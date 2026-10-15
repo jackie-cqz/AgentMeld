@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { deployConversationArtifact } from "@/server/conversation-service";
+import { gateRequest } from "@/server/api-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ const deploySchema = z.object({
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+  const gate = await gateRequest(request);
+  if (!gate.allowed) return gate.response;
   const { id } = await context.params;
   const body = await request.json().catch(() => ({}));
   const parsed = deploySchema.safeParse(body);
