@@ -2,6 +2,7 @@ import { sendMessage } from "@/server/conversation-service";
 import { createMessage } from "@/server/repositories";
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import { resolveChannelConversation } from "@/server/channels/feishu/conversation-binding";
+import { claimBindingOwner, hasLiveClaim } from "@/server/channels/feishu/binding";
 import {
   claimChannelInboundMessage,
   findAgentIdByBotOpenId,
@@ -134,6 +135,42 @@ export async function routeChannelInbound(
   });
   if (!claimed) return { status: "duplicate" };
 
+  // Manual (credentials) binding: the person who typed the app secret still has
+  // to prove they are reachable as a Feishu user, because the credentials carry
+  // no human identity and cards are authorised against one. The web page shows
+  // a one-time code; sending it to the bot in the group claims the binding.
+  //
+  // Only while a claim is live, so ordinary use is untouched; and it never
+  // reaches an agent, because the text is a code, not a request.
+  const looksLikeClaimCode = /^\d{6}$/.test(inbound.content.trim());
+  if (looksLikeClaimCode && originForSender(inbound.senderType, inbound.senderIsBot) === "human" && hasLiveClaim(inbound.agentId, now)) {
+    const outcome = claimBindingOwner({
+      agentId: inbound.agentId,
+      // The SDK fills senderId with open_id ?? user_id ?? union_id; only an open
+      // id can match a future callback, so a fallback would claim successfully
+      // and then authorise nobody.
+      openId: inbound.senderId,
+      code: inbound.content,
+      now
+    });
+    const notice = outcome.ok
+      ? "绑定已认领：这个机器人的提问、审批与取消现在由你来作答。"
+      : claimRefusal(outcome.reason);
+    const noticeId = recordChannelNotice(
+      channelConversation.conversationId,
+      inbound.agentId,
+      notice,
+      now
+    );
+    return {
+      status: "routed",
+      conversationId: channelConversation.conversationId,
+      messageId: noticeId ?? "",
+      runIds: [],
+      origin: "human"
+    };
+  }
+
   // Record every mentioned agent as present BEFORE deciding whether there is
   // anything to hand to an agent. An @ with no text is a real interaction — the
   // SDK explicitly wakes a bot on a bare mention — and it is still evidence that
@@ -218,7 +255,7 @@ export async function routeChannelInbound(
  * takes: a room's bot is per-agent, so a notice with no agent has no bot to
  * deliver it.
  */
-function recordChannelNotice(conversationId: string, agentId: string, text: string, now: number): void {
+function recordChannelNotice(conversationId: string, agentId: string, text: string, now: number): string | null {
   // A notice is a courtesy about a message that is already recorded. Throwing
   // here would reject the whole routing call and skip the bookkeeping that
   // follows it, so a failure to say something must not cost the record.
@@ -233,8 +270,26 @@ function recordChannelNotice(conversationId: string, agentId: string, text: stri
       now
     });
     eventBus.publish({ type: "message.added", conversationId, timestamp: now, message });
+    return message.id;
   } catch (error) {
     console.error("[feishu] failed to record a channel notice:", error);
+    return null;
+  }
+}
+
+/** What to say when a claim attempt does not succeed. */
+function claimRefusal(reason: string): string {
+  switch (reason) {
+    case "expired":
+      return "认领口令已过期，请在网页上重新生成。";
+    case "too-many":
+      return "口令输错次数过多，已作废。请在网页上重新生成。";
+    case "wrong-code":
+      return "口令不对。请核对网页上显示的口令，再发一次。";
+    case "not-bound":
+      return "这个机器人还没有绑定，请先在网页上完成绑定。";
+    default:
+      return "当前没有待认领的绑定。";
   }
 }
 

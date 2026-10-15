@@ -72,7 +72,7 @@ export function sha256Token(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function constantTimeEquals(a: string, b: string): boolean {
+export function constantTimeEquals(a: string, b: string): boolean {
   const ab = Buffer.from(a, "hex");
   const bb = Buffer.from(b, "hex");
   if (ab.length !== bb.length || ab.length === 0) return false;

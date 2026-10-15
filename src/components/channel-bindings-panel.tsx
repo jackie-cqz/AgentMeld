@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, ExternalLink, Loader2, MessageSquare, QrCode, RefreshCw, Search, Unlink } from "lucide-react";
+import { Clock3, ExternalLink, Loader2, MessageSquare, QrCode, RefreshCw, Search, Unlink, KeyRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAppStore } from "@/stores/app-store";
@@ -161,6 +161,7 @@ export function ChannelBindingsPanel({ active = true }: { active?: boolean }) {
   const loaded = useAppStore((state) => state.channelBindingsLoaded);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
   const [unbindAgentId, setUnbindAgentId] = useState<string | null>(null);
+  const [manualAgentId, setManualAgentId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [filter, setFilter] = useState<BindingFilter>("all");
   const [query, setQuery] = useState("");
@@ -279,8 +280,10 @@ export function ChannelBindingsPanel({ active = true }: { active?: boolean }) {
           <div className="channel-agent-actions">
             {state.kind === "bound" ? <button className="ui-icon-button channel-unbind" type="button" aria-label={`解绑 ${agent?.name ?? agentId} 的飞书应用`} title="解绑飞书应用" disabled={disabled} onClick={() => setUnbindAgentId(agentId)}><Unlink size={15} /></button>
               : state.kind === "binding" ? <button className="ui-button ui-button--quiet" aria-label={`取消 ${agent?.name ?? agentId} 的绑定`} disabled={disabled} onClick={() => void run(agentId, () => useAppStore.getState().cancelChannelBindingSession(state.session.id))}>取消</button>
-                : <button className="ui-button" type="button" aria-label={`绑定 ${agent?.name ?? agentId} 到飞书`} disabled={disabled} onClick={() => void run(agentId, () => useAppStore.getState().startFeishuBinding(agentId))}>
-                  {busyAgentId === agentId ? <Loader2 size={14} className="animate-spin" /> : <QrCode size={14} />}{state.kind === "failed" ? "重试绑定" : "绑定飞书"}</button>}
+                : <><button className="ui-button" type="button" aria-label={`绑定 ${agent?.name ?? agentId} 到飞书`} disabled={disabled} onClick={() => void run(agentId, () => useAppStore.getState().startFeishuBinding(agentId))}>
+                  {busyAgentId === agentId ? <Loader2 size={14} className="animate-spin" /> : <QrCode size={14} />}{state.kind === "failed" ? "重试绑定" : "绑定飞书"}</button>
+                  <button className="ui-button ui-button--quiet" type="button" aria-label={`手动填写凭据绑定 ${agent?.name ?? agentId}`} disabled={disabled} onClick={() => setManualAgentId(agentId)}>
+                    <KeyRound size={14} />手动填写</button></>}
           </div>
           {detail ? <details className="channel-row-error"><summary>查看原因</summary><p>{detail}</p></details> : null}
         </li>;
@@ -296,7 +299,84 @@ export function ChannelBindingsPanel({ active = true }: { active?: boolean }) {
     {active && activeSession ? <LauncherDialog key={activeSession.id} agentName={activeAgentName} session={activeSession} now={now}
       onCancel={() => useAppStore.getState().cancelChannelBindingSession(activeSession.id)}
       onRenew={async () => { await useAppStore.getState().cancelChannelBindingSession(activeSession.id); await useAppStore.getState().startFeishuBinding(activeSession.agentId); }} /> : null}
+      {manualAgentId ? <ManualBindDialog agentId={manualAgentId} agentName={agents[manualAgentId]?.name ?? manualAgentId} onClose={() => setManualAgentId(null)} /> : null}
   </section>;
+}
+
+/**
+ * Bind with an app id and secret typed here, instead of scanning.
+ *
+ * The credentials carry no human identity, so the server answers with a
+ * one-time code that has to be sent to the bot in the group — that message's
+ * sender becomes the owner, and until it arrives the binding answers nothing.
+ * The dialog says so, because a code with no explanation looks like a failure.
+ */
+function ManualBindDialog({ agentId, agentName, onClose }: { agentId: string; agentName: string; onClose: () => void }) {
+  const [appId, setAppId] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The window text is computed when the code arrives, not while rendering:
+  // reading the clock during render is exactly what the lint rule forbids, and
+  // the code's own expiry is all the detail this needs.
+  const [claim, setClaim] = useState<{ code: string; window: string } | null>(null);
+  const actionBusy = useRef(false);
+
+  const submit = async () => {
+    if (actionBusy.current) return;
+    actionBusy.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const issued = await useAppStore
+        .getState()
+        .bindFeishuWithCredentials(agentId, appId.trim(), appSecret.trim());
+      setClaim({ code: issued.code, window: describeLauncherWindow(issued.expiresAt, Date.now()) });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "绑定失败。");
+    } finally {
+      actionBusy.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`手动绑定飞书 · ${agentName}`} size="medium" busy={busy}
+      footer={<>
+        {error ? <Feedback>{error}</Feedback> : null}
+        <button className="ui-button" onClick={onClose} disabled={busy}>关闭</button>
+        {claim ? null : (
+          <button className="ui-button ui-button--primary" onClick={() => void submit()} disabled={busy || !appId.trim() || !appSecret.trim()}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}验证并绑定
+          </button>
+        )}
+      </>}>
+      {claim ? (
+        <div className="channel-manual-claim">
+          <h3>在群里把下面的口令发给这个 Bot</h3>
+          <p className="channel-manual-code" aria-label="认领口令"><code>{claim.code}</code></p>
+          <p className="ui-muted">
+            口令 {claim.window} 内有效，用一次即失效。
+            发送口令的那个飞书账号会成为这个机器人的主人——只有它能回答问题、审批与取消。
+          </p>
+          <p className="ui-muted">绑定已经建立，但在此之前它不会回应任何卡片操作（fail-closed）。</p>
+        </div>
+      ) : (
+        <div className="channel-manual-form">
+          <label className="ui-field"><span>App ID</span>
+            <input value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="cli_xxxxxxxxxxxxxxxx" autoComplete="off" />
+          </label>
+          <label className="ui-field"><span>App Secret</span>
+            <input type="password" value={appSecret} onChange={(event) => setAppSecret(event.target.value)} placeholder="应用凭证里的 App Secret" autoComplete="off" />
+          </label>
+          <p className="ui-muted">
+            在飞书开放平台的自建应用里找「凭证与基础信息」。服务端会先真的连一次验证它，
+            连不上不会保存；App Secret 只存在本机数据目录，接口不会回显。
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 function BindingStatus({ state, now, connection, loaded }: { state: AgentBindingState; now: number; connection: ChannelConnectionInfo | undefined; loaded: boolean }) {

@@ -831,6 +831,22 @@ export function getChannelBindingSecret(id: string): string | undefined {
  * identity, so a mentioned open id can later be mapped back to the agent that
  * owns it without a live connection being present.
  */
+/**
+ * Record who owns this binding, without touching anything else.
+ *
+ * A full upsert would take the caller's fields as the new truth, and the manual
+ * binding flow does not have the app secret in hand at claim time — writing it
+ * back empty would silently break the connection it just established.
+ */
+export function setChannelBindingOwner(agentId: string, channel: string, openId: string): boolean {
+  const result = getDatabase()
+    .prepare(
+      "UPDATE channel_bindings SET bound_by_open_id = ?, updated_at = ? WHERE agent_id = ? AND channel = ?"
+    )
+    .run(openId, Date.now(), agentId, channel) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
 export function setChannelBindingBotOpenId(id: string, botOpenId: string): void {
   getDatabase()
     .prepare("UPDATE channel_bindings SET bot_open_id = ?, updated_at = ? WHERE id = ?")
