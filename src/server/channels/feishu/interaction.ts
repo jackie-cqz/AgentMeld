@@ -532,16 +532,18 @@ async function handleQuestionAnswer(
       return { toast: { type: "error", content: "这个选项已经失效，请重新点击卡片。" } };
     }
 
-    // A partly-answered card keeps its buttons live for the OTHER questions, so
-    // a second device could otherwise add ticks to a question already recorded
-    // and rewrite the answer as a union.
-    if (getAnswerBuffer().get(question.id)?.[String(value.questionIndex)] !== undefined) {
-      return { toast: { type: "info", content: "这个问题已经回答过了。" } };
-    }
-
     const drafts = getSelectionDrafts();
     const forQuestion = { ...(drafts.get(question.id) ?? {}) };
-    const current = forQuestion[String(value.questionIndex)] ?? [];
+    // An answered question starts a NEW set: a tick from an old card replaces
+    // the recorded answer (the same last-write-wins rule the single-select path
+    // follows) instead of being unioned with it.
+    const stored = forQuestion[String(value.questionIndex)] ?? [];
+    // Only a TICK restarts the set: an answered question must not accumulate,
+    // while a confirm has to see what the ticks just put there.
+    const current =
+      option !== null && getAnswerBuffer().get(question.id)?.[String(value.questionIndex)] !== undefined
+        ? []
+        : stored;
     if (option) {
       forQuestion[String(value.questionIndex)] = current.includes(option)
         ? current.filter((label) => label !== option)

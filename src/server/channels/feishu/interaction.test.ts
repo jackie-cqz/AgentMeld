@@ -296,11 +296,18 @@ describe("handleCardAction", () => {
     // The authorisation check runs before the multi-select branch, but nothing
     // tested that: skipping it for the new value shapes stayed green.
     const stranger = { openId: "ou_someone_else", name: "别人" };
+    // Seeded by the owner first: with an empty set the confirm is refused for
+    // THAT reason, and the assertion would hold even with no authorisation
+    // check at all.
     for (const value of [
-      { kind: "ask_user", pendingId: "unused", questionIndex: 0, toggle: "搜索", v: 0 },
-      { kind: "ask_user", pendingId: "unused", questionIndex: 0, confirm: true, v: 0 }
+      { kind: "ask_user", questionIndex: 0, toggle: "搜索", v: 0 },
+      { kind: "ask_user", questionIndex: 0, confirm: true, v: 0 }
     ] as const) {
       const { pending, pendingId } = ask({ multi: true });
+      await handleCardAction(
+        click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }),
+        "cli_pm"
+      );
       const response = await handleCardAction(
         click({ ...value, pendingId }, stranger),
         "cli_pm"
@@ -316,6 +323,11 @@ describe("handleCardAction", () => {
       { kind: "ask_user", questionIndex: 0, confirm: true, v: 0 }
     ] as const) {
       const { pending, pendingId } = ask({ multi: true });
+      // Seeded, so a refused confirm proves the check rather than the empty set.
+      await handleCardAction(
+        click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }),
+        "cli_pm"
+      );
       const response = await handleCardAction(
         { ...click({ ...value, pendingId }), chatId: "oc_other" } as CardActionEvent,
         "cli_pm"
@@ -349,9 +361,10 @@ describe("handleCardAction", () => {
     await expect(pending).resolves.toEqual({ "要哪些能力？": "翻译", "要哪些渠道？": "群" });
   });
 
-  it("does not answer one question twice from an old card", async () => {
-    // A partly answered card stays live for the other questions, so a second
-    // device could add ticks to a recorded question and rewrite the answer.
+  it("lets an old card replace the answer instead of adding to it", async () => {
+    // Last write wins, the rule the single-select path already follows: a tick
+    // from an old card starts a NEW set, so the answer cannot become a union of
+    // both devices' ticks.
     const questions: PendingQuestion["questions"] = [
       { question: "要哪些能力？", header: "能力", multiSelect: true, options: [{ label: "搜索" }, { label: "翻译" }] },
       { question: "部署到哪？", header: "环境", options: [{ label: "预览" }, { label: "线上" }] }
@@ -369,18 +382,39 @@ describe("handleCardAction", () => {
       click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 0 }),
       "cli_pm"
     );
-    const second = await handleCardAction(
+    // The second device ticks something else and confirms from its old card.
+    await handleCardAction(
       click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }),
       "cli_pm"
     );
-
-    expect(second).toMatchObject({ toast: { type: "info" } });
-    // The recorded answer stands.
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 0 }),
+      "cli_pm"
+    );
     await handleCardAction(
       click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }),
       "cli_pm"
     );
-    await expect(pending).resolves.toEqual({ "要哪些能力？": "翻译", "部署到哪？": "预览" });
+
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "搜索", "部署到哪？": "预览" });
+  });
+
+  it("clears the drafts and versions when a multi-select question completes", async () => {
+    const { pending, pendingId } = ask({ multi: true });
+    const maps = globalThis as unknown as {
+      __agentMeldChannelDrafts?: Map<string, unknown>;
+      __agentMeldChannelVersions?: Map<string, unknown>;
+    };
+
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }), "cli_pm");
+    expect(maps.__agentMeldChannelDrafts?.has(pendingId)).toBe(true);
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 1 }), "cli_pm");
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "搜索" });
+
+    // Completing the question took its drafts with it: the answers map is not
+    // the only state that would otherwise outlive it.
+    expect(maps.__agentMeldChannelDrafts?.has(pendingId)).toBe(false);
+    expect(maps.__agentMeldChannelVersions?.has(pendingId)).toBe(false);
   });
 
   it("counts a repeated option once", async () => {
