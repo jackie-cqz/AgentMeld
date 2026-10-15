@@ -346,7 +346,10 @@ describe("delivering an artifact into the room", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const outcome = await projectArtifact(
-        artifact({ id: "art_unfoldable", content: { type: "web_app", files: { "index.html": "<p>x</p>" }, entry: "index.html" } })
+        // A type that is still refused: web_app folds into a file now (#56),
+        // so the skip this test is about needs a shape that has no single-file
+        // form at all.
+        artifact({ id: "art_unfoldable", content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } })
       );
       expect(outcome.status).toBe("skipped");
       const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
