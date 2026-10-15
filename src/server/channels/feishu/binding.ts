@@ -1,17 +1,200 @@
 import { registerApp, type QRCodeInfo, type RegisterAppResult } from "@larksuite/channel";
+import { randomBytes } from "node:crypto";
+import { createLarkChannel } from "@larksuite/channel";
 import { ensureDatabase } from "@/db/bootstrap";
+import { constantTimeEquals, hashToken } from "@/server/auth";
 import { eventBus } from "@/server/event-bus";
 import {
   deleteChannelBinding,
   getAgent,
   getChannelBindingForAgent,
   listChannelBindings,
+  setChannelBindingOwner,
   upsertChannelBinding
 } from "@/server/repositories";
 import { newChannelBindingId, newChannelBindingSessionId } from "@/shared/ids";
 import type { ChannelBinding, ChannelBindingSession, ChannelBindingStatus } from "@/shared/types";
 
 const CHANNEL = "feishu" as const;
+
+/** How long a claim code is good for, and how many wrong guesses it survives. */
+const CLAIM_CODE_TTL_MS = 5 * 60_000;
+const CLAIM_MAX_ATTEMPTS = 5;
+
+/**
+ * The owner's open id, established without a QR scan.
+ *
+ * A scan hands us three things at once: the credentials, the bot's identity and
+ * the scanning human's open id — and that last one is the anchor every card
+ * action is authorised against. Credentials typed into a form carry no human
+ * identity at all, so the binding starts fail-closed (`boundByOpenId: null`,
+ * which refuses everyone) and the owner is established by a one-time code the
+ * web page shows and the person sends to the bot in the group. Only someone who
+ * has the app secret AND can speak to that bot can take it.
+ */
+interface ClaimEntry {
+  agentId: string;
+  hashed: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+declare global {
+  var __agentMeldChannelClaimCodes: Map<string, ClaimEntry> | undefined;
+}
+
+function getClaimCodes(): Map<string, ClaimEntry> {
+  globalThis.__agentMeldChannelClaimCodes ??= new Map();
+  return globalThis.__agentMeldChannelClaimCodes;
+}
+
+/** One live claim per agent: issuing another replaces it in place. */
+function issueClaimCode(agentId: string): { code: string; expiresAt: number } {
+  const code = String(randomBytes(3).readUIntBE(0, 3) % 1_000_000).padStart(6, "0");
+  const expiresAt = Date.now() + CLAIM_CODE_TTL_MS;
+  getClaimCodes().set(agentId, { agentId, hashed: hashToken(code), expiresAt, attempts: 0 });
+  return { code, expiresAt };
+}
+
+export function hasLiveClaim(agentId: string, now = Date.now()): boolean {
+  const entry = getClaimCodes().get(agentId);
+  if (!entry) return false;
+  if (entry.expiresAt < now) {
+    getClaimCodes().delete(agentId);
+    return false;
+  }
+  return true;
+}
+
+export function claimExpiresAt(agentId: string): number | null {
+  return getClaimCodes().get(agentId)?.expiresAt ?? null;
+}
+
+/**
+ * Put a KNOWN code in place, for tests that need to exercise the claim path
+ * without a real credential check. Production only ever mints codes through
+ * `bindFeishuWithCredentials`.
+ */
+export function issueClaimCodeForTests(agentId: string, code: string, ttlMs = CLAIM_CODE_TTL_MS): number {
+  const expiresAt = Date.now() + ttlMs;
+  getClaimCodes().set(agentId, { agentId, hashed: hashToken(code), expiresAt, attempts: 0 });
+  return expiresAt;
+}
+
+export function clearClaimCodesForTests(): void {
+  globalThis.__agentMeldChannelClaimCodes = undefined;
+}
+
+export type ClaimOutcome =
+  | { ok: true; binding: ChannelBinding }
+  | { ok: false; reason: "no-claim" | "expired" | "too-many" | "wrong-code" | "not-bound" };
+
+/**
+ * Take ownership of a binding with the code the web page showed.
+ *
+ * Deliberately NOT a comparison against anything the caller sends besides the
+ * code: the open id comes from the platform callback, so a forwarded code
+ * claims the binding for whoever actually sent it — which is the same trust the
+ * scan flow has (whoever holds the phone).
+ */
+export function claimBindingOwner(input: {
+  agentId: string;
+  openId: string;
+  code: string;
+  now?: number;
+}): ClaimOutcome {
+  const now = input.now ?? Date.now();
+  const claims = getClaimCodes();
+  const entry = claims.get(input.agentId);
+  if (!entry) return { ok: false, reason: "no-claim" };
+  if (entry.expiresAt < now) {
+    claims.delete(input.agentId);
+    return { ok: false, reason: "expired" };
+  }
+  if (!constantTimeEquals(hashToken(input.code.trim()), entry.hashed)) {
+    entry.attempts += 1;
+    if (entry.attempts >= CLAIM_MAX_ATTEMPTS) {
+      claims.delete(input.agentId);
+      return { ok: false, reason: "too-many" };
+    }
+    return { ok: false, reason: "wrong-code" };
+  }
+
+  // Single use: the entry goes before the write, so a second message with the
+  // same code cannot re-claim after a failure below.
+  claims.delete(input.agentId);
+  if (!setChannelBindingOwner(input.agentId, CHANNEL, input.openId)) {
+    return { ok: false, reason: "not-bound" };
+  }
+  const binding = getChannelBindingForAgent(input.agentId, CHANNEL);
+  if (!binding) return { ok: false, reason: "not-bound" };
+  return { ok: true, binding };
+}
+
+export interface ManualBindingResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+  binding?: ChannelBinding;
+  claim?: { code: string; expiresAt: number };
+}
+
+/**
+ * Bind from credentials a person typed, instead of a QR scan.
+ *
+ * The credentials are CHECKED before they are stored: a channel is created and
+ * connected once, its identity read, and then closed. Storing unchecked
+ * credentials would leave a binding that fails forever at startup, which is
+ * worse than refusing the form.
+ */
+export async function bindFeishuWithCredentials(input: {
+  agentId: string;
+  appId: string;
+  appSecret: string;
+  tenantBrand?: string | null;
+}): Promise<ManualBindingResult> {
+  ensureDatabase();
+  const agent = getAgent(input.agentId);
+  if (!agent) return { ok: false, status: 404, error: "Unknown agent." };
+
+  const appId = input.appId.trim();
+  const appSecret = input.appSecret.trim();
+  if (!appId || !appSecret) {
+    return { ok: false, status: 400, error: "appId and appSecret are both required." };
+  }
+
+  const channel = createLarkChannel({ appId, appSecret, source: "agentmeld" });
+  let botOpenId: string | null = null;
+  try {
+    await channel.connect();
+    botOpenId = channel.getBotIdentity().openId;
+  } catch (error) {
+    await channel.disconnect().catch(() => {});
+    return {
+      ok: false,
+      status: 400,
+      error: `That app id and secret could not connect: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    };
+  }
+  await channel.disconnect().catch(() => {});
+
+  const binding = upsertChannelBinding({
+    id: newChannelBindingId(),
+    agentId: input.agentId,
+    channel: CHANNEL,
+    appId,
+    appSecret,
+    tenantBrand: input.tenantBrand ?? null,
+    botOpenId,
+    // Fail-closed until the owner is established by the one-time code below.
+    boundByOpenId: null,
+    now: Date.now()
+  });
+  const claim = issueClaimCode(input.agentId);
+  return { ok: true, status: 201, binding, claim };
+}
 
 /** How long the launcher URL is given to appear before we give up on it. */
 const QR_READY_TIMEOUT_MS = 20_000;
