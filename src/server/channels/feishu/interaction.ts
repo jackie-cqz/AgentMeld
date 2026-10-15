@@ -1,7 +1,7 @@
 import type { CardActionEvent } from "@larksuite/channel";
 import { eventBus } from "@/server/event-bus";
 import { isChannelProjectionPaused } from "@/server/channels/feishu/projection";
-import { cancelRunFromCard } from "@/server/channels/feishu/progress";
+import { cancelRunFromCard, handleRunStatusClick } from "@/server/channels/feishu/progress";
 import { answerQuestion, getPendingQuestion } from "@/server/pending-questions";
 import { approvePlan, getPendingPlan, rejectPlan } from "@/server/dispatch-plan-manager";
 import { approvePendingBash, getPendingBash, rejectPendingBash } from "@/server/pending-bash";
@@ -13,6 +13,7 @@ import {
 } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import { deliverSend, deliverCardUpdate } from "@/server/channels/feishu/delivery";
+import { escapeLarkMd } from "@/server/channels/feishu/card-text";
 import type {
   DispatchPlanItem,
   PendingBashCommand,
@@ -52,16 +53,22 @@ export type CardActionValue =
       pendingId: string;
       decision: "approve" | "reject";
     }
-  | { kind: "cancel_run"; runId: string };
+  | { kind: "cancel_run"; runId: string }
+  | { kind: "run_status"; runId: string };
 
 const APPROVAL_KINDS: ApprovalKind[] = ["plan", "bash", "write"];
 
 export function decodeCardActionValue(value: unknown): CardActionValue | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Record<string, unknown>;
-  if (typeof raw.pendingId !== "string" || !raw.pendingId) return null;
 
+  // `pendingId` is required by the kinds that are about a pending item, and
+  // checked inside them. It used to be checked here, before the kind, for every
+  // value — and a cancel or status button carries a `runId` and no `pendingId`,
+  // so every click on either was decoded as unrecognised and silently ignored.
+  // The cancel button shipped like that and never worked.
   if (raw.kind === "ask_user") {
+    if (typeof raw.pendingId !== "string" || !raw.pendingId) return null;
     if (typeof raw.questionIndex !== "number" || !Number.isInteger(raw.questionIndex)) return null;
     if (typeof raw.answer !== "string") return null;
     return {
@@ -72,12 +79,13 @@ export function decodeCardActionValue(value: unknown): CardActionValue | null {
     };
   }
 
-  if (raw.kind === "cancel_run") {
+  if (raw.kind === "cancel_run" || raw.kind === "run_status") {
     if (typeof raw.runId !== "string" || !raw.runId) return null;
-    return { kind: "cancel_run", runId: raw.runId };
+    return { kind: raw.kind, runId: raw.runId };
   }
 
   if (raw.kind === "approval") {
+    if (typeof raw.pendingId !== "string" || !raw.pendingId) return null;
     if (!APPROVAL_KINDS.includes(raw.pendingType as ApprovalKind)) return null;
     if (raw.decision !== "approve" && raw.decision !== "reject") return null;
     return {
@@ -236,17 +244,6 @@ export function buildQuestionCard(
   };
 }
 
-/**
- * Neutralise card markup in text this bot did not author.
- *
- * Question text and headers come from a model, and `lark_md` renders tags — an
- * `<at id=all></at>` in a question would summon the whole room in this bot's
- * name. Stripping the angle brackets leaves the text readable and inert; this is
- * the same treatment the SDK applies to names it puts into mentions.
- */
-function escapeLarkMd(text: string): string {
-  return text.replace(/[<>]/g, "");
-}
 
 /**
  * Neutralise a command without misrepresenting it.
@@ -335,6 +332,9 @@ export async function handleCardAction(
 
   if (value.kind === "ask_user") return handleQuestionAnswer(value, event);
   if (value.kind === "approval") return handleApprovalDecision(value, event);
+  if (value.kind === "run_status") {
+    return handleRunStatusClick({ runId: value.runId, chatId: event.chatId });
+  }
   return handleCancelRun(value, event);
 }
 
@@ -455,6 +455,14 @@ async function handleCancelRun(
 ): Promise<Record<string, unknown> | undefined> {
   const run = getRun(value.runId);
   if (!run) return { toast: { type: "info", content: "这次运行已经结束了。" } };
+
+  // Like every other card action, the click has to come from the chat the card
+  // belongs to. The owner check below says WHO may cancel, not WHERE the click
+  // came from, and this path had only the first.
+  const where = getChannelConversationByConversationId(run.conversationId);
+  if (!where || where.chatId !== event.chatId) {
+    return { toast: { type: "error", content: "这张卡片不属于这个群。" } };
+  }
 
   const outcome = cancelRunFromCard(value.runId, event.operator?.openId, run.agentId);
   if (!outcome.ok) {

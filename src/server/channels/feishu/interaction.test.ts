@@ -18,10 +18,18 @@ import { registerPendingBash, clearPendingBashForTests } from "@/server/pending-
 import {
   createChannelConversation,
   createConversation,
+  createRun,
   upsertChannelBinding
 } from "@/server/repositories";
 import type { CardActionEvent } from "@larksuite/channel";
-import type { PendingBashCommand, PendingDispatchPlan, PendingQuestion } from "@/shared/types";
+import { buildProgressCard } from "@/server/channels/feishu/progress";
+import type {
+  AgentRun,
+  PendingBashCommand,
+  PendingDispatchPlan,
+  PendingQuestion,
+  PendingWrite
+} from "@/shared/types";
 
 const { channelsByAgent, sent, updated } = vi.hoisted(() => ({
   channelsByAgent: new Map<string, unknown>(),
@@ -890,5 +898,195 @@ describe("approval cards", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].input).toHaveProperty("card");
+  });
+});
+
+describe("run card actions through the card handler", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-channel-run-actions-");
+    sent.length = 0;
+    updated.length = 0;
+    channelsByAgent.clear();
+    stopChannelInteractionsForTests();
+
+    createConversation({
+      id: "conv_1", title: "飞书群", mode: "group", agentIds: [AGENT],
+      fsWriteApprovalMode: "auto", now: 1
+    });
+    createChannelConversation({
+      id: "cc_1", channel: "feishu", chatId: "oc_1", conversationId: "conv_1", now: 1
+    });
+    channelsByAgent.set(AGENT, {});
+    upsertChannelBinding({
+      id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
+      boundByOpenId: "ou_user", now: 1
+    });
+  });
+
+  afterEach(() => {
+    stopChannelInteractionsForTests();
+    teardown();
+  });
+
+  function seedRun() {
+    return createRun({
+      id: `run_${Math.random().toString(36).slice(2, 8)}`,
+      conversationId: "conv_1",
+      agentId: AGENT,
+      triggerMessageId: null,
+      parentRunId: null,
+      status: "running",
+      now: Date.now()
+    });
+  }
+
+  it("decodes a status value, and refuses one with no run", () => {
+    expect(decodeCardActionValue({ kind: "run_status", runId: "run_1" })).toEqual({
+      kind: "run_status",
+      runId: "run_1"
+    });
+    expect(decodeCardActionValue({ kind: "run_status" })).toBeNull();
+    expect(decodeCardActionValue({ kind: "run_status", runId: "" })).toBeNull();
+  });
+
+  it("still decodes a cancel value now that the two share a branch", () => {
+    expect(decodeCardActionValue({ kind: "cancel_run", runId: "run_1" })).toEqual({
+      kind: "cancel_run",
+      runId: "run_1"
+    });
+  });
+
+  it("routes a status click to the status handler", async () => {
+    const run = seedRun();
+
+    const response = await handleCardAction(click({ kind: "run_status", runId: run.id }));
+
+    expect(response).toMatchObject({ toast: { type: "info" } });
+    expect(JSON.stringify(response)).toContain("已运行");
+  });
+
+  it("lets anyone in the room ask for status, because it shows nothing the room cannot see", async () => {
+    // Acting on the run is the owner's; asking about it is not.
+    const run = seedRun();
+
+    const response = await handleCardAction(
+      click({ kind: "run_status", runId: run.id }, { openId: "ou_stranger", name: "别人" })
+    );
+
+    expect(response).toMatchObject({ toast: { type: "info" } });
+  });
+
+  it("refuses a status click that came from another chat", async () => {
+    const run = seedRun();
+    const event = click({ kind: "run_status", runId: run.id });
+
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+  });
+
+  it("refuses a cancel click from another chat, even from the owner", async () => {
+    // The owner check says WHO may cancel; it said nothing about WHERE the click
+    // came from, so a forwarded card could cancel a run from a room the clicker
+    // was not in. Every other card action already checked.
+    const run = seedRun();
+    const event = click({ kind: "cancel_run", runId: run.id });
+
+    const response = await handleCardAction({ ...event, chatId: "oc_elsewhere" });
+
+    expect(response).toMatchObject({ toast: { type: "error" } });
+    expect(JSON.stringify(response)).toContain("不属于这个群");
+  });
+
+  it("lets a cancel click from the right chat through to the owner check", async () => {
+    // The control for the test above: same click, right chat, and it gets past
+    // the chat guard. Nothing is actually running, so it lands on "already over".
+    const run = seedRun();
+
+    const response = await handleCardAction(click({ kind: "cancel_run", runId: run.id }));
+
+    expect(response).toMatchObject({ toast: { type: "info" } });
+    expect(JSON.stringify(response)).toContain("已经结束");
+  });
+});
+
+/**
+ * A card is only as good as its buttons' values surviving the trip back.
+ *
+ * The cancel button shipped dead: the decoder required a `pendingId` of every
+ * value, the cancel button carries a `runId`, and every click was read as
+ * unrecognised and dropped. The tests built values by hand and handed them to the
+ * handler, so a builder and a decoder that disagreed could never be noticed.
+ * These take the values from the cards the builders actually produce.
+ */
+describe("every button a card offers can be read back", () => {
+  function buttonValues(card: object): unknown[] {
+    const elements = (card as {
+      elements: Array<{ tag: string; actions?: Array<{ value?: unknown }> }>;
+    }).elements;
+    return elements
+      .filter((element) => element.tag === "action")
+      .flatMap((element) => element.actions ?? [])
+      .map((button) => button.value);
+  }
+
+  it("on a question card", () => {
+    const question: PendingQuestion = {
+      id: "pq_1", conversationId: "conv_1", agentId: AGENT, runId: "run_1", createdAt: 1,
+      questions: [{ question: "用哪个框架？", header: "技术栈", options: [{ label: "Vue" }, { label: "React" }] }]
+    };
+
+    const values = buttonValues(buildQuestionCard(question));
+
+    expect(values).toHaveLength(2);
+    for (const value of values) {
+      expect(decodeCardActionValue(value)).toMatchObject({ kind: "ask_user", pendingId: "pq_1" });
+    }
+  });
+
+  it("on an approval card, for each kind of thing that can wait", () => {
+    const bash: PendingBashCommand = {
+      id: "pb_1", conversationId: "conv_1", agentId: AGENT, runId: "run_1",
+      command: "ls", cwd: "/tmp", reason: "看看", createdAt: 1
+    };
+    const plan: PendingDispatchPlan = {
+      id: "pp_1", conversationId: "conv_1", runId: "run_1", createdAt: 1,
+      plan: [{ id: "t1", agentId: AGENT, task: "设计登录页", dependsOn: [] }]
+    };
+    const write: PendingWrite = {
+      id: "pw_1", conversationId: "conv_1", agentId: AGENT, runId: "run_1",
+      path: "a.txt", absolutePath: "/tmp/a.txt", oldContent: null, newContent: "x", createdAt: 1
+    };
+
+    for (const [kind, item] of [["bash", bash], ["plan", plan], ["write", write]] as const) {
+      const values = buttonValues(buildApprovalCard(kind, item));
+      expect(values).toHaveLength(2);
+      for (const value of values) {
+        expect(decodeCardActionValue(value)).toMatchObject({
+          kind: "approval",
+          pendingType: kind,
+          pendingId: item.id
+        });
+      }
+    }
+  });
+
+  it("on a progress card — the cancel and status buttons, which carry a run and no pending id", () => {
+    const run: AgentRun = {
+      id: "run_9", conversationId: "conv_1", agentId: AGENT, triggerMessageId: null,
+      parentRunId: null, status: "running", stage: null, error: null, usage: null,
+      interrupted: false, errorCategory: null, retryable: false, startedAt: 1,
+      finishedAt: null, createdAt: 1, updatedAt: 1
+    };
+
+    const decoded = buttonValues(buildProgressCard(run, "PM 小灰")).map((value) =>
+      decodeCardActionValue(value)
+    );
+
+    expect(decoded).toHaveLength(2);
+    expect(decoded).toContainEqual({ kind: "cancel_run", runId: "run_9" });
+    expect(decoded).toContainEqual({ kind: "run_status", runId: "run_9" });
   });
 });
