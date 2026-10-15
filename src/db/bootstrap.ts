@@ -905,7 +905,7 @@ function hardenLegacyArtifactPromptExamples(prompt: string) {
     )
     .replaceAll(
       "当 workspace_info mode=local 且用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，优先使用 fs_read / fs_write / bash 直接操作本地文件并运行验证；不要用 write_artifact 代替应该落盘的源码。构建出 dist/build/out 等静态目录后，可用 deploy_workspace 生成部署预览卡。",
-      "当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。\n- 当用户要求“部署 / 重新部署 / 发布 / 预览”时，必须在本轮真实调用 deploy_workspace 或 deploy_artifact；不能只根据历史消息回复。deploy_workspace 可以部署任何 workspace 内包含 index.html 的静态目录（如 dist、build、out、public、app 目录或项目根目录），不只限构建输出目录。调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 \"todo-app\" 或 \".\"）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。"
+      "当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 workspace-confined 还是 host-access，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。\n- 当用户要求“部署 / 重新部署 / 发布 / 预览”时，必须在本轮真实调用 deploy_workspace 或 deploy_artifact；不能只根据历史消息回复。deploy_workspace 可以部署任何 workspace 内包含 index.html 的静态目录（如 dist、build、out、public、app 目录或项目根目录），不只限构建输出目录。调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 \"todo-app\" 或 \".\"）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。"
     )
     .replaceAll(
       "调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。\n- 只有用户明确要求网页产物",
@@ -918,6 +918,12 @@ function hardenLegacyArtifactPromptExamples(prompt: string) {
     .replaceAll(
       "完成 web_app 产物后必须调用 deploy_artifact；完成本地项目构建后优先调用 deploy_workspace。",
       "完成 web_app 产物后必须调用 deploy_artifact；完成本地静态项目或构建目录后优先调用 deploy_workspace。"
+    )
+    // Databases migrated by an earlier version hold the intermediate phrasing;
+    // the workspace modes it names no longer exist.
+    .replaceAll(
+      "无论 workspace_info mode 是 sandbox 还是 local",
+      "无论 workspace_info mode 是 workspace-confined 还是 host-access"
     );
 
   return upgradeReviewerArtifactPolicy(
@@ -969,7 +975,7 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
     "- 只有用户明确要求“单文件网页产物 / artifact / 独立 demo”，且不是当前 workspace 项目的源码实现时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。";
 
   const anchor =
-    "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。";
+    "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 workspace-confined 还是 host-access，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。";
 
   const insertAfterAnchor = (current: string, text: string) => {
     if (current.includes(anchor)) {

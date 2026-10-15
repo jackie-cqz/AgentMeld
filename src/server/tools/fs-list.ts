@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { assertPathWithinWorkspace } from "@/server/workspace-utils";
+import { assertRealPathWithinWorkspace } from "@/server/workspace-utils";
 import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
@@ -32,7 +32,7 @@ export const fsListTool: ToolDef = {
 
     let absolutePath: string;
     try {
-      absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
+      absolutePath = assertRealPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
     }

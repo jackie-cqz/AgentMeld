@@ -9,6 +9,7 @@ import {
 import { toolRegistry } from "@/server/tools/registry";
 import { buildSystemPrompt } from "@/server/agent-runner";
 import { buildConductorPlanPrompt } from "@/server/conductor-service";
+import { buildWorkspaceStableSection } from "@/server/adapters/custom-agent-adapter";
 import type { Agent, Conversation } from "@/shared/types";
 
 /**
@@ -45,11 +46,11 @@ describe("capability declarations", () => {
     expect(Object.keys(TOOL_CAPABILITIES).sort()).toEqual(registered);
   });
 
-  it("has every tool declare the same capabilities as the table", () => {
-    // Two places hold the declaration (the table, and the ToolDef that points
-    // at it); this is what keeps them from drifting.
+  it("points every tool at its OWN table entry, not an equal one", () => {
+    // Identity, not value: fs_write and fs_patch declare the same array, so a
+    // value comparison would not notice fs_write pointing at fs_patch's entry.
     for (const name of toolRegistry.listNames()) {
-      expect(toolRegistry.get(name)?.capabilities).toEqual(TOOL_CAPABILITIES[name]);
+      expect(toolRegistry.get(name)?.capabilities).toBe(TOOL_CAPABILITIES[name]);
     }
   });
 
@@ -105,11 +106,26 @@ describe("the workspace claim follows the tools", () => {
     expect(prompt).not.toContain("isolated sandbox directory");
   });
 
-  it("does not promise isolation to a bash-holding conductor either", () => {
-    // A conductor agent can be given bash like any other; the old text said
-    // "isolated sandbox directory" for every toolset.
-    const withBash = buildConductorPlanPrompt(agentWith(["plan_tasks", "bash"]), [], "/tmp/ws");
-    expect(withBash).toContain("<mode>host-access</mode>");
-    expect(withBash).not.toContain("isolated sandbox directory");
+  it("describes the conductor's PLAN toolset, not its configured one", () => {
+    // The default conductor has bash in its agent record, but the plan stage
+    // can only call CONDUCTOR_PLAN_TOOLS — no bash, no fs_write. Telling it
+    // otherwise contradicts the stage instructions in the same prompt.
+    const conductor = buildConductorPlanPrompt(agentWith(["plan_tasks", "bash", "fs_write"]), [], "/tmp/ws");
+    expect(conductor).toContain("<mode>workspace-confined</mode>");
+    expect(conductor).not.toContain("NOT sandboxed");
+    expect(conductor).not.toContain("isolated sandbox directory");
+  });
+
+  it("describes a dispatched sub-task by the tools the child really has", () => {
+    // The third prompt path: a conductor-dispatched child gets its workspace
+    // section from the adapter, and that path had no test at all — reverting it
+    // to the old blanket claim left the whole suite green.
+    const section = buildWorkspaceStableSection(["bash", "fs_write"], "/tmp/ws");
+    expect(section.content).toContain("<mode>host-access</mode>");
+    expect(section.content).toContain("NOT sandboxed");
+    expect(section.content).not.toContain("isolated sandbox directory");
+
+    const confined = buildWorkspaceStableSection(["fs_read"], "/tmp/ws");
+    expect(confined.content).toContain("<mode>workspace-confined</mode>");
   });
 });

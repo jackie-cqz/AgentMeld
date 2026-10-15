@@ -60,12 +60,16 @@ export const TOOL_CAPABILITIES: Record<string, readonly ToolCapability[]> = {
   fs_patch: ["workspace-read", "workspace-write"],
   read_artifact: ["project-data-read"],
   read_attachment: ["project-data-read"],
-  read_evidence: ["project-data-read"],
+  // Reading evidence RECORDS the read (insertEvidence), so the declaration
+  // carries the write too.
+  read_evidence: ["project-data-read", "project-data-write"],
   write_artifact: ["project-data-write"],
   ask_user: ["user-interaction"],
   deploy_artifact: ["outside-workspace-write", "project-data-read"],
   deploy_workspace: ["workspace-read", "outside-workspace-write"],
-  plan_tasks: ["project-data-write", "user-interaction"],
+  // The handler reads agents and returns a plan; it neither stores anything
+  // nor blocks (approval happens on the platform side, not inside the tool).
+  plan_tasks: ["project-data-read"],
   report_task_result: ["project-data-write"],
   update_context_facts: ["project-data-write"]
 };
@@ -106,10 +110,32 @@ export function workspaceNoteFor(toolNames: readonly string[]): string[] {
   }
   if (capabilities.has("outside-workspace-write")) {
     lines.push(
-      "deploy_* writes OUTSIDE this directory, into the configured publish directory."
+      "deploy_* writes OUTSIDE this directory: into AgentMeld's own deployments " +
+        "directory, and (when external publishing is on) into the configured publish directory."
     );
   }
   return lines;
+}
+
+/**
+ * The whole `<workspace_info>` block, built from the toolset.
+ *
+ * One builder for all three prompt paths (direct run, conductor planning,
+ * dispatched sub-task) so none of them can drift back to the old blanket
+ * claim on its own — which is exactly what the third one did until a review
+ * noticed only two were covered by tests.
+ */
+export function workspaceInfoBlock(toolNames: readonly string[], workspacePath: string): string {
+  const note = workspaceNoteFor(toolNames)
+    .map((line) => `    ${line}`)
+    .join("\n");
+  return `<workspace_info>
+  <cwd>${workspacePath}</cwd>
+  <mode>${workspaceModeLabel(toolNames)}</mode>
+  <note>
+${note}
+  </note>
+</workspace_info>`;
 }
 
 /** The `<mode>` value: what kind of reach the toolset gives. */

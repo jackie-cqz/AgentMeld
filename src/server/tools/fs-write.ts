@@ -5,7 +5,7 @@ import { recordFileWrite } from "@/server/dispatch-file-writes";
 import { recordFileWriteEvidence } from "@/server/dispatch-tool-evidence";
 import { registerPendingWrite } from "@/server/pending-writes";
 import {
-  assertPathWithinWorkspace,
+  assertRealPathWithinWorkspace,
   checkSandboxQuota,
   ensureDir,
   MAX_FILE_WRITE_BYTES,
@@ -55,7 +55,7 @@ export const fsWriteTool: ToolDef = {
     // Validate path
     let absolutePath: string;
     try {
-      absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
+      absolutePath = assertRealPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
       return {
         ok: false,

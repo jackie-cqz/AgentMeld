@@ -76,6 +76,62 @@ function ctx(overrides?: Partial<ToolContext>): ToolContext {
   };
 }
 
+describe("the fs_* tools refuse a symlink out of the workspace", () => {
+  // The lexical guard (resolveSafePath + startsWith) passes a symlink inside
+  // the workspace that points anywhere, and the tools used it until a review
+  // read /etc/passwd through one. The claim in the prompt is now backed by the
+  // same realpath rule the file browser uses.
+  it("does not read through a symlink to a file outside", async () => {
+    const outside = path.join(tempDir, "outside-secret.txt");
+    fs.writeFileSync(outside, "host secret");
+    fs.symlinkSync(outside, path.join(workspacePath, "leak.txt"));
+
+    const result = await toolRegistry.get("fs_read")!.handler({ path: "leak.txt" }, ctx());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("escapes the workspace");
+  });
+
+  it("does not write through a symlink to a file outside", async () => {
+    const outside = path.join(tempDir, "outside-victim.txt");
+    fs.writeFileSync(outside, "original");
+    fs.symlinkSync(outside, path.join(workspacePath, "escape.txt"));
+
+    const result = await toolRegistry.get("fs_write")!.handler(
+      { path: "escape.txt", content: "OVERWRITTEN BY AGENT" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    // The host file is untouched, not merely reported as an error.
+    expect(fs.readFileSync(outside, "utf-8")).toBe("original");
+  });
+
+  it("does not create a file under a symlinked-out directory", async () => {
+    const outsideDir = path.join(tempDir, "outside-dir");
+    fs.mkdirSync(outsideDir);
+    fs.symlinkSync(outsideDir, path.join(workspacePath, "escape-dir"));
+
+    const result = await toolRegistry.get("fs_write")!.handler(
+      { path: "escape-dir/new.txt", content: "x" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    expect(fs.existsSync(path.join(outsideDir, "new.txt"))).toBe(false);
+  });
+
+  it("still allows a symlink that stays inside", async () => {
+    fs.writeFileSync(path.join(workspacePath, "real.txt"), "inside");
+    fs.symlinkSync(path.join(workspacePath, "real.txt"), path.join(workspacePath, "alias.txt"));
+
+    const result = await toolRegistry.get("fs_read")!.handler({ path: "alias.txt" }, ctx());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect((result.value as { content: string }).content).toContain("inside");
+  });
+});
+
 describe("tool registry", () => {
   it("has all workspace tools registered", () => {
     const names = toolRegistry.listNames();
