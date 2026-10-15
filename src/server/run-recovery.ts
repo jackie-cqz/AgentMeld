@@ -1,4 +1,10 @@
-import { markRunInterrupted, listOrphanedRunningRuns, interruptAllPendingApprovals, cancelApprovalsForRun } from "@/server/repositories";
+import {
+  cancelApprovalsForRun,
+  failStreamingMessagesForRun,
+  interruptAllPendingApprovals,
+  listOrphanedRunningRuns,
+  markRunInterrupted
+} from "@/server/repositories";
 import { retireNonTerminalAttempts } from "@/server/repositories/evidence-repository";
 import { recoverCompactionJobs } from "@/server/context-compaction-service";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
@@ -35,6 +41,7 @@ export function recoverOrphanedRuns() {
   }
 
   const orphaned = listOrphanedRunningRuns();
+  let settledMessages = 0;
   if (orphaned.length > 0) {
     for (const run of orphaned) {
       markRunInterrupted(run.id, now);
@@ -46,9 +53,21 @@ export function recoverOrphanedRuns() {
       clearFileWrites(run.id);
       clearTaskResultsForRun(run.id);
       clearRunToolEvidence(run.id);
+      // The messages this run was streaming into are finished by the run, so a
+      // stopped run leaves them spinning with no content — indistinguishable
+      // from a frozen server in the room. Settle them with the same reason the
+      // run itself carries.
+      settledMessages += failStreamingMessagesForRun(
+        run.id,
+        "⚠️ 这条回答被中断了（服务重启过）。请重新发一次请求。",
+        now
+      );
     }
 
-    console.log(`[run-recovery] Marked ${orphaned.length} orphaned runs as interrupted.`);
+    console.log(
+      `[run-recovery] Marked ${orphaned.length} orphaned runs as interrupted` +
+        (settledMessages > 0 ? `, settled ${settledMessages} streaming message(s).` : ".")
+    );
   }
 
   // Runs are repaired above; the attempt rows they own need repairing too, and this
