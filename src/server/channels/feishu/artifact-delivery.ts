@@ -12,6 +12,7 @@ import {
   withinSendBudget
 } from "@/server/channels/feishu/projection";
 import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/workspace-utils";
+import { diffFileName, renderUnifiedDiff } from "@/server/channels/feishu/diff-file";
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
 import { deliverSend } from "@/server/channels/feishu/delivery";
@@ -192,7 +193,23 @@ export function artifactFileFor(
     return { name: deckFileName(artifact.title), content: bytes };
   }
 
-  return { reason: `a ${content.type} artifact is not a single file` };
+  if (content.type === "diff") {
+    // A change is not a file, but a unified diff IS one file, and it is the form
+    // every review tool reads. Nothing is read from the workspace here.
+    const rendered = renderUnifiedDiff(content.hunks, { applied: content.applied });
+    if (!rendered.ok) return { reason: rendered.reason };
+    const bytes = Buffer.from(rendered.text, "utf-8");
+    if (bytes.length > MAX_WEB_APP_BYTES) {
+      return { reason: `the rendered change is ${bytes.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+    return { name: diffFileName(artifact.title), content: bytes };
+  }
+
+  // Every current member of the union is handled above; this is the net for one
+  // added later, written through a cast because the compiler knows the union is
+  // exhausted and would call `content.type` unreachable.
+  const unhandled = content as { type?: string };
+  return { reason: `a ${unhandled.type ?? "unknown"} artifact is not a single file` };
 }
 
 export type DeliveryOutcome =

@@ -246,14 +246,25 @@ describe("artifactFileFor", () => {
     expect("reason" in file && file.reason).toContain("over the");
   });
 
-  it("says why a type it cannot send is not sent", () => {
+  it("says why an empty change is not sent", () => {
+    // This used to be the example of a type that cannot be sent at all; a diff
+    // is deliverable now, and what is left is malformed content — which must
+    // still come back as a reason rather than a throw, because a throw would be
+    // swallowed by the subscriber and leave no not-delivering line.
     const diff = artifactFileFor(
       artifact({ content: { type: "diff", targetArtifactId: "a", hunks: [], applied: false } }),
       null
     );
-    // The reason is asserted, not just its presence: a mutation replacing the
-    // whole sentence used to leave this green.
-    expect("reason" in diff && diff.reason).toContain("diff");
+    expect("reason" in diff && diff.reason).toContain("no hunks");
+  });
+
+  it("says why a type it will never send is not sent", () => {
+    // The net for a union member added later, which the compiler cannot check.
+    const unknown = artifactFileFor(
+      artifact({ content: { type: "hologram" } as never }),
+      null
+    );
+    expect("reason" in unknown && unknown.reason).toContain("hologram");
   });
 
   it("says the file is gone rather than sending something empty", () => {
