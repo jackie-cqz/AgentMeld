@@ -1,5 +1,7 @@
 import {
   addChannelConversationMember,
+  findAgentIdByBotOpenId,
+  removeChannelConversationMember,
   createChannelConversation,
   createConversation,
   deleteConversation,
@@ -118,4 +120,73 @@ export function joinChannelConversation(
 /** Agents whose bot has been observed in this chat, in first-seen order. */
 export function listObservedAgents(channelConversationId: string): string[] {
   return listChannelConversationMembers(channelConversationId);
+}
+
+/**
+ * Drop the observed agents that are no longer in the chat.
+ *
+ * Feishu sends no "bot removed" event to a bot that is still in the group, so a
+ * departure is only visible by asking who IS there. Two deliberate limits:
+ *
+ * - Agents this process cannot identify among the chat's bots are LEFT ALONE.
+ *   "Not in the list I just fetched" is only evidence when we can match the
+ *   agent to a bot at all; an empty or unhelpful answer must not empty the
+ *   roster.
+ * - Only the evidence table changes. The conversation's `agentIds` is a choice
+ *   made by a person (and can be edited on the web), so a bot leaving the group
+ *   does not silently remove the agent from the conversation.
+ */
+export function pruneObservedAgents(
+  channelConversationId: string,
+  presentAgentIds: readonly string[]
+): string[] {
+  const present = new Set(presentAgentIds);
+  const removed: string[] = [];
+  for (const agentId of listChannelConversationMembers(channelConversationId)) {
+    if (present.has(agentId)) continue;
+    if (removeChannelConversationMember(channelConversationId, agentId)) removed.push(agentId);
+  }
+  return removed;
+}
+
+/** Map as many of a chat's bots as we can onto agent ids. */
+export function identifyChatBots(
+  bots: ReadonlyArray<{ bot_id?: string; openId?: string; id?: string }>
+): string[] {
+  const agentIds: string[] = [];
+  for (const bot of bots) {
+    const openId = bot.bot_id ?? bot.openId ?? bot.id;
+    if (!openId) continue;
+    const agentId = findAgentIdByBotOpenId("feishu", openId);
+    if (agentId) agentIds.push(agentId);
+  }
+  return agentIds;
+}
+
+/**
+ * Reconcile the roster with the chat, when the channel can tell us who is in it.
+ *
+ * Capability-checked and failure-tolerant: a channel without `getChatBots`, or
+ * an API failure, leaves the roster exactly as it was.
+ */
+export async function syncChatMembership(
+  channel: { getChatBots?: (chatId: string) => Promise<unknown> },
+  channelConversationId: string,
+  chatId: string
+): Promise<string[]> {
+  if (typeof channel.getChatBots !== "function") return [];
+  let bots: unknown;
+  try {
+    bots = await channel.getChatBots(chatId);
+  } catch (error) {
+    console.error("[feishu] could not list the chat's bots:", error);
+    return [];
+  }
+  if (!Array.isArray(bots) || bots.length === 0) return [];
+  const present = identifyChatBots(bots as never);
+  // Nothing in that list mapped onto one of our agents, so it says nothing
+  // about any of them. Pruning here would empty the roster on the strength of
+  // an id format we do not recognise.
+  if (present.length === 0) return [];
+  return pruneObservedAgents(channelConversationId, present);
 }

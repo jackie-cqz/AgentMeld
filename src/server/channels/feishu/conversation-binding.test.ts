@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import { setupTestDatabase } from "@/test/test-database";
-import { resolveChannelConversation } from "@/server/channels/feishu/conversation-binding";
+import {
+  pruneObservedAgents,
+  resolveChannelConversation,
+  syncChatMembership
+} from "@/server/channels/feishu/conversation-binding";
 import {
   getChannelConversationByChat,
   getConversation,
   getWorkspaceForConversation,
-  listChannelConversationMembers
+  listChannelConversationMembers,
+  upsertChannelBinding
 } from "@/server/repositories";
 
 /**
@@ -16,6 +21,122 @@ import {
  * it grows as other bots are observed, and that an observed agent becomes a
  * participant — without which routing to it would be impossible.
  */
+describe("a roster that shrinks", () => {
+  let teardown: () => void;
+
+  beforeEach(() => {
+    teardown = setupTestDatabase("agentmeld-channel-prune-");
+  });
+
+  afterEach(() => {
+    teardown();
+  });
+
+  const sorted = (ids: string[]) => [...ids].sort();
+
+  function seedChat(agentIds: string[]) {
+    const { channelConversation } = resolveChannelConversation({
+      channel: "feishu",
+      chatId: "oc_1",
+      chatType: "group",
+      receivingAgentId: agentIds[0],
+      now: 1
+    });
+    for (const agentId of agentIds.slice(1)) {
+      resolveChannelConversation({
+        channel: "feishu",
+        chatId: "oc_1",
+        chatType: "group",
+        receivingAgentId: agentId,
+        now: 1
+      });
+    }
+    return channelConversation;
+  }
+
+  it("drops an observed agent that is no longer in the chat", () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+
+    const removed = pruneObservedAgents(channelConversation.id, ["ag_pm"]);
+
+    expect(removed).toEqual(["ag_designer"]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_pm"]);
+  });
+
+  it("leaves the conversation's participants alone", () => {
+    // `agentIds` is who may speak in the conversation, a choice a person can
+    // also make on the web. A bot leaving the group is not that.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    pruneObservedAgents(channelConversation.id, ["ag_pm"]);
+    expect(getConversation(channelConversation.conversationId)?.agentIds).toContain("ag_designer");
+  });
+
+  it("keeps every agent when the channel cannot say who is in the chat", async () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+
+    // No capability: nothing is learned, nothing is dropped.
+    expect(await syncChatMembership({}, channelConversation.id, "oc_1")).toEqual([]);
+    // A failed call: same.
+    expect(
+      await syncChatMembership(
+        { getChatBots: () => Promise.reject(new Error("api down")) },
+        channelConversation.id,
+        "oc_1"
+      )
+    ).toEqual([]);
+    // An empty answer is not evidence that everyone left.
+    expect(
+      await syncChatMembership({ getChatBots: async () => [] }, channelConversation.id, "oc_1")
+    ).toEqual([]);
+    // A list of bots none of which we can match says nothing about OUR agents
+    // either — pruning on it would empty the roster over an id format we simply
+    // do not recognise.
+    expect(
+      await syncChatMembership(
+        { getChatBots: async () => [{ bot_id: "ou_someone_else" }] },
+        channelConversation.id,
+        "oc_1"
+      )
+    ).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer", "ag_pm"]);
+  });
+
+  it("only drops agents it can positively identify among the chat's bots", async () => {
+    // Two agents with known bot ids: one is in the chat, the other is not.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    for (const [agentId, appId, openId] of [
+      ["ag_pm", "cli_pm_prune", "ou_bot_pm"],
+      ["ag_designer", "cli_designer_prune", "ou_bot_designer"]
+    ]) {
+      // botOpenId goes through the upsert: the table is keyed on
+      // (agent_id, channel), so a binding the fixture already seeded keeps its
+      // own id and an update by an invented id would match nothing.
+      upsertChannelBinding({
+        id: `cb_${agentId}`,
+        agentId,
+        channel: "feishu",
+        appId,
+        appSecret: "s",
+        botOpenId: openId,
+        boundByOpenId: "ou_user",
+        now: 1
+      });
+    }
+
+    const removed = await syncChatMembership(
+      { getChatBots: async () => [{ bot_id: "ou_bot_designer" }] },
+      channelConversation.id,
+      "oc_1"
+    );
+
+    // ag_pm is identifiable and absent from the list -> dropped.
+    expect(removed).toEqual(["ag_pm"]);
+    // ag_designer was in the list -> kept.
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer"]);
+  });
+
+});
+
 describe("resolveChannelConversation", () => {
   let teardown: () => void;
 

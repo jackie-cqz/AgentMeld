@@ -885,6 +885,26 @@ export function listChannelConversationMembers(channelConversationId: string): s
 }
 
 /**
+ * Forget that an agent's bot is in a chat.
+ *
+ * Membership is evidence, and evidence can be falsified: a bot that leaves the
+ * group is no longer in the room, and a roster that only grows would keep
+ * offering it as a member (and, since artifact delivery picks a carrier from the
+ * observed members, keep choosing a bot that cannot send).
+ */
+export function removeChannelConversationMember(
+  channelConversationId: string,
+  agentId: string
+): boolean {
+  const result = getDatabase()
+    .prepare(
+      "DELETE FROM channel_conversation_members WHERE channel_conversation_id = ? AND agent_id = ?"
+    )
+    .run(channelConversationId, agentId) as { changes?: number };
+  return (result.changes ?? 0) > 0;
+}
+
+/**
  * Record that an agent's bot has been seen in a chat. Idempotent — membership is
  * evidence, and seeing the same bot twice is not new evidence.
  */
