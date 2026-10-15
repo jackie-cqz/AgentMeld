@@ -126,7 +126,10 @@ export function ChatPanel() {
     () => conversation?.agentIds.map((id) => agents[id]).filter((agent): agent is Agent => Boolean(agent)) ?? [],
     [agents, conversation]
   );
-  const visibleMessages = useMemo(() => transcriptMessages(messages), [messages]);
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => message.role !== "system"),
+    [messages]
+  );
 
   useLayoutEffect(() => {
     const returnedToConversation = conversationVisible && !previousVisibleRef.current;
@@ -344,24 +347,6 @@ export function ChatPanel() {
   );
 }
 
-/**
- * Which messages the transcript shows.
- *
- * System notices used to be filtered out here, and that split the record: the
- * channel projection sends them to the room (deliberately — a failure nobody
- * hears about is the worst outcome), while the desktop showed nothing. So a
- * failed task appeared in Feishu and nowhere on the desktop. They are included
- * now and styled apart (see `isNoticeMessage`), so both sides tell one story.
- */
-export function transcriptMessages(messages: Message[]): Message[] {
-  return messages;
-}
-
-/** A notice rather than something an agent said: rendered differently, not hidden. */
-export function isNoticeMessage(message: Message): boolean {
-  return message.role === "system";
-}
-
 function MessageBubble({
   message,
   agent,
@@ -438,13 +423,12 @@ function MessageBubble({
     }
   };
 
-  const isNotice = isNoticeMessage(message);
-  const agentLabel = isNotice ? "通告" : agent?.name ?? "Agent";
+  const agentLabel = agent?.name ?? "Agent";
 
   return (
     <article
       id={`message-${message.id}`}
-      className={`workspace-message ${isUser ? "is-user" : "is-agent"}${isNotice ? " is-notice" : ""} group flex w-full gap-3 rounded-md transition-colors duration-500 ${
+      className={`workspace-message ${isUser ? "is-user" : "is-agent"} group flex w-full gap-3 rounded-md transition-colors duration-500 ${
         highlighted ? "bg-amber-100/80 ring-2 ring-amber-300 ring-offset-4 dark:bg-amber-500/15 dark:ring-amber-400/60 dark:ring-offset-slate-950" : ""
       } ${isUser ? "justify-end" : "justify-start"}`}
     >
