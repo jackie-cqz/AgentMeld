@@ -1300,7 +1300,29 @@ export function buildWorkspaceStableSection(toolNames: string[], workspacePath: 
   };
 }
 
-function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+/**
+ * The stable prefix sections of a dispatched sub-task prompt.
+ *
+ * Extracted from buildMessages so the wiring is testable: the workspace entry
+ * must be the shared builder applied to the tools the child actually has. A
+ * review showed that replacing the call with a literal left every test green,
+ * because only the helper was covered.
+ */
+export function buildStableSections(input: AdapterInput) {
+  const runtimePlatform = buildRuntimePlatformPrompt(input.workspacePath);
+  return [
+    buildWorkspaceStableSection(input.toolNames, input.workspacePath),
+    { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
+    { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 }
+  ];
+}
+
+/**
+ * The chat messages for one turn. Exported so the dispatched-sub-task prompt
+ * can be asserted end to end — a review showed the call site could be replaced
+ * with a literal while a helper-level test stayed green.
+ */
+export function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
   const runtimePlatform = buildRuntimePlatformPrompt(input.workspacePath);
 
@@ -1319,11 +1341,7 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
       toolNames: input.toolNames,
       roleContractVersion: "role-contracts-v1",
       platformPromptVersion: "agentmeld-p0-v1",
-      stableSections: [
-        buildWorkspaceStableSection(input.toolNames, input.workspacePath),
-        { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
-        { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 },
-      ],
+      stableSections: buildStableSections(input),
       userMessage: triggerText,
       taskPrompt: input.taskExecution ? "Dispatched sub-task — see context below." : triggerText,
       taskContextXml: input.contextXml,

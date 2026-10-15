@@ -121,6 +121,22 @@ describe("the fs_* tools refuse a symlink out of the workspace", () => {
     expect(fs.existsSync(path.join(outsideDir, "new.txt"))).toBe(false);
   });
 
+  it("refuses a dangling symlink, which is where a write would land", async () => {
+    // existsSync FOLLOWS the link, so a link whose target does not exist reads
+    // as "not created yet" and the ancestor rule passes — while the write
+    // creates the file wherever the link points.
+    const outsideTarget = path.join(tempDir, "outside-created.txt");
+    fs.symlinkSync(outsideTarget, path.join(workspacePath, "dangling.txt"));
+
+    const result = await toolRegistry.get("fs_write")!.handler(
+      { path: "dangling.txt", content: "ESCAPED" },
+      ctx()
+    );
+
+    expect(result.ok).toBe(false);
+    expect(fs.existsSync(outsideTarget)).toBe(false);
+  });
+
   it("still allows a symlink that stays inside", async () => {
     fs.writeFileSync(path.join(workspacePath, "real.txt"), "inside");
     fs.symlinkSync(path.join(workspacePath, "real.txt"), path.join(workspacePath, "alias.txt"));

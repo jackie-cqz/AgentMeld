@@ -215,9 +215,10 @@ export function resolveWorkspaceFileForRead(
  *   realpath — that is what a create would land in, so a symlinked-out parent
  *   is refused before the file is made.
  *
- * Returns the path to operate on (the realpath for an existing target, the
- * logical path for a new one) or throws the way `assertPathWithinWorkspace`
- * does, so tool call sites read the same.
+ * Returns the LOGICAL path (never the realpath: callers and the paths they
+ * record work in workspace terms, and realpathing a temp directory rewrites its
+ * prefix on some platforms) or throws the way `assertPathWithinWorkspace` does,
+ * so tool call sites read the same.
  */
 export function assertRealPathWithinWorkspace(workspacePath: string, targetPath: string): string {
   let realRoot: string;
@@ -228,6 +229,21 @@ export function assertRealPathWithinWorkspace(workspacePath: string, targetPath:
   }
 
   const logical = resolveSafePath(workspacePath, targetPath);
+
+  // A DANGLING symlink is the case `existsSync` hides: it follows the link, so
+  // a link whose target does not exist reads as "not created yet" and would be
+  // judged by its ancestor — while a write to it follows the link and creates
+  // the file wherever it points. Where it points cannot be verified, so it is
+  // refused rather than guessed at.
+  try {
+    if (fs.lstatSync(logical).isSymbolicLink() && !fs.existsSync(logical)) {
+      throw new Error(`Path escapes the workspace: ${targetPath}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Path escapes")) throw error;
+    // lstat failing means the path truly does not exist; the ancestor rule below
+    // is the right one for that.
+  }
 
   // Existing target: its realpath is what would be opened, so that is what
   // decides. The LOGICAL path is returned either way — callers (and the paths

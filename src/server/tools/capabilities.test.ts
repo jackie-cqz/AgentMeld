@@ -9,7 +9,7 @@ import {
 import { toolRegistry } from "@/server/tools/registry";
 import { buildSystemPrompt } from "@/server/agent-runner";
 import { buildConductorPlanPrompt } from "@/server/conductor-service";
-import { buildWorkspaceStableSection } from "@/server/adapters/custom-agent-adapter";
+import { buildMessages, buildStableSections, buildWorkspaceStableSection } from "@/server/adapters/custom-agent-adapter";
 import type { Agent, Conversation } from "@/shared/types";
 
 /**
@@ -114,6 +114,52 @@ describe("the workspace claim follows the tools", () => {
     expect(conductor).toContain("<mode>workspace-confined</mode>");
     expect(conductor).not.toContain("NOT sandboxed");
     expect(conductor).not.toContain("isolated sandbox directory");
+  });
+
+  it("puts the truth in the prompt the adapter actually builds", () => {
+    // End to end through buildMessages: this is the assertion that fails if the
+    // CALL SITE is replaced with a literal, which a helper-level test missed.
+    const messages = buildMessages({
+      workspacePath: "/tmp/ws",
+      conversationId: "conv_1",
+      agent: agentWith(["bash"]),
+      toolNames: ["bash", "fs_write"],
+      systemPrompt: "sys",
+      contextXml: "<task_context><title>t</title></task_context>",
+      triggerMessage: { id: "m1", parts: [{ type: "text", content: "go" }] }
+    } as never);
+    const system = messages.filter((message) => message.role === "system")
+      .map((message) => String(message.content))
+      .join("\n");
+    expect(system).toContain("<mode>host-access</mode>");
+    expect(system).toContain("NOT sandboxed");
+    expect(system).not.toContain("isolated sandbox directory");
+  });
+
+  it("wires the shared builder into the sub-task prompt's section list", () => {
+    // Asserting the helper alone left the CALLER unpinned: replacing the call
+    // in custom-agent-adapter with a literal kept every test green.
+    const withBash = buildStableSections({
+      agent: agentWith(["bash"]),
+      workspacePath: "/tmp/ws",
+      toolNames: ["bash", "fs_write"],
+      systemPrompt: "sys",
+      triggerMessage: { parts: [{ type: "text", content: "go" }] }
+    } as never);
+    const workspace = withBash.find((section) => section.id === "workspace_info");
+    expect(workspace?.content).toContain("<mode>host-access</mode>");
+    expect(workspace?.content).toContain("NOT sandboxed");
+    expect(workspace?.content).not.toContain("isolated sandbox directory");
+
+    const confined = buildStableSections({
+      agent: agentWith(["fs_read"]),
+      workspacePath: "/tmp/ws",
+      toolNames: ["fs_read"],
+      systemPrompt: "sys",
+      triggerMessage: { parts: [{ type: "text", content: "go" }] }
+    } as never);
+    expect(confined.find((section) => section.id === "workspace_info")?.content)
+      .toContain("<mode>workspace-confined</mode>");
   });
 
   it("describes a dispatched sub-task by the tools the child really has", () => {

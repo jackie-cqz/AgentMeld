@@ -63,6 +63,20 @@ export function deployWorkspace(
     if (!isPathWithin(absPath, workspacePath)) {
       return failedDeploy("workspace", "Path is outside workspace.");
     }
+    // The lexical check above passes a symlink inside the workspace that points
+    // anywhere, and this function READS the directory and publishes it — so a
+    // link to a host directory would publish host files. The same realpath rule
+    // the fs_* tools use applies here, which is what makes the tool's
+    // "workspace-read" capability true.
+    try {
+      const realRoot = fs.realpathSync(workspacePath);
+      const realTarget = fs.realpathSync(absPath);
+      if (!isPathWithin(realTarget, realRoot)) {
+        return failedDeploy("workspace", "Path escapes the workspace.");
+      }
+    } catch {
+      return failedDeploy("workspace", "Path is not accessible.");
+    }
 
     if (!fs.existsSync(absPath) || !fs.statSync(absPath).isDirectory()) {
       return failedDeploy("workspace", "Path is not a directory.");
