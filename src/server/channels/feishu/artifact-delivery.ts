@@ -15,6 +15,7 @@ import { MAX_FILE_READ_BYTES, resolveWorkspaceFileForRead } from "@/server/works
 import { safeFileName } from "@/server/channels/feishu/file-name";
 import type { Artifact, Workspace } from "@/shared/types";
 import { deliverSend } from "@/server/channels/feishu/delivery";
+import { deckFileName, renderDeckHtml } from "@/server/channels/feishu/ppt-deck";
 import {
   MAX_WEB_APP_BYTES,
   inlineWebApp,
@@ -37,10 +38,10 @@ import {
  *
  * A web app is a set of files, so it is not sent as one arbitrary file out of
  * the set: it is folded into a single self-contained page when that is
- * faithful, and zipped when it is not (see web-app.ts). Structures that are not
- * files at all — a deck's slides, a diff's hunks — keep the reference the
- * message projection writes, and the reason is stated rather than left to look
- * like an oversight.
+ * faithful, and zipped when it is not (see web-app.ts). A deck is
+ * rendered to a self-contained HTML file (see ppt-deck.ts). A diff's hunks are
+ * not a file at all, so that one keeps the reference the message projection
+ * writes, with the reason stated rather than left to look like an oversight.
  */
 
 export interface ArtifactFile {
@@ -161,6 +162,18 @@ export function artifactFileFor(
         reason: error instanceof Error ? error.message : "the web app could not be packaged"
       };
     }
+  }
+
+  if (content.type === "ppt") {
+    // The artifact is a structure, not a file: a self-contained HTML deck is
+    // the rendering that needs nothing else (see ppt-deck.ts).
+    const deck = renderDeckHtml(content);
+    if (!deck.ok) return { reason: deck.reason };
+    const bytes = Buffer.from(deck.html, "utf-8");
+    if (bytes.length > MAX_WEB_APP_BYTES) {
+      return { reason: `the rendered deck is ${bytes.length} bytes, over the ${MAX_WEB_APP_BYTES} limit` };
+    }
+    return { name: deckFileName(artifact.title), content: bytes };
   }
 
   return { reason: `a ${content.type} artifact is not a single file` };
