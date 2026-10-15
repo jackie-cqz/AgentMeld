@@ -8,7 +8,8 @@ import {
 } from "@/server/channels/feishu/router";
 import { eventBus } from "@/server/event-bus";
 import {
-  getChannelInboundThread,
+  getChannelBindingForAgent,
+getChannelInboundThread,
 
   getChannelConversationByChat,
   getChannelInboundMessage,
@@ -135,6 +136,55 @@ describe("routeChannelInbound", () => {
 
     const stored = getChannelInboundThread(outcome.messageId);
     expect(stored).toMatchObject({ externalMessageId: "om_1", threadId: "omt_topic_9" });
+  });
+
+  it("claims a manual binding with the code and does not start a run", async () => {
+    // The credentials flow has no owner; the code the web page showed is sent
+    // to the bot in the group, and that message is a claim, not a request.
+    const { issueClaimCodeForTests, clearClaimCodesForTests } = await import(
+      "@/server/channels/feishu/binding"
+    );
+    clearClaimCodesForTests();
+    // The binding already exists (the fixture seeds one); the claim is what the
+    // credentials flow would have issued.
+    issueClaimCodeForTests("ag_pm", "424242");
+    upsertChannelBinding({
+      id: "cb_pm",
+      agentId: "ag_pm",
+      channel: "feishu",
+      appId: "cli_pm",
+      appSecret: "secret_typed",
+      boundByOpenId: null,
+      now: 1
+    });
+
+    const outcome = await routeChannelInbound(inbound({ content: "424242" }));
+
+    expect(outcome.status).toBe("routed");
+    if (outcome.status !== "routed") return;
+    // No run: the text was a code, and the agent must not be asked to act on it.
+    expect(outcome.runIds).toEqual([]);
+    expect(getChannelBindingForAgent("ag_pm", "feishu")?.boundByOpenId).toBe("ou_human");
+    const messages = listMessages(outcome.conversationId);
+    expect(messages.some((message) => message.parts.some(
+      (part) => part.type === "text" && part.content.includes("绑定已认领")
+    ))).toBe(true);
+    clearClaimCodesForTests();
+  });
+
+  it("refuses a wrong claim code without starting a run", async () => {
+    const { issueClaimCodeForTests, clearClaimCodesForTests } = await import(
+      "@/server/channels/feishu/binding"
+    );
+    clearClaimCodesForTests();
+    issueClaimCodeForTests("ag_pm", "424242");
+
+    const outcome = await routeChannelInbound(inbound({ content: "000000" }));
+
+    if (outcome.status !== "routed") throw new Error("expected routed");
+    expect(outcome.runIds).toEqual([]);
+    expect(getChannelBindingForAgent("ag_pm", "feishu")?.boundByOpenId).toBeFalsy();
+    clearClaimCodesForTests();
   });
 
   it("lets a human message start a run", async () => {
