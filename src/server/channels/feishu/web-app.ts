@@ -1,4 +1,4 @@
-import { safeFileName } from "@/server/channels/feishu/file-name";
+import { artifactFileName } from "@/server/channels/feishu/file-name";
 import { normalizeStaticFilePath } from "@/server/static-file-utils";
 import { MAX_FILE_READ_BYTES } from "@/server/workspace-utils";
 
@@ -191,39 +191,11 @@ export function inlineWebApp(
 
 /** Names to send the two shapes under, with the extension forced. */
 export function inlineWebAppName(title: string): string {
-  return forceExtension(safeFileName(stripExtension(title), "web-app", ".html"), ".html");
+  return artifactFileName(title, "web-app", ".html");
 }
 
 export function zipWebAppName(title: string): string {
-  return forceExtension(safeFileName(stripExtension(title), "web-app", ".zip"), ".zip");
-}
-
-/**
- * The extension is decided by the content, so it is appended if the sanitiser
- * left something else — a title of "..." produced "web-app." because
- * safeFileName saw a "." and believed it was one.
- */
-function forceExtension(name: string, extension: string): string {
-  return name.toLowerCase().endsWith(extension) ? name : `${name}${extension}`;
-}
-
-/**
- * A `safeFileName` keeps whatever extension the title already had, so "v2.0"
- * became a delivered file named "v2.0" with no extension and "index.html"
- * became a ZIP called index.html. The extension is decided by the content.
- */
-function stripExtension(title: string): string {
-  let trimmed = title.trim();
-  // EVERY trailing dot segment goes, in a loop: "Dashboard 2.0.1" stripped once
-  // becomes "Dashboard 2.0", and safeFileName would then treat ".0" as the
-  // extension and drop the one we asked for. Version-numbered titles are the
-  // common case, not the exotic one.
-  let previous = "";
-  while (previous !== trimmed) {
-    previous = trimmed;
-    trimmed = trimmed.replace(/\.[^.]*$/, "").trim();
-  }
-  return trimmed.length > 0 ? trimmed : title.trim();
+  return artifactFileName(title, "web-app", ".zip");
 }
 
 /**
