@@ -21,6 +21,11 @@ export async function acquirePiWorkspace(workspace: string, signal: AbortSignal)
     if (Number(receipt.changes) === 1) break;
     const current = db.prepare("SELECT token,owner_pid,child_pid,status FROM harness_workspace_leases WHERE workspace_key=?").get(key) as LeaseRow | undefined;
     if (current && !isProcessAlive(current.owner_pid) && (current.child_pid === null || !isProcessAlive(current.child_pid))) {
+      // Parent PID disappearance is not a receipt for detached descendants.
+      if (current.child_pid !== null) {
+        db.prepare("UPDATE harness_workspace_leases SET status='poisoned' WHERE workspace_key=? AND token=?").run(key, current.token);
+        throw new PiRuntimeError("Previous Pi ownership ended without a teardown receipt. Inspect native descendants before clearing the workspace lease.", "cleanup_failed");
+      }
       db.prepare("DELETE FROM harness_workspace_leases WHERE workspace_key=? AND token=?").run(key, current.token);
       continue;
     }

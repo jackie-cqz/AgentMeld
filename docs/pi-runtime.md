@@ -139,9 +139,11 @@ The database contains `agent_execution_bindings`, `harness_executions` and
 `harness_workspace_leases`. Session files live under
 `.agentmeld-data/pi/executions/<invocation>/sessions`. They are local history,
 not live-process checkpoints. Startup marks unfinished invocations interrupted;
-it does not replay commands. A lease is reclaimed automatically only if both
-recorded owner and child processes are gone. A surviving orphan must be inspected
-and stopped before the next writer is admitted. PID reuse may conservatively
+it does not replay commands. A dead owner that never launched a child can be
+reclaimed automatically. If a child was launched but no normal teardown released
+the lease, dead parent/child PIDs do not prove detached descendants stopped: the
+lease remains locked for inspection, on all operating systems. A surviving orphan
+must be stopped before the next writer is admitted. PID reuse may conservatively
 require operator intervention; never delete a lease merely to unblock execution
 without confirming that its old processes have stopped.
 
