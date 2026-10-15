@@ -223,7 +223,7 @@ grep "\[feishu\] not delivering"
 | **`code_file` / `diff` 产物投递** | `code_file` 有分支但**本仓库没有生产者**（`write-artifact` 只接受 `web_app\|document\|image\|ppt`）；`diff` **连投递分支都没有**，走通用失败理由。生产上都走不到 |
 | **`web_app` 产物** | **已实现**：单页且资源可内联 → 发一个自包含 `.html`；否则 → 发 `.zip`（不丢文件）。两者都不需要公网地址。**未验证**：`.html`/`.zip` 在飞书客户端/移动端的呈现方式没有真机确认（§4.4 同类未验证项） |
 | **`ppt` 产物** | 仍不发（需要渲染器）。真实库里 3/12 个产物是 web_app 那一类——**设计真正想要的入口随上面一行一起解决了** |
-| **网页侧产物同步** | **已实现**：`POST /api/artifacts`、`PATCH /api/artifacts/:id`、`POST /api/artifacts/:id/versions` 都会发 `artifact.create`，群里因此能看到网页上创建/编辑的产物。网页新建的产物**没有作者**，投递时由该会话内**第一个有活连接的 Bot** 代为发出（有作者的产物不受影响）。PATCH 与 versions 都是**新建一行**（新 id、version+1），所以每次有效编辑都会投递一份新文件——刻意如此；**无改动的更新不会新建行也不会投递**。
+| **网页侧产物同步** | **已实现**：`POST /api/artifacts`、`PATCH /api/artifacts/:id`、`POST /api/artifacts/:id/versions` 都会发 `artifact.create`，群里因此能看到网页上创建/编辑的产物。网页新建的产物**没有作者**，投递时从**这个群里观测到的成员**中挑一个有活连接的 Bot 代发（有作者的产物仍用作者；候选依次尝试，投递失败会换下一个）。PATCH 与 versions 都是**新建一行**（新 id、version+1），所以每次有效编辑都会投递一份新文件——刻意如此；**无改动的更新（PATCH 与 versions 都是）不会新建行也不会投递**。
 | **产物删除不通告** | 网页删除产物（`DELETE /api/artifacts/:id`）**不发事件**，群里已投出去的文件不会撤回，也没有任何提示。需要时再单独做一个「撤回/更新」消息 |
 | **并发编辑会产生重复版本** | `createNewArtifactVersion` 是「读-改-插」且无事务：并发两次编辑同一产物会得到**两行同为 version+1**、各自投递一次。既有竞态，本轮只记录 |
 | **话题隔离** | 入站事件带 `threadId`，但**当前被丢弃**，群里的话题不会延续到会话 |

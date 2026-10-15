@@ -102,6 +102,33 @@ export function createNewArtifactVersion(artifactId: string, input: UpdateArtifa
  * reported to the caller as a failed creation (the row is already stored, and
  * the client would retry into a duplicate).
  */
+/**
+ * Would this update change anything?
+ *
+ * Both routes that create a new version ask this first: an edit that changes
+ * nothing is not an edit, and treating it as one created a duplicate row and
+ * delivered a byte-identical copy to the room.
+ *
+ * Comparison is structural, not textual: a client that re-serialises the same
+ * content with its keys in another order is not making a change.
+ */
+export function isNoOpArtifactUpdate(existing: Artifact, input: UpdateArtifactInput): boolean {
+  const titleUnchanged = input.title === undefined || input.title === existing.title;
+  const contentUnchanged = input.content === undefined || canonical(input.content) === canonical(existing.content);
+  return titleUnchanged && contentUnchanged;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 export function announceArtifactCreated(artifact: Artifact): void {
   try {
     eventBus.publish({

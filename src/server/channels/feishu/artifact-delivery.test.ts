@@ -16,8 +16,8 @@ import {
 import { eventBus } from "@/server/event-bus";
 import {
   createChannelConversation,
+  addChannelConversationMember,
   createConversation,
-  getConversation,
   upsertChannelBinding
 } from "@/server/repositories";
 import type { Artifact, Workspace } from "@/shared/types";
@@ -292,6 +292,9 @@ describe("delivering an artifact into the room", () => {
       id: "cb_pm", agentId: AGENT, channel: "feishu", appId: "cli_pm", appSecret: "s",
       boundByOpenId: "ou_user", now: 1
     });
+    // Who is IN the group, which is the member table — not the conversation's
+    // agentIds, which only says who may speak in it.
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: AGENT, now: 1 });
   });
 
   afterEach(() => {
@@ -352,11 +355,13 @@ describe("delivering an artifact into the room", () => {
   });
 
   it("stays silent for an artifact nobody authored when no bot can carry it", async () => {
-    const conversation = getConversation(artifact().conversationId);
-    // No agent in the conversation has a channel any more.
-    for (const agentId of conversation?.agentIds ?? []) channelsByAgent.delete(agentId);
+    // Nobody observed in the group has a channel any more.
+    channelsByAgent.clear();
     const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
-    expect(outcome).toEqual({ status: "skipped", reason: "no agent in this conversation has a live channel" });
+    expect(outcome).toEqual({
+      status: "skipped",
+      reason: "no agent observed in this group has a live channel"
+    });
   });
 
   it("yields to the pause switch", async () => {

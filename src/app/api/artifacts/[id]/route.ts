@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   announceArtifactCreated,
+  isNoOpArtifactUpdate,
   getArtifactById,
   createNewArtifactVersion,
   getVersionChain
@@ -40,18 +41,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  // An edit that changes nothing is not an edit: no new row, no new file in the
-  // room. Without this, `PATCH {}` produced a duplicate version and delivered a
-  // byte-identical copy.
+  // An edit that changes nothing is not an edit: no new row, and no
+  // byte-identical copy delivered to the room.
   const existing = getArtifactById(id);
-  if (existing && parsed.data.title === undefined && parsed.data.content === undefined) {
-    return Response.json({ artifact: existing });
-  }
-  if (
-    existing &&
-    (parsed.data.title === undefined || parsed.data.title === existing.title) &&
-    (parsed.data.content === undefined || JSON.stringify(parsed.data.content) === JSON.stringify(existing.content))
-  ) {
+  if (existing && isNoOpArtifactUpdate(existing, {
+    title: parsed.data.title,
+    content: parsed.data.content as ArtifactContent | undefined
+  })) {
     return Response.json({ artifact: existing });
   }
 

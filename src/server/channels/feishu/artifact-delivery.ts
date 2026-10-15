@@ -2,10 +2,10 @@ import fs from "node:fs";
 import { eventBus } from "@/server/event-bus";
 import {
   getChannelConversationByConversationId,
-  getConversation,
   getWorkspaceForConversation
 } from "@/server/repositories";
 import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
+import { listObservedAgents } from "@/server/channels/feishu/conversation-binding";
 import {
   isChannelProjectionPaused,
   recordSend,
@@ -166,21 +166,6 @@ export function artifactFileFor(
   return { reason: `a ${content.type} artifact is not a single file` };
 }
 
-/**
- * A bot that can hand something over in this conversation: the first agent in
- * it with a live channel. Attribution is not lost by this — an artifact that
- * HAS an author keeps it; this only answers "who can carry the file" for one
- * that never had an author to begin with.
- */
-function delivererFor(conversationId: string): string | null {
-  const conversation = getConversation(conversationId);
-  if (!conversation) return null;
-  for (const agentId of conversation.agentIds) {
-    if (getFeishuChannelForAgent(agentId)) return agentId;
-  }
-  return null;
-}
-
 export type DeliveryOutcome =
   | { status: "delivered"; chatId: string; fileName: string }
   | { status: "skipped"; reason: string };
@@ -192,17 +177,19 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
   if (!channelConversation) return { status: "skipped", reason: "conversation is not on a channel" };
 
   // An artifact may have no author: one made on the web page belongs to the
-  // conversation, not to an agent. The room still has bots — the agents in this
-  // conversation — so the file is handed over by the first of them that has a
-  // live channel. Without this, every web-created artifact was skipped as
-  // "no author" and the create path was dead code.
-  const agentId = artifact.createdByAgentId ?? delivererFor(artifact.conversationId);
-  if (!agentId) {
-    return { status: "skipped", reason: "no agent in this conversation has a live channel" };
+  // conversation, not to an agent. The room still has bots, but the candidate
+  // list must come from the OBSERVED members of this group — `agentIds` is who
+  // may speak in the conversation, not who is in the room, and
+  // `getFeishuChannelForAgent` is documented as "this agent has a Feishu
+  // presence", never as "use someone else's". A bot that is not in the group
+  // fails to send, so each candidate is tried in turn instead of trusting the
+  // first one that has a connection.
+  const candidates = artifact.createdByAgentId
+    ? [artifact.createdByAgentId]
+    : listObservedAgents(channelConversation.id).filter((agentId) => getFeishuChannelForAgent(agentId));
+  if (candidates.length === 0) {
+    return { status: "skipped", reason: "no agent observed in this group has a live channel" };
   }
-
-  const channel = getFeishuChannelForAgent(agentId);
-  if (!channel) return { status: "skipped", reason: "agent has no live channel" };
 
   // One delivery per artifact. Nothing else stopped a second: `deploy_artifact`
   // on a document re-announces it, and a message projection would send a file
@@ -210,36 +197,45 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
   const delivered = getDeliveredArtifacts();
   if (delivered.has(artifact.id)) return { status: "skipped", reason: "already delivered" };
 
-  const workspace = getWorkspaceForConversation(artifact.conversationId);
-  const file = artifactFileFor(artifact, workspace ?? null);
-  if ("reason" in file) {
-    // Said out loud: a skip nobody can see is indistinguishable from a bug.
-    console.info(`[feishu] not delivering ${artifact.id}: ${file.reason}`);
-    return { status: "skipped", reason: file.reason };
-  }
-
-  // The rate limit applies, and is RECORDED. It used to be checked and never
-  // counted, so twenty-five artifacts went out inside one twenty-message
-  // window — a limit that does not count is not a limit.
+  // The message rate limit applies to this too: a file is a message.
   const now = Date.now();
   if (!withinSendBudget(artifact.conversationId, now)) {
     console.info(`[feishu] not delivering ${artifact.id}: send budget exhausted`);
     return { status: "skipped", reason: "send budget exhausted" };
   }
 
-  const sent = await deliverSend<{ messageId: string }>(
-    channel,
-    artifact.conversationId,
-    agentId,
-    channelConversation.chatId,
-    { file: { source: file.content, fileName: file.name } }
-  );
-  recordSend(artifact.conversationId, now);
-  delivered.add(artifact.id);
-  console.info(
-    `[feishu] delivered ${file.name} (${file.content.length} bytes) to ${channelConversation.chatId} (${sent.messageId})`
-  );
-  return { status: "delivered", chatId: channelConversation.chatId, fileName: file.name };
+  const workspace = getWorkspaceForConversation(artifact.conversationId);
+  const file = artifactFileFor(artifact, workspace ?? null);
+  if ("reason" in file) return { status: "skipped", reason: file.reason };
+
+  // The file is the same whoever carries it, so it is built once and offered to
+  // each candidate until one succeeds.
+  let lastReason = "no agent observed in this group has a live channel";
+  for (const agentId of candidates) {
+    const channel = getFeishuChannelForAgent(agentId);
+    if (!channel) {
+      lastReason = "agent has no live channel";
+      continue;
+    }
+    try {
+      const sent = await deliverSend<{ messageId: string }>(
+        channel,
+        artifact.conversationId,
+        agentId,
+        channelConversation.chatId,
+        { file: { source: file.content, fileName: file.name } }
+      );
+      recordSend(artifact.conversationId, Date.now());
+      delivered.add(artifact.id);
+      console.info(
+        `[feishu] delivered ${file.name} (${file.content.length} bytes) to ${channelConversation.chatId} (${sent.messageId})`
+      );
+      return { status: "delivered", chatId: channelConversation.chatId, fileName: file.name };
+    } catch (error) {
+      lastReason = error instanceof Error ? error.message : "the send failed";
+    }
+  }
+  return { status: "skipped", reason: lastReason };
 }
 
 declare global {
@@ -247,17 +243,18 @@ declare global {
   var __agentMeldDeliveredArtifacts: Set<string> | undefined;
 }
 
+/**
+ * Which artifacts the room has already been given.
+ *
+ * Kept in memory: a restart re-delivering what is already in the room would be
+ * worse than the rare miss, and the platform's own message history is not
+ * readable with a one-click app's scopes.
+ */
 function getDeliveredArtifacts(): Set<string> {
   globalThis.__agentMeldDeliveredArtifacts ??= new Set<string>();
   return globalThis.__agentMeldDeliveredArtifacts;
 }
 
-/**
- * Follow artifact creation.
- *
- * Subscribes once per process. An artifact is announced when it is created,
- * which is also when the agent that made it is still around to hand it over.
- */
 export function startChannelArtifactDelivery(): () => void {
   if (globalThis.__agentMeldChannelArtifactStop) return globalThis.__agentMeldChannelArtifactStop;
 

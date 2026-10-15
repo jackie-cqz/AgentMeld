@@ -6,7 +6,7 @@ import {
 } from "@/server/artifact-service";
 import type { ArtifactContent } from "@/shared/types";
 import { gateRequest } from "@/server/api-gate";
-import { announceArtifactCreated } from "@/server/artifact-service";
+import { announceArtifactCreated, isNoOpArtifactUpdate } from "@/server/artifact-service";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +41,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const parsed = createVersionSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  // Same rule as PATCH: an empty or identical request is not a new version.
+  const existing = getArtifactById(id);
+  if (existing && isNoOpArtifactUpdate(existing, {
+    title: parsed.data.title,
+    content: parsed.data.content as ArtifactContent | undefined
+  })) {
+    return Response.json({ artifact: existing });
   }
 
   const artifact = createNewArtifactVersion(id, {

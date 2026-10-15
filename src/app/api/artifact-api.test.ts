@@ -212,13 +212,23 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
   // fabrication, when it is published before the row exists, and when it is
   // published before the gate.
   function collect() {
-    const seen: Array<{ id: string; conversationId: string; createdByAgentId: string | null }> = [];
+    const seen: Array<{
+      id: string;
+      conversationId: string;
+      createdByAgentId: string | null;
+      persistedAtPublish: boolean;
+    }> = [];
     const unsubscribe = eventBus.subscribe((entry) => {
       if (entry.event.type === "artifact.create") {
         seen.push({
           id: entry.event.artifact.id,
           conversationId: entry.event.artifact.conversationId,
-          createdByAgentId: entry.event.artifact.createdByAgentId
+          createdByAgentId: entry.event.artifact.createdByAgentId,
+          // Read HERE, inside the subscriber: "the row exists by the time the
+          // response came back" is satisfied by an announcement made before the
+          // insert and a response that waits for it. This is the ordering the
+          // event is supposed to guarantee.
+          persistedAtPublish: getArtifactById(entry.event.artifact.id) !== null
         });
       }
     });
@@ -254,7 +264,8 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       expect(seen[0]).toEqual({
         id: persisted?.id,
         conversationId: conversation.id,
-        createdByAgentId: persisted?.createdByAgentId ?? null
+        createdByAgentId: persisted?.createdByAgentId ?? null,
+        persistedAtPublish: true
       });
     } finally {
       unsubscribe();
@@ -310,6 +321,64 @@ describe("the web artifact routes put their artifacts on the event bus", () => {
       const body = (await response.json()) as { artifact: { id: string; version: number } };
       expect(body.artifact.id).toBe(original.id);
       expect(body.artifact.version).toBe(original.version);
+      expect(seen).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("publishes nothing when a version request changes nothing", async () => {
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "document",
+      title: "第一版",
+      content: { type: "document", content: "# one" }
+    });
+    const { seen, unsubscribe } = collect();
+    try {
+      for (const body of [{}, { title: "第一版", content: { type: "document", content: "# one" } }]) {
+        const response = await postArtifactVersion(
+          authedRequest(`http://localhost/api/artifacts/${original.id}/versions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          }),
+          { params: Promise.resolve({ id: original.id }) }
+        );
+        expect(response.status).toBe(200);
+        const payload = (await response.json()) as { artifact: { id: string } };
+        expect(payload.artifact.id).toBe(original.id);
+      }
+      expect(seen).toHaveLength(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("treats re-ordered keys as the same content", async () => {
+    // A client that re-serialises web_app.files in another order is not editing.
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+    const content = { type: "web_app", files: { "index.html": "<p>x</p>", "a.css": "body{}" }, entry: "index.html" };
+    const original = createNewArtifact({
+      conversationId: conversation.id,
+      type: "web_app",
+      title: "应用",
+      content: content as never
+    });
+    const { seen, unsubscribe } = collect();
+    try {
+      const response = await patchArtifact(
+        authedRequest(`http://localhost/api/artifacts/${original.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: { entry: "index.html", type: "web_app", files: { "a.css": "body{}", "index.html": "<p>x</p>" } } })
+        }),
+        { params: Promise.resolve({ id: original.id }) }
+      );
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { artifact: { id: string } };
+      expect(payload.artifact.id).toBe(original.id);
       expect(seen).toHaveLength(0);
     } finally {
       unsubscribe();
