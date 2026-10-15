@@ -553,9 +553,17 @@ describe("app-store bootstrap and UI state", () => {
   });
 
   it("opens the right panel when an artifact is selected", () => {
-    useAppStore.setState({ rightPanelOpen: false });
+    useAppStore.setState({ rightPanelOpen: false, rightPanelMode: "files" });
     useAppStore.getState().setActiveArtifact("art_123456789abc");
     expect(useAppStore.getState().activeArtifactId).toBe("art_123456789abc");
+    expect(useAppStore.getState().rightPanelOpen).toBe(true);
+    expect(useAppStore.getState().rightPanelMode).toBe("artifact");
+  });
+
+  it("returns to preview when the selected artifact is opened from the file pane", () => {
+    useAppStore.setState({ activeArtifactId: "art_123456789abc", rightPanelOpen: true, rightPanelMode: "files" });
+    useAppStore.getState().setActiveArtifact("art_123456789abc");
+    expect(useAppStore.getState().rightPanelMode).toBe("artifact");
     expect(useAppStore.getState().rightPanelOpen).toBe(true);
   });
 

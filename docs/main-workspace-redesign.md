@@ -24,6 +24,7 @@ assets were copied.
   reference metadata is missing.
 - The right workspace starts closed. Files, artifact references and the header
   actions open it on demand. The existing resize and unsaved-editor guards remain.
+  Selecting a new or already-selected artifact also switches from files to preview.
 - Light/dark themes and small-screen navigation are supported. The message
   timeline retains a reserved lane to the right of user avatars.
 
@@ -105,3 +106,8 @@ failures are in unchanged Feishu backend tests: two assertions concatenate `/`
 into Windows filesystem paths, and one symlink fixture fails with Windows
 `EPERM`. These failures were not suppressed or fixed in this frontend change.
 The build also reports the existing backend SDK file-tracing warnings.
+
+Pre-merge review added a focused regression for opening artifacts while the file
+pane is active, including reopening the same artifact. The focused store,
+navigation and layout suites then passed 49 tests; the count above records the
+earlier full local run.

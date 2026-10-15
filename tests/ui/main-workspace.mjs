@@ -78,10 +78,16 @@ try {
   assert(Math.abs(await scroller.evaluate(node => node.scrollTop) - position) < 2, 'Returning from management preserves reading position');
   await page.getByLabel('消息', { exact: true }).fill('');
 
+  await page.getByTitle('工作区文件', { exact: true }).click();
+  await page.getByRole('separator', { name: '调整工作区文件面板宽度', exact: true }).waitFor();
   await page.getByTitle('产物库', { exact: true }).click();
   await page.locator('.workspace-view').getByRole('button', { name: /Todo · 界面规范/ }).first().click();
   assert.equal(await page.locator('.workspace-conversation').isVisible(), true, 'Library selection returns to the owning conversation');
   await page.locator('.ui-right-pane').waitFor();
+  await page.getByTitle('关闭预览', { exact: true }).waitFor();
+  await page.getByTitle('工作区文件', { exact: true }).click();
+  await page.getByTitle('点击在右侧预览', { exact: true }).click();
+  await page.getByTitle('关闭预览', { exact: true }).waitFor();
   await capture(page, 'desktop-split');
   await page.getByTitle('深色模式', { exact: true }).click();
   await capture(page, 'desktop-dark-split');
