@@ -11,6 +11,7 @@ export class PiEventProjection {
   private inputTokens = 0;
   private outputTokens = 0;
   private hasUsage = false;
+  private incompleteUsage = false;
   committedAssistantMessages = 0;
 
   constructor(private readonly conversationId: string, private readonly modelId: string) {}
@@ -58,7 +59,7 @@ export class PiEventProjection {
         this.hasUsage = true;
         this.inputTokens += usage.input + (finiteCount(usage.cacheRead) ? usage.cacheRead : 0) + (finiteCount(usage.cacheWrite) ? usage.cacheWrite : 0);
         this.outputTokens += usage.output;
-      }
+      } else this.incompleteUsage = true;
       if (message.stopReason === "error") {
         const reason = typeof message.errorMessage === "string" ? message.errorMessage : "";
         if (/\b(?:401|403)\b|unauthorized|invalid.api.key|authentication/i.test(reason)) throw new PiRuntimeError("Pi model authentication failed. Check the selected provider and credentials.", "authentication");
@@ -72,7 +73,7 @@ export class PiEventProjection {
   }
 
   usage(): UsagePayload | null {
-    return this.hasUsage ? { modelId: this.modelId, inputTokens: this.inputTokens, outputTokens: this.outputTokens } : null;
+    return this.hasUsage && !this.incompleteUsage ? { modelId: this.modelId, inputTokens: this.inputTokens, outputTokens: this.outputTokens } : null;
   }
 
   private part(contentIndex: number, kind: Part["kind"], events: StreamEvent[]): Part {

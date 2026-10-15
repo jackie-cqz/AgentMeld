@@ -40,4 +40,12 @@ describe("Pi event projection contract", () => {
     const projection = new PiEventProjection("conversation", "model");
     expect(() => projection.consume({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 unauthorized: private provider diagnostic" } })).toThrow("authentication failed");
   });
+  it("does not present partial usage as the total when another turn is unknown", () => {
+    const projection = new PiEventProjection("conversation", "model");
+    projection.consume({ type: "message_end", message: { role: "assistant", content: [], stopReason: "toolUse", usage: { input: 10, output: 5 } } });
+    expect(projection.usage()).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+    projection.consume({ type: "message_start", message: { role: "assistant" } });
+    projection.consume({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop" } });
+    expect(projection.usage()).toBeNull();
+  });
 });
