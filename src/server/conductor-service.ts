@@ -2010,7 +2010,7 @@ async function runConductorAssess(
     agent: { ...agent, toolNames: assessToolNames, systemPrompt: assessSystemPrompt },
     conversation,
     workspace,
-    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }] },
+    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] },
     recentMessages: [],
     toolNames: assessToolNames,
     systemPrompt: assessSystemPrompt,

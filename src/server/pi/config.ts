@@ -73,7 +73,7 @@ export function preparePiInvocation(input: PiInvocationInput) {
     compat: { ...nativeModel?.compat, supportsDeveloperRole: false, supportsReasoningEffort: false,
       ...(deepseek ? { supportsStore: false, maxTokensField: "max_tokens", requiresReasoningContentOnAssistantMessages: true, thinkingFormat: "deepseek" } : {}) },
     models: [{ id: input.agent.modelId, name: input.agent.modelId, reasoning: nativeModel?.reasoning ?? deepseek,
-      input: input.agent.supportsVision ? ["text", "image"] : ["text"],
+      input: nativeModel?.input ?? (input.agent.supportsVision && !deepseek ? ["text", "image"] : ["text"]),
       contextWindow, maxTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
   } } }), { mode: 0o600 });
