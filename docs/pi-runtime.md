@@ -90,6 +90,10 @@ Windows process ownership also requires Windows PowerShell with `Add-Type` and
 permission to run the repository's local Job Object host script. The launcher
 does not bypass execution policy. Host diagnostics report only fixed stage names
 and numeric error codes, never provider credentials or raw subprocess stderr.
+The initial Windows RPC handshake allows up to 60 seconds for cold PowerShell
+and .NET initialization; subsequent RPC commands retain the 15-second bound.
+Prefer workspace-relative native file paths; the runtime uses the physical root
+to avoid Windows short-name aliases disagreeing with native file callbacks.
 
 These controls are **not an OS sandbox**. Approved project scripts execute host
 code and can reach host resources. Only run trusted workspaces and dependencies.

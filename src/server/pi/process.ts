@@ -92,7 +92,9 @@ export class PiProcess {
 
   async request(type: string, params: Record<string, unknown> = {}): Promise<PiRecord> {
     if (this.exitObserved || this.closing) throw new PiRuntimeError("Pi is no longer accepting commands.", "process_exit");
-    return this.sendRequest(type, params, this.options.requestTimeoutMs ?? 15000);
+    // Windows PowerShell/.NET compilation has a materially slower first boot.
+    // Keep that startup handshake bounded without extending normal RPC commands.
+    return this.sendRequest(type, params, this.options.requestTimeoutMs ?? (this.windowsJob && type === "get_state" ? 60000 : 15000));
   }
 
   private sendRequest(type: string, params: Record<string, unknown>, timeoutMs: number): Promise<PiRecord> {

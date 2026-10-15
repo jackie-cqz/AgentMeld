@@ -68,7 +68,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     const events: StreamEvent[] = [];
     for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
     expect(events.some(event => event.type === "part.delta" && event.delta.text === "Pi fixture answer")).toBe(true);
-  }, 30000);
+  }, process.platform === "win32" ? 75000 : 30000);
 
   it("lets Pi execute a native write and perform the next model turn", async () => {
     let requests = 0;
@@ -98,7 +98,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     });
     const input = invocation(url, ["fs_write"]);
     const target = input.workspacePath;
-    nativePath = path.join(fs.realpathSync(target), "alias.txt");
+    nativePath = path.join(fs.realpathSync.native(target), "alias.txt");
     const alias = `${target}-alias`;
     fs.symlinkSync(target, alias, "junction");
     input.workspacePath = alias;
