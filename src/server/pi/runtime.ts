@@ -19,7 +19,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
   input = capturePiConfiguration(input);
   // Pi and its native write callback must use the same physical root as the
   // admission bridge (Windows 8.3 names and directory aliases can differ).
-  try { input = { ...input, workspacePath: fs.realpathSync(input.workspacePath) }; }
+  try { input = { ...input, workspacePath: fs.realpathSync.native(input.workspacePath) }; }
   catch { throw new PiRuntimeError("The Pi workspace directory is not accessible.", "configuration"); }
   const budget = new AbortController();
   const timeoutMs = Number(process.env.AGENTMELD_PI_RUN_TIMEOUT_MS ?? 20 * 60 * 1000);
@@ -142,7 +142,7 @@ export function buildPiTaskPacket(input: PiInvocationInput): string {
     const attachment = getAttachment(part.attachmentId);
     if (!attachment || attachment.conversationId !== input.conversationId) return [];
     let workspacePath: string | undefined;
-    try { workspacePath = path.relative(input.workspacePath, assertRealPathWithinWorkspace(input.workspacePath, fs.realpathSync(attachment.filePath))); }
+    try { workspacePath = path.relative(input.workspacePath, assertRealPathWithinWorkspace(input.workspacePath, fs.realpathSync.native(attachment.filePath))); }
     catch { /* Out-of-workspace attachments are only accessible through the scoped platform tool. */ }
     return [{ id: attachment.id, fileName: attachment.fileName, mimeType: attachment.mimeType, workspacePath }];
   });

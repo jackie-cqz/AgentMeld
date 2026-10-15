@@ -10,7 +10,7 @@ export interface PiWorkspaceLease { attachChild: (pid: number) => void; release:
 
 /** SQLite receipts survive hot reloads and exclude writers in other control processes. */
 export async function acquirePiWorkspace(workspace: string, signal: AbortSignal): Promise<PiWorkspaceLease> {
-  const physical = fs.realpathSync(workspace);
+  const physical = fs.realpathSync.native(workspace);
   const key = process.platform === "win32" ? path.normalize(physical).toLowerCase() : physical;
   const token = randomUUID();
   const db = getDatabase();

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent, updateAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
@@ -82,6 +83,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     const input = invocation(url, ["fs_write"]);
     const events: StreamEvent[] = [];
     for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(events.filter(event => event.type === "tool.result" && event.isError)).toEqual([]);
     expect(fs.readFileSync(path.join(input.workspacePath, "hello.txt"), "utf8")).toBe("Written by real Pi");
     expect(requests).toBe(2);
     expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
@@ -106,6 +108,22 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     expect(fs.readFileSync(path.join(target, "alias.txt"), "utf8")).toBe("same physical workspace");
   }, 30000);
 
+  it.skipIf(process.platform !== "win32")("resolves Windows short workspace paths for native relative writes", async ({ skip }) => {
+    let requests = 0;
+    const url = await modelServer((_request, response) => {
+      requests++;
+      complete(response, requests === 1 ? { tool_calls: [{ index: 0, id: "short-write", type: "function", function: { name: "write", arguments: JSON.stringify({ path: "short.txt", content: "short-path write" }) } }] } : { content: "Done" }, requests === 1 ? "tool_calls" : "stop");
+    });
+    const input = invocation(url, ["fs_write"]);
+    const shortPath = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:FIXTURE_WORKSPACE).ShortPath"], { env: { ...process.env, FIXTURE_WORKSPACE: input.workspacePath }, encoding: "utf8", windowsHide: true }).trim();
+    if (shortPath.toLowerCase() === fs.realpathSync.native(input.workspacePath).toLowerCase()) skip();
+    input.workspacePath = shortPath;
+    const events: StreamEvent[] = [];
+    for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(events.filter(event => event.type === "tool.result" && event.isError)).toEqual([]);
+    expect(fs.readFileSync(path.join(input.workspacePath, "short.txt"), "utf8")).toBe("short-path write");
+  }, 30000);
+
   it("uses Pi's batch edit algorithm and preserves BOM and CRLF bytes", async () => {
     let requests = 0;
     const url = await modelServer((_request, response) => {
@@ -116,6 +134,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     fs.writeFileSync(path.join(input.workspacePath, "existing.txt"), "\ufeffold\r\nunchanged\r\n");
     const events: StreamEvent[] = [];
     for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(events.filter(event => event.type === "tool.result" && event.isError)).toEqual([]);
     expect(fs.readFileSync(path.join(input.workspacePath, "existing.txt"), "utf8")).toBe("\ufeffnew\r\nunchanged\r\n");
     expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
   }, 30000);
