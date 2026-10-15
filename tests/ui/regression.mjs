@@ -38,6 +38,7 @@ async function newPage(width = 1440, height = 900, pending = false) {
   const page = await browser.contexts()[0].newPage();
   await page.setViewportSize({ width, height });
   await page.addInitScript(() => {
+    window.localStorage.setItem('agentmeld:right-panel-width', '640');
     const NativeSource = window.EventSource;
     window.EventSource = class extends NativeSource {
       constructor(...args) { super(...args); window.uiEventSource = this; }
