@@ -163,6 +163,25 @@ export async function bindFeishuWithCredentials(input: {
     return { ok: false, status: 400, error: "appId and appSecret are both required." };
   }
 
+  // The scan flow cannot hit either of these (it creates a new app), so a manual
+  // binding is the only way they can happen — and both are silent destruction:
+  // overwriting a working binding (owner included) because a name was mistyped,
+  // or binding one app to two agents when only one of them can ever connect.
+  const existing = getChannelBindingForAgent(input.agentId, CHANNEL);
+  if (existing) {
+    return {
+      ok: false,
+      status: 409,
+      error: "This agent already has a Feishu app bound. Unbind it first."
+    };
+  }
+  const takenBy = listChannelBindings().find(
+    (binding) => binding.channel === CHANNEL && binding.appId === appId && binding.agentId !== input.agentId
+  );
+  if (takenBy) {
+    return { ok: false, status: 409, error: "That app is already bound to another agent." };
+  }
+
   const channel = createLarkChannel({ appId, appSecret, source: "agentmeld" });
   let botOpenId: string | null = null;
   try {

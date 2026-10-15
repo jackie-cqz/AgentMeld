@@ -142,9 +142,13 @@ export async function routeChannelInbound(
   //
   // Only while a claim is live, so ordinary use is untouched; and it never
   // reaches an agent, because the text is a code, not a request.
-  if (inbound.senderType === "user" && hasLiveClaim(inbound.agentId, now)) {
+  const looksLikeClaimCode = /^\d{6}$/.test(inbound.content.trim());
+  if (looksLikeClaimCode && originForSender(inbound.senderType, inbound.senderIsBot) === "human" && hasLiveClaim(inbound.agentId, now)) {
     const outcome = claimBindingOwner({
       agentId: inbound.agentId,
+      // The SDK fills senderId with open_id ?? user_id ?? union_id; only an open
+      // id can match a future callback, so a fallback would claim successfully
+      // and then authorise nobody.
       openId: inbound.senderId,
       code: inbound.content,
       now

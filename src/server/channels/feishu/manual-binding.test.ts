@@ -93,6 +93,50 @@ describe("binding from credentials", () => {
     expect(hasLiveClaim(AGENT)).toBe(false);
   });
 
+  it("refuses to overwrite a binding the agent already has", async () => {
+    // The scan flow creates a new app, so it cannot hit this; a mistyped agent
+    // id in the form could, and would silently destroy a working binding —
+    // owner included, which fail-closes every card action.
+    const first = await bindFeishuWithCredentials({
+      agentId: AGENT,
+      appId: "cli_first",
+      appSecret: "secret_first"
+    });
+    expect(first.ok).toBe(true);
+    claimBindingOwner({ agentId: AGENT, openId: "ou_scan_owner", code: first.claim!.code });
+
+    const second = await bindFeishuWithCredentials({
+      agentId: AGENT,
+      appId: "cli_second",
+      appSecret: "secret_second"
+    });
+
+    expect(second).toMatchObject({ ok: false, status: 409 });
+    const binding = getChannelBindingForAgent(AGENT, "feishu");
+    expect(binding?.appId).toBe("cli_first");
+    expect(binding?.boundByOpenId).toBe("ou_scan_owner");
+  });
+
+  it("refuses an app that is already bound to another agent", async () => {
+    const first = await bindFeishuWithCredentials({
+      agentId: AGENT,
+      appId: "cli_shared",
+      appSecret: "s"
+    });
+    expect(first.ok).toBe(true);
+
+    const other = await bindFeishuWithCredentials({
+      agentId: "ag_designer",
+      appId: "cli_shared",
+      appSecret: "s"
+    });
+
+    // Only one of them could ever connect (the registry is keyed by app id), so
+    // the second would be silently unroutable.
+    expect(other).toMatchObject({ ok: false, status: 409 });
+    expect(getChannelBindingForAgent("ag_designer", "feishu")).toBeFalsy();
+  });
+
   it("refuses an unknown agent", async () => {
     const result = await bindFeishuWithCredentials({
       agentId: "ag_nobody",
@@ -174,15 +218,19 @@ describe("claiming the binding with the one-time code", () => {
     });
   });
 
-  it("keeps one claim per agent: a new code replaces the old one", async () => {
+  it("keeps the first code valid when a second bind is refused", async () => {
+    // A second manual bind for the same agent is refused now (it would silently
+    // destroy a working binding), so the "one live code per agent" property is
+    // held by that refusal rather than by replacing the code.
     const first = await bind();
-    const second = await bind();
 
-    expect(first).not.toBe(second);
-    expect(claimBindingOwner({ agentId: AGENT, openId: "ou_owner", code: first })).toMatchObject({
-      ok: false,
-      reason: "wrong-code"
+    const second = await bindFeishuWithCredentials({
+      agentId: AGENT,
+      appId: "cli_other",
+      appSecret: "s"
     });
-    expect(claimBindingOwner({ agentId: AGENT, openId: "ou_owner", code: second }).ok).toBe(true);
+
+    expect(second).toMatchObject({ ok: false, status: 409 });
+    expect(claimBindingOwner({ agentId: AGENT, openId: "ou_owner", code: first }).ok).toBe(true);
   });
 });
