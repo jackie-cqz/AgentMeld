@@ -292,6 +292,117 @@ describe("handleCardAction", () => {
     expect(confirmed).toMatchObject({ toast: { type: "success" } });
   });
 
+  it("refuses a tick and a confirm from anyone but the bound account", async () => {
+    // The authorisation check runs before the multi-select branch, but nothing
+    // tested that: skipping it for the new value shapes stayed green.
+    const stranger = { openId: "ou_someone_else", name: "别人" };
+    for (const value of [
+      { kind: "ask_user", pendingId: "unused", questionIndex: 0, toggle: "搜索", v: 0 },
+      { kind: "ask_user", pendingId: "unused", questionIndex: 0, confirm: true, v: 0 }
+    ] as const) {
+      const { pending, pendingId } = ask({ multi: true });
+      const response = await handleCardAction(
+        click({ ...value, pendingId }, stranger),
+        "cli_pm"
+      );
+      expect(response).toMatchObject({ toast: { type: "error" } });
+      await expect(Promise.race([pending, Promise.resolve("pending")])).resolves.toBe("pending");
+    }
+  });
+
+  it("refuses a tick and a confirm from another chat", async () => {
+    for (const value of [
+      { kind: "ask_user", questionIndex: 0, toggle: "搜索", v: 0 },
+      { kind: "ask_user", questionIndex: 0, confirm: true, v: 0 }
+    ] as const) {
+      const { pending, pendingId } = ask({ multi: true });
+      const response = await handleCardAction(
+        { ...click({ ...value, pendingId }), chatId: "oc_other" } as CardActionEvent,
+        "cli_pm"
+      );
+      expect(response).toMatchObject({ toast: { type: "error" } });
+      await expect(Promise.race([pending, Promise.resolve("pending")])).resolves.toBe("pending");
+    }
+  });
+
+  it("keeps two multi-select questions apart", async () => {
+    // selectedOptions going by the wrong index stayed green: nothing had a
+    // second multi-select question to tell them apart.
+    const questions: PendingQuestion["questions"] = [
+      { question: "要哪些能力？", header: "能力", multiSelect: true, options: [{ label: "搜索" }, { label: "翻译" }] },
+      { question: "要哪些渠道？", header: "渠道", multiSelect: true, options: [{ label: "网页" }, { label: "群" }] }
+    ];
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", questions);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const store = (globalThis as any).__agentMeldPendingQuestions as Map<string, unknown>;
+    const pendingId = [...store.keys()][store.size - 1] as string;
+
+    const multi = (index: number, value: Record<string, unknown>) =>
+      handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: index, ...value }), "cli_pm");
+
+    await multi(0, { toggle: "翻译", v: 0 });
+    await multi(1, { toggle: "群", v: 0 });
+    await multi(0, { confirm: true, v: 0 });
+    // Answering the first must not disturb the second's ticks, and vice versa.
+    await multi(1, { confirm: true, v: 0 });
+
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "翻译", "要哪些渠道？": "群" });
+  });
+
+  it("does not answer one question twice from an old card", async () => {
+    // A partly answered card stays live for the other questions, so a second
+    // device could add ticks to a recorded question and rewrite the answer.
+    const questions: PendingQuestion["questions"] = [
+      { question: "要哪些能力？", header: "能力", multiSelect: true, options: [{ label: "搜索" }, { label: "翻译" }] },
+      { question: "部署到哪？", header: "环境", options: [{ label: "预览" }, { label: "线上" }] }
+    ];
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", questions);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const store = (globalThis as any).__agentMeldPendingQuestions as Map<string, unknown>;
+    const pendingId = [...store.keys()][store.size - 1] as string;
+
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "翻译", v: 0 }),
+      "cli_pm"
+    );
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 0 }),
+      "cli_pm"
+    );
+    const second = await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }),
+      "cli_pm"
+    );
+
+    expect(second).toMatchObject({ toast: { type: "info" } });
+    // The recorded answer stands.
+    await handleCardAction(
+      click({ kind: "ask_user", pendingId, questionIndex: 1, answer: "预览" }),
+      "cli_pm"
+    );
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "翻译", "部署到哪？": "预览" });
+  });
+
+  it("counts a repeated option once", async () => {
+    const questions: PendingQuestion["questions"] = [
+      {
+        question: "要哪些能力？",
+        header: "能力",
+        multiSelect: true,
+        options: [{ label: "搜索" }, { label: "搜索" }, { label: "翻译" }]
+      }
+    ];
+    const pending = registerPendingQuestion("conv_1", AGENT, "run_1", questions);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const store = (globalThis as any).__agentMeldPendingQuestions as Map<string, unknown>;
+    const pendingId = [...store.keys()][store.size - 1] as string;
+
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }), "cli_pm");
+    await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, confirm: true, v: 0 }), "cli_pm");
+
+    await expect(pending).resolves.toEqual({ "要哪些能力？": "搜索" });
+  });
+
   it("unticks an option that was already ticked", async () => {
     const { pending, pendingId } = ask({ multi: true });
     await handleCardAction(click({ kind: "ask_user", pendingId, questionIndex: 0, toggle: "搜索", v: 0 }), "cli_pm");
@@ -889,6 +1000,17 @@ describe("projectPendingQuestion", () => {
     const id = [...((globalThis as unknown as { __agentMeldPendingQuestions: Map<string, unknown> })
       .__agentMeldPendingQuestions.keys())][0];
 
+    // A cancelled question must not leave its multi-select draft behind: the
+    // map would keep one entry per cancelled question for the life of the
+    // process, which is exactly what the answer buffer's own comment warns
+    // about.
+    const maps = globalThis as unknown as {
+      __agentMeldChannelDrafts?: Map<string, unknown>;
+      __agentMeldChannelVersions?: Map<string, unknown>;
+    };
+    maps.__agentMeldChannelDrafts = new Map([[id, { "0": ["搜索"] }]]);
+    maps.__agentMeldChannelVersions = new Map([[id, 3]]);
+
     eventBus.publish({
       type: "ask_user.cancelled",
       conversationId: "conv_1",
@@ -899,6 +1021,10 @@ describe("projectPendingQuestion", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(updated).toHaveLength(1);
+    // The cancelled question's multi-select draft went with it: leaving it would
+    // keep one entry per cancelled question for the life of the process.
+    expect(maps.__agentMeldChannelDrafts?.has(id)).toBe(false);
+    expect(maps.__agentMeldChannelVersions?.has(id)).toBe(false);
   });
 
   it("posts when a question is asked", async () => {

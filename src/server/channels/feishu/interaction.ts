@@ -457,7 +457,14 @@ export function selectedOptions(question: PendingQuestion, index: number): strin
   const offered = question.questions[index]?.options.map((option) => option.label) ?? [];
   // Card order, not click order: the answer a person reads back should be the
   // order they saw, and the same set must always produce the same string.
-  return offered.filter((label) => draft.includes(label));
+  // De-duplicated because nothing stops a question from offering one label
+  // twice, and the answer would read "搜索; 搜索".
+  const seen = new Set<string>();
+  return offered.filter((label) => {
+    if (!draft.includes(label) || seen.has(label)) return false;
+    seen.add(label);
+    return true;
+  });
 }
 
 /**
@@ -525,6 +532,13 @@ async function handleQuestionAnswer(
       return { toast: { type: "error", content: "这个选项已经失效，请重新点击卡片。" } };
     }
 
+    // A partly-answered card keeps its buttons live for the OTHER questions, so
+    // a second device could otherwise add ticks to a question already recorded
+    // and rewrite the answer as a union.
+    if (getAnswerBuffer().get(question.id)?.[String(value.questionIndex)] !== undefined) {
+      return { toast: { type: "info", content: "这个问题已经回答过了。" } };
+    }
+
     const drafts = getSelectionDrafts();
     const forQuestion = { ...(drafts.get(question.id) ?? {}) };
     const current = forQuestion[String(value.questionIndex)] ?? [];
@@ -547,8 +561,9 @@ async function handleQuestionAnswer(
         card: { type: "raw", data: buildQuestionCard(question, { answeredByIndex: getAnswerBuffer().get(question.id) ?? {} }) }
       };
     }
-    // Confirmed: the answer is the ticked labels, in the order the card offered
-    // them, joined the way the web page joins a multi-select answer.
+    // Confirmed: the ticked labels in CARD order, and the separator is the same
+    // one the web page uses (its order is click order — the separator is what
+    // is shared, not the ordering).
     const confirmed = selectedOptions(question, value.questionIndex).join("; ");
     if (!confirmed) {
       return { toast: { type: "error", content: "请先选择至少一个选项。" } };
@@ -887,6 +902,8 @@ async function settlePostedCard(
   // The buffer is always cleared, paused or not: it is local state, and holding
   // it would leak. Only the outbound half is subject to the pause.
   getAnswerBuffer().delete(pendingId);
+  getSelectionDrafts().delete(pendingId);
+  getCardVersions().delete(pendingId);
   if (isChannelProjectionPaused()) return;
 
   const card = getPostedCards().get(pendingId);
@@ -975,6 +992,11 @@ export function startChannelInteractions(): () => void {
 }
 
 export function stopChannelInteractionsForTests(): void {
+  // Same lifetime as the answers they belong to: a cancelled or
+  // answered-elsewhere question must not leave an entry for the life of the
+  // process.
+  globalThis.__agentMeldChannelDrafts = undefined;
+  globalThis.__agentMeldChannelVersions = undefined;
   globalThis.__agentMeldChannelInteractionStop?.();
   globalThis.__agentMeldChannelInteractionStop = undefined;
   globalThis.__agentMeldChannelAnswers = undefined;
