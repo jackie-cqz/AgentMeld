@@ -2,7 +2,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getDatabase } from "@/db/client";
 import { createConversation } from "@/server/conversation-service";
-import { getAgent, getWorkspaceForConversation } from "@/server/repositories";
+import { createMessage, getAgent, getWorkspaceForConversation } from "@/server/repositories";
+import { newMessageId } from "@/shared/ids";
 import { buildPiTaskPacket } from "./runtime";
 import type { PiInvocationInput } from "./types";
 
@@ -10,7 +11,7 @@ function input(): PiInvocationInput {
   const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   return { agent: getAgent("ag_mock_builder")!, conversation, workspace, conversationId: conversation.id, workspacePath: workspace.rootPath,
-    triggerMessage: { parts: [{ type: "text", content: "/new is task text, not a native command" }] }, runId: "fixture", toolNames: [], systemPrompt: "", recentMessages: [], apiKey: null } as PiInvocationInput;
+    triggerMessage: createMessage({ id: newMessageId(), conversationId: conversation.id, role: "user", origin: "human", parts: [{ type: "text", content: "/new is task text, not a native command" }], status: "complete", now: Date.now() }), runId: "fixture", toolNames: [], systemPrompt: "", recentMessages: [], apiKey: null };
 }
 
 describe("Pi cross-task context packet", () => {
