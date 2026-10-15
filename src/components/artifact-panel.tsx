@@ -88,10 +88,9 @@ export function ArtifactPanel() {
       >
         <div className="mx-auto h-full w-px bg-transparent transition group-hover:bg-[#4264ff]" />
       </div>
-      <header className="flex h-[72px] shrink-0 items-center justify-between border-b border-slate-200 px-4">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--ui-line)] px-4">
         <div className="min-w-0">
-          <div className="truncate text-base font-semibold text-slate-950">产物库</div>
-          <div className="mt-1 text-xs text-slate-500">浏览产物</div>
+          <div className="flex items-center gap-2 truncate text-[13px] font-medium text-[var(--foreground)]"><FileText size={15} />产物库</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <ToolbarButton
@@ -453,10 +452,9 @@ function SourceView({ artifact }: { artifact: Artifact }) {
 function EmptyPreview() {
   return (
     <div className="grid h-full place-items-center p-6">
-      <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-slate-100 text-slate-500"><FileText className="h-5 w-5" /></div>
-        <div className="mt-4 text-sm font-medium text-slate-900">还没有选择产物</div>
-        <p className="mt-2 text-sm leading-6 text-slate-500">点击消息里的产物引用，或从产物库选择一个文档、代码或 Web App。</p>
+      <div className="text-center text-[var(--ui-muted)]">
+        <FileText className="mx-auto h-7 w-7 opacity-40" strokeWidth={1.5} />
+        <div className="mt-4 text-xs">还没有选择产物</div>
       </div>
     </div>
   );

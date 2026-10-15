@@ -7,6 +7,7 @@ import { GlobalSearch } from "@/components/global-search";
 import { WorkspaceFileBrowser } from "@/components/workspace-file-browser";
 import { Sidebar } from "@/components/sidebar";
 import { StreamProvider } from "@/components/stream-provider";
+import { WorkspaceView } from "@/components/workspace-view";
 import { APP_NAME, RIGHT_PANEL_WIDTH_STORAGE_KEY } from "@/shared/constants";
 import { useAppStore } from "@/stores/app-store";
 
@@ -26,6 +27,7 @@ function ShellContent() {
   const darkMode = useAppStore((state) => state.darkMode);
   const panelWidth = useAppStore((state) => state.artifactPanelWidth);
   const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
+  const sidebarTab = useAppStore((state) => state.sidebarTab);
 
   // Toggle dark class on <html> for Tailwind dark: variants + component conditional styles
   useEffect(() => {
@@ -50,8 +52,9 @@ function ShellContent() {
   }
 
   return (
-    <main className="ui-shell relative flex h-dvh overflow-hidden bg-[var(--background)] text-[var(--foreground)]" style={{ "--panel-width": `${panelWidth}px`, "--sidebar-width": sidebarCollapsed ? "56px" : "280px" } as CSSProperties}>
+    <div className="ui-shell relative flex h-dvh overflow-hidden bg-[var(--background)] text-[var(--foreground)]" style={{ "--panel-width": `${panelWidth}px`, "--sidebar-width": sidebarCollapsed ? "56px" : "280px" } as CSSProperties}>
       <Sidebar />
+      <div className={`workspace-conversation ${sidebarTab !== "conversations" ? "workspace-hidden" : ""}`} inert={sidebarTab !== "conversations"}>
       <ChatPanel />
       {rightPanelOpen ? (
         <div className="ui-right-pane">
@@ -67,7 +70,9 @@ function ShellContent() {
           )}
         </div>
       ) : null}
+      </div>
+      {sidebarTab !== "conversations" ? <WorkspaceView view={sidebarTab} /> : null}
       <GlobalSearch />
-    </main>
+    </div>
   );
 }

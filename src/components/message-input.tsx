@@ -1,92 +1,73 @@
 "use client";
 
-import { ArrowUp, AtSign, File, Loader2, Paperclip, ShieldCheck, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { ArrowUp, AtSign, Check, ChevronDown, File, Loader2, Paperclip, Pencil, ShieldCheck, Users, X } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Popover } from "@/components/ui/popover";
 import { requestJson } from "@/lib/request-json";
+import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectConversationPendingDispatchPlans } from "@/stores/selectors";
-import type { Agent, Attachment, Conversation } from "@/shared/types";
+import type { Agent, Attachment, Conversation, MessagePart } from "@/shared/types";
 
 const EMPTY_ATTACHMENTS: Attachment[] = [];
 
-interface MessageInputProps {
-  conversationId: string;
-  agents: Agent[];
-  rightPanelOpen?: boolean;
-  rightPanelWidth?: number;
-}
-
-export function MessageInput({
-  conversationId,
-  agents,
-}: MessageInputProps) {
-  const draft = useAppStore((state) => state.composerDraftByConversation[conversationId] ?? "");
-  const setDraft = useAppStore((state) => state.setComposerDraft);
-  const sendMessage = useAppStore((state) => state.sendMessage);
-  const replyTargetId = useAppStore((state) => state.replyTargetByConversation[conversationId] ?? null);
-  const replyTarget = useAppStore((state) => replyTargetId ? state.messages[replyTargetId] ?? null : null);
-  const setReplyTarget = useAppStore((state) => state.setReplyTarget);
-  const attachments = useAppStore((state) => state.pendingAttachmentsByConversation[conversationId] ?? EMPTY_ATTACHMENTS);
-  const addPendingAttachment = useAppStore((state) => state.addPendingAttachment);
-  const removePendingAttachment = useAppStore((state) => state.removePendingAttachment);
-  const approvalMode = useAppStore((state) => state.conversations[conversationId]?.fsWriteApprovalMode ?? "auto");
-  const updateConversation = useAppStore((state) => state.updateConversation);
-  const pendingDispatchPlans = useAppStore(
-    useShallow((state) => selectConversationPendingDispatchPlans(state, conversationId))
-  );
-  const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
-  const [reviseForPlanId, setReviseForPlanId] = useState<string | null>(null);
+export function MessageInput({ conversationId, agents }: { conversationId: string; agents: Agent[]; rightPanelOpen?: boolean; rightPanelWidth?: number }) {
+  const draft = useAppStore(state => state.composerDraftByConversation[conversationId] ?? "");
+  const setDraft = useAppStore(state => state.setComposerDraft);
+  const sendMessage = useAppStore(state => state.sendMessage);
+  const replyTargetId = useAppStore(state => state.replyTargetByConversation[conversationId] ?? null);
+  const replyTarget = useAppStore(state => replyTargetId ? state.messages[replyTargetId] ?? null : null);
+  const setReplyTarget = useAppStore(state => state.setReplyTarget);
+  const attachments = useAppStore(state => state.pendingAttachmentsByConversation[conversationId] ?? EMPTY_ATTACHMENTS);
+  const addPendingAttachment = useAppStore(state => state.addPendingAttachment);
+  const removePendingAttachment = useAppStore(state => state.removePendingAttachment);
+  const approvalMode = useAppStore(state => state.conversations[conversationId]?.fsWriteApprovalMode ?? "auto");
+  const updateConversation = useAppStore(state => state.updateConversation);
+  const pendingPlans = useAppStore(useShallow(state => selectConversationPendingDispatchPlans(state, conversationId)));
+  const [mentionedIds, setMentionedIds] = useState<string[]>([]);
+  const [recipientMenu, setRecipientMenu] = useState<{ x: number; y: number } | null>(null);
+  const [revisePlanId, setRevisePlanId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [updatingMode, setUpdatingMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const composingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mentionedAgents = useMemo(
-    () => agents.filter((agent) => mentionedAgentIds.includes(agent.id)),
-    [agents, mentionedAgentIds]
-  );
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionedAgents = useMemo(() => agents.filter(agent => mentionedIds.includes(agent.id)), [agents, mentionedIds]);
+  const pendingPlan = pendingPlans[0] ?? null;
+  const revising = revisePlanId !== null && pendingPlan?.id === revisePlanId;
+  const primaryAgent = mentionedAgents[0] ?? agents.find(agent => agent.isConductor) ?? agents[0];
 
-  // Check if there's a pending plan for this conversation → revise mode
-  const pendingPlan = pendingDispatchPlans[0] ?? null;
-
-  const isReviseMode = reviseForPlanId !== null && pendingPlan?.id === reviseForPlanId;
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(180, Math.max(56, textarea.scrollHeight))}px`;
+  }, [draft]);
 
   const submit = async () => {
-    if (!draft.trim() || submitting) return;
+    if (!draft.trim() || submitting || uploading) return;
     setSubmitting(true);
     setError(null);
-
     try {
-      if (isReviseMode && pendingPlan) {
+      if (revising && pendingPlan) {
         await requestJson(`/api/dispatch-plans/${pendingPlan.id}/resolve`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "revise",
-            feedback: draft.trim()
-          })
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "revise", feedback: draft.trim() })
         });
         setDraft(conversationId, "");
-        setReviseForPlanId(null);
-        return;
+        setRevisePlanId(null);
+      } else {
+        await sendMessage(conversationId, draft.trim(), { mentionedAgentIds: mentionedAgents.map(agent => agent.id), attachmentIds: attachments.map(item => item.id), parentMessageId: replyTargetId });
+        setMentionedIds([]);
       }
-
-      await sendMessage(conversationId, draft.trim(), {
-        mentionedAgentIds,
-        attachmentIds: attachments.map((attachment) => attachment.id),
-        parentMessageId: replyTargetId
-      });
-      setMentionedAgentIds([]);
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "发送失败。");
-    } finally {
-      setSubmitting(false);
-    }
+      textareaRef.current?.focus();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "发送失败。"); }
+    finally { setSubmitting(false); }
   };
-
   const uploadFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
+    if (!files?.length || uploading) return;
     setUploading(true);
     setError(null);
     try {
@@ -94,187 +75,74 @@ export function MessageInput({
         const formData = new FormData();
         formData.set("file", file);
         formData.set("conversationId", conversationId);
-        const data = await requestJson<{ attachment: Attachment }>("/api/attachments", {
-          method: "POST",
-          body: formData
-        });
+        const data = await requestJson<{ attachment: Attachment }>("/api/attachments", { method: "POST", body: formData });
         addPendingAttachment(conversationId, data.attachment);
       }
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "附件上传失败。");
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "附件上传失败。"); }
+    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+  };
+  const toggleApproval = async () => {
+    if (updatingMode) return;
+    setUpdatingMode(true);
+    setError(null);
+    try {
+      const data = await requestJson<{ conversation: Conversation }>(`/api/conversations/${conversationId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fsWriteApprovalMode: approvalMode === "auto" ? "review" : "auto" })
+      });
+      updateConversation(conversationId, data.conversation);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "审批模式更新失败。"); }
+    finally { setUpdatingMode(false); }
   };
 
-  const toggleMention = (agentId: string) => {
-    setMentionedAgentIds((current) =>
-      current.includes(agentId) ? current.filter((id) => id !== agentId) : [...current, agentId]
-    );
-  };
-
-  return (
-    <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-4">
-      <div className="rounded-lg border border-[var(--ui-line)] bg-[var(--ui-surface)] p-2">
-        <div className="ui-agent-mentions mb-2 flex flex-wrap gap-2 px-2 pt-1">
-          {agents.map((agent) => (
-            <button
-              key={agent.id}
-              className={`flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition ${
-                mentionedAgentIds.includes(agent.id)
-                  ? "border-[#4264ff] bg-[#eff5ff] text-[#2546d8]"
-                  : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"
-              }`}
-              type="button"
-              onClick={() => toggleMention(agent.id)}
-              title={`@${agent.name}`}
-            >
-              <AtSign className="h-3.5 w-3.5" />
-              {agent.name}
-            </button>
-          ))}
-        </div>
-
-        {mentionedAgents.length > 0 ? (
-          <div className="mb-2 px-2 text-xs text-slate-500">
-            将指定 {mentionedAgents.map((agent) => agent.name).join("、")} 回复
-          </div>
-        ) : null}
-
-        {replyTarget ? (
-          <div className="mb-2 flex items-center justify-between rounded-md border-l-2 border-blue-500 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-            <span className="min-w-0 truncate">
-              回复 {replyTarget.role === "user" ? "你" : "Agent"}：{messageSummary(replyTarget.parts)}
-            </span>
-            <button type="button" onClick={() => setReplyTarget(conversationId, null)} className="grid h-6 w-6 place-items-center rounded hover:bg-blue-100" title="取消引用">
-              <X className="h-3.5 w-3.5" />
+  return <footer className="workspace-composer">
+    <div className="workspace-composer-inner">
+      {pendingPlan ? <div className="workspace-compose-notice">
+        <Pencil size={13} /><span>{revising ? "正在修订编排计划" : "编排计划待确认"}</span>
+        <button type="button" onClick={() => setRevisePlanId(revising ? null : pendingPlan.id)}>{revising ? "取消修订" : "修改计划"}</button>
+      </div> : null}
+      <div className="workspace-compose-box">
+        {replyTarget ? <div className="workspace-compose-reply"><span>回复 {replyTarget.role === "user" ? "我" : "Agent"} · {messageSummary(replyTarget.parts)}</span>
+          <button className="ui-icon-button" title="取消引用" onClick={() => setReplyTarget(conversationId, null)}><X size={13} /></button></div> : null}
+        {attachments.length ? <div className="workspace-compose-attachments">{attachments.map(item => <span key={item.id}><File size={13} /><span>{item.fileName}</span>
+          <button type="button" title={`移除附件 ${item.fileName}`} onClick={() => removePendingAttachment(conversationId, item.id)}><X size={13} /></button></span>)}</div> : null}
+        <textarea ref={textareaRef} aria-label={revising ? "计划修改意见" : "消息"} placeholder={revising ? "描述你希望调整的计划…" : "输入消息，或描述一个任务…"}
+          value={draft} onChange={event => setDraft(conversationId, event.target.value)}
+          onKeyDown={event => {
+            if (event.key === "Escape") { if (revising) setRevisePlanId(null); else setReplyTarget(conversationId, null); }
+            if (event.key === "Enter" && !event.shiftKey && !composingRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); }
+          }}
+          onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} />
+        <div className="workspace-compose-toolbar">
+          <div className="workspace-compose-options">
+            <input ref={fileInputRef} type="file" multiple hidden onChange={event => void uploadFiles(event.target.files)} />
+            <button className="ui-icon-button" type="button" title="上传附件" disabled={uploading || submitting} onClick={() => fileInputRef.current?.click()}>{uploading ? <Loader2 size={16} className="animate-spin" /> : <Paperclip size={16} />}</button>
+            <button className="workspace-recipient-trigger" type="button" title="选择回复 Agent" aria-expanded={recipientMenu !== null} onClick={event => {
+              const rect = event.currentTarget.getBoundingClientRect(); setRecipientMenu({ x: rect.left, y: rect.top - Math.min(360, agents.length * 48 + 90) - 8 });
+            }}>
+              {mentionedAgents.length ? <AtSign size={14} /> : <Users size={14} />}<span>{mentionedAgents.length ? mentionedAgents.map(agent => agent.name).join("、") : agents.length > 1 ? "团队协作" : primaryAgent?.name ?? "Agent"}</span><ChevronDown size={12} />
             </button>
           </div>
-        ) : null}
-
-        {attachments.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-2 px-2">
-            {attachments.map((attachment) => (
-              <span key={attachment.id} className="flex max-w-[220px] items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
-                <File className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{attachment.fileName}</span>
-                <button type="button" onClick={() => removePendingAttachment(conversationId, attachment.id)} className="shrink-0" title="移除附件">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
-
-        {/* Revise mode banner */}
-        {isReviseMode ? (
-          <div className="mb-2 flex items-center justify-between rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800">
-            <span>📝 计划修订模式 — 输入你对当前计划的修改意见</span>
-            <button
-              onClick={() => setReviseForPlanId(null)}
-              className="grid h-6 w-6 place-items-center rounded text-blue-500 hover:bg-blue-100"
-              title="退出修订模式"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : pendingPlan ? (
-          <button
-            onClick={() => { setReviseForPlanId(pendingPlan.id); setDraft(conversationId, ""); }}
-            className="mb-2 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100 w-full"
-          >
-            📝 对计划有修改意见？点击进入修订模式
-          </button>
-        ) : null}
-
-        <div className="ui-composer-row flex items-end gap-2">
-          <textarea
-            className="max-h-36 min-h-12 flex-1 resize-none bg-transparent px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
-            placeholder={
-              isReviseMode
-                ? "说明你希望如何调整计划，Enter 提交修改意见"
-                : "输入消息，@ 指定 Agent，Enter 发送，Shift+Enter 换行"
-            }
-            value={draft}
-            onChange={(event) => setDraft(conversationId, event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                if (isReviseMode) setReviseForPlanId(null);
-                else setReplyTarget(conversationId, null);
-              }
-              if (event.key === "Enter" && !event.shiftKey && !composingRef.current && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={() => { composingRef.current = false; }}
-          />
-          <div className="ui-composer-actions flex items-center gap-1">
-            {!isReviseMode ? (
-              <>
-                <input ref={fileInputRef} type="file" multiple hidden onChange={(event) => void uploadFiles(event.target.files)} />
-                <button
-                  type="button"
-                  disabled={uploading}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="grid h-10 w-10 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
-                  title="上传附件"
-                >
-                  {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-                </button>
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={async () => {
-                    const newMode = approvalMode === "auto" ? "review" : "auto";
-                    try {
-                      const data = await requestJson<{ conversation: Conversation }>(
-                        `/api/conversations/${conversationId}`,
-                        {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ fsWriteApprovalMode: newMode })
-                        }
-                      );
-                      updateConversation(conversationId, data.conversation);
-                    } catch (modeError) {
-                      setError(modeError instanceof Error ? modeError.message : "审批模式更新失败。");
-                    }
-                  }}
-                  className={`flex h-10 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${
-                    approvalMode === "review"
-                      ? "border-amber-200 bg-amber-50 text-amber-700"
-                      : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  }`}
-                  title={`当前：${approvalMode === "auto" ? "自动写入" : "需审批"}，点击切换`}
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  {approvalMode === "auto" ? "Auto" : "Review"}
-                </button>
-              </>
-            ) : null}
-            <button
-              className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg text-white transition disabled:cursor-not-allowed disabled:bg-slate-300 ${
-                isReviseMode ? "bg-blue-600 hover:bg-blue-700" : "bg-[#4264ff] hover:bg-[#2f50e6]"
-              }`}
-              type="button"
-              disabled={!draft.trim() || submitting}
-              onClick={() => void submit()}
-              title={isReviseMode ? "提交修改意见" : "发送"}
-            >
-              <ArrowUp className="h-5 w-5" />
-            </button>
+          <div className="workspace-compose-options">
+            {!revising ? <button type="button" title={`当前：${approvalMode === "auto" ? "自动写入" : "需审批"}，点击切换`} aria-label="自动审批" aria-pressed={approvalMode === "auto"} disabled={updatingMode || submitting}
+              className="workspace-approval-mode" onClick={() => void toggleApproval()}>{updatingMode ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}<span>{approvalMode === "auto" ? "Auto" : "Review"}</span></button> : null}
+            <button className="workspace-send" type="button" title={revising ? "提交修改意见" : "发送"} disabled={!draft.trim() || submitting || uploading} onClick={() => void submit()}>{submitting ? <Loader2 size={17} className="animate-spin" /> : <ArrowUp size={18} />}</button>
           </div>
         </div>
-        {error ? <p className="px-2 pb-1 pt-2 text-xs text-red-600">{error}</p> : null}
       </div>
-    </footer>
-  );
+      <div className="workspace-compose-status"><span title={primaryAgent?.modelId || "未配置模型"}>{primaryAgent?.modelId || primaryAgent?.adapterName || "未配置模型"}</span><span>{uploading ? "附件上传中…" : mentionedAgents.length ? `已指定 ${mentionedAgents.length} 位 Agent` : `${agents.length} 位 Agent`}</span></div>
+      {error ? <p className="workspace-compose-error" role="alert">{error}</p> : null}
+    </div>
+    {recipientMenu ? <Popover {...recipientMenu} label="选择回复 Agent" className="workspace-recipient-menu" onClose={() => setRecipientMenu(null)}>
+      <button className="workspace-recipient-option" onClick={() => setMentionedIds([])}><Users size={17} /><span><strong>团队协作</strong><small>由会话默认规则分派</small></span>{!mentionedAgents.length ? <Check size={15} /> : null}</button>
+      <div className="workspace-recipient-list">{agents.map(agent => <label className="workspace-recipient-option" key={agent.id}>
+        <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span><span><strong>{agent.name}</strong><small>{agent.modelId || agent.adapterName}</small></span>
+        <input type="checkbox" aria-label={`@${agent.name}`} checked={mentionedIds.includes(agent.id)} onChange={() => setMentionedIds(current => current.includes(agent.id) ? current.filter(id => id !== agent.id) : [...current, agent.id])} />
+      </label>)}</div>
+    </Popover> : null}
+  </footer>;
 }
 
-function messageSummary(parts: import("@/shared/types").MessagePart[]) {
-  const text = parts.find((part) => part.type === "text");
+function messageSummary(parts: MessagePart[]) {
+  const text = parts.find(part => part.type === "text");
   return text?.type === "text" ? text.content.slice(0, 100) : "附件或结构化消息";
 }

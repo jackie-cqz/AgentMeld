@@ -1,6 +1,6 @@
 "use client";
 
-import { Circle, FileSearch, Folder, GitBranch, Layers, Loader2, Pencil, Pin, Reply, RotateCcw, UserPlus, Users, X } from "lucide-react";
+import { Circle, FileSearch, Folder, GitBranch, Layers, Loader2, MessageSquare, Pencil, Pin, Reply, RotateCcw, UserPlus, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
@@ -30,11 +30,8 @@ import type { Agent, Message } from "@/shared/types";
 import type { AdapterName, ModelProvider } from "@/shared/types";
 import { Popover } from "@/components/ui/popover";
 
-const WIDE_CONVERSATION_WIDTH = 1480;
-
 export function ChatPanel() {
   const agents = useAppStore((state) => state.agents);
-  const darkMode = useAppStore((state) => state.darkMode);
   const activeConversationId = useAppStore((state) => state.activeConversationId);
   const conversation = useAppStore(selectActiveConversation);
   const messages = useAppStore(useShallow((state) => selectConversationMessages(state, state.activeConversationId)));
@@ -44,6 +41,7 @@ export function ChatPanel() {
   const connectionStatus = useAppStore((state) => state.connectionStatus);
   const rightPanelOpen = useAppStore((state) => state.rightPanelOpen);
   const rightPanelMode = useAppStore((state) => state.rightPanelMode);
+  const conversationVisible = useAppStore(state => state.sidebarTab === "conversations");
   const activeTab = useAppStore((state) =>
     state.activeConversationId ? state.activeTabByConversation[state.activeConversationId] ?? "chat" : "chat"
   );
@@ -53,6 +51,8 @@ export function ChatPanel() {
   const stickToBottomRef = useRef(true);
   const previousConversationIdRef = useRef<string | null>(null);
   const previousActiveTabRef = useRef<string | null>(null);
+  const previousVisibleRef = useRef(true);
+  const savedScrollTopRef = useRef(0);
   const [showContextStats, setShowContextStats] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [agentProfile, setAgentProfile] = useState<{ agent: Agent; x: number; y: number } | null>(null);
@@ -121,12 +121,6 @@ export function ChatPanel() {
 
   const runningCount = runs.filter((run) => run.status === "running").length;
   const tokenTotal = runs.reduce((sum, run) => sum + (run.usage?.inputTokens ?? 0) + (run.usage?.outputTokens ?? 0), 0);
-  const conversationContentClass = rightPanelOpen ? "space-y-7" : "max-w-[1480px] space-y-7";
-  const conversationContentStyle = rightPanelOpen
-    ? {
-        maxWidth: WIDE_CONVERSATION_WIDTH
-      }
-    : undefined;
 
   const activeAgents = useMemo(
     () => conversation?.agentIds.map((id) => agents[id]).filter((agent): agent is Agent => Boolean(agent)) ?? [],
@@ -138,6 +132,9 @@ export function ChatPanel() {
   );
 
   useLayoutEffect(() => {
+    const returnedToConversation = conversationVisible && !previousVisibleRef.current;
+    previousVisibleRef.current = conversationVisible;
+    if (!conversationVisible) return;
     const conversationChanged = previousConversationIdRef.current !== activeConversationId;
     const returnedToChat =
       activeTab === "chat" && previousActiveTabRef.current !== null &&
@@ -154,10 +151,15 @@ export function ChatPanel() {
       return;
     }
 
+    if (returnedToConversation) {
+      scroller.scrollTop = stickToBottomRef.current ? scroller.scrollHeight : savedScrollTopRef.current;
+      return;
+    }
+
     if (stickToBottomRef.current) {
       scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
     }
-  }, [activeConversationId, activeTab, visibleMessages.length, runningCount]);
+  }, [activeConversationId, activeTab, visibleMessages.length, runningCount, conversationVisible]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -187,59 +189,40 @@ export function ChatPanel() {
 
   return (
     <main className="ui-chat flex min-w-0 flex-1 flex-col bg-[var(--ui-surface)]">
-      <header className={`flex h-[72px] shrink-0 items-center border-b px-4 ${darkMode ? "border-slate-700 bg-[#111827]" : "border-slate-200 bg-white"}`}>
-        <div className="ui-chat-header flex min-w-0 flex-1 items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex shrink-0 -space-x-2">
+      <header className="workspace-chat-header">
+        <div className="workspace-chat-title"><MessageSquare size={16} /><span className="workspace-crumb">工作空间<span>/</span></span><h1 title={conversation.title}>{conversation.title}</h1></div>
+        <div className="workspace-chat-utilities">
+          <span className={`workspace-connection ${connectionStatus === "open" ? "is-connected" : connectionStatus === "connecting" ? "is-connecting" : "is-disconnected"}`} title={formatConnectionStatus(connectionStatus)} aria-label={formatConnectionStatus(connectionStatus)}><Circle size={6} className="fill-current" /><span>{formatConnectionStatus(connectionStatus)}</span></span>
+          <HeaderIcon title="工作区文件" onClick={() => {
+            if (rightPanelMode === "files" && rightPanelOpen) setRightPanelOpen(false);
+            else setRightPanelMode("files");
+          }} active={rightPanelMode === "files" && rightPanelOpen}><GitBranch size={15} /><span className="workspace-utility-label">文件</span></HeaderIcon>
+          <HeaderIcon title="Artifact Workspace" onClick={() => {
+            if (rightPanelMode === "artifact" && rightPanelOpen) setRightPanelOpen(false);
+            else { setRightPanelMode("artifact"); setRightPanelOpen(true); }
+          }} active={rightPanelMode === "artifact" && rightPanelOpen}><Layers size={15} /><span className="workspace-utility-label">产物</span></HeaderIcon>
+          <HeaderIcon title="会话文件" onClick={() => setShowFiles(true)}><Folder size={15} /></HeaderIcon>
+        </div>
+      </header>
+      <div className="workspace-team-strip">
+        <div className="workspace-team-members">
               {activeAgents.slice(0, 3).map((agent) => (
-                <Avatar
-                  key={agent.id}
-                  agent={agent}
-                  label={agent.name}
-                  displayLabel={getAgentAvatarLabel(agent)}
-                  compact
-                  className="border-2 border-white text-[11px] shadow-sm transition-transform hover:z-10 hover:-translate-y-0.5"
-                  onClick={(event) => handleViewAgent(agent, event)}
-                />
+                <button key={agent.id} className="workspace-team-member" title={`查看 ${agent.name}`} onClick={event => handleViewAgent(agent, event)}>
+                  <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span><span>{agent.name}</span>
+                </button>
               ))}
-              {activeAgents.length > 3 ? (
-                <div
-                  className="relative z-0 grid h-8 w-8 shrink-0 place-items-center rounded-full border-2 border-white bg-slate-100 text-[11px] font-semibold text-slate-500 shadow-sm dark:border-slate-900 dark:bg-slate-700 dark:text-slate-200"
-                  title={`还有 ${activeAgents.length - 3} 位 Agent`}
-                >
-                  +{activeAgents.length - 3}
-                </div>
-              ) : null}
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-semibold leading-6 text-slate-950">{conversation.title}</h1>
-              <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-              <span className="flex items-center gap-1">
-                <Users className="h-3.5 w-3.5" />
-                {conversation.mode === "group" ? "群聊" : "单聊"} · {activeAgents.length} 位 Agent
-              </span>
-            </div>
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <HeaderIcon title="工作区文件" onClick={() => {
-              if (rightPanelMode === "files" && rightPanelOpen) setRightPanelOpen(false);
-              else setRightPanelMode("files");
-            }} active={rightPanelMode === "files" && rightPanelOpen}><GitBranch className="h-4 w-4" /></HeaderIcon>
-            <HeaderIcon title="Artifact Workspace" onClick={() => {
-              if (rightPanelMode === "artifact" && rightPanelOpen) setRightPanelOpen(false);
-              else { setRightPanelMode("artifact"); setRightPanelOpen(true); }
-            }} active={rightPanelMode === "artifact" && rightPanelOpen}><Layers className="h-4 w-4" /></HeaderIcon>
-            <HeaderIcon title="会话文件" onClick={() => setShowFiles(true)}><Folder className="h-4 w-4" /></HeaderIcon>
-            <HeaderIcon title="管理会话 Agent" onClick={() => setShowAgentManager(true)}><UserPlus className="h-4 w-4" /></HeaderIcon>
-            <div className="relative">
+              <button type="button" title="管理会话 Agent" className="workspace-team-member workspace-team-manage" onClick={() => setShowAgentManager(true)}>
+                {activeAgents.length > 3 ? <span>+{activeAgents.length - 3}</span> : <UserPlus size={14} />}
+              </button>
+        </div>
+        <div className="workspace-context-meter">
               <button
                 onClick={() => setShowContextStats((prev) => !prev)}
-                className="flex h-8 items-center gap-1 rounded-full border border-slate-200 bg-white px-3 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                className="workspace-context-button"
+                aria-expanded={showContextStats}
                 title="上下文统计与压缩"
               >
-                <Circle className="h-3 w-3 text-slate-400" />
-                {formatTokenCount(tokenTotal)}
+                <Circle size={12} />{formatTokenCount(tokenTotal)}<span>tokens</span>
               </button>
               {showContextStats && activeConversationId && (
                 <ContextStatsPanel
@@ -247,22 +230,8 @@ export function ChatPanel() {
                   onClose={() => setShowContextStats(false)}
                 />
               )}
-            </div>
-            <div
-              className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium ${
-                connectionStatus === "open"
-                  ? "bg-[#4169ff] text-white"
-                  : connectionStatus === "error"
-                    ? "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-200"
-                    : "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200"
-              }`}
-            >
-              <Circle className="h-2 w-2 fill-current" />
-              {formatConnectionStatus(connectionStatus)}
-            </div>
-          </div>
         </div>
-      </header>
+      </div>
 
       <ConversationTabBar conversationId={conversation.id} />
 
@@ -271,18 +240,22 @@ export function ChatPanel() {
           <>
             <div
               ref={scrollerRef}
-              className="h-full overflow-y-auto py-6 pl-4 pr-12"
+              className="workspace-chat-scroller h-full overflow-y-auto"
               onScroll={(event) => {
+                if (!conversationVisible) return;
                 const scroller = event.currentTarget;
+                savedScrollTopRef.current = scroller.scrollTop;
                 stickToBottomRef.current =
                   scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
               }}
             >
               <PinnedMessagesBar conversation={conversation} />
-              <div className={conversationContentClass} style={conversationContentStyle}>
+              <div className={`workspace-transcript ${visibleMessages.length === 0 ? "is-empty" : ""}`}>
                 {visibleMessages.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-400">
-                    发送一条消息，启动这个群聊里的 Agent 协作。
+                  <div className="workspace-empty-conversation"><span className="workspace-empty-mark"><Layers size={26} strokeWidth={1.5} /></span>
+                    <h2>准备好开始了</h2><p>{activeAgents.length} 位 Agent · {conversation.mode === "group" ? "团队协作" : "单独对话"}</p>
+                    <div>{activeAgents.map(agent => <button type="button" key={agent.id} onClick={event => handleViewAgent(agent, event)} title={`查看 ${agent.name}`}>
+                      <span className={`workspace-team-avatar ${getAgentAvatarStyle(agent).solid}`}>{getAgentAvatarLabel(agent)}</span>{agent.name}</button>)}</div>
                   </div>
                 ) : null}
                 {visibleMessages.map((message) => (
@@ -453,7 +426,7 @@ function MessageBubble({
   return (
     <article
       id={`message-${message.id}`}
-      className={`group flex w-full gap-3 rounded-md transition-colors duration-500 ${
+      className={`workspace-message ${isUser ? "is-user" : "is-agent"} group flex w-full gap-3 rounded-md transition-colors duration-500 ${
         highlighted ? "bg-amber-100/80 ring-2 ring-amber-300 ring-offset-4 dark:bg-amber-500/15 dark:ring-amber-400/60 dark:ring-offset-slate-950" : ""
       } ${isUser ? "justify-end" : "justify-start"}`}
     >
@@ -461,27 +434,27 @@ function MessageBubble({
         <Avatar
           agent={agent ?? undefined}
           label={agentLabel}
-          className="mt-1 h-9 w-9"
+          className="workspace-message-avatar"
           onClick={agent && onViewAgent ? (event) => onViewAgent(agent, event) : undefined}
         />
       ) : null}
       <div
         className={
           isUser
-            ? "flex min-w-0 max-w-[min(75%,420px)] flex-col items-end"
-            : "flex min-w-0 w-full max-w-[min(100%,1160px)] flex-col items-start pr-2"
+            ? "workspace-message-content flex min-w-0 max-w-[min(80%,560px)] flex-col items-end"
+            : "workspace-message-content flex min-w-0 w-full flex-col items-start"
         }
       >
-        <div className={`mb-2 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-500 ${isUser ? "justify-end" : "justify-start"}`}>
-          <span className="font-medium text-slate-700 dark:text-slate-300">{isUser ? "我" : agentLabel}</span>
+        <div className={`workspace-message-meta flex items-center gap-2 text-xs text-[var(--ui-muted)] ${isUser ? "justify-end" : "justify-start"}`}>
+          {!isUser ? <span className="font-semibold text-[var(--foreground)]">{agentLabel}</span> : null}
           <span>{formatTime(message.createdAt)}</span>
           {!isUser && message.status === "streaming" ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
         </div>
         <div
-          className={`break-words ${
+          className={`workspace-message-body break-words ${
             isUser
-              ? "w-fit max-w-full rounded-xl border border-[#bdd0ff] bg-[#eff5ff] px-4 py-3 text-slate-900 shadow-sm dark:border-blue-500/40 dark:bg-blue-500/15 dark:text-blue-50"
-              : "w-full rounded-xl border border-slate-200 bg-white px-4 py-4 text-slate-900 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              ? "w-fit max-w-full rounded-lg bg-[var(--ui-subtle)] px-4 py-2.5"
+              : "w-full"
           }`}
         >
           {parentMessage ? (
@@ -512,7 +485,7 @@ function MessageBubble({
           )}
           {!isUser && message.runId ? <DispatchProgress messageId={message.id} /> : null}
         </div>
-        <div className={`mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 ${isUser ? "justify-end" : "justify-start"}`}>
+        <div className={`workspace-message-actions mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 ${isUser ? "justify-end" : "justify-start"}`}>
           <button type="button" onClick={() => setReplyTarget(message.conversationId, message.id)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="引用回复">
             <Reply className="h-3.5 w-3.5" />
           </button>
@@ -544,7 +517,7 @@ function MessageBubble({
           <p className={`mt-1 text-xs text-red-600 ${isUser ? "text-right" : ""}`}>{error}</p>
         ) : null}
       </div>
-      {isUser ? <Avatar label="我" dark /> : null}
+      {isUser ? <Avatar label="我" dark className="workspace-message-avatar" /> : null}
     </article>
   );
 }
@@ -570,7 +543,7 @@ function extractMessageText(message: Message) {
 
 function Avatar({ label, displayLabel, agent, dark, muted, compact, className = "", onClick }: { label: string; displayLabel?: string; agent?: Agent; dark?: boolean; muted?: boolean; compact?: boolean; className?: string; onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void }) {
   const agentColor = agent ? getAgentAvatarStyle(agent).solid : "bg-emerald-600 text-white";
-  const content = displayLabel ?? label.slice(0, 2);
+  const content = displayLabel ?? (agent ? getAgentAvatarLabel(agent) : label.slice(0, 2));
   const sizeClass = compact ? "h-8 w-8" : "h-9 w-9";
   const base = `grid ${sizeClass} shrink-0 place-items-center rounded-full text-xs font-semibold ${
     dark ? "bg-[#4169ff] text-white" : muted ? "bg-slate-100 text-slate-500" : agentColor
@@ -715,14 +688,14 @@ function formatProvider(provider: ModelProvider | null) {
 
 function HeaderIcon({ children, title, onClick, active, disabled }: { children: ReactNode; title: string; onClick?: () => void; active?: boolean; disabled?: boolean }) {
   return (
-    <button disabled={disabled} className={`grid h-9 w-9 place-items-center rounded-lg disabled:cursor-not-allowed disabled:opacity-40 ${active ? "bg-[#eef2ff] text-[#4264ff] dark:bg-blue-500/20 dark:text-blue-200" : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"}`} type="button" title={title} onClick={onClick}>
+    <button disabled={disabled} className={`workspace-header-action ${active ? "is-active" : ""}`} aria-pressed={active} type="button" title={title} onClick={onClick}>
       {children}
     </button>
   );
 }
 
 function formatTokenCount(tokens: number) {
-  if (tokens <= 0) return "0 tok";
+  if (tokens <= 0) return "0";
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
-  return `${tokens} tok`;
+  return `${tokens}`;
 }

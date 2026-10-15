@@ -9,7 +9,7 @@ import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
 import { requestJson } from "@/lib/request-json";
-import { getAgentAvatarStyle } from "@/shared/agent-avatar";
+import { getAgentAvatarLabel, getAgentAvatarStyle } from "@/shared/agent-avatar";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 
 export function AgentsPanel() {
@@ -71,7 +71,7 @@ export function AgentsPanel() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="workspace-agent-library flex h-full flex-col">
       <div className="flex items-center justify-between px-5 py-4 border-b border-stone-200">
         <h2 className="text-sm font-semibold text-stone-950">Agents</h2>
         <button
@@ -83,14 +83,14 @@ export function AgentsPanel() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+      <div className="workspace-agent-grid flex-1 overflow-y-auto px-4 py-3 space-y-2">
         {agentList.map((agent) => (
           <div
             key={agent.id}
-            className="flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
+            className="workspace-agent-row flex items-center gap-3 rounded-md border border-stone-200 bg-white px-3 py-3"
           >
             <button type="button" aria-label={`查看 ${agent.name} 的详情`} onClick={() => setViewingAgent(agent)} className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${getAgentAvatarStyle(agent).solid}`}>
-              {agent.avatar}
+              {getAgentAvatarLabel(agent)}
             </button>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
@@ -107,6 +107,7 @@ export function AgentsPanel() {
               <div className="mt-0.5 text-xs text-stone-500">
                 {agent.adapterName} · {agent.modelId || "无模型"} · {agent.toolNames.length} 工具
               </div>
+              <p className="workspace-agent-description">{agent.description || "未填写职责描述"}</p>
             </div>
             <button
               type="button"

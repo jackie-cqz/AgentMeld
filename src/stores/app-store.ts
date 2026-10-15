@@ -68,7 +68,7 @@ export const useAppStore = create<AppState>()(
     activeConversationId: null,
     activeArtifactId: null,
     sidebarTab: "conversations",
-    rightPanelOpen: true,
+    rightPanelOpen: false,
     rightPanelMode: "artifact",
     artifactPanelWidth: DEFAULT_ARTIFACT_PANEL_WIDTH,
     connectionStatus: "connecting",
@@ -218,10 +218,13 @@ export const useAppStore = create<AppState>()(
     },
 
     setActiveArtifact(artifactId) {
-      if (artifactId === get().activeArtifactId) { if (artifactId) get().setRightPanelOpen(true); return; }
+      if (artifactId === get().activeArtifactId) { if (artifactId) get().setRightPanelMode("artifact"); return; }
       requestWorkspaceNavigation(() => set((state) => {
         state.activeArtifactId = artifactId;
-        if (artifactId) state.rightPanelOpen = true;
+        if (artifactId) {
+          state.rightPanelMode = "artifact";
+          state.rightPanelOpen = true;
+        }
       }));
     },
 

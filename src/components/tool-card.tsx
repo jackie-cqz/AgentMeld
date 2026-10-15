@@ -63,7 +63,7 @@ export function ToolUseCard({ parts, messageStatus }: { parts: MessagePart[]; me
   const summary = getToolGroupSummary(entries, msgDone);
 
   return (
-    <div className={`overflow-hidden rounded-lg border text-sm ${summary.containerClass}`}>
+    <div className={`workspace-tool-call ${summary.status === "error" ? "has-error" : ""}`}>
       <button
         type="button"
         aria-expanded={groupExpanded}
@@ -119,11 +119,7 @@ function ToolCallItem({
   const args = toolUse.args as Record<string, unknown> | undefined;
 
   return (
-    <div className={grouped ? "" : `overflow-hidden rounded-lg border text-sm ${
-      isError ? "border-red-200 bg-red-50/80 dark:border-red-900/70 dark:bg-red-950/30" :
-      isComplete ? "border-emerald-100 bg-emerald-50/70 dark:border-emerald-900/60 dark:bg-emerald-950/20" :
-      "border-amber-200 bg-amber-50/80 dark:border-amber-900/70 dark:bg-amber-950/20"
-    }`}>
+    <div className={grouped ? "" : `workspace-tool-call ${isError ? "has-error" : ""}`}>
       <button
         type="button"
         aria-expanded={expanded}
