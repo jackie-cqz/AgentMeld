@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
-import { hashToken } from "@/server/auth";
+import { sha256Token } from "@/server/auth";
 
 /**
  * Route tests call handlers directly, and since the #24 gate every handler
@@ -31,7 +31,7 @@ export function pairTestOwner(): string {
   `);
   getDatabase()
     .prepare("INSERT INTO owner_sessions (id, token_hash, created_at, last_seen_at, label) VALUES (?, ?, ?, ?, ?)")
-    .run(`os_${randomBytes(8).toString("hex")}`, hashToken(token), now, now, "test");
+    .run(`os_${randomBytes(8).toString("hex")}`, sha256Token(token), now, now, "test");
   currentCookie = `agentmeld_session=${token}`;
   return currentCookie;
 }

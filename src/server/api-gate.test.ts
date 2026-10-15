@@ -79,6 +79,24 @@ describe("the gate", () => {
     expect(gate.response?.status).toBe(401);
   });
 
+  it("refuses a session whose sliding window has lapsed", async () => {
+    pair();
+    // Insert a session whose token we know, then age its last_seen_at past
+    // the 30-day sliding TTL. The lookup key still matches — what must fail
+    // is the freshness check on the row, not the cookie.
+    const { sha256Token } = await import("@/server/auth");
+    const token = "lapsed-" + "c".repeat(40);
+    const now = Date.now();
+    getDatabase()
+      .prepare("INSERT INTO owner_sessions (id, token_hash, created_at, last_seen_at, label) VALUES (?, ?, ?, ?, ?)")
+      .run("os_lapsed", sha256Token(token), now - 31 * 24 * 3600 * 1000, now - 31 * 24 * 3600 * 1000, "test");
+    const gate = await gateRequest(
+      new Request(anyUrl, { headers: { cookie: `agentmeld_session=${token}` } })
+    );
+    expect(gate.allowed).toBe(false);
+    expect(gate.response?.status).toBe(401);
+  });
+
   it("refuses a session cookie that was never issued", async () => {
     pair();
     const gate = await gateRequest(
@@ -127,12 +145,35 @@ describe("pairing codes", () => {
   });
 
   it("replacing the code kills the previous one", () => {
-    createPairingCode();
-    const { code } = createPairingCode();
-    // The first code was never returned to us, but redeeming a stale one must
-    // fail anyway — what we test is that only the LATEST code works.
-    expect(redeemPairingCode(code).ok).toBe(true);
+    // Redeem BOTH codes' fates: the first mint's code must be dead the moment
+    // a second one is issued. (An earlier version of this test never tried
+    // the first code — it passed even when stale codes stayed redeemable.)
+    const first = createPairingCode();
+    const second = createPairingCode();
+    expect(redeemPairingCode(first.code).ok).toBe(false);
+    expect(redeemPairingCode(second.code).ok).toBe(true);
     expect(hasPairedOwner()).toBe(true);
+  });
+
+  it("refuses an expired code with 410", () => {
+    const { code } = createPairingCode();
+    // Backdate the live entry past its TTL, as time passing would.
+    const codes = globalThis.__agentMeldPairingCodes!;
+    codes.set("current", { ...codes.get("current")!, expiresAt: Date.now() - 1 });
+    const result = redeemPairingCode(code);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(410);
+    expect(hasPairedOwner()).toBe(false);
+  });
+
+  it("sets the session cookie with HttpOnly, SameSite=Strict and Path=/", () => {
+    const { code } = createPairingCode();
+    const result = redeemPairingCode(code);
+    expect(result.ok).toBe(true);
+    const cookie = result.setCookie ?? "";
+    for (const attribute of ["HttpOnly", "SameSite=Strict", "Path=/", "Max-Age="]) {
+      expect(cookie).toContain(attribute);
+    }
   });
 
   it("caps wrong attempts and says so", () => {

@@ -52,12 +52,25 @@ interface SessionRow {
 }
 
 /** Pairing/session tokens are stored one-way. Shared with the test helper. */
+/**
+ * Pairing codes ONLY: 6 digits is low entropy, so it gets the slow one-way
+ * treatment — a stolen database cannot be brute-forced back into codes.
+ */
 export function hashToken(token: string): string {
-  // A pairing code is short and human-typed, so it gets the same one-way
-  // treatment as a session token: what sits in the database cannot be read
-  // back out, and what appears in a log cannot be replayed.
   const salt = createHash("sha256").update("agentmeld-session-salt").digest();
   return scryptSync(token, salt, SCRYPT_KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P }).toString("hex");
+}
+
+/**
+ * Session and device tokens: 256 bits of CSPRNG output, which no adversary
+ * can enumerate, so a fast hash used as a lookup key is the standard storage
+ * shape (same as any opaque bearer token registry). This is also why the
+ * gate stays cheap: a scrypt per request would hand any anonymous caller a
+ * ~32ms synchronous CPU hit per try — a self-service DoS. scrypt is reserved
+ * for the one place entropy actually demands it: pairing codes.
+ */
+export function sha256Token(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -112,10 +125,10 @@ export function createPairingCode(): { code: string; expiresAt: number } {
   const expiresAt = Date.now() + PAIRING_CODE_TTL_MS;
   globalThis.__agentMeldPairingCodes ??= new Map();
   const codes = globalThis.__agentMeldPairingCodes;
-  // One live code at a time: a second request replaces the first rather than
-  // doubling the guessing surface.
-  codes.clear();
-  for (const [key, entry] of codes) if (entry.expiresAt < Date.now()) codes.delete(key);
+  // One live code at a time, structurally: mint and redeem both go through
+  // the SAME single "current" key, so issuing a second code overwrites the
+  // first in place. There is no multi-key store to sweep — a stale code dies
+  // by having been replaced, nothing else needs to expire it.
   codes.set("current", { hashed: hashToken(code), expiresAt, attempts: 0 });
   return { code, expiresAt };
 }
@@ -155,7 +168,7 @@ export function redeemPairingCode(code: string): PairingResult {
   const id = `os_${randomBytes(8).toString("hex")}`;
   getDatabase()
     .prepare("INSERT INTO owner_sessions (id, token_hash, created_at, last_seen_at, label) VALUES (?, ?, ?, ?, ?)")
-    .run(id, hashToken(token), now, now, null);
+    .run(id, sha256Token(token), now, now, null);
   return { ok: true, status: 200, setCookie: sessionCookie(token) };
 }
 
@@ -192,7 +205,7 @@ export async function resolvePrincipal(request: Request): Promise<AuthPrincipal>
     const token = auth.slice(7).trim();
     const { getSettings } = await import("@/server/settings-service");
     const expected = getSettings().mobileDeviceToken ?? null;
-    if (token && expected && constantTimeEquals(hashToken(token), hashToken(expected))) {
+    if (token && expected && constantTimeEquals(sha256Token(token), sha256Token(expected))) {
       return { kind: "device-token", label: "companion" };
     }
   }
@@ -205,7 +218,7 @@ function sessionFromCookie(token: string): AuthPrincipal | null {
   const now = Date.now();
   const rows = getDatabase()
     .prepare("SELECT id, token_hash, created_at, last_seen_at, revoked_at FROM owner_sessions WHERE token_hash = ?")
-    .all(hashToken(token)) as SessionRow[];
+    .all(sha256Token(token)) as SessionRow[];
   const row = rows[0];
   if (!row) return null;
   if (row.revoked_at) return null;

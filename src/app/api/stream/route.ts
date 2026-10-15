@@ -39,13 +39,25 @@ export async function GET(request: Request) {
       });
 
       const heartbeat = setInterval(() => {
-        const event: StreamEvent = {
-          type: "heartbeat",
-          conversationId: "*",
-          timestamp: Date.now()
-        };
-        const id = eventBus.lastEventId();
-        write(encodeSse(id, event));
+        // A revoked or expired session must not keep its EventSource fed
+        // forever: the gate only runs at connect time, so each heartbeat
+        // re-resolves the principal and closes the stream when it is gone.
+        // The browser reconnects, the gate runs again, and the now-anonymous
+        // connect is refused — that is the loop that makes revocation real
+        // for SSE.
+        void gateRequest(request).then((recheck) => {
+          if (!recheck.allowed) {
+            cleanup();
+            return;
+          }
+          const event: StreamEvent = {
+            type: "heartbeat",
+            conversationId: "*",
+            timestamp: Date.now()
+          };
+          const id = eventBus.lastEventId();
+          write(encodeSse(id, event));
+        });
       }, HEARTBEAT_MS);
 
       const cleanup = () => {

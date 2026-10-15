@@ -1,9 +1,10 @@
 "use client";
 
-import { Cpu, Globe, Loader2, MessageSquare } from "lucide-react";
+import { Cpu, Globe, Loader2, MessageSquare, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ChannelBindingsPanel } from "@/components/channel-bindings-panel";
 import { ModelProviderSettings } from "@/components/model-provider-settings";
+import { SessionsPanel } from "@/components/sessions-panel";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, SectionHeading } from "@/components/ui/controls";
 import { mergeProviderValues, type ProviderSnapshot, type ProviderSources, type ProviderValues } from "@/lib/model-provider-settings";
@@ -74,7 +75,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       <div className="ui-settings-layout">
         <nav className="ui-settings-rail" aria-label="设置分类">
           <div className="settings-rail-label">工作空间</div>
-          {[{ id: "models", label: "模型供应商", icon: <Cpu size={16} /> }, { id: "channels", label: "渠道绑定", icon: <MessageSquare size={16} /> }, { id: "publishing", label: "发布与预览", icon: <Globe size={16} /> }].map(item =>
+          {[{ id: "models", label: "模型供应商", icon: <Cpu size={16} /> }, { id: "channels", label: "渠道绑定", icon: <MessageSquare size={16} /> }, { id: "security", label: "安全与会话", icon: <ShieldCheck size={16} /> }, { id: "publishing", label: "发布与预览", icon: <Globe size={16} /> }].map(item =>
             <button key={item.id} aria-current={tab === item.id} onClick={() => setTab(item.id)}>{item.icon}{item.label}</button>)}
         </nav>
         <div className="min-w-0">
@@ -93,6 +94,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
               </fieldset>
             </>}
           <section hidden={tab !== "channels"}><ChannelBindingsPanel /></section>
+          <section hidden={tab !== "security"}><SessionsPanel /></section>
         </div>
       </div>
     </Modal>

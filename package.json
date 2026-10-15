@@ -5,9 +5,9 @@
   "description": "Local-first multi-agent collaboration workspace.",
   "license": "MIT",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H ${AGENTMELD_HOST:-127.0.0.1}",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H ${AGENTMELD_HOST:-127.0.0.1}",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
