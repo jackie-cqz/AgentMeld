@@ -172,6 +172,23 @@ describe("routeChannelInbound", () => {
     clearClaimCodesForTests();
   });
 
+  it("lets an ordinary message through while a claim is pending", async () => {
+    // Only a 6-digit message is a claim attempt. Swallowing everything else
+    // would lose the message (it is already deduplicated and never becomes one)
+    // and a few lines of chatter would burn the code's attempts.
+    const { issueClaimCodeForTests, clearClaimCodesForTests } = await import(
+      "@/server/channels/feishu/binding"
+    );
+    clearClaimCodesForTests();
+    issueClaimCodeForTests("ag_pm", "424242");
+
+    const outcome = await routeChannelInbound(inbound({ content: "帮我看看这个" }));
+
+    if (outcome.status !== "routed") throw new Error("expected routed");
+    expect(outcome.runIds.length).toBeGreaterThan(0);
+    clearClaimCodesForTests();
+  });
+
   it("refuses a wrong claim code without starting a run", async () => {
     const { issueClaimCodeForTests, clearClaimCodesForTests } = await import(
       "@/server/channels/feishu/binding"
