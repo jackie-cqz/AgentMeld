@@ -340,6 +340,62 @@ describe("delivering an artifact into the room", () => {
     clearDeliveryHealthForTests();
   });
 
+  it("logs a skip the operator is told to grep for", async () => {
+    // The operations guide says to grep `[feishu] not delivering`, so that line
+    // is an interface: it vanished once with no test to notice.
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const outcome = await projectArtifact(
+        artifact({ id: "art_unfoldable", content: { type: "web_app", files: { "index.html": "<p>x</p>" }, entry: "index.html" } })
+      );
+      expect(outcome.status).toBe("skipped");
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("not delivering art_unfoldable");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("says why when nobody in the group can carry the file", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      channelsByAgent.clear();
+      const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+      expect(outcome).toEqual({
+        status: "skipped",
+        reason: "no agent observed in this group has a live channel"
+      });
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("no agent observed in this group has a live channel");
+    } finally {
+      info.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
+  it("reports every candidate failure, and the reason it gave up", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const second = "ag_designer";
+      channelsByAgent.set(second, {});
+      addChannelConversationMember({ channelConversationId: "cc_1", agentId: second, now: 2 });
+      failingAgents.add(AGENT);
+      failingAgents.add(second);
+
+      const outcome = await projectArtifact(artifact({ createdByAgentId: null }));
+
+      expect(outcome.status).toBe("skipped");
+      expect(errors.mock.calls.length).toBe(2);
+      const logged = info.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain("not delivering art_1");
+    } finally {
+      info.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
   it("stays silent for a conversation that is not on a channel", async () => {
     const outcome = await projectArtifact(artifact({ conversationId: "conv_other" }));
     expect(outcome).toMatchObject({ status: "skipped" });

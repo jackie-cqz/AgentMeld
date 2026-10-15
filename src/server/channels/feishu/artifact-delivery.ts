@@ -188,6 +188,13 @@ export async function projectArtifact(artifact: Artifact): Promise<DeliveryOutco
     ? [artifact.createdByAgentId]
     : listObservedAgents(channelConversation.id).filter((agentId) => getFeishuChannelForAgent(agentId));
   if (candidates.length === 0) {
+    // The group IS on the channel but nobody in it can carry the file. Not the
+    // ordinary "this conversation has no channel" silence — that one is most
+    // conversations and must stay quiet — but an anomaly an operator needs to
+    // see, and it happens before deliverSend so health records nothing either.
+    console.info(
+      `[feishu] not delivering ${artifact.id}: no agent observed in this group has a live channel`
+    );
     return { status: "skipped", reason: "no agent observed in this group has a live channel" };
   }
 
