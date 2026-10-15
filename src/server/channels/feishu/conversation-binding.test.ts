@@ -4,7 +4,8 @@ import { setupTestDatabase } from "@/test/test-database";
 import {
   pruneObservedAgents,
   resolveChannelConversation,
-  syncChatMembership
+  syncChatMembership,
+  syncChatMembershipKeeping
 } from "@/server/channels/feishu/conversation-binding";
 import {
   getChannelConversationByChat,
@@ -93,12 +94,60 @@ describe("a roster that shrinks", () => {
     // do not recognise.
     expect(
       await syncChatMembership(
-        { getChatBots: async () => [{ bot_id: "ou_someone_else" }] },
+        { getChatBots: async () => [{ id: "ou_someone_else", idType: "open_id", name: "Other", isBot: true }] },
         channelConversation.id,
         "oc_1"
       )
     ).toEqual([]);
     expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer", "ag_pm"]);
+  });
+
+  it("keeps the agent it was just told about, even when the list disagrees", async () => {
+    // joinChannelConversation followed by the reconciliation could delete the
+    // agent that was just recorded: the bot was added a moment ago and may not
+    // be in the list yet, or its binding may have no open id to match on.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    upsertChannelBinding({
+      id: "cb_designer_keep",
+      agentId: "ag_designer",
+      channel: "feishu",
+      appId: "cli_designer_keep",
+      appSecret: "s",
+      botOpenId: "ou_bot_designer",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+
+    const removed = await syncChatMembershipKeeping(
+      { getChatBots: async () => [{ id: "ou_bot_designer", idType: "open_id", name: "D", isBot: true }] },
+      channelConversation.id,
+      "oc_1",
+      ["ag_pm"]
+    );
+
+    expect(removed).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
+  });
+
+  it("does not trust a non-array answer", async () => {
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    for (const answer of [null, { id: "ou_bot_pm" }, "ou_bot_pm", 42]) {
+      expect(
+        await syncChatMembership(
+          { getChatBots: async () => answer as never },
+          channelConversation.id,
+          "oc_1"
+        ),
+        JSON.stringify(answer)
+      ).toEqual([]);
+    }
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
   });
 
   it("only drops agents it can positively identify among the chat's bots", async () => {
@@ -124,7 +173,7 @@ describe("a roster that shrinks", () => {
     }
 
     const removed = await syncChatMembership(
-      { getChatBots: async () => [{ bot_id: "ou_bot_designer" }] },
+      { getChatBots: async () => [{ id: "ou_bot_designer", idType: "open_id", name: "Designer", isBot: true }] },
       channelConversation.id,
       "oc_1"
     );

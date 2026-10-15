@@ -1,3 +1,4 @@
+import type { ChatMember } from "@larksuite/channel";
 import {
   addChannelConversationMember,
   findAgentIdByBotOpenId,
@@ -19,7 +20,7 @@ import type { ChannelConversation } from "@/shared/types";
  * that this agent's bot is present there.
  *
  * Membership is learned, not declared. No granted scope can list a chat's bots
- * (`getChatBots` answers 400), so the only evidence that an agent belongs to a
+ * (`getChatBots` answers 400 unless the app is granted `im:chat:readonly` (see docs/feishu-operations.md)), so the only evidence that an agent belongs to a
  * group is that its bot received an event in it. A conversation therefore starts
  * with whoever spoke first and grows as other agents' bots are seen — which is
  * also why the receiving agent is added on every call, not just on creation.
@@ -149,13 +150,19 @@ export function pruneObservedAgents(
   return removed;
 }
 
-/** Map as many of a chat's bots as we can onto agent ids. */
-export function identifyChatBots(
-  bots: ReadonlyArray<{ bot_id?: string; openId?: string; id?: string }>
-): string[] {
+/**
+ * Map as many of a chat's bots as we can onto agent ids.
+ *
+ * The shape is the SDK's `ChatMember`: `fetchChatBots` builds
+ * `{ id: it.bot_id, idType: "open_id", name: it.bot_name, isBot: true }`, so the
+ * open id is `id`. An earlier version also accepted `bot_id`/`openId` — fields
+ * the SDK never returns — which meant the one shape that DOES occur in
+ * production had no test at all, and deleting it stayed green.
+ */
+export function identifyChatBots(bots: readonly ChatMember[]): string[] {
   const agentIds: string[] = [];
   for (const bot of bots) {
-    const openId = bot.bot_id ?? bot.openId ?? bot.id;
+    const openId = bot?.id;
     if (!openId) continue;
     const agentId = findAgentIdByBotOpenId("feishu", openId);
     if (agentId) agentIds.push(agentId);
@@ -170,23 +177,55 @@ export function identifyChatBots(
  * an API failure, leaves the roster exactly as it was.
  */
 export async function syncChatMembership(
-  channel: { getChatBots?: (chatId: string) => Promise<unknown> },
+  channel: {
+    getChatBots?: (chatId: string, opts?: { force?: boolean }) => Promise<ChatMember[]>;
+  },
   channelConversationId: string,
   chatId: string
 ): Promise<string[]> {
   if (typeof channel.getChatBots !== "function") return [];
   let bots: unknown;
   try {
-    bots = await channel.getChatBots(chatId);
+    // `force` because the SDK caches members per chat for five minutes: the
+    // point of this call is what is true NOW, and a cached answer would report
+    // a bot that just left as still present — silently doing nothing in exactly
+    // the case this exists for.
+    bots = await channel.getChatBots(chatId, { force: true });
   } catch (error) {
     console.error("[feishu] could not list the chat's bots:", error);
     return [];
   }
   if (!Array.isArray(bots) || bots.length === 0) return [];
-  const present = identifyChatBots(bots as never);
+  const present = identifyChatBots(bots);
   // Nothing in that list mapped onto one of our agents, so it says nothing
   // about any of them. Pruning here would empty the roster on the strength of
   // an id format we do not recognise.
   if (present.length === 0) return [];
   return pruneObservedAgents(channelConversationId, present);
+}
+
+/**
+ * The reconciliation, plus the one thing the caller just learned.
+ *
+ * `keep` exists because the list is not always complete: a bot added a moment
+ * ago may not be in it yet, and its binding may have no `bot_open_id` to match
+ * on at all. Without this, `joinChannelConversation` followed by the
+ * reconciliation could delete the agent it had just recorded.
+ */
+export async function syncChatMembershipKeeping(
+  channel: {
+    getChatBots?: (chatId: string, opts?: { force?: boolean }) => Promise<ChatMember[]>;
+  },
+  channelConversationId: string,
+  chatId: string,
+  keep: readonly string[]
+): Promise<string[]> {
+  const removed = await syncChatMembership(channel, channelConversationId, chatId);
+  if (removed.length === 0) return removed;
+  const keepSet = new Set(keep);
+  const restored = removed.filter((agentId) => keepSet.has(agentId));
+  for (const agentId of restored) {
+    addChannelConversationMember({ channelConversationId, agentId, now: Date.now() });
+  }
+  return removed.filter((agentId) => !keepSet.has(agentId));
 }

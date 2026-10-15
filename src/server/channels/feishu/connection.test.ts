@@ -3,7 +3,13 @@ import { setupTestDatabase } from "@/test/test-database";
 import { resetFeishuConnectionsForTests } from "@/server/channels/feishu/connection";
 import { unbindAgent } from "@/server/channels/feishu/binding";
 import { getDatabase } from "@/db/client";
-import { upsertChannelBinding } from "@/server/repositories";
+import {
+  addChannelConversationMember,
+  createChannelConversation,
+  createConversation,
+  listChannelConversationMembers,
+  upsertChannelBinding
+} from "@/server/repositories";
 import { eventBus, type EventBusEntry } from "@/server/event-bus";
 import type { StreamEvent } from "@/shared/types";
 
@@ -36,6 +42,7 @@ interface FakeChannel {
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
+  getChatBots: ReturnType<typeof vi.fn>;
   getBotIdentity: ReturnType<typeof vi.fn>;
   on: (event: string, handler: Handler) => void;
   emit: (event: string, payload: unknown) => void;
@@ -65,6 +72,7 @@ function makeChannel(options: Record<string, unknown>): FakeChannel {
       }
     }),
     disconnect: vi.fn(async () => {}),
+    getChatBots: vi.fn(async () => []),
     // If anything ever calls this, the loop defence has been broken.
     send: vi.fn(async () => ({ messageId: "om_should_not_happen" })),
     getBotIdentity: vi.fn(() => ({
@@ -251,6 +259,56 @@ describe("feishu connection layer", () => {
 
     // §5.8 layer 1: receiving a message must never produce one.
     expect(created[0].send).not.toHaveBeenCalled();
+  });
+
+  it("records itself and reconciles the group when it is added to a chat", async () => {
+    // The glue around the reconciliation: which chat, who we are, and that a
+    // departed member really goes. Removing the self-recording line used to
+    // leave the whole suite green.
+    seedBinding("ag_pm", "cli_pm");
+    const conversation = createConversation({
+      id: "conv_1",
+      title: "群",
+      mode: "group",
+      agentIds: ["ag_pm", "ag_designer"],
+      fsWriteApprovalMode: "auto",
+      now: 1
+    });
+    createChannelConversation({
+      id: "cc_1",
+      channel: "feishu",
+      chatId: "oc_1",
+      conversationId: conversation.id,
+      now: 1
+    });
+    addChannelConversationMember({ channelConversationId: "cc_1", agentId: "ag_designer", now: 1 });
+    upsertChannelBinding({
+      id: "cb_designer",
+      agentId: "ag_designer",
+      channel: "feishu",
+      appId: "cli_designer",
+      appSecret: "s",
+      botOpenId: "ou_bot_designer",
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+
+    await startFeishuChannels();
+    // Only the designer's bot is in the chat, so the agent we are about to
+    // record ourselves as must survive the reconciliation.
+    // Two bindings mean two channels: the event must come from the app whose
+    // agent we are asserting about, not from whichever was created first.
+    const mine = created.find((fake) => fake.options.appId === "cli_pm");
+    if (!mine) throw new Error("expected a channel for cli_pm");
+    mine.getChatBots.mockResolvedValue([
+      { id: "ou_bot_designer", idType: "open_id", name: "D", isBot: true }
+    ]);
+    mine.emit("botAdded", { chatId: "oc_1", operator: { openId: "ou_user" } });
+
+    await vi.waitFor(() => {
+      expect(listChannelConversationMembers("cc_1")).toContain("ag_pm");
+    });
+    expect(listChannelConversationMembers("cc_1")).toContain("ag_designer");
   });
 
   it("turns a rejected event into a visible connection event", async () => {

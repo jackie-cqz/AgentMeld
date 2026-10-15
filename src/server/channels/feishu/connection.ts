@@ -9,7 +9,7 @@ import {
 import { ensureDatabase } from "@/db/bootstrap";
 import {
   joinChannelConversation,
-  syncChatMembership
+  syncChatMembershipKeeping
 } from "@/server/channels/feishu/conversation-binding";
 import { getChannelConversationByChat } from "@/server/repositories";
 import { createPersistentCache, type SdkCache } from "@/server/channels/feishu/cache";
@@ -195,7 +195,15 @@ function wireHandlers(entry: ConnectionEntry, channel: LarkChannel): void {
         // Being added is evidence about OURSELVES, and it is the only such
         // evidence we get without a mention.
         joinChannelConversation(channelConversation, binding.agentId, Date.now());
-        const removed = await syncChatMembership(channel, channelConversation.id, event.chatId);
+        // `keep` is this bot: we were just told it is in the group, the list may
+        // not say so yet, and its binding may have no open id to match on — the
+        // reconciliation must not undo the line above.
+        const removed = await syncChatMembershipKeeping(
+          channel,
+          channelConversation.id,
+          event.chatId,
+          [binding.agentId]
+        );
         if (removed.length > 0) {
           console.info(
             `[feishu] ${event.chatId}: dropped ${removed.length} agent(s) no longer in the group`
