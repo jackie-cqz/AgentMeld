@@ -815,6 +815,46 @@ describe("the status button", () => {
     expect(JSON.stringify(updated[1].card)).toContain("已完成");
   });
 
+  it("keeps a third update out while the second is still on its way", async () => {
+    // The queue entry must live until the LAST work item for the run settles,
+    // not just until the first one does. If cleanup deleted it when refresh A
+    // finished, refresh C — clicked while refresh B is still on its way —
+    // would find no chain, start immediately, and race B for the same card.
+    const run = seed();
+    await projectRunStarted(run);
+    updated.length = 0;
+
+    let releaseA!: () => void;
+    gate.next = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" }); // A, held open
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" }); // B, queued behind A
+    await tick();
+    expect(updated).toHaveLength(0);
+
+    // Free A and arm the gate again in the same breath, so B is held too.
+    releaseA();
+    let releaseB!: () => void;
+    gate.next = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    await tick();
+    // A landed; B has taken the gate and is mid-flight.
+    expect(updated).toHaveLength(1);
+
+    handleRunStatusClick({ runId: run.id, chatId: "oc_1" }); // C, clicked mid-B
+    await tick();
+    expect(updated).toHaveLength(1); // C is still waiting its turn
+
+    releaseB();
+    await tick();
+    await tick();
+    expect(updated).toHaveLength(3);
+    expect(versions(updated[1].card)).toEqual({ run_status: 2, cancel_run: 2 });
+    expect(versions(updated[2].card)).toEqual({ run_status: 3, cancel_run: 3 });
+  });
+
   it("lets a refresh that is still on its way land BEFORE the settle, not after", async () => {
     // The race: a status click starts rewriting the card, the run ends, and the
     // settle rewrites it too. If the slower refresh landed last it would put a
