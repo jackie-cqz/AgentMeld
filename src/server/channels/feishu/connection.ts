@@ -26,6 +26,8 @@ import {
 export { getFeishuChannelForAgent, listFeishuConnections, resetFeishuConnectionsForTests } from "@/server/channels/feishu/registry";
 import { eventBus } from "@/server/event-bus";
 import { listFeishuBindings } from "@/server/channels/feishu/binding";
+import { acquireFeishuAppLock } from "@/server/channels/feishu/single-instance";
+import { getDataDir } from "@/db/client";
 import { getChannelBindingSecret, setChannelBindingBotOpenId } from "@/server/repositories";
 import type {
   ChannelBinding,
@@ -390,6 +392,10 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
       // that is being torn down; the app is briefly absent from the status list
       // instead, which is the safe direction (a send is skipped rather than
       // attempted on a dying socket).
+      // Give back the lock this process holds for a previous attempt BEFORE
+      // touching the old socket: a retry must not be refused by its own pid, and
+      // a close that fails leaves no lock behind for the next round.
+      existing?.releaseLock?.();
       const stale = existing?.channel ?? existing?.staleChannel ?? null;
       if (stale) {
         registry.delete(binding.appId);
@@ -415,6 +421,18 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
         continue;
       }
 
+      // One live connection per app ACROSS PROCESSES. The registry only stops
+      // this process from connecting twice; a second process with the same
+      // credentials would split the app's events between two sockets (or, with
+      // its own database, answer the same message twice). The lock lives in the
+      // data directory, so it is exactly the instances that share state that
+      // see each other.
+      const lock = acquireFeishuAppLock(binding.appId, getDataDir());
+      if (!lock.ok) {
+        fail(lock.reason);
+        continue;
+      }
+
       try {
         const entry = await connectOne(binding, secret);
         entry.lastAttemptAt = Date.now();
@@ -422,10 +440,15 @@ export async function startFeishuChannels(): Promise<ChannelConnectionInfo[]> {
           // A stop happened while this was connecting. Closing it is the whole
           // point of the epoch; registering it would make stop a lie.
           await entry.channel?.disconnect().catch(() => {});
+          lock.handle.release();
           continue;
         }
+        entry.releaseLock = lock.handle.release;
         registry.set(binding.appId, entry);
       } catch (error) {
+        // The attempt failed, so the app is not connected: the lock must go back
+        // or the next start (this process or another) could not retry it.
+        lock.handle.release();
         fail(error instanceof Error ? error.message : String(error));
       }
     }
@@ -459,6 +482,9 @@ export async function disconnectFeishuApp(appId: string): Promise<boolean> {
   } catch {
     // The row is gone either way; a failed close is not actionable.
   }
+  // The app is no longer connected here, so the next process (or the next start
+  // in this one) must be able to take it over.
+  entry.releaseLock?.();
   publishConnection(entry.binding, "disconnected");
   return true;
 }
@@ -474,6 +500,7 @@ export async function stopFeishuChannels(): Promise<void> {
   const registry = getRegistry();
   const entries = [...registry.values()];
   registry.clear();
+  for (const entry of entries) entry.releaseLock?.();
   await Promise.all(
     entries.map(async (entry) => {
       try {

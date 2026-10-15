@@ -30,6 +30,13 @@ export interface ConnectionEntry {
   connectedAt: number | null;
   /** When this app was last attempted, so a failure is not retried in a loop. */
   lastAttemptAt: number;
+  /**
+   * The cross-process lock this entry holds for its app, released when the
+   * connection goes away. Without it a crashed process could lock the app out
+   * (the lock file carries a pid, so a stale one is taken over) and a stopped
+   * one would leave the app unusable for the next process.
+   */
+  releaseLock?: (() => void) | null;
 }
 
 declare global {
