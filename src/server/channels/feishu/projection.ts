@@ -196,7 +196,7 @@ export async function projectRunFailure(run: AgentRun): Promise<ProjectionOutcom
 function replyTargetForMessage(
   message: Message,
   chatId: string
-): { chatId: string; messageId: string; threadId: string | null } | null {
+): { chatId: string; messageId: string; threadId: string } | null {
   if (!message.runId) return null;
   const run = getRun(message.runId);
   if (!run?.triggerMessageId) return null;

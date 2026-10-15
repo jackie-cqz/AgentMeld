@@ -102,14 +102,19 @@ export function deliverSend<T>(
    * Optional and capability-checked: a channel stub that only implements `send`
    * (and an app whose SDK predates `reply`) still posts, just not in-thread.
    */
-  replyTo?: { chatId: string; messageId: string; threadId: string | null } | null
+  replyTo?: { chatId: string; messageId: string; threadId: string } | null
 ): Promise<T> {
-  return attempt(conversationId, agentId, () => {
+  return attempt(conversationId, agentId, async () => {
     if (replyTo && typeof channel.reply === "function") {
-      return channel.reply(
-        { chatId: replyTo.chatId, messageId: replyTo.messageId, threadId: replyTo.threadId ?? undefined },
-        input
-      ) as unknown as Promise<T>;
+      try {
+        return (await channel.reply(replyTo, input)) as unknown as T;
+      } catch (error) {
+        // A withdrawn message, a closed topic, an app without reply permission:
+        // failing here would lose the answer entirely, and this module calls
+        // silence the worst of the available outcomes. Post it at the top level
+        // instead — what would have happened without any of this.
+        console.error("[feishu] reply failed; posting at the top level instead:", error);
+      }
     }
     return channel.send(chatId, input) as unknown as Promise<T>;
   });

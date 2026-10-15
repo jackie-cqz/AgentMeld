@@ -22,6 +22,42 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+describe("a database that predates a column", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-migrate-"));
+    process.env.AGENTMELD_DATA_DIR = tempDir;
+    resetBootstrapForTests();
+    resetDatabaseForTests();
+  });
+
+  afterEach(() => {
+    resetBootstrapForTests();
+    resetDatabaseForTests();
+    delete process.env.AGENTMELD_DATA_DIR;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("adds a column an older database is missing", () => {
+    // The drift guard compares a FRESH database, so a dropped `ensureColumn`
+    // line passes every test in the repository while every existing install
+    // stays broken. This drops the column the way an old database lacks it.
+    ensureDatabase();
+    getDatabase().exec("ALTER TABLE channel_inbound_messages DROP COLUMN thread_id");
+    const columns = () =>
+      (getDatabase().prepare("PRAGMA table_info(channel_inbound_messages)").all() as Array<{ name: string }>)
+        .map((column) => column.name);
+    expect(columns()).not.toContain("thread_id");
+
+    // Re-running bootstrap — what happens on the next start — must restore it.
+    resetBootstrapForTests();
+    ensureDatabase();
+
+    expect(columns()).toContain("thread_id");
+  });
+});
+
 describe("database bootstrap", () => {
   it("creates all P1 tables and seeds builtin records", () => {
     ensureDatabase();

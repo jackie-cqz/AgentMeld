@@ -654,6 +654,7 @@ function createIndexes() {
   const db = getDatabase();
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_channel_inbound_conversation ON channel_inbound_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_channel_inbound_message ON channel_inbound_messages(message_id);
     CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
     CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_artifacts_conv ON artifacts(conversation_id);
