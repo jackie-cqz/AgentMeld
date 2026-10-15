@@ -64,6 +64,49 @@ describe("run-recovery", () => {
     expect(after?.interrupted).toBe(true);
   });
 
+  it("settles the messages an interrupted run was streaming into", async () => {
+    // Only the run that owns a message ever finishes it, so a restart left the
+    // row `streaming` forever: the room showed a message spinning with nothing
+    // in it, which is indistinguishable from a frozen server. Recovery marks
+    // the run; it has to settle the message too.
+    const now = Date.now();
+    const runId = "run_streaming_1";
+    createRun({
+      id: runId,
+      conversationId: convId,
+      agentId,
+      triggerMessageId: null,
+      parentRunId: null,
+      status: "running",
+      now
+    });
+    const message = createMessage({
+      id: "msg_streaming_1",
+      conversationId: convId,
+      agentId,
+      role: "agent",
+      runId,
+      parts: [{ type: "text", content: "写了一半" }],
+      status: "streaming",
+      now
+    });
+
+    recoverOrphanedRuns();
+
+    const row = getDatabase()
+      .prepare("SELECT status, parts FROM messages WHERE id = ?")
+      .get(message.id) as { status: string; parts: string };
+    // `error`, not `failed`: a MESSAGE status is one of
+    // streaming | complete | error | aborted, and writing a RUN status here put
+    // a value the client cannot render into the database — a white screen, not
+    // a degraded row.
+    expect(["streaming", "complete", "error", "aborted"]).toContain(row.status);
+    expect(row.status).toBe("error");
+    // The answer that did arrive is kept, and the row explains itself.
+    expect(row.parts).toContain("写了一半");
+    expect(row.parts).toContain("中断");
+  });
+
   it("does not touch completed runs", () => {
     const now = Date.now();
     createRun({

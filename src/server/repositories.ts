@@ -261,6 +261,34 @@ export function updateMessageParts(messageId: string, parts: MessagePart[], now:
     .run(JSON.stringify(parts), now, messageId);
 }
 
+/**
+ * Settle the messages a stopped run was streaming into.
+ *
+ * A restart kills a run mid-answer, and the run's own recovery marks the RUN
+ * interrupted — but the message row it was writing stays `streaming` forever,
+ * because only the run that owned it ever finishes it. The room then shows a
+ * message that spins with nothing in it, which looks exactly like a frozen
+ * server. The note is appended so the row explains itself.
+ */
+export function failStreamingMessagesForRun(runId: string, note: string, now: number): number {
+  const rows = getDatabase()
+    .prepare("SELECT id, parts FROM messages WHERE run_id = ? AND status = 'streaming'")
+    .all(runId) as Array<{ id: string; parts: string | null }>;
+  for (const row of rows) {
+    let parts: unknown[] = [];
+    try {
+      const parsed = JSON.parse(row.parts ?? "[]");
+      parts = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      parts = [];
+    }
+    getDatabase()
+      .prepare("UPDATE messages SET status = 'error', parts = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify([...parts, { type: "text", content: note }]), now, row.id);
+  }
+  return rows.length;
+}
+
 export function updateMessageStatus(messageId: string, status: MessageStatus, now: number) {
   getDatabase()
     .prepare("UPDATE messages SET status = ?, updated_at = ? WHERE id = ?")
