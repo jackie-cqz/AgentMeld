@@ -8,6 +8,7 @@ import { createNewArtifact } from "@/server/artifact-service";
 import { createConversation } from "@/server/conversation-service";
 import {
   deployArtifact,
+  deployWorkspace,
   resolveDeploymentFile
 } from "@/server/deployment-service";
 import { updateSettings } from "@/server/settings-service";
@@ -110,5 +111,34 @@ describe("deployment-service", () => {
   it("rejects private metadata and traversal paths", () => {
     expect(resolveDeploymentFile("dep_valid", ".agentmeld/manifest.json")).toBeNull();
     expect(resolveDeploymentFile("dep_valid", "../secret.txt")).toBeNull();
+  });
+});
+
+describe("deploying a workspace directory", () => {
+  it("refuses a directory that is a symlink out of the workspace", () => {
+    // The lexical check passes a link inside the workspace, and this function
+    // READS the directory and publishes it — so host files would be published.
+    const workspace = path.join(tempDir, "ws");
+    const outside = path.join(tempDir, "outside");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, "index.html"), "<p>host</p>");
+    fs.writeFileSync(path.join(outside, "secret.txt"), "HOST SECRET");
+    fs.symlinkSync(outside, path.join(workspace, "link"));
+
+    const result = deployWorkspace(workspace, "link", "escaped");
+
+    expect(result.status).toBe("failed");
+    expect(JSON.stringify(result)).toContain("escapes the workspace");
+  });
+
+  it("still deploys a real directory inside the workspace", () => {
+    const workspace = path.join(tempDir, "ws2");
+    fs.mkdirSync(path.join(workspace, "site"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "site", "index.html"), "<p>mine</p>");
+
+    const result = deployWorkspace(workspace, "site", "mine");
+
+    expect(result.status).toBe("ready");
   });
 });

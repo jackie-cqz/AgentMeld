@@ -198,6 +198,83 @@ export function resolveWorkspaceFileForRead(
 
   return { ok: true, realPath: realTarget, size: stat.size };
 }
+/**
+ * The guard the fs_* TOOLS use: realpath-verified containment for a path that
+ * may not exist yet.
+ *
+ * `assertPathWithinWorkspace` is lexical — `resolveSafePath` plus `startsWith`
+ * — and the comment above `resolveWorkspaceRealPath` says plainly that such a
+ * check "is defeated by a symlink". The tools were all still using the lexical
+ * one, so a link inside the workspace pointing at /etc/passwd was read, and a
+ * link pointing at a host file was written through. This is the same rule the
+ * file browser already applies, extended to paths that do not exist yet:
+ *
+ * - the workspace root is compared as its realpath;
+ * - an EXISTING target must resolve inside it, so a symlink out is refused;
+ * - a target that does not exist is judged by its nearest existing ancestor's
+ *   realpath — that is what a create would land in, so a symlinked-out parent
+ *   is refused before the file is made.
+ *
+ * Returns the LOGICAL path (never the realpath: callers and the paths they
+ * record work in workspace terms, and realpathing a temp directory rewrites its
+ * prefix on some platforms) or throws the way `assertPathWithinWorkspace` does,
+ * so tool call sites read the same.
+ */
+export function assertRealPathWithinWorkspace(workspacePath: string, targetPath: string): string {
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(workspacePath);
+  } catch {
+    throw new Error("The workspace directory is not accessible.");
+  }
+
+  const logical = resolveSafePath(workspacePath, targetPath);
+
+  // A DANGLING symlink is the case `existsSync` hides: it follows the link, so
+  // a link whose target does not exist reads as "not created yet" and would be
+  // judged by its ancestor — while a write to it follows the link and creates
+  // the file wherever it points. Where it points cannot be verified, so it is
+  // refused rather than guessed at.
+  let danglingLink = false;
+  try {
+    danglingLink = fs.lstatSync(logical).isSymbolicLink() && !fs.existsSync(logical);
+  } catch {
+    // lstat failing means the path truly does not exist; the ancestor rule below
+    // is the right one for that.
+  }
+  if (danglingLink) {
+    // Not "escapes": this link may well point inside. What is missing is the
+    // ability to VERIFY it — a chain of dangling links cannot be resolved — and
+    // a refusal should say what it actually knows.
+    throw new Error(`Cannot verify where this dangling symlink points: ${targetPath}`);
+  }
+
+  // Existing target: its realpath is what would be opened, so that is what
+  // decides. The LOGICAL path is returned either way — callers (and the paths
+  // they record) work in workspace terms, and realpathing a temp directory on
+  // some platforms rewrites its prefix.
+  if (fs.existsSync(logical)) {
+    const realTarget = fs.realpathSync(logical);
+    if (!isPathWithin(realTarget, realRoot)) {
+      throw new Error(`Path escapes the workspace: ${targetPath}`);
+    }
+    return logical;
+  }
+
+  // Not created yet: the nearest existing ancestor decides where it would land.
+  let ancestor = path.dirname(logical);
+  while (!fs.existsSync(ancestor)) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  const realAncestor = fs.realpathSync(ancestor);
+  if (!isPathWithin(realAncestor, realRoot)) {
+    throw new Error(`Path escapes the workspace: ${targetPath}`);
+  }
+  return logical;
+}
+
 export const MAX_TEXT_CHARS = 50_000;
 export const MAX_FILE_WRITE_BYTES = 100_000; // 100 KB
 export const BASH_OUTPUT_CHARS = 10_000;

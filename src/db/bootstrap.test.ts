@@ -227,7 +227,7 @@ describe("database bootstrap", () => {
       .prepare("SELECT system_prompt FROM agents WHERE id = ?")
       .get("ag_mock_builder") as { system_prompt: string };
 
-    expect(row.system_prompt).toContain("无论 workspace_info mode 是 sandbox 还是 local");
+    expect(row.system_prompt).toContain("无论 workspace_info mode 是 workspace-confined 还是 host-access");
     expect(row.system_prompt).toContain("必须在本轮真实调用 deploy_workspace 或 deploy_artifact");
     expect(row.system_prompt).toContain("如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace");
     expect(row.system_prompt).toContain("精确覆盖目标文件");
@@ -273,7 +273,7 @@ describe("database bootstrap", () => {
       "你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。",
       "",
       "工作方式：",
-      "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 sandbox 还是 local，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。",
+      "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 workspace-confined 还是 host-access，都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。",
       "- 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。",
       "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。"
     ].join("\n");

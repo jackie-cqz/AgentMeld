@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { getAttachment, readAttachmentContent } from "@/server/attachment-service";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 export const readAttachmentTool: ToolDef = {
   name: "read_attachment",
+  capabilities: TOOL_CAPABILITIES.read_attachment,
   description:
     "Read a user-uploaded attachment. For text files, returns the content (up to 50,000 chars). " +
     "For images, returns metadata. For other binary files, returns a note. " +

@@ -32,6 +32,7 @@ import type { Agent, AgentRun, Conversation, Message } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import { consumeDelegation } from "@/server/delegation";
 import { recordRunRefusal } from "@/server/run-refusals";
+import { workspaceInfoBlock } from "@/server/tools/capabilities";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
@@ -517,18 +518,17 @@ function createErrorMessage(
   });
 }
 
-function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePath: string): string {
+/**
+ * The system prompt for a run. Exported so the workspace claim it makes can be
+ * asserted against the agent's actual tools (see tools/capabilities.test.ts).
+ */
+export function buildSystemPrompt(agent: Agent, conversation: Conversation, workspacePath: string): string {
   const parts: string[] = [];
 
-  // Workspace context block (sandbox mode for now)
-  parts.push(`<workspace_info>
-  <cwd>${workspacePath}</cwd>
-  <mode>sandbox</mode>
-  <note>
-    This is an isolated sandbox directory. Files you write here are only visible
-    inside this conversation.
-  </note>
-</workspace_info>`);
+  // Workspace context block, told truthfully for THIS agent's tools: an agent
+  // holding bash is not in a sandbox, and saying so invited it to treat the
+  // host as one (see tools/capabilities.ts).
+  parts.push(workspaceInfoBlock(agent.toolNames, workspacePath));
 
   if (agent.systemPrompt) {
     parts.push(agent.systemPrompt);

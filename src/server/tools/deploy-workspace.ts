@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { createNewArtifact } from "@/server/artifact-service";
 import { deployWorkspace } from "@/server/deployment-service";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 import { isPathWithin } from "@/server/workspace-utils";
 
@@ -31,6 +32,7 @@ const MAX_ARTIFACT_TEXT_TOTAL_BYTES = 4 * 1024 * 1024;
 
 export const deployWorkspaceTool: ToolDef = {
   name: "deploy_workspace",
+  capabilities: TOOL_CAPABILITIES.deploy_workspace,
   description:
     "Deploy a static directory from the workspace. The directory must contain an index.html. Use after running build commands.",
   parameters: {

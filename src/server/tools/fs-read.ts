@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { z } from "zod";
-import { assertPathWithinWorkspace, MAX_TEXT_CHARS, MAX_FILE_READ_BYTES } from "@/server/workspace-utils";
+import { assertRealPathWithinWorkspace, MAX_TEXT_CHARS, MAX_FILE_READ_BYTES } from "@/server/workspace-utils";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -9,6 +10,7 @@ const ArgsSchema = z.object({
 
 export const fsReadTool: ToolDef = {
   name: "fs_read",
+  capabilities: TOOL_CAPABILITIES.fs_read,
   description:
     "Read a text file inside the workspace. Returns file content (UTF-8), truncated to 50,000 characters. Max file size: 1 MB.",
   parameters: {
@@ -29,7 +31,7 @@ export const fsReadTool: ToolDef = {
 
     let absolutePath: string;
     try {
-      absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
+      absolutePath = assertRealPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
     }

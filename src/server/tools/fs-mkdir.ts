@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { z } from "zod";
-import { assertPathWithinWorkspace } from "@/server/workspace-utils";
+import { assertRealPathWithinWorkspace } from "@/server/workspace-utils";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 
 const ArgsSchema = z.object({
@@ -10,6 +11,7 @@ const ArgsSchema = z.object({
 
 export const fsMkdirTool: ToolDef = {
   name: "fs_mkdir",
+  capabilities: TOOL_CAPABILITIES.fs_mkdir,
   description:
     "Create a directory inside the workspace. Use this instead of bash/PowerShell mkdir when a directory is needed. " +
     "It cannot delete, move, rename, or overwrite files.",
@@ -32,7 +34,7 @@ export const fsMkdirTool: ToolDef = {
 
     let absolutePath: string;
     try {
-      absolutePath = assertPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
+      absolutePath = assertRealPathWithinWorkspace(ctx.workspacePath, parsed.data.path);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Path validation failed." };
     }

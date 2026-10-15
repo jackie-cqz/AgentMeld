@@ -1,4 +1,5 @@
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
+import type { ToolCapability } from "@/server/tools/capabilities";
 
 export interface ToolContext {
   conversationId: string;
@@ -37,5 +38,12 @@ export interface ToolDef {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+  /**
+   * What this tool can reach, declared once and used to describe the workspace
+   * honestly (see tools/capabilities.ts). Required: the registry test fails if
+   * a tool omits it, because a prompt that overstates confinement is how an
+   * agent ends up treating the host as a sandbox.
+   */
+  capabilities: readonly ToolCapability[];
   handler: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;
 }

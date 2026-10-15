@@ -39,6 +39,7 @@ import {
   insertContextSnapshot,
   listEvidenceForAttempt,
 } from "@/server/repositories/evidence-repository";
+import { workspaceInfoBlock } from "@/server/tools/capabilities";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -1601,14 +1602,11 @@ export function buildConductorPlanPrompt(
   const blocks: string[] = [];
 
   // Block 1: Workspace context
-  blocks.push(`<workspace_info>
-  <cwd>${workspacePath}</cwd>
-  <mode>sandbox</mode>
-  <note>
-    This is an isolated sandbox directory. Files you write here are only visible
-    inside this conversation.
-  </note>
-</workspace_info>`);
+  // The tools the PLAN stage actually gets (CONDUCTOR_PLAN_TOOLS), not the
+  // agent record's list: a conductor configured with bash still cannot run a
+  // command while planning, and telling it it can would contradict the stage
+  // instructions two blocks down.
+  blocks.push(workspaceInfoBlock(CONDUCTOR_PLAN_TOOLS, workspacePath));
 
   // Block 2: Conductor persona
   blocks.push(agent.systemPrompt);

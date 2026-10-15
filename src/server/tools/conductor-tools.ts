@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getTaskArtifacts, recordTaskReport } from "@/server/dispatch-task-results";
 import { getConversation } from "@/server/repositories";
+import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolDef } from "@/server/tools/types";
 import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-criteria";
 import type { DispatchTaskIntent } from "@/shared/types";
@@ -11,6 +12,7 @@ import type { DispatchTaskIntent } from "@/shared/types";
 
 export const planTasksTool: ToolDef = {
   name: "plan_tasks",
+  capabilities: TOOL_CAPABILITIES.plan_tasks,
   description:
     "Create a plan of subtasks to delegate to other agents. " +
     "Only available to Conductor agents. Each task specifies an agent, instructions, and dependencies.",
@@ -168,6 +170,7 @@ export const planTasksTool: ToolDef = {
 
 export const reportTaskResultTool: ToolDef = {
   name: "report_task_result",
+  capabilities: TOOL_CAPABILITIES.report_task_result,
   description:
     "Report the final result of a dispatched task. Must be called once before the child agent finishes. " +
     "When the task declares acceptance criteria, report every criterion verbatim in acceptanceResults with pass/fail evidence. " +

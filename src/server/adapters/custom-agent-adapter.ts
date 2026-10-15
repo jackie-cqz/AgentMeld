@@ -10,6 +10,7 @@ import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import { getArtifact } from "@/server/repositories";
 import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 import { buildPromptLayout } from "@/server/prompt-layout/prompt-layout-builder";
+import { workspaceInfoBlock } from "@/server/tools/capabilities";
 
 export const CUSTOM_AGENT_MAX_TOOL_ROUNDS = 48;
 export const TASK_REPORT_FINALIZATION_ROUNDS = 1;
@@ -1282,7 +1283,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+/**
+ * The workspace section of the dispatched-sub-task prompt.
+ *
+ * Exported because it is one of the three places that describe the workspace,
+ * and the one a review found unpinned: the other two had prompt tests, this one
+ * could be reverted to the old blanket sandbox claim with the whole suite
+ * green.
+ */
+export function buildWorkspaceStableSection(toolNames: string[], workspacePath: string) {
+  return {
+    id: "workspace_info",
+    title: "Workspace",
+    content: workspaceInfoBlock(toolNames, workspacePath),
+    tokenEstimate: 60
+  };
+}
+
+/**
+ * The stable prefix sections of a dispatched sub-task prompt.
+ *
+ * Extracted from buildMessages so the wiring is testable: the workspace entry
+ * must be the shared builder applied to the tools the child actually has. A
+ * review showed that replacing the call with a literal left every test green,
+ * because only the helper was covered.
+ */
+export function buildStableSections(input: AdapterInput) {
+  const runtimePlatform = buildRuntimePlatformPrompt(input.workspacePath);
+  return [
+    buildWorkspaceStableSection(input.toolNames, input.workspacePath),
+    { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
+    { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 }
+  ];
+}
+
+/**
+ * The chat messages for one turn. Exported so the dispatched-sub-task prompt
+ * can be asserted end to end — a review showed the call site could be replaced
+ * with a literal while a helper-level test stayed green.
+ */
+export function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
   const runtimePlatform = buildRuntimePlatformPrompt(input.workspacePath);
 
@@ -1301,11 +1341,7 @@ function buildMessages(input: AdapterInput): OpenAI.Chat.Completions.ChatComplet
       toolNames: input.toolNames,
       roleContractVersion: "role-contracts-v1",
       platformPromptVersion: "agentmeld-p0-v1",
-      stableSections: [
-        { id: "workspace_info", title: "Workspace", content: `<workspace_info>\n  <cwd>${input.workspacePath}</cwd>\n  <mode>sandbox</mode>\n</workspace_info>`, tokenEstimate: 30 },
-        { id: "runtime_platform", title: "Runtime Platform", content: runtimePlatform, tokenEstimate: 120 },
-        { id: "tool_guidance", title: "Tool Guidance", content: extractToolGuidance(input.systemPrompt), tokenEstimate: 200 },
-      ],
+      stableSections: buildStableSections(input),
       userMessage: triggerText,
       taskPrompt: input.taskExecution ? "Dispatched sub-task — see context below." : triggerText,
       taskContextXml: input.contextXml,
