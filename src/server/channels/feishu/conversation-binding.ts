@@ -8,6 +8,7 @@ import {
   deleteConversation,
   getChannelConversationByChat,
   getConversation,
+  listChannelBindings,
   listChannelConversationMembers,
   updateConversation
 } from "@/server/repositories";
@@ -142,9 +143,22 @@ export function pruneObservedAgents(
   presentAgentIds: readonly string[]
 ): string[] {
   const present = new Set(presentAgentIds);
+  // "Not in the list I just fetched" is only evidence about an agent we can
+  // match to a bot at all. Without this, a member whose binding has no
+  // `bot_open_id` (an identity lookup that failed once, or a binding that was
+  // removed) never appears in `present` and was deleted even when its bot was
+  // in the list — the opposite of the rule this function documents, and a
+  // deletion with no evidence behind it.
+  const identifiable = new Set(
+    listChannelBindings()
+      .filter((binding) => binding.channel === "feishu" && binding.botOpenId)
+      .map((binding) => binding.agentId)
+  );
+
   const removed: string[] = [];
   for (const agentId of listChannelConversationMembers(channelConversationId)) {
     if (present.has(agentId)) continue;
+    if (!identifiable.has(agentId)) continue;
     if (removeChannelConversationMember(channelConversationId, agentId)) removed.push(agentId);
   }
   return removed;

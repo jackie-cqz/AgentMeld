@@ -55,8 +55,25 @@ describe("a roster that shrinks", () => {
     return channelConversation;
   }
 
+  /** A binding with a bot id, so the agent can be matched against the chat. */
+  function identify(agentId: string, openId: string) {
+    upsertChannelBinding({
+      id: `cb_${agentId}_${openId}`,
+      agentId,
+      channel: "feishu",
+      appId: `cli_${agentId}_${openId}`,
+      appSecret: "s",
+      botOpenId: openId,
+      boundByOpenId: "ou_user",
+      now: 1
+    });
+  }
+
   it("drops an observed agent that is no longer in the chat", () => {
     const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    // "Not in the list" is only evidence about an agent we can match to a bot.
+    identify("ag_pm", "ou_bot_pm");
+    identify("ag_designer", "ou_bot_designer");
 
     const removed = pruneObservedAgents(channelConversation.id, ["ag_pm"]);
 
@@ -100,6 +117,31 @@ describe("a roster that shrinks", () => {
       )
     ).toEqual([]);
     expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual(["ag_designer", "ag_pm"]);
+  });
+
+  it("keeps a member it cannot match to a bot, even when its bot IS in the list", async () => {
+    // The rule the function documents: no identification, no evidence, no
+    // deletion. `ag_pm` has a binding but no bot id (an identity lookup that
+    // failed once), so nothing said it left — and its bot is in the list.
+    const channelConversation = seedChat(["ag_pm", "ag_designer"]);
+    identify("ag_designer", "ou_bot_designer");
+
+    const removed = await syncChatMembership(
+      {
+        getChatBots: async () => [
+          { id: "ou_bot_designer", idType: "open_id", name: "D", isBot: true },
+          { id: "ou_bot_pm", idType: "open_id", name: "P", isBot: true }
+        ]
+      },
+      channelConversation.id,
+      "oc_1"
+    );
+
+    expect(removed).toEqual([]);
+    expect(sorted(listChannelConversationMembers(channelConversation.id))).toEqual([
+      "ag_designer",
+      "ag_pm"
+    ]);
   });
 
   it("keeps the agent it was just told about, even when the list disagrees", async () => {

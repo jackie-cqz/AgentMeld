@@ -351,7 +351,7 @@ R12 的实测说明回环**不是理论风险且很快**：一个「任何群消
 | **R13** | **一键清单缺少「列出群内机器人」与「列出群成员」的 scope**（§3 更正、§8.1.2 实测 400） | 按名字提及因此**只对已 @ 过我、被 roster 观察到的 peer 可用**；其余情况用已知 openId（§5.7）。需要用名字时走 §4.4 重授权补 scope |
 | **R14** | **没有发送者或群 allowlist**。`connection.ts` 只设了 `requireMention` / `respondToMentionAll` / `botLoopGuard`；SDK 的 `dmMode` 默认 `open`，`groupAllowlist` 未设。**后果：任何能在群里 @ 到 Bot 的飞书用户，都会以 `origin: "human"` 触发一次 Agent 运行**——包括内容形如 `/deploy` 的消息（那会走部署分支）。 | **未修**。SDK 建议用 `groupAllowlist` 圈定群。这是 issue #24「网页、飞书与远端接管共用的认证和审批权限边界」的直接范围——在鉴权落地前，飞书入口的授权边界等于「群成员」。**不要**把它当成已解决 |
 | **R15** | **渠道建出来的群会话只有 1 个成员**，绕过了服务层「group 至少两个 Agent」的校验（`validateConversationAgents`）。后果：之后有人在 UI 里按 group 规则编辑该会话，会直接抛错。 | **未修**。修它要么放宽校验（要确认放宽不会让手工建的会话也变得不合法），要么让渠道会话用另一种模式表达。真实数据里已有这样一条会话 |
-| **R16** | **membership 只增不减**：Bot 被移出群后仍留在 `conversation.agentIds` 与成员表里，没有离群处理路径。 | **未修**。`im:chat.members:bot_access` 权限在清单里，所以理论上可以订阅机器人进出群事件来收敛；尚未接 |
+| **R16** | **membership 只增不减**：Bot 被移出群后仍留在 `conversation.agentIds` 与成员表里，没有离群处理路径。 | **已实现但受 scope 阻塞**（见 `docs/feishu-operations.md` 的「一键权限清单」与「常见问题」两节）：本 Bot 被拉进群时用 `getChatBots` 对账并移除已退群成员，但该接口在**未授予 `im:chat:readonly` 时返回 400**，所以当前部署里对账是 no-op。飞书另有 `im.chat.member.bot.deleted_v1`（scope `im:chat.members:bot_access` 已在清单里），但本 SDK 只包装了进群事件；直接订阅它是更直接的路线，尚未实现 |
 | **R17** | 本地消息**丢弃了 `threadId`**（话题归属），且 `message_id` 为 null 同时表示「空消息」与「认领后失败」，两件事无法区分。 | **未修**，属可观测性/话题隔离（Issue F3），先记录 |
 
 ## 7. 架构选择与实施顺序
