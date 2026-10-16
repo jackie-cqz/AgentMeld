@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "peer-consultation-basic",
+  "title": "Peer Consultation Handoff",
+  "description": "A static landing page whose release codename can only be obtained by consulting a peer agent, exercising consult_agent end to end.",
+  "category": "context_handoff",
+  "prompt": "这是一个必须使用同伴咨询（consult_agent）才能完成的任务。目标是产出一个纯静态的聚焦主题落地页。\n\n硬性流程（验收会逐条检查，不要跳步）：\n1. Conductor 只派发一个前端任务（expected output 的 id 必须是 web_app，类型 web_app）；不需要给 UI 设计师单独派发交付任务。\n2. UI 设计师是唯一有权给出「发布代号」的角色。当被 consult_agent 咨询时，UI 必须自行选择由 MELLOW、连字符和 4 位数字组成的代号，并用 respond_to_consultation 回复；该代号只能通过这次咨询回复给出，不得写进任何 artifact、工作区文件、产物或普通聊天消息。\n3. 前端工程师必须先调用 consult_agent 咨询 UI 设计师（targetAgentId 使用系统提示里 <consultation_peers> 中 UI 设计师的真实 id；requestKey 自拟），拿到 replied 回复后，把回复中出现的那个 MELLOW-#### 代号原样写入页面主标题 <h1 data-testid=\"release-title\">…</h1>。不要自己编造代号，也不允许从其它角色或文件里获取。\n4. 前端用 write_artifact 写一个 web_app 产物：outputKey=web_app，content 形如 {\"files\":{\"index.html\":\"…\"},\"entry\":\"index.html\"}。index.html 必须是完整可渲染的静态页面（不使用 CDN、不依赖外部网络），页面可见的 H1 文本包含上述代号。然后调用 deploy_artifact 部署该 web_app。\n5. 前端最后调用 report_task_result。\n\n注意：consult_agent 的答复通常是只读意见，但本任务明确要求最终页面必须体现 UI 给出的代号，因此咨询是交付的必要条件。",
+  "expectedRoles": ["ui", "frontend"],
+  "assertions": [
+    { "id": "role-frontend-complete", "type": "role_executed", "role": "frontend", "mustComplete": true, "required": true },
+    { "id": "output-web-app", "type": "output_binding", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "required": true },
+    { "id": "frontend-write-artifact", "type": "tool_succeeded", "toolName": "write_artifact", "role": "frontend", "required": true },
+    { "id": "frontend-consulted-peer", "type": "tool_succeeded", "toolName": "consult_agent", "role": "frontend", "required": true },
+    { "id": "frontend-consultation-reflected", "type": "consultation_reflected", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "answerPattern": "MELLOW-[0-9]{4}", "required": true },
+    { "id": "frontend-consultation-lifecycle", "type": "consultation_lifecycle", "role": "frontend", "requireReplied": true, "requirePeerTornDown": true, "requireLeaseRestored": true, "requireReplayBounded": true, "requireNoExpired": true, "required": true },
+    { "id": "artifact-web-app-valid", "type": "artifact_valid", "role": "frontend", "outputKey": "web_app", "artifactType": "web_app", "minContentBytes": 200, "requiredFiles": ["index.html"], "required": true },
+    { "id": "frontend-deploy", "type": "deployment_ready", "role": "frontend", "outputKey": "web_app", "required": true },
+    { "id": "preview-http", "type": "preview_http", "role": "frontend", "outputKey": "web_app", "expectedStatus": 200, "minBodyBytes": 50, "required": true },
+    { "id": "browser-release-title", "type": "browser_interaction", "scriptId": "release-title", "required": true }
+  ],
+  "runtime": {
+    "browserScripts": [{
+      "id": "release-title",
+      "outputKey": "web_app",
+      "steps": [
+        { "action": "assert_visible", "selector": "h1[data-testid='release-title'], h1" }
+      ]
+    }]
+  },
+  "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1" },
+  "limits": { "maxDurationMs": 420000, "maxToolCalls": 100, "maxAttemptsPerTask": 2 },
+  "tags": ["web-app", "static", "consultation", "collaboration"]
+}

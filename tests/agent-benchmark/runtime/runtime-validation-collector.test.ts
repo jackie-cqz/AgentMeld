@@ -6,6 +6,7 @@ import {
   selectLatestTerminalEvidence,
   selectLatestValidDeploymentEvidence,
   splitSelectorFallbacks,
+  summarizeHarnessSmoke,
   type RuntimeEvidenceRow,
 } from "./runtime-validation-collector";
 import type { BenchmarkToolCallValidation } from "@/server/context-metrics/benchmark-types";
@@ -105,6 +106,48 @@ describe("isBlockingBrowserRequest", () => {
       "https://via.placeholder.com/400x200",
       "http://127.0.0.1:3002/deployments/dep_1",
     )).toBe(false);
+  });
+});
+
+describe("summarizeHarnessSmoke", () => {
+  it("scores only the case-declared harness browser scripts", () => {
+    const summary = summarizeHarnessSmoke([{
+      declaredScriptIds: ["add-todo", "filter-todos"],
+      results: [
+        { scriptId: "add-todo", status: "passed" },
+        { scriptId: "filter-todos", status: "failed" },
+      ],
+    }]);
+
+    expect(summary).toMatchObject({ total: 2, passed: 1, rate: 0.5 });
+    expect(summary.failedScriptIds).toEqual(["filter-todos"]);
+  });
+
+  it("counts a declared script with no harness result as a smoke failure", () => {
+    const summary = summarizeHarnessSmoke([{
+      declaredScriptIds: ["add-todo"],
+      results: [],
+    }]);
+
+    expect(summary).toMatchObject({ total: 1, passed: 0, rate: 0 });
+    expect(summary.missingScriptIds).toEqual(["add-todo"]);
+  });
+
+  it("ignores the agent's own browser_check evidence", () => {
+    // The agent's recorded browser_check result is deliberately absent from this
+    // input: only the harness `browsers` record can move the smoke rate.
+    const summary = summarizeHarnessSmoke([{
+      declaredScriptIds: ["add-todo"],
+      results: [{ scriptId: "add-todo", status: "passed" }],
+    }]);
+
+    expect(summary.rate).toBe(1);
+  });
+
+  it("stays vacuously passing when a case declares no browser script", () => {
+    expect(summarizeHarnessSmoke([{ declaredScriptIds: [], results: [] }]))
+      .toMatchObject({ total: 0, rate: 1 });
+    expect(summarizeHarnessSmoke([])).toMatchObject({ total: 0, rate: 1 });
   });
 });
 

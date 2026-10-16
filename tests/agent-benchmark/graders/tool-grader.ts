@@ -15,6 +15,7 @@ const TOOL_EVIDENCE_TYPES: Record<string, string[]> = {
   deploy_workspace: ["deployment_created"],
   ask_user: ["user_answered"],
   report_task_result: ["task_reported"],
+  consult_agent: ["agent_consulted"],
 };
 
 export const toolSucceededGrader: BenchmarkGrader = {

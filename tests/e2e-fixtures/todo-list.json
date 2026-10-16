@@ -4,7 +4,7 @@
   "title": "Todo List",
   "description": "Classic CRUD Todo List exercising the complete PM, UI, Frontend, and Reviewer collaboration chain.",
   "category": "collaboration",
-  "prompt": "帮我做一个 Todo List Web App。React，绿色主题，不需要登录。支持添加、完成、删除任务，支持按状态筛选（全部/进行中/已完成）。",
+  "prompt": "帮我做一个 Todo List Web App。React，绿色主题，不需要登录。支持添加、完成、删除任务，支持按状态筛选（全部/进行中/已完成），任务保存到 localStorage，刷新页面后仍然存在。请按 PM → UI 设计 → 前端实现 → Reviewer 审查的完整链路协作：Conductor 必须 plan_tasks，PM 产出 prd（document），UI 产出 style-guide（document），前端读取 prd 与 style-guide 后产出并部署 web_app（web_app），Reviewer 读取 web_app 后产出 review_report（document）。\n\n请严格实现以下可验收元素（验收脚本会按这些选择器驱动页面，缺少任何一项都会被判失败）：\n- 添加表单：文本输入框必须是 input[data-testid='new-task-input']；提交按钮是 button[data-testid='add-task']（按钮文本「添加」）。输入非空文本并点击该按钮后，任务立即出现在列表中。\n- 任务项：每个任务的外层元素是 [data-testid='todo-item']，内部包含任务文本；每项有一个原生复选框 input[type='checkbox'][data-testid='todo-toggle']；勾选完成后，该项根元素必须带上 data-completed=\"true\"。\n- 删除按钮：每项有 button[data-testid='todo-delete']（文本「删除」），点击后该项从列表消失。\n- 状态筛选：三个按钮 [data-testid='filter-all']、[data-testid='filter-active']、[data-testid='filter-completed']，文本分别为「全部」「进行中」「已完成」，默认显示全部。切到「进行中」时已完成任务必须从可见列表中移除；切回「全部」时重新出现。\n- 持久化：任务写入 localStorage，刷新页面后任务文本与完成状态仍然可见。",
   "expectedRoles": ["pm", "ui", "frontend", "reviewer"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
@@ -36,9 +36,21 @@
       "id": "add-todo",
       "outputKey": "web_app",
       "steps": [
-        { "action": "fill", "selector": "input[type='text'], input:not([type])", "value": "Benchmark task" },
-        { "action": "click", "selector": "button[type='submit'], button:has-text('添加'), button:has-text('新增'), .add-btn, button[aria-label='添加任务'], form button" },
-        { "action": "assert_text", "text": "Benchmark task" }
+        { "action": "fill", "selector": "[data-testid='new-task-input'], input[placeholder*='添加'], input[placeholder*='任务'], input[type='text'], input:not([type])", "value": "Benchmark task" },
+        { "action": "click", "selector": "[data-testid='add-task'], button:has-text('添加'), button:has-text('新增'), button[type='submit'], form button" },
+        { "action": "assert_text", "text": "Benchmark task" },
+        { "action": "assert_visible", "selector": "[data-testid='todo-item'], li.todo-item, .todo-item, ul li" },
+        { "action": "check", "selector": "[data-testid='todo-toggle'], li input[type='checkbox'], .todo-item input[type='checkbox']" },
+        { "action": "assert_visible", "selector": "[data-testid='todo-item'][data-completed='true'], [data-completed='true'], .todo-item.completed, li.completed" },
+        { "action": "click", "selector": "[data-testid='filter-active'], button:has-text('进行中'), button:has-text('未完成')" },
+        { "action": "assert_hidden", "selector": "[data-testid='todo-item'], li.todo-item, .todo-item, ul li" },
+        { "action": "click", "selector": "[data-testid='filter-completed'], button:has-text('已完成')" },
+        { "action": "assert_visible", "selector": "[data-testid='todo-item'], li.todo-item, .todo-item, ul li" },
+        { "action": "click", "selector": "[data-testid='filter-all'], button:has-text('全部')" },
+        { "action": "assert_visible", "selector": "[data-testid='todo-item'], li.todo-item, .todo-item, ul li" },
+        { "action": "reload" },
+        { "action": "assert_text", "text": "Benchmark task" },
+        { "action": "assert_visible", "selector": "[data-testid='todo-item'], li.todo-item, .todo-item, ul li" }
       ]
     }]
   },

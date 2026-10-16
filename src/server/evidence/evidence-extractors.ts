@@ -247,6 +247,41 @@ export const extractTaskReport: EvidenceExtractor = (ctx, args) => {
   };
 };
 
+// ── consult_agent ─────────────────────────────────────────────────────────
+
+/**
+ * A consultation is only valid evidence when the peer actually replied. A
+ * declined, expired, cancelled, or failed grant is recorded as invalid so a
+ * `tool_succeeded` assertion cannot treat "the peer never answered" as a
+ * successful consultation.
+ */
+export const extractAgentConsultation: EvidenceExtractor = (ctx, args, result) => {
+  const value = (result as { value?: Record<string, unknown> } | null)?.value;
+  const targetAgentId = getStr(args, "targetAgentId") || getStr(value, "targetAgentId");
+  const requestKey = getStr(args, "requestKey");
+  const status = getStr(value, "status");
+  const answered = isToolResultOk(result)
+    && status === "replied"
+    && typeof value?.answer === "string"
+    && value.answer.length > 0;
+  return {
+    type: "agent_consulted",
+    subjectType: "agent",
+    subjectId: targetAgentId || "peer",
+    payload: {
+      agentId: ctx.agentId,
+      targetAgentId,
+      requestKey,
+      status,
+      consultationId: getStr(value, "id"),
+      answerChars: typeof value?.answer === "string" ? value.answer.length : 0,
+    },
+    contentHash: hashContent(JSON.stringify({ targetAgentId, requestKey, status })),
+    trustLevel: "verified",
+    status: answered ? "valid" : "invalid",
+  };
+};
+
 // ── Tool → extractor map ──────────────────────────────────────────────────
 
 function observation(type: string, subjectType: string, reported = false): EvidenceExtractor {
@@ -287,4 +322,5 @@ export const EXTRACTOR_MAP: Record<string, EvidenceExtractor> = {
   deploy_workspace: extractDeployment,
   ask_user: extractUserAnswer,
   report_task_result: extractTaskReport,
+  consult_agent: extractAgentConsultation,
 };

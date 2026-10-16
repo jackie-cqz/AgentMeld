@@ -10,6 +10,7 @@ import { artifactReadGrader } from "./artifact-read-grader";
 import { artifactValidGrader } from "./artifact-grader";
 import { browserInteractionGrader } from "./browser-grader";
 import { buildSucceededGrader } from "./build-grader";
+import { consultationLifecycleGrader, consultationReflectedGrader } from "./consultation-grader";
 import { dagEdgeGrader } from "./dag-grader";
 import { deploymentReadyGrader } from "./deployment-grader";
 import { previewHttpGrader } from "./preview-grader";
@@ -83,5 +84,7 @@ export function createDefaultBenchmarkGraderRegistry(): BenchmarkGraderRegistry 
   registry.register(workspaceFileGrader);
   registry.register(structuredOutputGrader);
   registry.register(noForbiddenMutationGrader);
+  registry.register(consultationReflectedGrader);
+  registry.register(consultationLifecycleGrader);
   return registry;
 }

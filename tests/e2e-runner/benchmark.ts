@@ -22,6 +22,7 @@ import {
 } from "../agent-benchmark/judges/judge-calibration";
 import { DEFAULT_RUBRIC_VERSION, JUDGE_PROMPT_VERSION } from "../agent-benchmark/judges/judge-rubric";
 import { runBenchmarkCase, type BenchmarkTrialReport } from "../agent-benchmark/runtime/benchmark-runner";
+import { summarizeHarnessSmoke } from "../agent-benchmark/runtime/runtime-validation-collector";
 import { loadBenchmarkCases } from "../agent-benchmark/schemas/benchmark-case";
 import type {
   E2ERunResult,
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
       : undefined;
     const qualityGates = buildQualityGates(
       trials,
+      selectedCases,
       selectedCases.some((benchmarkCase) => benchmarkCase.judge?.enabled && benchmarkCase.judge.requiredForPass),
       calibrationApplicable,
     );
@@ -295,6 +297,7 @@ function readJudgePacket(filePath: string): JudgePacket | null {
 
 function buildQualityGates(
   trials: BenchmarkTrialReport[],
+  cases: ReturnType<typeof loadBenchmarkCases>,
   semanticRequired: boolean,
   judgeCalibrated: boolean,
 ) {
@@ -311,9 +314,22 @@ function buildQualityGates(
   const verifiedBindings = trials.reduce((sum, trial) => sum + trial.result.metrics.verifiedOutputBindingCount, 0);
   const unverifiedPropagation = trials.reduce((sum, trial) => sum + trial.result.metrics.unverifiedOutputPropagationCount, 0);
   const totalBindings = verifiedBindings + unverifiedPropagation;
+  const scriptsByCaseId = new Map(cases.map((benchmarkCase) => [
+    benchmarkCase.id,
+    (benchmarkCase.runtime?.browserScripts ?? []).map((script) => script.id),
+  ]));
+  // The smoke gate is the harness's own browser verification of the deployed
+  // preview, driven by the contract each case declares. It deliberately ignores
+  // the agent's `browser_check` calls (still recorded via toolCalls and counted
+  // in the tool-failure gate) and does not inherit unrelated required-assertion
+  // failures such as a missing reviewer report.
+  const smoke = summarizeHarnessSmoke(trials.map((trial) => ({
+    declaredScriptIds: scriptsByCaseId.get(trial.caseId) ?? [],
+    results: trial.runtimeValidation?.browsers ?? [],
+  })));
   return runBenchmarkQualityGates({
     requiredAssertionPassRate: required.length ? required.filter((assertion) => assertion.status === "passed").length / required.length : 1,
-    smokeSuccessRate: trials.length ? trials.filter((trial) => trial.verdict.finalVerdict === "passed").length / trials.length : 0,
+    smokeSuccessRate: smoke.rate,
     upstreamArtifactReadRate: totalVerifiedInputs ? totalReads / totalVerifiedInputs : 1,
     staleFactLeakageRate: contextItems ? staleLeaks / contextItems : 0,
     unverifiedOutputPropagationRate: totalBindings ? unverifiedPropagation / totalBindings : 0,

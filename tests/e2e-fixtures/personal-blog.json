@@ -4,7 +4,7 @@
   "title": "Personal Blog",
   "description": "Static blog testing structured requirements, design handoff, implementation, and deployment.",
   "category": "collaboration",
-  "prompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。部署环境使用 /deployments/{id} 子路径托管静态文件，客户端路由必须使用 HashRouter 或等价的子路径兼容方案，不能让首次打开部署预览落入应用内 404。所有 Markdown/front matter 解析必须在浏览器中直接运行，禁止使用依赖 Node.js Buffer、process 或 fs 的解析库；可以使用浏览器兼容库、构建时 import.meta.glob eager 导入或简单的本地解析函数。",
+  "prompt": "帮我做一个个人博客网站。React 静态站点，有一个首页展示文章列表，文章详情页，关于我页面。不需要后端，用 Markdown 文件做内容源。简洁的阅读风格，深色导航栏。部署环境使用 /deployments/{id} 子路径托管静态文件，客户端路由必须使用 HashRouter 或等价的子路径兼容方案，不能让首次打开部署预览落入应用内 404。所有 Markdown/front matter 解析必须在浏览器中直接运行，禁止使用依赖 Node.js Buffer、process 或 fs 的解析库；可以使用浏览器兼容库、构建时 import.meta.glob eager 导入或简单的本地解析函数。验收脚本会：断言首屏存在可见的 main/[role='main']/article 容器（首页直接渲染文章列表，不能是空壳或 404），然后点击导航中的「关于」入口（a[href*='about'] 或文本「关于」/「About」），并要求点击后 DOM 发生变化。请确保「关于我」入口真实存在且切换视图。",
   "expectedRoles": ["pm", "ui", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },

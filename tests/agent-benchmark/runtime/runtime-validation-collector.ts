@@ -15,16 +15,20 @@ import type {
   BenchmarkBrowserStepResult,
   BenchmarkBrowserValidation,
   BenchmarkBuildValidation,
+  BenchmarkConsultationValidation,
   BenchmarkDeploymentValidation,
   BenchmarkFaultRecord,
   BenchmarkPreviewValidation,
+  BenchmarkRole,
   BenchmarkRuntimeValidation,
   BenchmarkToolCallValidation,
   BenchmarkToolRejectionValidation,
+  BenchmarkWorkspaceLeaseValidation,
 } from "@/server/context-metrics/benchmark-types";
 import type { ContextTraceRunResponse } from "@/server/context-trace/context-trace-types";
-import { getArtifact } from "@/server/repositories";
+import { getArtifact, getRun, getWorkspaceForConversation } from "@/server/repositories";
 import type { Artifact } from "@/shared/types";
+import { inferBenchmarkRole } from "../graders/role-utils";
 import type { BenchmarkOwnerSession } from "./environment-manager";
 
 export interface RuntimeEvidenceRow {
@@ -64,6 +68,53 @@ export function resolveDeploymentPreviewPath(input: {
   return "";
 }
 
+/**
+ * Harness-owned smoke outcome for a set of case-declared browser scripts.
+ *
+ * The smoke gate must never be derived from the agent's own `browser_check`
+ * calls: those only prove the model guessed selectors against the DOM it just
+ * wrote. The harness runs the case-declared contract itself (see
+ * `runBrowserScripts`), so a script that was declared but never produced a
+ * result counts as a failure rather than silently disappearing. A case with no
+ * declared browser script contributes nothing and the rate stays 1.
+ */
+export interface HarnessSmokeSummary {
+  total: number;
+  passed: number;
+  failedScriptIds: string[];
+  missingScriptIds: string[];
+  rate: number;
+}
+
+export function summarizeHarnessSmoke(
+  inputs: ReadonlyArray<{
+    declaredScriptIds: readonly string[];
+    results: ReadonlyArray<Pick<BenchmarkBrowserValidation, "scriptId" | "status">>;
+  }>,
+): HarnessSmokeSummary {
+  const summary: HarnessSmokeSummary = {
+    total: 0,
+    passed: 0,
+    failedScriptIds: [],
+    missingScriptIds: [],
+    rate: 1,
+  };
+  for (const input of inputs) {
+    for (const scriptId of input.declaredScriptIds) {
+      summary.total += 1;
+      const result = input.results.find((candidate) => candidate.scriptId === scriptId);
+      if (!result) {
+        summary.missingScriptIds.push(scriptId);
+        continue;
+      }
+      if (result.status === "passed") summary.passed += 1;
+      else summary.failedScriptIds.push(scriptId);
+    }
+  }
+  summary.rate = summary.total === 0 ? 1 : summary.passed / summary.total;
+  return summary;
+}
+
 export interface RuntimeValidationCollectorOptions {
   reportDir: string;
   apiBase?: string;
@@ -88,6 +139,8 @@ export async function collectRuntimeValidation(
   const toolCalls = collectToolCalls(trace, evidence);
   const toolRejections = collectToolRejections(trace, evidence);
   const approvals = collectApprovals(trace);
+  const consultations = collectConsultations(trace);
+  const workspaceLease = collectWorkspaceLease(trace);
   const deploymentServer = options.apiBase ? null : await startDeploymentRouteServer(options.ownerSession ?? null);
   const apiBase = options.apiBase ?? deploymentServer!.baseUrl;
   try {
@@ -110,10 +163,93 @@ export async function collectRuntimeValidation(
       toolCalls,
       injectedFaults: options.injectedFaults ?? [],
       approvals,
+      consultations,
+      workspaceLease,
     };
   } finally {
     await deploymentServer?.close();
   }
+}
+
+/**
+ * Peer consultations are recorded outside the delegated run tree: the peer is
+ * not a child of the conductor, so it never appears in the trace. Read the
+ * durable consultation rows directly so a case can assert that a peer opinion
+ * actually happened, that the peer was torn down, and that a replay did not
+ * start a second peer run.
+ */
+function collectConsultations(trace: ContextTraceRunResponse): BenchmarkConsultationValidation[] {
+  const roleByAgentId = new Map<string, BenchmarkRole>();
+  for (const task of trace.tasks) {
+    const role = inferBenchmarkRole(task);
+    if (role && !roleByAgentId.has(task.agentId)) roleByAgentId.set(task.agentId, role);
+  }
+  const rows = getDatabase().prepare(`
+    SELECT id, source_run_id, source_agent_id, target_agent_id, target_run_id,
+           request_key, status, answer, expires_at, created_at, updated_at
+    FROM agent_consultations
+    WHERE conversation_id = ?
+    ORDER BY created_at, id
+  `).all(trace.conversationId) as Array<Record<string, unknown>>;
+  return rows.map((row) => {
+    const targetRunId = typeof row.target_run_id === "string" ? row.target_run_id : null;
+    const peerRun = targetRunId ? getRun(targetRunId) : null;
+    const sourceAgentId = String(row.source_agent_id);
+    return {
+      id: String(row.id),
+      sourceRunId: String(row.source_run_id),
+      sourceAgentId,
+      sourceRole: roleByAgentId.get(sourceAgentId) ?? null,
+      targetAgentId: String(row.target_agent_id),
+      targetRunId,
+      requestKey: String(row.request_key),
+      status: String(row.status),
+      answer: typeof row.answer === "string" ? row.answer : null,
+      peerRunStatus: peerRun?.status ?? null,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      expiresAt: Number(row.expires_at),
+    };
+  });
+}
+
+/**
+ * Durable proof that a lent workspace was returned: a poisoned receipt means
+ * the peer's teardown was never confirmed, and a still-held receipt after the
+ * run settled means some writer never released the workspace.
+ */
+function collectWorkspaceLease(
+  trace: ContextTraceRunResponse,
+): BenchmarkWorkspaceLeaseValidation | null {
+  const workspace = getWorkspaceForConversation(trace.conversationId);
+  if (!workspace) return null;
+  const candidateKeys = [workspace.rootPath, workspace.boundPath]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map((value) => {
+      try {
+        const physical = fs.realpathSync.native(value);
+        return process.platform === "win32" ? path.normalize(physical).toLowerCase() : physical;
+      } catch {
+        return null;
+      }
+    })
+    .filter((value): value is string => value !== null);
+  const row = candidateKeys.length === 0
+    ? undefined
+    : getDatabase().prepare(`
+        SELECT workspace_key, status, child_pid FROM harness_workspace_leases
+        WHERE workspace_key IN (${candidateKeys.map(() => "?").join(",")})
+        ORDER BY created_at DESC LIMIT 1
+      `).get(...candidateKeys) as { workspace_key: string; status: string; child_pid: number | null } | undefined;
+  if (!row) {
+    return { workspaceKey: candidateKeys[0] ?? "", held: false, poisoned: false, childPid: null };
+  }
+  return {
+    workspaceKey: row.workspace_key,
+    held: row.status === "held",
+    poisoned: row.status === "poisoned",
+    childPid: row.child_pid ?? null,
+  };
 }
 
 function collectToolCalls(
@@ -786,6 +922,17 @@ async function executeStep(page: Page, step: BenchmarkBrowserStep, baseline: str
       await locator.waitFor({ state: "visible" });
       return;
     }
+    case "assert_hidden": {
+      // No element matched by any fallback may become visible. A selector that
+      // matches nothing at all is hidden by definition, which is what a filter
+      // that removes completed items produces.
+      const deadline = Date.now() + 5_000;
+      while (Date.now() <= deadline) {
+        if (!(await anyVisibleLocator(page, step.selector))) return;
+        await page.waitForTimeout(100);
+      }
+      throw new Error(`Selector "${step.selector}" is still visible.`);
+    }
     case "assert_dom_changed": {
       const current = await domFingerprint(page);
       if (current === baseline) throw new Error("DOM text and form values did not change after interaction.");
@@ -811,6 +958,13 @@ async function firstVisibleLocator(page: Page, selectorList: string) {
     return page.locator(selectors[0]).first();
   }
   return page.locator(selectorList).first();
+}
+
+async function anyVisibleLocator(page: Page, selectorList: string): Promise<boolean> {
+  for (const selector of splitSelectorFallbacks(selectorList)) {
+    if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
+  }
+  return false;
 }
 
 export function splitSelectorFallbacks(selectorList: string): string[] {
