@@ -341,7 +341,7 @@ export async function runCompaction(
   coveredUntilCreatedAt: number,
   sourceMessageCount: number,
   modelProvider: string = "deepseek",
-  modelId: string = "deepseek-chat",
+  modelId: string = "deepseek-v4-flash",
   apiKeyOverride?: string | null,
   apiBaseUrl?: string | null,
   existingSummaryOverride?: string | null,

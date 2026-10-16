@@ -27,7 +27,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
     capabilities: ["planning", "coordination", "review"],
     adapterName: "pi",
     modelProvider: "deepseek",
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     apiKey: null,
     apiBaseUrl: null,
     systemPrompt: `你是 AgentMeld 平台的 Conductor（群聊项目经理）。你负责理解用户目标，判断是否需要多 Agent 协作，并把任务交给当前群聊中最合适的 Agent。
@@ -61,7 +61,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
     capabilities: ["requirements", "PRD", "product", "document"],
     adapterName: "pi",
     modelProvider: "deepseek",
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     apiKey: null,
     apiBaseUrl: null,
     systemPrompt: `你是经验丰富的产品经理。你的核心产出是 PRD（产品需求文档），用 write_artifact 输出。
@@ -97,7 +97,7 @@ PRD 必须包含：
     capabilities: ["design", "UI", "style-guide", "document"],
     adapterName: "pi",
     modelProvider: "deepseek",
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     apiKey: null,
     apiBaseUrl: null,
     systemPrompt: `你是 UI / 视觉设计师。你的核心产出是「风格指南」（不是图，是结构化的设计描述），用 write_artifact 输出。
@@ -134,7 +134,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
     capabilities: ["react", "frontend", "web_app"],
     adapterName: "pi",
     modelProvider: "deepseek",
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     apiKey: null,
     apiBaseUrl: null,
     systemPrompt: `你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。
@@ -179,7 +179,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
     capabilities: ["review", "code-review", "analysis"],
     adapterName: "pi",
     modelProvider: "deepseek",
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     apiKey: null,
     apiBaseUrl: null,
     systemPrompt: `你是 Reviewer，负责对群聊中已产出的产物或本地 workspace 代码做审查。
