@@ -101,7 +101,7 @@ export function compileAndValidateDispatchPlan(
     console.log(`[dispatch-plan] role contracts enriched plan fields`);
   }
 
-  // Compile: auto-add dependencies, resolve inputs
+  // Compile explicit dependencies and input contracts, never prose keywords.
   const compiled = compileDispatchPlan(contractEnriched);
 
   // Validate: agentId existence, no self-dispatch, no cycles, etc.
@@ -117,27 +117,13 @@ export function compileAndValidateDispatchPlan(
 }
 
 // ---------------------------------------------------------------------------
-// 8.3 compileDispatchPlan — auto-add dependencies from text heuristics
+// 8.3 compileDispatchPlan — dependencies come from explicit contracts
 // ---------------------------------------------------------------------------
 
 export function compileDispatchPlan(plan: DispatchPlanItem[]): DispatchPlanItem[] {
-  return plan.map((item, index) => {
+  return plan.map((item) => {
     // Keep explicit dependsOn
     const deps = new Set(item.dependsOn);
-
-    // Infer deps from "t1 产物", "基于 PRD", "读取 UI 设计" etc.
-    const text = item.task.toLowerCase();
-    for (let j = 0; j < index; j++) {
-      const prev = plan[j];
-      // If current task mentions previous task's id, add dependency
-      if (text.includes(prev.id.toLowerCase())) {
-        deps.add(prev.id);
-      }
-      // If current task is review/verify/test type, depend on all previous production tasks
-      if (isReviewTask(item) && !isReviewTask(prev)) {
-        deps.add(prev.id);
-      }
-    }
 
     // Resolve inputs → dependsOn
     if (item.inputs) {
@@ -255,11 +241,6 @@ function readTaskIntent(value: unknown): DispatchPlanItem["taskIntent"] {
     return value;
   }
   return undefined;
-}
-
-function isReviewTask(task: DispatchPlanItem): boolean {
-  const text = task.task.toLowerCase();
-  return text.includes("审查") || text.includes("review") || text.includes("验证") || text.includes("测试");
 }
 
 function detectCycle(plan: DispatchPlanItem[]): boolean {

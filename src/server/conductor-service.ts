@@ -21,7 +21,7 @@ import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { issueDelegation } from "@/server/delegation";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
-import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
+import { getFileWrites, getFileWriteOrder, clearFileWrites, detectWaveConflicts, collapseTaskAttemptWrites, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { clearRunToolEvidence, getRunToolEvidence, getTaskToolEvidence } from "@/server/dispatch-tool-evidence";
 import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
@@ -43,6 +43,9 @@ import {
   listEvidenceForAttempt,
 } from "@/server/repositories/evidence-repository";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
+import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
+import { acceptedHandoffForAttempt, bindHandoffAttempt, claimHandoff, finishHandoff, getHandoff, validateHandoffPackage } from "@/server/collaboration/handoffs";
+import { getTaskAttemptByChildRun, listTaskAttempts } from "@/server/repositories/evidence-repository";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -58,9 +61,25 @@ export interface ConductorInput {
   messageId: string;
   signal?: AbortSignal;
   piConfiguration?: PiProviderSnapshot;
+  objectiveContext?: string;
+  onTaskAccepted?: () => void;
+  onContextCaptured?: PiInvocationInput["onContextCaptured"];
+}
+
+function setConductorStage(conversationId: string, runId: string, stage: string): void {
+  const now = Date.now();
+  updateRunStage(runId, stage, now);
+  eventBus.publish({ type: "run.stage", conversationId, timestamp: now, runId, stage });
+}
+
+function taskWriterRunIds(runIds: string[]): string[] {
+  return [...new Set(runIds.flatMap(runId => [runId, ...(getDatabase().prepare(
+    "SELECT target_run_id FROM agent_consultations WHERE source_run_id=? AND target_run_id IS NOT NULL ORDER BY created_at,id"
+  ).all(runId) as Array<{ target_run_id: string }>).map(row => row.target_run_id)]))];
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
+  setConductorStage(input.conversationId, input.conductorRunId, "planning");
   const agent = listAgents().find(agent => agent.id === input.conductorAgentId);
   if (agent) input.piConfiguration ??= snapshotPiProvider(agent);
   // Stage 0: FACT EXTRACTION — extract structured facts from user message
@@ -82,7 +101,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
   }
 
   // Stage 1: ASSESS — LLM decides whether this needs a plan or is a simple chat
-  const assessResult = await runConductorAssess(input, userText);
+  const assessResult = await runConductorAssess(input, input.objectiveContext ?? userText);
 
   // Case A: Direct response — LLM answered directly (simple chat, greeting, question)
   if (assessResult.mode === "direct") {
@@ -174,6 +193,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       contractSelectionVersion: t.contractSelectionVersion
     }));
 
+    setConductorStage(input.conversationId, input.conductorRunId, "awaiting_approval");
     const result = await registerPendingPlan(input.conversationId, input.conductorRunId, planItems);
 
     if (!result.approved) {
@@ -334,7 +354,7 @@ export async function executeConductorPlan(
   const waves = topologicalWaves(validTasks);
 
   // ── Stage 1: DISPATCH — execute waves with per-wave conflict detection ──
-  updateRunStage(conductorRunId, "dispatch", Date.now());
+  setConductorStage(conversationId, conductorRunId, "dispatch");
   publishDispatchPlan(conversationId, conductorRunId, validTasks);
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
@@ -382,7 +402,7 @@ export async function executeConductorPlan(
               conductorRunId,
               conversationId,
               taskId: task.id,
-              agentId: task.agentId,
+              agentId: r.childRunId ? getRun(r.childRunId)?.agentId ?? task.agentId : task.agentId,
               title: task.title,
               status: r.status,
               summary: r.summary,
@@ -401,12 +421,10 @@ export async function executeConductorPlan(
     const waveRunWrites: RunFileWrites[] = [];
     for (const task of wave) {
       const r = results.get(task.id);
-      if (r?.childRunId) {
-        const writes = getFileWrites(r.childRunId);
-        if (writes.size > 0) {
-          waveRunWrites.push({ taskId: task.id, agentId: task.agentId, runId: r.childRunId, writes });
-        }
-      }
+      const runIds = [...new Set([...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId].filter((id): id is string => !!id))];
+      const attempts = taskWriterRunIds(runIds).map(runId => ({ taskId: task.id, agentId: getRun(runId)?.agentId ?? task.agentId, runId,
+        writes: getFileWrites(runId), writeOrder: getFileWriteOrder(runId) }));
+      waveRunWrites.push(...collapseTaskAttemptWrites(attempts));
     }
 
     const waveConflicts = detectWaveConflicts(waveRunWrites);
@@ -457,12 +475,17 @@ export async function executeConductorPlan(
     // Clean up file writes for this wave's tasks
     for (const task of wave) {
       const r = results.get(task.id);
-      if (r?.childRunId) clearFileWrites(r.childRunId);
+      const runIds = [...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId];
+      for (const runId of taskWriterRunIds(runIds.filter((id): id is string => !!id))) {
+        clearFileWrites(runId);
+        clearRunToolEvidence(runId);
+        clearTaskResultsForRun(runId);
+      }
     }
   }
 
   // ── Stage 2: RECOVERY — LLM-driven re-plan for failures ──
-  updateRunStage(conductorRunId, "recovery", Date.now());
+  setConductorStage(conversationId, conductorRunId, "recovery");
   let recovered = false;
   const hasFailures = Array.from(results.values()).some(
     (r) => r.status === "failed" || r.status === "blocked"
@@ -548,7 +571,7 @@ export async function executeConductorPlan(
   }
 
   // ── Stage 3: AGGREGATE — accurate completion status ──
-  updateRunStage(conductorRunId, "aggregate", Date.now());
+  setConductorStage(conversationId, conductorRunId, "aggregate");
   const completionStatus = determineCompletionStatus(results, recovered);
 
   await runAggregateStage(
@@ -684,6 +707,61 @@ async function runChildTask(
   outputBindings: Map<string, string>,
   signal: AbortSignal
 ): Promise<TaskResult> {
+  let result = await executeChildTaskAttempts(conversationId, task, triggerMessage, parentRunId, planId, outputBindings, signal);
+  for (let hop = 0; hop < 4; hop++) {
+    const source = result.childRunId ? getTaskAttemptByChildRun(result.childRunId) : undefined;
+    const handoff = source ? acceptedHandoffForAttempt(source.id) : null;
+    if (!handoff) return result;
+    result = await executeTaskHandoff(handoff.id, parentRunId, triggerMessage, signal, outputBindings);
+  }
+  return result;
+}
+
+/** An accepted handoff changes assignment, not the logical task or its evidence contract. */
+export async function executeTaskHandoff(id: string, coordinatorRunId: string, triggerMessage: Message, signal: AbortSignal,
+  outputBindings = new Map<string, string>()): Promise<TaskResult> {
+  const handoff = getHandoff(id);
+  if (!handoff || handoff.coordinatorRunId !== coordinatorRunId || !claimHandoff(id, coordinatorRunId)) throw new Error("Handoff has already been claimed or is not authorized.");
+  try {
+    const { waitForRunTreeStop } = await import("@/server/agent-runner");
+    await waitForRunTreeStop(handoff.sourceRunId, signal);
+    const packet = validateHandoffPackage(id);
+    signal.throwIfAborted();
+    const parent = getRun(coordinatorRunId);
+    if (!parent || parent.status !== "running" || parent.conversationId !== handoff.conversationId) throw new Error("The handoff coordinator is not active.");
+    // Prior evidence remains inspectable, but is not current-attempt proof.
+    getDatabase().prepare("UPDATE task_evidence SET status='stale',invalidated_at=? WHERE attempt_id=? AND invalidated_at IS NULL").run(Date.now(), handoff.sourceAttemptId);
+    updateTaskAttemptVerification(handoff.sourceAttemptId, "rejected", JSON.stringify({ handoffId: id, reason: "Superseded by an explicitly accepted handoff." }), Date.now());
+    const task = { ...packet.task, agentId: handoff.targetAgentId };
+    let planId = packet.sourcePlanId;
+    if (coordinatorRunId !== packet.sourceConductorRunId) {
+      planId = `plan_${coordinatorRunId}_handoff`;
+      persistConductorPlan({ id: planId, conductorRunId: coordinatorRunId, conversationId: handoff.conversationId,
+        planJson: JSON.stringify([task]), status: "active", stageAtCreation: "handoff", resumedFromRunId: packet.sourceConductorRunId, now: Date.now() });
+      for (const input of packet.inputs) outputBindings.set(input.key, input.artifactId);
+      publishDispatchPlan(handoff.conversationId, coordinatorRunId, [task]);
+    }
+    setConductorStage(handoff.conversationId, coordinatorRunId, "handoff");
+    const result = await executeChildTaskAttempts(handoff.conversationId, task, triggerMessage, coordinatorRunId, planId, outputBindings, signal,
+      { id, sourceAttemptId: handoff.sourceAttemptId, sourceRunId: handoff.sourceRunId, sourceAttempt: packet.sourceAttempt,
+        failure: packet.failure ?? "The human requested another Agent to continue this exact task; inspect prior evidence, do not treat it as current success." });
+    finishHandoff(id, result.status === "complete", result.status !== "complete" ? result.summary : undefined);
+    if (coordinatorRunId !== packet.sourceConductorRunId) persistConductorTask({ id: `${coordinatorRunId}_${task.id}`, conductorRunId: coordinatorRunId,
+      conversationId: handoff.conversationId, taskId: task.id, agentId: handoff.targetAgentId, title: task.title, status: result.status,
+      summary: result.summary, childRunId: result.childRunId ?? null, verificationStatus: result.verificationStatus,
+      attempt: packet.sourceAttempt + 1, now: Date.now() });
+    return result;
+  } catch (error) {
+    finishHandoff(id, false, error instanceof Error ? error.message : "Handoff failed.");
+    throw error;
+  }
+}
+
+async function executeChildTaskAttempts(
+  conversationId: string, task: ParsedTask, triggerMessage: Message, parentRunId: string, planId: string,
+  outputBindings: Map<string, string>, signal: AbortSignal,
+  handoff?: { id: string; sourceAttemptId: string; sourceRunId: string; sourceAttempt: number; failure: string }
+): Promise<TaskResult> {
   const effectiveOutputBindings = hydrateOutputBindings(outputBindings, planId);
   // Resolve inputs — check if required inputs are available
   const resolvedInputs = resolveTaskInputs(task, effectiveOutputBindings);
@@ -775,9 +853,9 @@ async function runChildTask(
     // On the first attempt these are empty — there is no previous run.
     // After each failed attempt, they are updated so the next iteration can
     // pass them into compileTaskContext → buildFailureContext.
-    let previousRunId = "";
-    let previousAttemptId = "";
-    let previousError: string | undefined;
+    let previousRunId = handoff?.sourceRunId ?? "";
+    let previousAttemptId = handoff?.sourceAttemptId ?? "";
+    let previousError: string | undefined = handoff?.failure;
     // Post-loop references: finalRunId for dispatch events, finalAttemptId for
     // verification-status updates.
     let finalRunId = "";
@@ -787,7 +865,8 @@ async function runChildTask(
     let finalReport: ReturnType<typeof getTaskReport>;
     let finalEvaluation: ReturnType<typeof evaluateChildTaskResult> = { status: "failed", error: "not started" };
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const lastAttempt = (handoff?.sourceAttempt ?? 0) + maxAttempts;
+    for (let attempt = (handoff?.sourceAttempt ?? 0) + 1; attempt <= lastAttempt; attempt++) {
       if (signal.aborted) return { taskId: task.id, status: "aborted", summary: "Parent run cancelled before retry." };
       // P0: Generate task execution identity for this attempt
       const attemptId = newTaskAttemptId();
@@ -879,7 +958,7 @@ async function runChildTask(
 
       // P3: Use compiled envelope prompt for first attempt, continuation for retries
       const attemptPrompt = attempt > 1
-        ? buildContinuationPrompt(renderTaskContextPrompt(envelope), attempt, maxAttempts, finalEvaluation.error ?? "unknown")
+        ? buildContinuationPrompt(renderTaskContextPrompt(envelope), attempt, lastAttempt, previousError ?? "unknown")
         : renderTaskContextPrompt(envelope);
 
       const attemptMsg: Message = {
@@ -951,11 +1030,20 @@ async function runChildTask(
 
       // P1: Mark attempt as running now that we have the childRunId
       startTaskAttempt(attemptId, attemptRunId, Date.now());
+      if (handoff) bindHandoffAttempt(handoff.id, attemptId, attemptRunId);
 
       try {
         await promise;
       } catch {
         // Run failed — continue to evaluation
+      }
+
+      if (acceptedHandoffForAttempt(attemptId)) {
+        finishTaskAttempt(attemptId, "aborted", Date.now());
+        updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ reason: "Human accepted task handoff; old results are ineligible." }), Date.now());
+        clearRunToolEvidence(attemptRunId);
+        clearTaskResultsForRun(attemptRunId);
+        return { taskId: task.id, status: "aborted", summary: "Task is being handed to another Agent.", childRunId: attemptRunId, verificationStatus: "rejected" };
       }
 
       // The delegation gate refuses BEFORE a run row exists, so the reason
@@ -1131,6 +1219,9 @@ async function runChildTask(
     }
 
     const report = finalReport;
+    if (finalAttemptId && acceptedHandoffForAttempt(finalAttemptId)) {
+      return { taskId: task.id, status: "aborted", summary: "Task is being handed to another Agent.", childRunId: finalRunId, verificationStatus: "rejected" };
+    }
 
     // P0: Check for missing required outputs — fail before binding anything
     const verifiedOutputKeys = new Set(finalVerifiedBindings.map((binding) => binding.outputKey));
@@ -1412,7 +1503,7 @@ async function runAggregateStage(
   const aggregateSystemPrompt = `${baseSystem}\n\n## 执行结果\n整体状态：${statusLabel}${completionStatus === "has_failures" ? "\n请明确说明整体未完成，不要把局部成功说成全部完成。" : ""}`;
 
   // Tools: remove plan_tasks and ask_user
-  const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
+  const aggregateTools = provisionedPlatformToolNames().filter((t) => t !== "ask_user");
 
   const invocationInput: PiInvocationInput = {
     conversationId,
@@ -1618,7 +1709,7 @@ export function buildConductorPlanPrompt(
   // agent record's list: a conductor configured with bash still cannot run a
   // command while planning, and telling it it can would contradict the stage
   // instructions two blocks down.
-  blocks.push(workspaceInfoBlock(CONDUCTOR_PLAN_TOOLS, workspacePath));
+  blocks.push(workspaceInfoBlock([...CONDUCTOR_PLAN_TOOLS, "consult_agent"], workspacePath));
 
   // Block 2: Conductor persona
   blocks.push(agent.systemPrompt);
@@ -1627,6 +1718,7 @@ export function buildConductorPlanPrompt(
   blocks.push(`## 你的工作流
 1. 阅读用户最新请求与上下文。
 2. 在调用任何工具前，先基于语义判断当前请求属于：
+   - DISCUSSION：用户在讨论方案、征求意见、询问进度或解释，尚未授权实际交付。
    - NEEDS_CLARIFICATION：存在多个合理方案，且不同选择会显著改变最终产物。
    - READY_TO_PLAN：信息足以形成可靠计划，或用户已明确授权你自行做决定。
 3. 对“创建应用 / 网站 / 工具 / 游戏 / 页面”类请求，重点检查：
@@ -1638,12 +1730,14 @@ export function buildConductorPlanPrompt(
    - 不要自行把常见默认值当作用户已经确认的选择。
    例如“帮我做一个番茄时钟”通常仍有计时规则、功能范围或视觉方向等高影响选择，
    应先判断这些选择是否需要用户确认。
-5. 如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
+5. DISCUSSION 时直接对话；需要专业意见且工具可用时调用 consult_agent，不调用 plan_tasks，不强制创建 PRD、风格指南或其他产物。
+   用户说“先别改”“先讨论”时，即使点名多位 Agent 也只进行咨询；不能把咨询结果当作用户已经批准执行。
+   如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
    例如用户已明确“React+TS、25+5、极简、不需要后端”，或明确说“细节你决定”。
 6. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
-7. 用户明确指定两个或以上角色、明确要求“先由 A 再由 B”、或明确要求 Agent 间产物交接时，
-   该请求必定属于 READY_TO_PLAN；你必须调用 plan_tasks。只读侦察只能帮助形成计划，
-   不能在侦察后由 Conductor 自己完成诊断、实现或审查并直接回复。
+7. 用户明确指定两个或以上角色执行实际交付、明确要求“先由 A 再由 B”执行、或明确要求 Agent 间正式产物交接时，
+   信息充分后你必须调用 plan_tasks；单个专业 Agent 足够时，计划只需一个任务，不额外插入需求、设计或审查步骤。
+   上述规则不适用于只读咨询或讨论。这些平台规则优先于角色模板里固定的多角色工作流。
 
 ## 可用 Agent
 
@@ -1661,7 +1755,7 @@ ${agentList}
 - 需要创建或修改网页、组件、源码、运行构建时优先找前端 / 工程类 Agent。
 - 需要检查完成度、代码质量、需求一致性或风险时优先找 Reviewer / QA 类 Agent。
 - 一个任务只分派给一个最合适的 Agent；不要把同一职责同时派给多个 Agent。
-- 多角色链路必须用 dependsOn 串起来，例如 PRD -> 风格指南 -> 实现 -> 审查。
+- 只有存在实际输入依赖的角色才用 dependsOn 串起来；不要因为角色不同或带有“审查/测试”字样就强制串行。
 - 如果当前群聊缺少某类 Agent，就用已有最接近能力者降级完成，并在任务 prompt 中说明边界；不要编造新 Agent。
 
 ## agentId 严格规则
@@ -1674,9 +1768,9 @@ ${agentList}
 - 充分利用每个 Agent 的 capabilities，不要把任务派给不合适的人。
 - 每个子任务必须独立可执行（被分派的 Agent 看不到完整群聊上下文，
   必要上下文要写进 task）。
-- 计划阶段只能调用 ask_user、plan_tasks 和只读侦察工具
+- 计划阶段只能调用 ask_user、plan_tasks、已授权的 consult_agent 和只读侦察工具
   （fs_list / fs_read / read_artifact / read_attachment）；不要写文件或执行命令。
-- NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
+- DISCUSSION 时直接回复或受控咨询；NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
 - 给工程类 Agent 写任务时，不要把“必须先 npm install / npm run dev”作为硬流程；如果确实需要安装依赖，只写“需要时通过 bash 发起依赖安装审批”。验证优先写 build/test/lint/typecheck/check。
 
 ## 依赖关系（执行顺序的唯一来源，务必读完）
@@ -1686,8 +1780,7 @@ ${agentList}
   你【必须】在 B 的 dependsOn 里写上 A 的 id。
 - 在 task 文本里写「先做 A」「基于上一步」之类【没有任何效果】
   ——执行顺序只认 dependsOn 字段。
-- 只有彼此真正无关、可同时进行的任务才留空 dependsOn；
-  拿不准时倾向加依赖（串行更安全）。
+- 彼此独立的任务留空 dependsOn；不确定实际输入时先澄清，不用无关依赖掩盖不确定性。
 - Only declare expectedOutputs when the assigned agent must create a real artifact
   via write_artifact for downstream handoff or user inspection.
 - Reviewer tasks use the standard review_report document output so the review can
@@ -1991,7 +2084,11 @@ async function runConductorAssess(
 
   // Build the PLAN stage system prompt from the extracted pure function
   const assessSystemPrompt = buildConductorPlanPrompt(agent, otherAgents, workspacePath);
-  const assessToolNames = [...CONDUCTOR_PLAN_TOOLS];
+  const assessToolNames: string[] = [...CONDUCTOR_PLAN_TOOLS];
+  assessToolNames.push("consult_agent");
+  const { history, recentMessages } = await buildCollaborationHistory({
+    agent, triggerMessage: input.triggerMessage, systemPrompt: assessSystemPrompt, currentText: userText,
+  });
   const invocationInput: PiInvocationInput = {
     conversationId: input.conversationId,
     runId: input.conductorRunId,
@@ -1999,12 +2096,15 @@ async function runConductorAssess(
     conversation,
     workspace,
     triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] },
-    recentMessages: [],
+    recentMessages,
+    history,
     toolNames: assessToolNames,
     systemPrompt: assessSystemPrompt,
     ...input.piConfiguration,
     workspacePath,
-    apiKey
+    apiKey,
+    onTaskAccepted: input.onTaskAccepted,
+    onContextCaptured: input.onContextCaptured,
   };
 
   // Pi owns model deadlines; approval waits must not inherit a one-minute HTTP timeout.

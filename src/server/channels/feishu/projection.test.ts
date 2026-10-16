@@ -5,6 +5,7 @@ import {
   projectRunFailure,
   projectableText,
   projectMessage,
+  handoffProjectionMessage,
   setChannelProjectionPaused,
   startChannelProjection,
   stopChannelProjectionForTests,
@@ -21,6 +22,13 @@ import {
   setChannelInboundMessageId
 } from "@/server/repositories";
 import type { Message, MessagePart, MessageStatus } from "@/shared/types";
+import type { TaskHandoff } from "@/shared/collaboration-types";
+
+function taskHandoff(overrides: Partial<TaskHandoff> = {}): TaskHandoff {
+  return { id: "handoff_1", conversationId: "conv_1", sourceAttemptId: "attempt_source", sourceRunId: "run_source", sourceAgentId: "ag_pm", targetAgentId: "ag_designer",
+    taskId: "t1", title: "Inspect layout", status: "proposed", executionStatus: "not_started", coordinatorRunId: null, targetRunId: null, targetAttemptId: null,
+    decidedBy: null, error: null, createdAt: 1, updatedAt: 1, expiresAt: Date.now() + 60_000, ...overrides };
+}
 
 /**
  * `getFeishuChannelForAgent` is stubbed: this suite is about WHICH channel a
@@ -206,6 +214,29 @@ describe("projectMessage", () => {
     channelsByAgent.set(agentId, { send: async () => ({ messageId: "om_out" }) });
   }
 
+  it("projects the same handoff identity once without adding execution authority or wake-up mentions", async () => {
+    linkChat(); connect("ag_pm");
+    const handoff = taskHandoff({ title: "<at id=all></at> Inspect layout" });
+    const message = handoffProjectionMessage(handoff)!;
+    expect(message.origin).toBe("internal");
+    expect(message.mentionedAgentIds).toEqual([]);
+    expect(projectableText(message.parts)).toContain("handoff");
+    expect(projectableText(message.parts)).not.toContain("<at");
+    startChannelProjection();
+    eventBus.publish({ type: "collaboration.handoff", conversationId: handoff.conversationId, timestamp: 1, handoff });
+    eventBus.publish({ type: "collaboration.handoff", conversationId: handoff.conversationId, timestamp: 1, handoff });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ agentId: "ag_pm", chatId: "oc_1" });
+    expect(JSON.stringify(sent[0].input)).toContain(handoff.id);
+  });
+
+  it("keeps intermediate handoff updates quiet and projects the terminal outcome", () => {
+    expect(handoffProjectionMessage(taskHandoff({ status: "accepted", executionStatus: "running" }))).toBeNull();
+    const message = handoffProjectionMessage(taskHandoff({ status: "accepted", executionStatus: "complete" }))!;
+    expect(projectableText(message.parts)).toContain("接手完成");
+    expect(message.id).toContain("handoff_1");
+  });
+
   it("answers inside the topic the question was asked in", async () => {
     // Feishu topics: a question asked in one should not be answered at the top
     // of the group, where it loses its context.
@@ -223,6 +254,7 @@ describe("projectMessage", () => {
     });
     // The inbound record points at the local message it became, which is what
     // the run was triggered by.
+    createMessage({ id: "msg_trigger", conversationId: "conv_1", role: "user", parts: [{ type: "text", content: "Question" }], status: "complete", now: 1 });
     setChannelInboundMessageId("cim_1", "msg_trigger");
     createRun({
       id: "run_1",
@@ -273,6 +305,7 @@ describe("projectMessage", () => {
       threadId: "omt_my_topic",
       now: 2
     });
+    createMessage({ id: "msg_trigger", conversationId: "conv_1", role: "user", parts: [{ type: "text", content: "My question" }], status: "complete", now: 2 });
     setChannelInboundMessageId("cim_mine", "msg_trigger");
     createRun({
       id: "run_1",
@@ -288,6 +321,36 @@ describe("projectMessage", () => {
 
     expect(replied).toHaveLength(1);
     expect(replied[0].target).toMatchObject({ messageId: "om_mine", threadId: "omt_my_topic" });
+  });
+
+  it("keeps a peer consultation reply in the initiating human's topic", async () => {
+    linkChat();
+    connect("ag_pm");
+    const root = createMessage({ id: "msg_topic_root", conversationId: "conv_1", role: "user", origin: "human",
+      parts: [{ type: "text", content: "Discuss this layout" }], status: "complete", now: 1 });
+    claimChannelInboundMessage({ id: "cim_consult", channel: "feishu", chatId: "oc_1", externalMessageId: "om_root",
+      conversationId: "conv_1", agentId: "ag_pm", threadId: "omt_consult", now: 1 });
+    setChannelInboundMessageId("cim_consult", root.id);
+    const question = createMessage({ id: "msg_peer_question", conversationId: "conv_1", role: "agent", origin: "internal", agentId: "ag_mock_builder",
+      parts: [{ type: "text", content: "Which layout?" }], status: "complete", parentMessageId: root.id, now: 2 });
+    createRun({ id: "run_1", conversationId: "conv_1", agentId: "ag_pm", triggerMessageId: question.id, status: "running", now: 2 });
+    await projectMessage(agentMessage({ parentMessageId: question.id }));
+    expect(sent).toHaveLength(0);
+    expect(replied).toHaveLength(1);
+    expect(replied[0].target).toMatchObject({ messageId: "om_root", threadId: "omt_consult" });
+  });
+
+  it("never follows a forged reply chain into another conversation's topic", async () => {
+    linkChat();
+    connect("ag_pm");
+    createConversation({ id: "conv_private", title: "Private", mode: "single", agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now: 1 });
+    const root = createMessage({ id: "msg_private", conversationId: "conv_private", role: "user", parts: [], status: "complete", now: 1 });
+    claimChannelInboundMessage({ id: "cim_private", channel: "feishu", chatId: "oc_private", externalMessageId: "om_private",
+      conversationId: "conv_private", agentId: "ag_pm", threadId: "omt_private", now: 1 });
+    setChannelInboundMessageId("cim_private", root.id);
+    await projectMessage(agentMessage({ runId: null, parentMessageId: root.id }));
+    expect(replied).toHaveLength(0);
+    expect(sent).toHaveLength(1);
   });
 
   it("does not put a dispatched sub-task's answer in the parent's topic", async () => {

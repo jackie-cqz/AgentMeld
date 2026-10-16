@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestDatabase } from "@/test/test-database";
 import {
@@ -139,7 +140,7 @@ describe("importing attachments a person sent", () => {
 
     const workspace = getWorkspaceForConversation("conv_1");
     const stored = storedAttachments("conv_1")[0];
-    expect(stored.file_path.startsWith(`${workspace!.rootPath}/attachments/`)).toBe(true);
+    expect(path.dirname(stored.file_path)).toBe(path.join(workspace!.rootPath, "attachments"));
     expect(fs.readFileSync(stored.file_path, "utf-8")).toBe("bytes of fk_1");
     expect(stored.size).toBe("bytes of fk_1".length);
   });
@@ -213,7 +214,7 @@ describe("importing attachments a person sent", () => {
     const workspace = getWorkspaceForConversation("conv_1");
     // The path may contain the dashes the name now has, but it must still be
     // inside the attachments directory.
-    expect(stored.file_path.startsWith(`${workspace!.rootPath}/attachments/`)).toBe(true);
+    expect(path.dirname(stored.file_path)).toBe(path.join(workspace!.rootPath, "attachments"));
     expect(stored.file_name).not.toContain("/");
   });
 

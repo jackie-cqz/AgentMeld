@@ -14,6 +14,28 @@ export function applyStreamEvent(state: StoreDraft, event: StreamEvent) {
   // Creating buckets for "" would leave seven permanent empty arrays for a
   // conversation that can never exist, so only real ids get buckets.
   if (event.conversationId) ensureConversationBuckets(state, event.conversationId);
+  if (event.type === "collaboration.handoff") {
+    const previous = state.handoffs[event.handoff.id];
+    if (!previous || previous.updatedAt <= event.handoff.updatedAt) state.handoffs[event.handoff.id] = event.handoff;
+    return;
+  }
+  if (event.type === "collaboration.turn") {
+    const previous = state.collaborationTurns[event.turn.id];
+    const terminal = (status: string) => ["applied", "rejected", "cancelled", "resolved"].includes(status);
+    if ((!previous || previous.updatedAt <= event.turn.updatedAt) && !(previous && terminal(previous.status) && !terminal(event.turn.status))) {
+      state.collaborationTurns[event.turn.id] = event.turn;
+    }
+    return;
+  }
+  if (event.type === "collaboration.consultation") {
+    const previous = state.consultations[event.consultation.id];
+    const isTerminal = (status: string) => status !== "requested" && status !== "running";
+    if ((!previous || previous.updatedAt <= event.consultation.updatedAt) &&
+      !(previous && isTerminal(previous.status) && !isTerminal(event.consultation.status))) {
+      state.consultations[event.consultation.id] = event.consultation;
+    }
+    return;
+  }
   if (applyRunEvent(state, event)) return;
   if (applyMessageEvent(state, event)) return;
   if (applyToolEvent(state, event)) return;

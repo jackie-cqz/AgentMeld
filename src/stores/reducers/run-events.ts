@@ -2,6 +2,11 @@ import type { StreamEvent } from "@/shared/types";
 import { finalizeRunMessages, type StoreDraft, upsertRun } from "@/stores/store-helpers";
 
 export function applyRunEvent(state: StoreDraft, event: StreamEvent) {
+  if (event.type === "run.stage") {
+    const run = state.runs[event.runId];
+    if (run && run.status === "running") { run.stage = event.stage; run.updatedAt = event.timestamp; }
+    return true;
+  }
   if (event.type === "run.start") {
     upsertRun(state, {
       id: event.runId,

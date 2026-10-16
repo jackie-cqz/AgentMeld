@@ -117,22 +117,22 @@ describe("database bootstrap", () => {
 
     expect(toolsById.get("ag_mock_conductor")).toEqual([
       "plan_tasks", "report_task_result", "read_artifact", "ask_user", "update_context_facts",
-      "read_attachment", "bash", "fs_list", "fs_read"
+      "read_attachment", "bash", "fs_list", "fs_read", "consult_agent"
     ]);
     expect(toolsById.get("ag_pm")).toEqual([
-      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
+      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read", "consult_agent"
     ]);
     expect(toolsById.get("ag_designer")).toEqual([
-      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
+      "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read", "consult_agent"
     ]);
     expect(toolsById.get("ag_mock_builder")).toEqual([
       "fs_read", "fs_write", "fs_patch", "fs_mkdir", "bash", "write_artifact", "read_artifact",
-      "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list"
+      "deploy_artifact", "deploy_workspace", "read_attachment", "fs_list", "consult_agent"
     ]);
     expect(toolsById.get("ag_reviewer")).toEqual([
-      "read_artifact", "write_artifact", "read_attachment", "fs_list", "fs_read", "bash"
+      "read_artifact", "write_artifact", "read_attachment", "fs_list", "fs_read", "bash", "consult_agent"
     ]);
-    expect(toolsById.get("ag_custom_assistant")).toEqual(["write_artifact", "read_artifact"]);
+    expect(toolsById.get("ag_custom_assistant")).toEqual(["write_artifact", "read_artifact", "consult_agent"]);
   });
 
   it("migrates old builtin tool defaults without overwriting customized tools", () => {
@@ -159,6 +159,21 @@ describe("database bootstrap", () => {
       "write_artifact", "read_artifact", "read_attachment", "ask_user", "fs_list", "fs_read"
     ]);
     expect(JSON.parse(designer.tool_names)).toEqual(["fs_read"]);
+  });
+
+  it("does not regrant consultation after the user revokes it and restarts", () => {
+    ensureDatabase();
+    const ids = ["ag_custom_assistant", "ag_mock_builder"];
+    for (const id of ids) {
+      const row = getDatabase().prepare("SELECT tool_names FROM agents WHERE id=?").get(id) as { tool_names: string };
+      getDatabase().prepare("UPDATE agents SET tool_names=? WHERE id=?").run(JSON.stringify((JSON.parse(row.tool_names) as string[]).filter(tool => tool !== "consult_agent")), id);
+    }
+    resetBootstrapForTests();
+    ensureDatabase();
+    for (const id of ids) {
+      const row = getDatabase().prepare("SELECT tool_names FROM agents WHERE id=?").get(id) as { tool_names: string };
+      expect(JSON.parse(row.tool_names)).not.toContain("consult_agent");
+    }
   });
 
   it("migrates legacy branding in builtin model prompts without resetting other content", () => {

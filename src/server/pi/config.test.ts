@@ -31,6 +31,7 @@ describe("immutable Pi execution configuration", () => {
   });
   it("stores only a credential reference and keeps global secrets out of the child environment", () => {
     vi.stubEnv("UNRELATED_HOST_SECRET", "never-forward-me");
+    vi.stubEnv("ProgramFiles", "C:\\FixtureProgramFiles");
     const input = capturePiConfiguration({ ...fixture(), apiKey: "private-fixture-key" });
     const execution = preparePiInvocation(input);
     const modelConfig = fs.readFileSync(path.join(execution.home, "models.json"), "utf8");
@@ -40,6 +41,8 @@ describe("immutable Pi execution configuration", () => {
     expect(JSON.parse(modelConfig).providers.agentmeld.compat.requiresReasoningContentOnAssistantMessages).toBe(true);
     expect(execution.env.AGENTMELD_PI_MODEL_KEY).toBe("private-fixture-key");
     expect(execution.env.UNRELATED_HOST_SECRET).toBeUndefined();
+    expect(execution.env.ProgramFiles).toBe("C:\\FixtureProgramFiles");
+    expect(execution.env.USERPROFILE).toBe(execution.home);
     expect(execution.env.PI_CODING_AGENT_DIR).toBe(execution.home);
     const binding = getDatabase().prepare("SELECT configuration_json FROM agent_execution_bindings WHERE version=?").get(execution.bindingVersion) as { configuration_json: string };
     expect(binding.configuration_json).not.toContain("private-fixture-key");

@@ -29,9 +29,13 @@ export type { AppState, CompactionState, DispatchState, SearchState, SidebarTab 
 
 const DEFAULT_ARTIFACT_PANEL_WIDTH = 640;
 let searchRequestId = 0;
+const pendingSends = new Map<string, { fingerprint: string; requestId: string; tempId: string }>();
 
 export const useAppStore = create<AppState>()(
   immer((set, get) => ({
+    handoffs: {},
+    collaborationTurns: {},
+    consultations: {},
     agents: {},
     agentIds: [],
     conversations: {},
@@ -128,9 +132,16 @@ export const useAppStore = create<AppState>()(
     async sendMessage(conversationId, content, options = {}) {
       const now = Date.now();
       const tempId = `local-${now}-${Math.random().toString(36).slice(2, 8)}`;
+      const fingerprint = JSON.stringify({ content, mentionedAgentIds: options.mentionedAgentIds, attachmentIds: options.attachmentIds,
+        parentMessageId: options.parentMessageId, action: options.action, targetRunId: options.targetRunId });
+      const previous = pendingSends.get(conversationId);
+      const requestId = options.clientRequestId ?? (previous?.fingerprint === fingerprint ? previous.requestId
+        : globalThis.crypto?.randomUUID?.() ?? `send-${now}-${Math.random().toString(36).slice(2)}`);
+      pendingSends.set(conversationId, { fingerprint, requestId, tempId });
       const attachments = useAppStore.getState().pendingAttachmentsByConversation[conversationId] ?? [];
       const optimisticMessage: Message = {
         id: tempId,
+        clientRequestId: requestId,
         conversationId,
         origin: "human",
         role: "user",
@@ -162,6 +173,11 @@ export const useAppStore = create<AppState>()(
       };
 
       set((state) => {
+        if (previous?.fingerprint === fingerprint && state.messages[previous.tempId]) {
+          delete state.messages[previous.tempId];
+          state.messageIdsByConversation[conversationId] = (state.messageIdsByConversation[conversationId] ?? []).filter(id => id !== previous.tempId);
+        }
+        if ((state.messageIdsByConversation[conversationId] ?? []).some(id => !id.startsWith("local-") && state.messages[id]?.clientRequestId === requestId)) return;
         state.messages[tempId] = optimisticMessage;
         ensureConversationBuckets(state, conversationId);
         state.messageIdsByConversation[conversationId].push(tempId);
@@ -177,7 +193,8 @@ export const useAppStore = create<AppState>()(
               content,
               mentionedAgentIds: options.mentionedAgentIds,
               attachmentIds: options.attachmentIds,
-              parentMessageId: options.parentMessageId
+              parentMessageId: options.parentMessageId,
+              clientRequestId: requestId, action: options.action, targetRunId: options.targetRunId,
             })
           }
         );
@@ -185,9 +202,11 @@ export const useAppStore = create<AppState>()(
           delete state.messages[tempId];
           const currentIds = state.messageIdsByConversation[conversationId] ?? [];
           const tempIndex = currentIds.indexOf(tempId);
+          const realIndex = currentIds.indexOf(result.message.id);
+          const existingIndex = realIndex >= 0 ? realIndex : tempIndex;
           const nextIds = currentIds.filter((id) => id !== tempId && id !== result.message.id);
-          const insertionIndex = tempIndex >= 0
-            ? currentIds.slice(0, tempIndex).filter((id) => id !== result.message.id).length
+          const insertionIndex = existingIndex >= 0
+            ? currentIds.slice(0, existingIndex).filter((id) => id !== result.message.id && id !== tempId).length
             : nextIds.length;
           state.messages[result.message.id] = result.message;
           nextIds.splice(insertionIndex, 0, result.message.id);
@@ -196,7 +215,9 @@ export const useAppStore = create<AppState>()(
           state.pendingAttachmentsByConversation[conversationId] = [];
           state.replyTargetByConversation[conversationId] = null;
         });
+        if (pendingSends.get(conversationId)?.requestId === requestId) pendingSends.delete(conversationId);
       } catch (error) {
+        if (error instanceof ApiRequestError && ["SUBMISSION_INTERRUPTED", "SUBMISSION_CONFLICT"].includes(error.code ?? "") && pendingSends.get(conversationId)?.requestId === requestId) pendingSends.delete(conversationId);
         set((state) => {
           const local = state.messages[tempId];
           if (local) {
@@ -268,6 +289,7 @@ export const useAppStore = create<AppState>()(
     },
 
     setComposerDraft(conversationId, draft) {
+      if (get().composerDraftByConversation[conversationId] !== draft) pendingSends.delete(conversationId);
       set((state) => {
         state.composerDraftByConversation[conversationId] = draft;
       });

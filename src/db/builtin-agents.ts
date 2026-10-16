@@ -18,7 +18,7 @@ export interface BuiltinAgentSeed {
   supportsVision: boolean;
 }
 
-export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
+const BUILTIN_AGENT_DEFINITIONS: BuiltinAgentSeed[] = [
   {
     id: "ag_mock_conductor",
     name: "Conductor",
@@ -35,7 +35,8 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
 核心原则：**先判断，后行动。**
 - 用户说"你好""谢谢""今天天气怎么样"之类的闲聊、问候、简单问答 → 直接文字回复就好，**不要调任何工具**。
 - 用户提出需要多步骤产出（PRD → 设计 → 编码 → 审查）的复杂任务 → 调 plan_tasks 拆解分派。
-- 用户明确指定多个角色、要求“先由某 Agent 再由另一 Agent”或要求跨 Agent 交接 → 必须调 plan_tasks，Conductor 不得自行执行这些专业任务。
+- 用户只是点名多个角色讨论或说“先别改” → 用 consult_agent 征询有界只读意见，不调用 plan_tasks、不创建交付产物。
+- 用户明确要求多角色执行交付或正式交接 → 调 plan_tasks；单个专业 Agent 足够时只分派一个任务。
 - 拿不准时直接回复——用户不满意自然会补充要求。不要为简单问题过度设计流程。
 
 调度原则：
@@ -44,7 +45,7 @@ export const BUILTIN_AGENTS: BuiltinAgentSeed[] = [
 3. 文档需求交给 PM / 产品类 Agent，视觉规范交给 UI / 设计类 Agent，前端实现交给工程类 Agent，验收审查交给 Reviewer / QA 类 Agent。
 4. 每个子任务只交给一个最合适的 Agent；不要把同一职责重复派给多人。
 5. 子任务要面向结果，不替子 Agent 规定过细流程；写清目标、必要输入、期望产物、验收标准和依赖关系。
-6. 产物链路要清楚：PRD -> 风格指南 -> web_app / workspace 实现 -> review；缺少上游产物时允许跳过或让对应 Agent 补齐。
+6. 只建立实际需要的产物链路；已有材料可以复用，不强制每次经历 PRD、设计、实现和审查全部阶段。
 7. dependsOn 是执行顺序的唯一依据，在 task 文本里写"先做 A"无效。
 8. 只能使用当前群聊中真实存在的 Agent id，不得编造 agentId 或把任务派给自己。
 9. 聚合结果时只总结关键结论、产物位置和下一步决策，不重复每个 Agent 的长篇过程。`,
@@ -223,3 +224,7 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
     supportsVision: true
   }
 ];
+
+export const BUILTIN_AGENTS: BuiltinAgentSeed[] = BUILTIN_AGENT_DEFINITIONS.map(agent => ({
+  ...agent, toolNames: [...agent.toolNames, "consult_agent"],
+}));

@@ -17,6 +17,8 @@ import {
 } from "@/server/conversation-service";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import type { StreamEvent } from "@/shared/types";
+import { createMessage, listRuns } from "@/server/repositories";
+import { newMessageId } from "@/shared/ids";
 
 let tempDir: string;
 let runIds: string[];
@@ -171,6 +173,38 @@ describe("conversation-service", () => {
   });
 
   describe("sendMessage", () => {
+    it("routes a reply to the actual author and lets an explicit mention override it", async () => {
+      const conv = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", "ag_mock_builder", "ag_custom_assistant"] });
+      const parent = createMessage({ id: newMessageId(), conversationId: conv.id, role: "agent", agentId: "ag_mock_builder",
+        parts: [{ type: "text", content: "Layout proposal" }], status: "complete", now: Date.now() });
+      const first = await sendMessage({ origin: "human", conversationId: conv.id, content: "Explain that proposal", parentMessageId: parent.id });
+      expect(listRuns(conv.id).find(run => run.id === first.runIds[0])?.agentId).toBe("ag_mock_builder");
+      const second = await sendMessage({ origin: "human", conversationId: conv.id, content: "Another opinion", parentMessageId: parent.id,
+        mentionedAgentIds: ["ag_custom_assistant", "ag_custom_assistant"] });
+      expect(second.runIds).toHaveLength(1);
+      expect(listRuns(conv.id).find(run => run.id === second.runIds[0])?.agentId).toBe("ag_custom_assistant");
+    });
+
+    it("rejects invalid mentions and cross-conversation replies before persistence", async () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const other = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const parent = createMessage({ id: newMessageId(), conversationId: other.id, role: "agent", agentId: "ag_mock_builder",
+        parts: [], status: "complete", now: Date.now() });
+      await expect(sendMessage({ origin: "human", conversationId: conv.id, content: "bad", mentionedAgentIds: ["ag_custom_assistant"] })).rejects.toThrow("current conversation member");
+      await expect(sendMessage({ origin: "human", conversationId: conv.id, content: "bad", parentMessageId: parent.id })).rejects.toThrow("does not belong");
+      expect(getConversationPayload(conv.id)?.messages).toEqual([]);
+      expect(listRuns(conv.id)).toEqual([]);
+    });
+
+    it("does not grant a bot execution authority by replying to an Agent", async () => {
+      const conv = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
+      const parent = createMessage({ id: newMessageId(), conversationId: conv.id, role: "agent", agentId: "ag_mock_builder",
+        parts: [], status: "complete", now: Date.now() });
+      const result = await sendMessage({ origin: "bot", conversationId: conv.id, content: "echo", parentMessageId: parent.id });
+      expect(result.runIds).toEqual([]);
+      expect(listRuns(conv.id)).toEqual([]);
+    });
+
     it("creates a user message and broadcasts message.added", async () => {
       const conv = createConversation({
         mode: "single",
@@ -396,7 +430,7 @@ describe("conversation-service", () => {
       const payload = getBootstrapPayload();
 
       expect(payload.provisionedToolNames).toEqual(provisionedPlatformToolNames());
-      expect(payload.provisionedToolNames).not.toContain("list_team_members");
+      expect(payload.provisionedToolNames).toContain("list_team_members");
       expect(payload.provisionedToolNames).toContain("bash");
     });
   });

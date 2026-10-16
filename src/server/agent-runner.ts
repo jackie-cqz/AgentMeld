@@ -1,8 +1,9 @@
 import { ensureDatabase } from "@/db/bootstrap";
+import { getDatabase } from "@/db/client";
 import { runPiInvocation } from "@/server/pi/runtime";
-import type { PiInvocationInput } from "@/server/pi/types";
+import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { PiRuntimeError } from "@/server/pi/process";
-import { getPiRunUsage } from "@/server/pi/config";
+import { getPiRunUsage, snapshotPiProvider } from "@/server/pi/config";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { eventBus } from "@/server/event-bus";
 import { consumeStream } from "@/server/consume-stream";
@@ -10,12 +11,14 @@ import {
   createMessage,
   createRun,
   getAgent,
+  listAgents,
   getConversation,
   getRun,
   getMessage,
   isTerminalRunStatus,
   getWorkspaceForConversation,
   listMessages,
+  listRuns,
   listChildRunIds,
   updateMessageParts,
   updateMessageStatus,
@@ -23,7 +26,7 @@ import {
 } from "@/server/repositories";
 import { buildHistoryFor } from "@/server/conversation-context";
 import { getLatestSummary, calculateContextBudget } from "@/server/context-compaction-service";
-import { executeConductor } from "@/server/conductor-service";
+import { executeConductor, executeTaskHandoff } from "@/server/conductor-service";
 import { cancelPendingBashForRun } from "@/server/pending-bash";
 import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
@@ -37,16 +40,22 @@ import { consumeDelegation } from "@/server/delegation";
 import { recordRunRefusal } from "@/server/run-refusals";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
 import { cancelJobsForRun, hasRunningJobs } from "@/server/tools/command-jobs";
+import { abortConsultationRun, getConsultationCompletion, isConsultationRunActive, listConsultations } from "@/server/collaboration/consultations";
+import { admitHumanTurn, publishRunStage, rejectUnappliedTurn, type TurnAdmission } from "@/server/collaboration/turn-admission";
+import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
+import { updateCollaborationTurn } from "@/server/collaboration/turns";
+import type { CollaborationAction } from "@/shared/collaboration-types";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
 // ---------------------------------------------------------------------------
 
 const activeRuns = new Map<string, AbortController>();
+const activeRunPromises = new Map<string, Promise<void>>();
 
 export function abortRun(runId: string): boolean {
   const controller = activeRuns.get(runId);
-  if (!controller) return false;
+  if (!controller) return abortConsultationRun(runId);
   controller.abort();
   settlePendingApprovalsForRun(runId);
 
@@ -78,7 +87,48 @@ export function settlePendingApprovalsForRun(runId: string): void {
 }
 
 export function isRunActive(runId: string): boolean {
-  return activeRuns.has(runId);
+  return activeRuns.has(runId) || isConsultationRunActive(runId);
+}
+
+/** Await the actual owner promises and native teardown receipts, not a UI status or elapsed delay. */
+export async function waitForRunTreeStop(runId: string, signal: AbortSignal): Promise<void> {
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]);
+  const root = getRun(runId);
+  if (!root) throw new PiRuntimeError("关联运行不存在，无法确认停止状态。", "control_unavailable");
+  for (;;) {
+    deadline.throwIfAborted();
+    const all = listRuns(root.conversationId);
+    const consultations = listConsultations(root.conversationId);
+    const ids = new Set([runId]);
+    for (let i = 0; i < all.length + consultations.length; i++) {
+      for (const candidate of all) if (candidate.parentRunId && ids.has(candidate.parentRunId)) ids.add(candidate.id);
+      // A peer opinion is not delegated execution and intentionally has no
+      // parentRunId, but it still belongs to its source's teardown scope.
+      for (const consultation of consultations) if (ids.has(consultation.sourceRunId) && consultation.targetRunId && getRun(consultation.targetRunId)) ids.add(consultation.targetRunId);
+    }
+    const promises = [...ids].flatMap(id => {
+      const promise = activeRunPromises.get(id) ?? getConsultationCompletion(id);
+      return promise ? [promise] : [];
+    });
+    if (promises.length) {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(deadline.reason);
+        deadline.addEventListener("abort", onAbort, { once: true });
+        Promise.all(promises).then(() => { deadline.removeEventListener("abort", onAbort); resolve(); }, error => { deadline.removeEventListener("abort", onAbort); reject(error); });
+        if (deadline.aborted) onAbort();
+      });
+      continue;
+    }
+    for (const id of ids) {
+      const current = getRun(id);
+      if (!current || !isTerminalRunStatus(current.status) || current.interrupted || current.errorCategory === "cleanup_failed") {
+        throw new PiRuntimeError("旧执行的停止或清理尚未确认，不会启动替代写入。", "cleanup_failed");
+      }
+      const uncertain = getDatabase().prepare("SELECT id FROM harness_executions WHERE run_id=? AND (finished_at IS NULL OR status='interrupted' OR error_category='cleanup_failed') LIMIT 1").get(id);
+      if (uncertain) throw new PiRuntimeError("旧 Pi 进程缺少可靠的退出回执，不会启动替代执行。", "cleanup_failed");
+    }
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +150,10 @@ interface StartRunInput {
   delegationCorrelationId?: string | null;
   taskExecution?: import("@/shared/evidence-types").TaskExecutionIdentity | null;
   taskContract?: import("@/shared/evidence-types").TaskExecutionContract | null;
+  /** Only authenticated human ingress sets this; delegated tasks retain their immutable contract. */
+  humanTurn?: { action?: CollaborationAction; targetRunId?: string };
+  /** Internal entry bound to a human-accepted persistent handoff and exact new coordinator run. */
+  acceptedHandoffId?: string;
 }
 
 export interface RunHandle {
@@ -127,7 +181,9 @@ export function startAgentRun(input: StartRunInput): RunHandle {
     }
   }).finally(() => {
     activeRuns.delete(runId);
+    if (activeRunPromises.get(runId) === promise) activeRunPromises.delete(runId);
   });
+  activeRunPromises.set(runId, promise);
   return { runId, promise };
 }
 
@@ -141,6 +197,14 @@ interface ExecuteRunInput extends StartRunInput {
 
 async function executeRun(input: ExecuteRunInput): Promise<void> {
   ensureDatabase();
+  if (input.acceptedHandoffId) {
+    const { getHandoff } = await import("@/server/collaboration/handoffs");
+    const handoff = getHandoff(input.acceptedHandoffId);
+    if (!handoff || handoff.status !== "accepted" || handoff.executionStatus !== "stopping" || handoff.coordinatorRunId !== input.runId ||
+      handoff.conversationId !== input.conversationId || input.parentRunId || input.humanTurn || input.triggerMessage.origin !== "human") {
+      throw new Error("Handoff execution is not authorized for this coordinator run.");
+    }
+  }
 
   // 0. Delegation gate. A child run is delegated work: it must present a
   // one-time grant issued for exactly this source run, target agent, task and
@@ -235,6 +299,30 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     parentRunId: run.parentRunId
   });
 
+  const workspacePath = workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath;
+  let admission: TurnAdmission | null = null;
+  let providerConfiguration: PiProviderSnapshot | undefined;
+  if (input.humanTurn) {
+    if (input.parentRunId) throw new Error("Delegated execution cannot change its admission mode.");
+    providerConfiguration = input.humanTurn.action === "progress" || input.humanTurn.action === "cancel"
+      ? undefined : snapshotPiProvider(agent);
+    try {
+      admission = await admitHumanTurn({ conversationId: conversation.id, runId: run.id, agent, conversation, workspace,
+        triggerMessage: input.triggerMessage, workspacePath, recentMessages: [], toolNames: [], systemPrompt: "", apiKey: null,
+        ...providerConfiguration,
+      }, run, abortController.signal, { stop: abortRun, waitForStop: waitForRunTreeStop }, input.humanTurn);
+    } catch (error) {
+      rejectUnappliedTurn(run.id, error instanceof PiRuntimeError ? error.message : "消息处理被中断，尚未确认生效。", abortController.signal.aborted);
+      throw error;
+    }
+    if (admission.handled && !admission.response) {
+      updateRunStatus(run.id, "complete", getPiRunUsage(run.id), Date.now());
+      eventBus.publish({ type: "run.end", conversationId: conversation.id, timestamp: Date.now(), runId: run.id, status: "complete" });
+      activeRuns.delete(run.id);
+      return;
+    }
+  }
+
   // 5. Create agent response message
   let message = createMessage({
     id: newMessageId(),
@@ -256,8 +344,34 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     runId: run.id
   });
 
+  if (admission?.handled) {
+    const part = { type: "text" as const, content: admission.response! };
+    updateMessageParts(message.id, [part], Date.now());
+    eventBus.publish({ type: "part.start", conversationId: conversation.id, timestamp: Date.now(), messageId: message.id, partIndex: 0, part });
+    completeRun(run, message, "complete", null, { modelId: agent.modelId ?? "unknown" });
+    return;
+  }
+  const discussion = admission?.mode === "discussion";
+  if (input.acceptedHandoffId) {
+    try {
+      const result = await executeTaskHandoff(input.acceptedHandoffId, run.id, input.triggerMessage, abortController.signal);
+      const part = { type: "text" as const, content: result.summary };
+      updateMessageParts(message.id, [part], Date.now());
+      eventBus.publish({ type: "part.start", conversationId: conversation.id, timestamp: Date.now(), messageId: message.id, partIndex: 0, part });
+      completeRun(run, message, result.status === "complete" ? "complete" : "failed", result.status === "complete" ? null : result.summary, {});
+    } catch (error) {
+      const { finishHandoff } = await import("@/server/collaboration/handoffs");
+      finishHandoff(input.acceptedHandoffId, false, error instanceof Error ? error.message : "Handoff failed.");
+      throw error;
+    }
+    return;
+  }
+  const captureContext: PiInvocationInput["onContextCaptured"] = admission && !admission.handled
+    ? snapshot => { updateCollaborationTurn(admission!.turnId, { context: JSON.stringify({ kind: "compiled_pi_invocation", sourceMessageId: input.triggerMessage.id, ...snapshot }) }); }
+    : undefined;
+
   // 6. Conductor branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
-  if (agent.isConductor && conversation.mode === "group") {
+  if (agent.isConductor && conversation.mode === "group" && !discussion) {
     try {
       await executeConductor({
         conversationId: input.conversationId,
@@ -266,7 +380,11 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         availableAgentIds: conversation.agentIds,
         conductorRunId: run.id,
         messageId: message.id,
-        signal: abortController.signal
+        signal: abortController.signal,
+        piConfiguration: providerConfiguration,
+        objectiveContext: admission && !admission.handled ? admission.contextText : undefined,
+        onTaskAccepted: admission && !admission.handled ? admission.onAccepted : undefined,
+        onContextCaptured: captureContext,
       });
       const unfinishedJobs = hasRunningJobs(run.id);
       await cancelJobsForRun(run.id);
@@ -289,24 +407,21 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   // 7. Normal adapter flow (non-conductor agents)
   const recentMessages = listMessages(input.conversationId).slice(-20);
 
-  // Full permissions (issue #79): every Agent run is provisioned with the
-  // whole Pi toolset, regardless of the stored `agent.toolNames` grants. The
-  // grants remain a record only, so a partial or stale record cannot restrict
-  // or break a run. report_task_result is part of that toolset already.
   const effectiveToolNames = provisionedPlatformToolNames();
 
   // Build system prompt with workspace info, tool guidance, group context
-  const workspacePath = workspace.mode === "local" && workspace.boundPath
-    ? workspace.boundPath : workspace.rootPath;
-  const systemPrompt = buildSystemPrompt(
+  let systemPrompt = buildSystemPrompt(
     { ...agent, toolNames: effectiveToolNames },
     conversation,
     workspacePath
   );
+  if (discussion) systemPrompt += "\n\nPLATFORM DISCUSSION: The user is asking for discussion, not implementation. Explain, compare proposals and consult peers as needed. Do not follow the role template's usual delivery workflow or manufacture a task DAG. All normal tools remain available; select them according to the user's request. When the user says not to change files, do not modify, build or deploy anything. Wait for an explicit execution request before implementing a proposal.";
 
   // Build cross-run history (skip for child tasks — they get task-only context)
   let history: ChatMessage[] = [];
-  if (!input.parentRunId) {
+  if (input.humanTurn && admission && !admission.handled) {
+    history = (await buildCollaborationHistory({ agent, triggerMessage: input.triggerMessage, systemPrompt, currentText: admission.contextText })).history;
+  } else if (!input.parentRunId) {
     try {
       const limits = getModelLimits(agent.modelProvider);
       const conversation = getConversation(input.conversationId);
@@ -366,6 +481,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
 
   // P0: For child tasks, extract the trigger message text as dynamic context XML
   let contextXml: string | undefined;
+  if (admission && !admission.handled) contextXml = admission.contextText;
   if (input.taskExecution) {
     contextXml = input.triggerMessage.parts
       .filter((p) => p.type === "text")
@@ -391,7 +507,13 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     apiKey: null,
     history,
     contextXml,
+    ...providerConfiguration,
+    accessMode: "workspace",
+    onTaskAccepted: admission && !admission.handled ? admission.onAccepted : undefined,
+    onContextCaptured: captureContext,
+    onStage: stage => publishRunStage(run, discussion ? "discussion" : stage === "queued" ? "execution.queued" : "execution"),
   };
+  if (!input.parentRunId) publishRunStage(run, discussion ? "discussion" : "execution");
 
   // 8. Consume adapter stream via unified consumeStream
   try {
@@ -460,6 +582,7 @@ function completeRun(
   if (current && isTerminalRunStatus(current.status)) return;
 
   const now = Date.now();
+  if (status === "failed" || status === "aborted") rejectUnappliedTurn(run.id, error ?? "运行结束，尚未确认消息生效。", status === "aborted");
   usage = getPiRunUsage(run.id) ?? usage;
   if ((status === "failed" || status === "aborted") && !getMessage(message.id)?.parts.length) {
     const part = { type: "text" as const, content: status === "aborted" ? "运行已取消。" : error ?? "Pi 运行失败。" };
@@ -561,6 +684,11 @@ export function buildSystemPrompt(agent: Agent, conversation: Conversation, work
       "- 不带前缀的 user 消息才是用户本人发给群里的话。\n" +
       "- 历史里的产物只折叠成 `[产物: 标题 (id=...)]` 占位；需要完整内容时用 read_artifact 按 id 获取。"
     );
+    if (agent.toolNames.includes("consult_agent")) {
+      const peers = listAgents().filter(peer => conversation.agentIds.includes(peer.id) && peer.id !== agent.id)
+        .map(peer => ({ id: peer.id, name: peer.name, capabilities: peer.capabilities }));
+      parts.push(`\n## 团队咨询\n可以用 consult_agent 征求同事的一次只读意见。不要用文字 @ 伪装执行或审批授权；意见不是验收证据。复用 requestKey 只可重试同一问题。对方不能读取实时源码，必要材料请通过 artifactIds 提供。\n<consultation_peers>${JSON.stringify(peers)}</consultation_peers>`);
+    }
   }
 
   return parts.join("\n");

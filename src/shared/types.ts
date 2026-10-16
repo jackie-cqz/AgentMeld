@@ -1,3 +1,5 @@
+import type { AgentConsultation, CollaborationTurn, TaskHandoff } from "./collaboration-types";
+
 /** Legacy values remain readable for migration; new production agents use Pi only. */
 export type AdapterName = "pi" | "claude-code" | "codex" | "custom" | "mock";
 
@@ -333,6 +335,8 @@ export interface Conversation {
 
 export interface Message {
   id: string;
+  /** Transport correlation, persisted in message_submissions rather than message content. */
+  clientRequestId?: string;
   conversationId: string;
   role: MessageRole;
   origin: MessageOrigin;
@@ -553,6 +557,10 @@ export type StreamEvent =
       parentRunId?: string | null;
     })
   | (BaseEvent & { type: "run.end"; runId: string; status: AgentRunStatus; error?: string })
+  | (BaseEvent & { type: "collaboration.consultation"; consultation: AgentConsultation })
+  | (BaseEvent & { type: "collaboration.turn"; turn: CollaborationTurn })
+  | (BaseEvent & { type: "collaboration.handoff"; handoff: TaskHandoff })
+  | (BaseEvent & { type: "run.stage"; runId: string; stage: string })
   | (BaseEvent & { type: "run.usage"; runId: string; usage: UsagePayload })
   | (BaseEvent & { type: "message.added"; message: Message })
   | (BaseEvent & { type: "message.removed"; messageIds: string[]; artifactIds: string[] })

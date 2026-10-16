@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
+import { compileAndValidateDispatchPlan, compileDispatchPlan } from "@/server/dispatch-plan";
+import type { DispatchPlanItem } from "@/shared/types";
+
+describe("contract-based dependency compilation", () => {
+  const task = (id: string, instruction: string): DispatchPlanItem => ({ id, agentId: "ag_worker", task: instruction, dependsOn: [] });
+  it("does not serialize independent review/test tasks or match t1 inside t10", () => {
+    const result = compileDispatchPlan([task("t1", "Create documentation"), task("t10", "Test the existing parser independently; label t10")]);
+    expect(result[1].dependsOn).toEqual([]);
+  });
+  it("preserves explicit edges and derives required input edges even for later declarations", () => {
+    const result = compileDispatchPlan([
+      { ...task("consumer", "Use a verified upstream report"), dependsOn: ["setup"], inputs: [{ fromTaskId: "producer", outputId: "report", required: true }] },
+      task("setup", "Prepare"), task("producer", "Produce report"),
+    ]);
+    expect(result[0].dependsOn).toEqual(["setup", "producer"]);
+  });
+  it("still rejects cycles induced by input contracts", () => {
+    expect(compileAndValidateDispatchPlan([
+      { id: "a", agentId: "worker", prompt: "A", inputs: [{ fromTaskId: "b", outputId: "output", required: true }], expectedOutputs: [{ id: "output", type: "document" }] },
+      { id: "b", agentId: "worker", prompt: "B", inputs: [{ fromTaskId: "a", outputId: "output", required: true }], expectedOutputs: [{ id: "output", type: "document" }] },
+    ], ["worker", "conductor"], "conductor")).toMatch(/circular/i);
+  });
+});
 
 describe("compileAndValidateDispatchPlan", () => {
   it("preserves task metadata and maxAttempts", () => {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
 import { getWorkspaceForConversation, SYSTEM_RESOLVED_BY } from "@/server/repositories";
@@ -11,21 +11,64 @@ import { getFileWrites } from "@/server/dispatch-file-writes";
 import { setTimeout as delay } from "node:timers/promises";
 import { createPiBridge } from "./bridge";
 import { provisionedPlatformToolNames } from "./tool-surface";
+import { acquirePiWorkspace, type PiWorkspaceLease } from "./workspace-lease";
+import { toolRegistry } from "@/server/tools/registry";
 
 const bridges: Array<Awaited<ReturnType<typeof createPiBridge>>> = [];
-afterEach(async () => { await Promise.all(bridges.splice(0).map(bridge => bridge.close())); });
-async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}, agentGrants: string[] = toolNames) {
+const leases: PiWorkspaceLease[] = [];
+afterEach(async () => {
+  await Promise.all(bridges.splice(0).map(bridge => bridge.close()));
+  leases.splice(0).forEach(lease => lease.release());
+  vi.restoreAllMocks();
+});
+async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}, agentGrants: string[] = toolNames, withLease = false) {
   const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: agentGrants.filter(name => name !== "report_task_result") });
   const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   const runId = newRunId();
-  const bridge = await createPiBridge({ agent, conversationId: conversation.id, runId, workspacePath: workspace.rootPath, toolNames, systemPrompt: "Fixture" } as never, new AbortController().signal, onBudgetExceeded);
+  const lease = withLease ? await acquirePiWorkspace(workspace.rootPath, new AbortController().signal) : null;
+  if (lease) { lease.attachChild(process.pid); leases.push(lease); }
+  const bridge = await createPiBridge({ agent, conversationId: conversation.id, runId, workspacePath: workspace.rootPath, toolNames, systemPrompt: "Fixture" } as never, new AbortController().signal, onBudgetExceeded, lease);
   bridges.push(bridge);
   const post = (route: string, body: unknown, token = bridge.token) => fetch(`${bridge.url}${route}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return { bridge, post, runId, workspace, conversation };
 }
 
 describe("private Pi bridge admission", () => {
+  it("pauses source tool admission during a peer workspace loan and resumes only after release", async () => {
+    const originalExecute = toolRegistry.execute.bind(toolRegistry);
+    let finishPeer!: () => void;
+    const peerStopped = new Promise<void>(resolve => { finishPeer = resolve; });
+    let peerStarted = false;
+    vi.spyOn(toolRegistry, "execute").mockImplementation(async (name, args, ctx, meta) => {
+      if (name !== "consult_agent") return originalExecute(name, args, ctx, meta);
+      const peer = ctx.consultationLease!;
+      peer.attachChild(process.pid);
+      peerStarted = true;
+      await peerStopped;
+      peer.release();
+      return { ok: true, value: { status: "replied" } };
+    });
+    const { post } = await fixture(["consult_agent", "fs_write"], () => {}, [], true);
+    const consulting = post("/tool", { callId: "peer", name: "consult_agent", args: {} });
+    try {
+      await vi.waitFor(() => expect(peerStarted).toBe(true));
+      const blocked = await post("/native/authorize", { callId: "during-peer", name: "write", args: { path: "blocked.txt" } });
+      expect(blocked.status).toBe(400);
+      expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("waiting for its peer") });
+      finishPeer();
+      expect((await consulting).status).toBe(200);
+      expect((await post("/native/authorize", { callId: "after-peer", name: "write", args: { path: "resumed.txt" } })).status).toBe(200);
+    } finally { finishPeer(); await consulting; }
+  });
+
+  it("does not lend ownership while an admitted native operation is unfinished", async () => {
+    const { post } = await fixture(["consult_agent", "fs_write"], () => {}, [], true);
+    expect((await post("/native/authorize", { callId: "write", name: "write", args: { path: "pending.txt" } })).status).toBe(200);
+    const blocked = await post("/tool", { callId: "peer", name: "consult_agent", args: {} });
+    expect(blocked.status).toBe(400);
+    expect(await blocked.json()).toMatchObject({ error: expect.stringContaining("Finish other tool calls") });
+  });
   it("rejects missing credentials, unmapped native names and call ID replay", async () => {
     const { post } = await fixture();
     expect((await post("/native/authorize", { callId: "missing", name: "write", args: {} }, "wrong")).status).toBe(403);
@@ -50,32 +93,31 @@ describe("private Pi bridge admission", () => {
     // Agent has NO grants at all, yet native and business tools are admitted.
     const provisioned = provisionedPlatformToolNames();
     expect(provisioned).toEqual(expect.arrayContaining(["fs_read", "fs_write", "fs_patch", "bash", "read_artifact", "write_artifact", "deploy_workspace", "web_fetch", "browser_check"]));
-    // The retired job_* kernel, the Conductor's PLAN protocol tool and the
-    // conversation-scoped roster tool are not Agent capabilities; the PLAN stage
-    // provisions plan_tasks and list_team_members for itself.
+    // Retired executors and terminal platform protocol tools are not ordinary
+    // capabilities. The same-conversation roster is available to all Agents.
     expect(provisioned).not.toContain("job_start");
     expect(provisioned).not.toContain("plan_tasks");
-    expect(provisioned).not.toContain("list_team_members");
+    expect(provisioned).not.toContain("respond_to_consultation");
+    expect(provisioned).toContain("list_team_members");
     const { post } = await fixture(provisioned, () => {}, []);
     expect((await post("/native/authorize", { callId: "write", name: "write", args: { path: "granted.txt" } })).status).toBe(200);
     expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "mkdir -p src && cat > src/App.css" } })).status).toBe(200);
     expect((await post("/tool", { callId: "artifact", name: "read_artifact", args: { artifactId: "art_missing" } })).status).toBe(200);
-    // A worker run is not provisioned with the roster tool, so even a direct
-    // call is refused at the bridge before the handler's role check.
-    expect((await post("/tool", { callId: "roster", name: "list_team_members", args: {} })).status).toBe(403);
+    const roster = await post("/tool", { callId: "roster", name: "list_team_members", args: {} });
+    expect(roster.status).toBe(200);
+    expect(await roster.json()).toMatchObject({ ok: true, value: { members: expect.any(Array) } });
   });
 
   it("advertises the roster line only to a run provisioned with the roster tool", async () => {
     const manifest = (bridge: Awaited<ReturnType<typeof createPiBridge>>) =>
       fetch(`${bridge.url}/manifest`, { headers: { Authorization: `Bearer ${bridge.token}` } }).then(response => response.json());
 
-    // A normal Agent run gets the whole workspace toolset but not the roster.
+    // Workers and planners can both discover current peers without role grants.
     const worker = await fixture(provisionedPlatformToolNames(), () => {}, []);
     const workerManifest = await manifest(worker.bridge) as { systemPrompt: string; definitions: Array<{ name: string }> };
-    expect(workerManifest.definitions.map(definition => definition.name)).not.toContain("list_team_members");
-    expect(workerManifest.systemPrompt).not.toContain("list_team_members");
+    expect(workerManifest.definitions.map(definition => definition.name)).toContain("list_team_members");
+    expect(workerManifest.systemPrompt).toContain("use list_team_members for the current roster");
 
-    // The Conductor PLAN stage is the one run that may query the roster.
     const planner = await fixture(["list_team_members", "plan_tasks"], () => {}, []);
     const plannerManifest = await manifest(planner.bridge) as { systemPrompt: string; definitions: Array<{ name: string }> };
     expect(plannerManifest.definitions.map(definition => definition.name)).toContain("list_team_members");

@@ -11,6 +11,7 @@ import { getAllPendingQuestions } from "@/server/pending-questions";
 import { getAllPendingBashCommands } from "@/server/pending-bash";
 import { getAllPendingWrites } from "@/server/pending-writes";
 import { getAllPendingPlans } from "@/server/dispatch-plan-manager";
+import { listConsultations } from "@/server/collaboration/consultations";
 import { escapeLarkMd, withVersion } from "@/server/channels/feishu/card-text";
 import {
   getFeishuChannelForAgent,
@@ -98,7 +99,18 @@ const STATUS_TEXT: Record<AgentRunStatus, string> = {
 const STAGE_LABEL: Record<string, string> = {
   dispatch: "正在执行各个任务",
   recovery: "正在为失败的任务重新规划",
-  aggregate: "正在汇总结果"
+  aggregate: "正在汇总结果",
+  planning: "正在规划任务",
+  awaiting_approval: "等待计划审批",
+  discussion: "讨论中",
+  "execution.queued": "等待执行资源",
+  execution: "正在执行",
+  "admission.received": "已接收消息",
+  "admission.classifying": "正在判断消息处理方式",
+  "admission.followup": "补充已排队，等待生效",
+  "admission.stopping": "等待旧执行停止",
+  "admission.waiting": "等待上一项工作结束",
+  handoff: "正在交接任务"
 };
 
 /**
@@ -127,7 +139,7 @@ export interface RunStatusSnapshot {
   children: Record<AgentRunStatus, number>;
   childTotal: number;
   /** Things this run is waiting on a person for — its own and its children's. */
-  waiting: { questions: number; approvals: number };
+  waiting: { questions: number; approvals: number; colleagues?: number };
 }
 
 /**
@@ -156,7 +168,8 @@ export function collectRunStatus(run: AgentRun, now = Date.now()): RunStatusSnap
     getAllPendingBashCommands().filter((item) => owned.has(item.runId)).length +
     getAllPendingWrites().filter((item) => owned.has(item.runId)).length;
 
-  return { run, now, children: counts, childTotal: children.length, waiting: { questions, approvals } };
+  const colleagues = listConsultations(run.conversationId).filter(item => owned.has(item.sourceRunId) && ["requested", "running"].includes(item.status)).length;
+  return { run, now, children: counts, childTotal: children.length, waiting: { questions, approvals, ...(colleagues ? { colleagues } : {}) } };
 }
 
 /**
@@ -187,6 +200,7 @@ export function describeRunStatus(snapshot: RunStatusSnapshot): string[] {
   if (waiting.questions) waits.push(`${waiting.questions} 个提问`);
   if (waiting.approvals) waits.push(`${waiting.approvals} 项审批`);
   if (waits.length) lines.push(`等待处理：${waits.join("、")}`);
+  if (waiting.colleagues) lines.push(`等待同事回复：${waiting.colleagues} 项咨询`);
 
   return lines;
 }

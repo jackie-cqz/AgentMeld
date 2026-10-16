@@ -145,6 +145,7 @@ import { webFetchTool, webSearchTool } from "@/server/tools/web";
 import { gitInspectTool } from "@/server/tools/git-inspect";
 import { browserCheckTool } from "@/server/tools/browser-check";
 import { listTeamMembersTool } from "@/server/tools/list-team-members";
+import { consultAgentTool, respondToConsultationTool } from "@/server/tools/consult-agent";
 
 function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -162,6 +163,8 @@ function buildRegistry(): ToolRegistry {
   registry.register(readAttachmentTool);
   registry.register(planTasksTool);
   registry.register(listTeamMembersTool);
+  registry.register(consultAgentTool);
+  registry.register(respondToConsultationTool);
   registry.register(reportTaskResultTool);
   registry.register(readEvidenceTool);
   registry.register(updateContextFactsTool);

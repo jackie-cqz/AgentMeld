@@ -159,7 +159,10 @@ describe("DeepSeek adapter integration", () => {
     const sent = await sendMessage({
       origin: "human",
       conversationId: conv.id,
-      content: "Build a pomodoro timer"
+      content: "Build a pomodoro timer",
+      // This suite exercises provider streaming, not semantic admission. The
+      // deterministic endpoint returns an application reply, not classifier JSON.
+      action: "new_task"
     });
     expect(sent.runIds).toHaveLength(1);
 

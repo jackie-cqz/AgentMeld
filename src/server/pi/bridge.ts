@@ -11,6 +11,8 @@ import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { recordTaskArtifact } from "@/server/dispatch-task-results";
+import { assertPiAccessProfile } from "./access-profile";
+import type { PiWorkspaceLease } from "./workspace-lease";
 
 const callSchema = z.object({ callId: z.string().min(1).max(200), name: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) });
 const outcomeSchema = z.object({ callId: z.string().min(1).max(200), result: z.unknown(), isError: z.boolean() });
@@ -23,7 +25,10 @@ export function cancelPiApprovals(runId: string): void {
 }
 
 /** A private, invocation-scoped tool bridge. Nothing is registered in the public Next API. */
-export async function createPiBridge(input: PiInvocationInput, signal: AbortSignal, onBudgetExceeded: () => void) {
+export async function createPiBridge(input: PiInvocationInput, signal: AbortSignal, onBudgetExceeded: () => void, lease: PiWorkspaceLease | null = null) {
+  assertPiAccessProfile(input.accessMode, input.toolNames);
+  const maxTurns = input.maxTurns ?? 64;
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 64) throw new Error("Invalid Pi turn limit.");
   const token = randomBytes(32).toString("hex");
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const ctx: ToolContext = { conversationId: input.conversationId, agentId: input.agent.id,
@@ -44,6 +49,9 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
   let turns = 0;
   let ready = false;
   let terminalToolAccepted = false;
+  let consultationActive = false;
+  let activeBusinessCalls = 0;
+  let activeNativeAdmissions = 0;
 
   const serve = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const authorization = Buffer.from(request.headers.authorization ?? "");
@@ -57,17 +65,11 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       if (request.method === "GET" && request.url === "/manifest") {
         const systemPrompt = Object.entries(PI_NATIVE_TO_PLATFORM).reduce((prompt, [native, platform]) =>
           native === platform ? prompt : prompt.replace(new RegExp(`\\b${platform}\\b`, "g"), native), input.systemPrompt);
-        // Only the Conductor's PLAN stage is provisioned with the roster tool
-        // (see tool-surface.ts), so this line is emitted exactly where querying
-        // the roster is permitted. Advertising it to every Agent is what taught
-        // workers a call their run cannot make: the roster is conversation-
-        // scoped information, and issue #79's full-toolset decision was about
-        // capability, not disclosure.
         const rosterGuidance = businessNames.includes(CONVERSATION_ROSTER_TOOL)
-          ? `\nBefore planning, use ${CONVERSATION_ROSTER_TOOL} for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements.`
+          ? `\nBefore consulting or planning, use ${CONVERSATION_ROSTER_TOOL} for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements.`
           : "";
         send({ definitions, native, systemPrompt: `${systemPrompt}${rosterGuidance}`,
-          needsReport: Boolean(input.parentRunId), maxTurns: 64 });
+          needsReport: Boolean(input.parentRunId), maxTurns });
         return;
       }
       if (request.method !== "POST") { send({ error: "Unknown bridge operation." }, 404); return; }
@@ -83,7 +85,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (request.url === "/ready") { ready = true; send({ ok: true }); return; }
       if (request.url === "/turn") {
-        if (++turns > 64) { send({ ok: false, error: "Pi turn budget exhausted." }, 409); onBudgetExceeded(); }
+        if (++turns > maxTurns) { send({ ok: false, error: "Pi turn budget exhausted." }, 409); onBudgetExceeded(); }
         else send({ ok: true });
         return;
       }
@@ -106,23 +108,42 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
         return;
       }
       const call = callSchema.parse(body);
+      if (consultationActive) throw new Error("This invocation is waiting for its peer; tools resume after the peer has stopped.");
+      lease?.assertActive();
       if (terminalToolAccepted) throw new Error("This invocation already submitted its terminal platform result.");
       if (admittedCalls.size >= 512) throw new Error("Pi tool call budget exhausted.");
       if (admittedCalls.has(call.callId)) throw new Error("Tool call ID has already been consumed.");
       admittedCalls.add(call.callId);
       if (request.url === "/native/authorize") {
-        try { admissions.set(call.callId, await authorizeNativeTool(call.name, call.args, ctx)); }
+        activeNativeAdmissions++;
+        try {
+          if (!native.includes(call.name)) throw new Error("Native tool is not provisioned for this internal invocation.");
+          admissions.set(call.callId, await authorizeNativeTool(call.name, call.args, ctx));
+        }
         catch (error) {
           const result = await toolRegistry.recordPreflightFailure(PI_NATIVE_TO_PLATFORM[call.name] ?? call.name, call.args,
             error instanceof Error ? error.message : "Native tool admission failed.", ctx,
             { callId: call.callId, source: "system" }, { code: "PI_NATIVE_TOOL_REJECTED", category: "security_policy" });
           results.set(call.callId, result);
           throw error;
-        }
+        } finally { activeNativeAdmissions--; }
         signal.throwIfAborted();
         send({ ok: true });
       } else if (request.url === "/tool" && businessNames.includes(call.name)) {
-        const result = await toolRegistry.execute(call.name, call.args, ctx, { callId: call.callId, source: "pi" });
+        let result: ToolResult;
+        if (call.name === "consult_agent") {
+          if (admissions.size || activeNativeAdmissions || activeBusinessCalls) throw new Error("Finish other tool calls before handing the workspace to a peer.");
+          consultationActive = true;
+          try {
+            const execute = (consultationLease?: PiWorkspaceLease) => toolRegistry.execute(call.name, call.args,
+              { ...ctx, consultationLease }, { callId: call.callId, source: "pi" });
+            result = lease ? await lease.lend(execute) : await execute();
+          } finally { consultationActive = false; }
+        } else {
+          activeBusinessCalls++;
+          try { result = await toolRegistry.execute(call.name, call.args, ctx, { callId: call.callId, source: "pi" }); }
+          finally { activeBusinessCalls--; }
+        }
         if (result.ok && result.value && typeof result.value === "object") {
           const value = result.value as Record<string, unknown>;
           if (typeof value.artifactId === "string" && typeof value.outputKey === "string") {
@@ -131,7 +152,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
           }
         }
         results.set(call.callId, result);
-        if (result.ok && (call.name === "plan_tasks" || call.name === "report_task_result")) terminalToolAccepted = true;
+        if (result.ok && ["plan_tasks", "report_task_result", "respond_to_consultation"].includes(call.name)) terminalToolAccepted = true;
         send(result);
       } else send({ ok: false, error: "Tool is not authorized for this invocation." }, 403);
     } catch (error) {

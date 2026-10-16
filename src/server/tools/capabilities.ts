@@ -88,6 +88,8 @@ export const TOOL_CAPABILITIES: Record<string, readonly ToolCapability[]> = {
   // nor blocks (approval happens on the platform side, not inside the tool).
   plan_tasks: ["project-data-read"],
   list_team_members: ["project-data-read"],
+  consult_agent: ["project-data-read", "project-data-write"],
+  respond_to_consultation: ["project-data-write"],
   report_task_result: ["project-data-write"],
   update_context_facts: ["project-data-write"]
 };

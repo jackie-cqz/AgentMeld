@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDataDir, getDatabase } from "@/db/client";
 import { startAgentRun } from "@/server/agent-runner";
@@ -15,6 +16,7 @@ import {
   deleteConversation as removeConversation,
   getConversation,
   getMessage,
+  getRun,
   listAgents,
   listArtifacts,
   listConversations,
@@ -27,6 +29,13 @@ import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
+import { resolveMessageRecipients } from "@/shared/collaboration-routing";
+import { listConsultations } from "@/server/collaboration/consultations";
+import { listHandoffs } from "@/server/collaboration/handoffs";
+import { publicCollaborationTurns } from "@/server/collaboration/turn-admission";
+import { claimMessageSubmission, finishMessageSubmission } from "@/server/collaboration/message-submissions";
+import type { CollaborationAction } from "@/shared/collaboration-types";
+import { persistedDispatches } from "@/server/collaboration/dispatch-projection";
 
 interface BootstrapPayload {
   agents: Agent[];
@@ -38,6 +47,10 @@ interface BootstrapPayload {
   pendingBashCommands: ReturnType<typeof getAllPendingBashCommands>;
   pendingDispatchPlans: ReturnType<typeof getAllPendingPlans>;
   pendingQuestions: ReturnType<typeof getAllPendingQuestions>;
+  consultationsByConversation: Record<string, ReturnType<typeof listConsultations>>;
+  collaborationTurnsByConversation: Record<string, ReturnType<typeof publicCollaborationTurns>>;
+  handoffsByConversation: Record<string, ReturnType<typeof listHandoffs>>;
+  dispatchesByRunId: ReturnType<typeof persistedDispatches>;
   /** The real per-run toolset (provisionedPlatformToolNames), served so the UI
    *  never has to reconstruct capability from the stored `agent.toolNames`. */
   provisionedToolNames: string[];
@@ -66,6 +79,9 @@ interface SendMessageInput {
   mentionedAgentIds?: string[];
   attachmentIds?: string[];
   parentMessageId?: string | null;
+  clientRequestId?: string;
+  action?: CollaborationAction;
+  targetRunId?: string;
   /**
    * Who authored the message. Required on purpose: this is the boundary channel
    * ingress will call, and a default of "human" would mean a future caller that
@@ -81,6 +97,10 @@ export function getBootstrapPayload(): BootstrapPayload {
   return {
     agents: listAgents(),
     conversations,
+    consultationsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, listConsultations(conversation.id)])),
+    collaborationTurnsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, publicCollaborationTurns(conversation.id)])),
+    handoffsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, listHandoffs(conversation.id)])),
+    dispatchesByRunId: Object.assign({}, ...conversations.map(conversation => persistedDispatches(conversation.id))),
     messagesByConversation: Object.fromEntries(
       conversations.map((conversation) => [conversation.id, listMessages(conversation.id)])
     ),
@@ -128,6 +148,9 @@ export function getConversationPayload(conversationId: string) {
 
   return {
     conversation,
+    consultations: listConsultations(conversationId),
+    collaborationTurns: publicCollaborationTurns(conversationId),
+    handoffs: listHandoffs(conversationId),
     messages: listMessages(conversationId),
     runs: listRuns(conversationId),
     artifacts: listArtifacts(conversationId)
@@ -173,18 +196,29 @@ export async function sendMessage(input: SendMessageInput) {
   const content = input.content.trim();
   if (!content) throw new Error("Message content cannot be empty.");
   const origin = assertMessageOrigin(input.origin);
+  if (origin !== "human" && (input.action || input.targetRunId)) throw new Error("Only human ingress may submit run-control actions.");
 
   const conversation = getConversation(input.conversationId);
   if (!conversation) throw new Error("Conversation not found.");
+  if (input.action && !["discussion", "new_task", "progress", "supplement", "correction", "cancel"].includes(input.action)) throw new Error("Invalid human message action.");
+  if (input.targetRunId) {
+    const target = getRun(input.targetRunId);
+    if (!input.action || !target || target.conversationId !== conversation.id || !conversation.agentIds.includes(target.agentId)) throw new Error("Control target is not a run in this conversation.");
+  }
+  const parent = input.parentMessageId ? getMessage(input.parentMessageId) : null;
   if (input.parentMessageId) {
-    const parent = getMessage(input.parentMessageId);
     if (!parent || parent.conversationId !== input.conversationId) {
       throw new Error("Reply target does not belong to this conversation.");
     }
   }
 
   const now = Date.now();
-  const mentionedAgentIds = input.mentionedAgentIds ?? [];
+  const mentionedAgentIds = [...new Set(input.mentionedAgentIds ?? [])];
+  // Resolve before writing, so invalid explicit targets cannot silently fall
+  // back to a different Agent or leave an apparently accepted message behind.
+  const responderIds = origin === "human"
+    ? resolveMessageRecipients(conversation, listAgents(), mentionedAgentIds, parent)
+    : [];
 
   // Build parts: text + attachment references
   const parts: Message["parts"] = [{ type: "text", content }];
@@ -200,7 +234,11 @@ export async function sendMessage(input: SendMessageInput) {
     }
   }
 
-  const message = createMessage({
+  const requestKey = input.clientRequestId ?? randomUUID();
+  if (!requestKey.trim() || requestKey.length > 120) throw new Error("Invalid client request identity.");
+  const payloadHash = createHash("sha256").update(JSON.stringify({ content, origin, mentionedAgentIds, attachmentIds,
+    parentMessageId: input.parentMessageId ?? null, action: input.action ?? null, targetRunId: input.targetRunId ?? null })).digest("hex");
+  const claimed = claimMessageSubmission(input.conversationId, requestKey, payloadHash, () => createMessage({
     id: newMessageId(),
     conversationId: input.conversationId,
     role: "user",
@@ -210,7 +248,9 @@ export async function sendMessage(input: SendMessageInput) {
     mentionedAgentIds,
     parentMessageId: input.parentMessageId ?? null,
     now
-  });
+  }));
+  if (claimed.replay) return { message: claimed.message, ...claimed.outcome };
+  const message: Message = { ...claimed.message, clientRequestId: requestKey };
 
   touchConversation(input.conversationId, now);
   eventBus.publish({
@@ -222,74 +262,41 @@ export async function sendMessage(input: SendMessageInput) {
 
   // Check for deploy command before starting agent runs. Only a human may
   // issue one: a bot echo of a deploy-looking string must not deploy.
-  const deployIntent = origin === "human" ? detectDeployCommand(content) : null;
+  const deployIntent = origin === "human" && (!input.action || input.action === "new_task") ? detectDeployCommand(content) : null;
   if (deployIntent) {
-    const deployMessage = await handleDeployCommand(input.conversationId, deployIntent);
-    return {
-      message,
-      runIds: [],
-      deploy: deployMessage
-    };
+    try {
+      const deploy = await handleDeployCommand(input.conversationId, deployIntent);
+      const outcome = { runIds: [] as string[], deploy };
+      finishMessageSubmission(input.conversationId, requestKey, outcome);
+      return { message, ...outcome };
+    } catch (error) { finishMessageSubmission(input.conversationId, requestKey, null); throw error; }
   }
 
-  const responderIds = dispatchTargets(conversation, origin, mentionedAgentIds);
   const handles = responderIds.map((agentId) =>
     startAgentRun({
       conversationId: input.conversationId,
       agentId,
-      triggerMessage: message
+      triggerMessage: message,
+      humanTurn: { action: input.action, targetRunId: input.targetRunId },
     })
   );
 
-  return { message, runIds: handles.map((h) => h.runId) };
+  const outcome = { runIds: handles.map((h) => h.runId) };
+  finishMessageSubmission(input.conversationId, requestKey, outcome);
+  return { message, ...outcome };
 }
 
 /**
  * The type makes `origin` required, but that only constrains TypeScript
  * callers. A caller that bypasses the type — or arrives from untyped code —
  * would otherwise have `createMessage` fall back to the role default and write
- * 'human' while `dispatchTargets` refuses to dispatch, producing a row that
+ * 'human' while ingress refuses to dispatch, producing a row that
  * says human but behaves as though it were not. Fail loudly instead, before
  * anything is written.
  */
 function assertMessageOrigin(value: unknown): MessageOrigin {
   if (value === "human" || value === "bot" || value === "internal") return value;
   throw new Error("sendMessage requires an explicit origin of human, bot, or internal.");
-}
-
-/**
- * Which agents a message may start work for.
- *
- * Only human-authored messages dispatch. `pickResponders` falls back to the
- * conductor whenever nothing is mentioned, so without this gate a single
- * bot-authored message — a channel echo, a projected internal event — would
- * start a new conductor run, whose output would be projected back and start
- * another: an unbounded loop. Non-human messages are still recorded in the
- * conversation for context; they simply never start a run.
- */
-function dispatchTargets(
-  conversation: Conversation,
-  origin: MessageOrigin,
-  mentionedAgentIds: string[]
-): string[] {
-  if (origin !== "human") return [];
-  return pickResponders(conversation, mentionedAgentIds);
-}
-
-function pickResponders(conversation: Conversation, mentionedAgentIds: string[]) {
-  if (conversation.mode === "single") {
-    return conversation.agentIds.slice(0, 1);
-  }
-
-  const allowedMentionIds = mentionedAgentIds.filter((agentId) => conversation.agentIds.includes(agentId));
-  if (allowedMentionIds.length > 0) {
-    return allowedMentionIds;
-  }
-
-  const conductor = listAgents().find(
-    (agent) => agent.isConductor && conversation.agentIds.includes(agent.id)
-  );
-  return conductor ? [conductor.id] : [];
 }
 
 /**

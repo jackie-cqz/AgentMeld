@@ -21,6 +21,11 @@ export function ensureDatabase() {
   const db = getDatabase();
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS app_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS model_provider_profiles (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -68,6 +73,93 @@ export function ensureDatabase() {
     CREATE TABLE IF NOT EXISTS harness_workspace_leases (
       workspace_key TEXT PRIMARY KEY, token TEXT NOT NULL, owner_pid INTEGER NOT NULL,
       child_pid INTEGER, status TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_consultations (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      source_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_run_id TEXT UNIQUE,
+      request_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      question TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      task_identity_json TEXT,
+      status TEXT NOT NULL,
+      proposed_status TEXT,
+      answer TEXT,
+      error TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(source_run_id, request_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_consultations_conversation ON agent_consultations(conversation_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      source_attempt_id TEXT NOT NULL REFERENCES task_attempts(id) ON DELETE CASCADE,
+      source_run_id TEXT NOT NULL,
+      source_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_agent_id TEXT NOT NULL REFERENCES agents(id),
+      task_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      execution_status TEXT NOT NULL,
+      coordinator_run_id TEXT,
+      target_run_id TEXT,
+      target_attempt_id TEXT,
+      decided_by TEXT,
+      package_json TEXT NOT NULL,
+      error TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_handoffs_conversation ON task_handoffs(conversation_id,created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_handoffs_source ON task_handoffs(source_attempt_id) WHERE status='proposed' OR (status='accepted' AND execution_status IN ('stopping','running'));
+
+    CREATE TABLE IF NOT EXISTS collaboration_turns (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+      target_run_id TEXT,
+      topic_message_id TEXT NOT NULL,
+      intent TEXT,
+      mode TEXT,
+      status TEXT NOT NULL,
+      context_snapshot_id TEXT,
+      context_json TEXT,
+      reason TEXT,
+      resolved_by TEXT,
+      resolution_message_id TEXT,
+      resolved_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_collaboration_turns_conversation ON collaboration_turns(conversation_id,created_at);
+    CREATE TABLE IF NOT EXISTS collaboration_context_snapshots (
+      id TEXT PRIMARY KEY,
+      turn_id TEXT NOT NULL REFERENCES collaboration_turns(id) ON DELETE CASCADE,
+      previous_snapshot_id TEXT,
+      context_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS message_submissions (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      response_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(conversation_id,request_key)
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
@@ -571,6 +663,9 @@ function migrateLegacyTables() {
   ensureColumn("agents", "api_base_url", "TEXT");
   ensureColumn("agents", "is_conductor", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("agents", "supports_vision", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("collaboration_turns", "resolved_by", "TEXT");
+  ensureColumn("collaboration_turns", "resolution_message_id", "TEXT");
+  ensureColumn("collaboration_turns", "resolved_at", "INTEGER");
 
   ensureColumn("conversations", "archived", "INTEGER NOT NULL DEFAULT 0");
 
@@ -794,6 +889,7 @@ function seedBuiltinAgents() {
   migrateLegacyBuiltinPrompts(now);
   migrateLegacyBuiltinToolPresets(now);
   migrateFrontendMkdirTool(now);
+  migrateBuiltinConsultationTool(now);
   upgradeBuiltinConductorPrompt(now);
   // Retain identities, channel bindings and history while replacing the retired execution engine.
   // SDK placeholders are not converted: their incompatible configuration requires explicit action.
@@ -832,7 +928,7 @@ function migrateLegacyBuiltinToolPresets(now: number) {
     const currentTools = parseToolNames(row.tool_names);
     if (!sameStringArray(currentTools, legacyTools)) continue;
 
-    update.run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
+    update.run(JSON.stringify(builtinMigrationTools(agent.toolNames, currentTools)), now, agent.id, row.tool_names);
   }
 }
 
@@ -847,14 +943,32 @@ function migrateFrontendMkdirTool(now: number) {
 
   const currentTools = parseToolNames(row.tool_names);
   const previousDefault = agent.toolNames.filter((tool) => tool !== "fs_mkdir");
-  if (!sameStringArray(currentTools, previousDefault)) return;
+  if (!sameStringArray(currentTools, previousDefault) &&
+    !sameStringArray(currentTools, previousDefault.filter(tool => tool !== "consult_agent"))) return;
 
   db.prepare(`
     UPDATE agents
     SET tool_names = ?, updated_at = ?
     WHERE id = ?
       AND is_builtin = 1
-  `).run(JSON.stringify(agent.toolNames), now, agent.id);
+  `).run(JSON.stringify(builtinMigrationTools(agent.toolNames, currentTools)), now, agent.id);
+}
+
+function migrateBuiltinConsultationTool(now: number) {
+  const db = getDatabase();
+  if (db.prepare("SELECT id FROM app_migrations WHERE id='consultation-presets-v1'").get()) return;
+  for (const agent of BUILTIN_AGENTS) {
+    const row = db.prepare("SELECT tool_names FROM agents WHERE id=? AND is_builtin=1").get(agent.id) as { tool_names: string } | undefined;
+    if (!row || !sameStringArray(parseToolNames(row.tool_names), agent.toolNames.filter(tool => tool !== "consult_agent"))) continue;
+    db.prepare("UPDATE agents SET tool_names=?,updated_at=? WHERE id=? AND tool_names=?")
+      .run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
+  }
+  db.prepare("INSERT OR IGNORE INTO app_migrations (id,applied_at) VALUES ('consultation-presets-v1',?)").run(now);
+}
+
+function builtinMigrationTools(defaults: string[], current: string[]): string[] {
+  const migrated = getDatabase().prepare("SELECT id FROM app_migrations WHERE id='consultation-presets-v1'").get();
+  return migrated && !current.includes("consult_agent") ? defaults.filter(tool => tool !== "consult_agent") : defaults;
 }
 
 function parseToolNames(raw: string): string[] {

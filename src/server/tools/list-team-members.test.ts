@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { createAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
+import { getWorkspaceForConversation } from "@/server/repositories";
 import { listTeamMembersTool } from "./list-team-members";
-import type { ToolContext } from "./types";
 
-describe("Conductor member lookup", () => {
-  it("returns only conversation members without execution credentials", async () => {
-    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", "ag_pm"] });
-    const context = { conversationId: conversation.id, agentId: "ag_mock_conductor" } as ToolContext;
-    const result = await listTeamMembersTool.handler({}, context);
+describe("shared conversation roster", () => {
+  it("lets a non-Conductor with no historical tool grants discover its peers", async () => {
+    const worker = createAgent({ name: "Roster worker", adapterName: "pi", modelId: "fixture", toolNames: [] });
+    const peer = createAgent({ name: "Roster peer", adapterName: "pi", modelId: "fixture", toolNames: [] });
+    createAgent({ name: "Unrelated member", adapterName: "pi", modelId: "fixture", toolNames: [] });
+    const conversation = createConversation({ mode: "group", agentIds: [worker.id, peer.id] });
+    const ctx = { conversationId: conversation.id, agentId: worker.id, runId: "roster-fixture",
+      workspacePath: getWorkspaceForConversation(conversation.id)!.rootPath, abortSignal: new AbortController().signal };
+    const result = await listTeamMembersTool.handler({}, ctx);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      const value = result.value as { members: Array<Record<string, unknown>> };
-      expect(value.members.map(member => member.id).sort()).toEqual([...conversation.agentIds].sort());
-      expect(JSON.stringify(value)).not.toMatch(/apiKey|apiBaseUrl|systemPrompt/);
-    }
-    expect(await listTeamMembersTool.handler({}, { ...context, agentId: "ag_pm" })).toMatchObject({ ok: false, category: "security_policy" });
+    if (!result.ok) throw new Error(result.error);
+    const members = (result.value as { members: Array<{ id: string; toolNames: string[] }> }).members;
+    expect(members.map(member => member.id).sort()).toEqual([worker.id, peer.id].sort());
+    for (const member of members) expect(member.toolNames).toEqual(expect.arrayContaining(["fs_write", "fs_patch", "bash", "consult_agent"]));
+    expect(JSON.stringify(result.value)).not.toContain("systemPrompt");
+    expect(JSON.stringify(result.value)).not.toContain("apiKey");
+    expect(JSON.stringify(result.value)).not.toContain("apiBaseUrl");
+    expect(await listTeamMembersTool.handler({}, { ...ctx, agentId: "ag_pm" })).toMatchObject({ ok: false, category: "security_policy" });
   });
 });

@@ -10,8 +10,14 @@ import type {
   PendingWrite
 } from "@/shared/types";
 import type { BootstrapPayload } from "@/stores/store-types";
+import type { AgentConsultation, CollaborationTurn, TaskHandoff } from "@/shared/collaboration-types";
+import type { DispatchState } from "@/shared/dispatch-state";
 
 export interface NormalizedBootstrapState {
+  dispatchesByRunId: Record<string, DispatchState>;
+  handoffs: Record<string, TaskHandoff>;
+  collaborationTurns: Record<string, CollaborationTurn>;
+  consultations: Record<string, AgentConsultation>;
   agents: Record<string, Agent>;
   agentIds: string[];
   conversations: Record<string, Conversation>;
@@ -38,6 +44,10 @@ export function normalizeBootstrap(payload: BootstrapPayload): NormalizedBootstr
     (left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt
   );
   const state: NormalizedBootstrapState = {
+    dispatchesByRunId: payload.dispatchesByRunId ?? {},
+    handoffs: keyById(Object.values(payload.handoffsByConversation ?? {}).flat()),
+    collaborationTurns: keyById(Object.values(payload.collaborationTurnsByConversation ?? {}).flat()),
+    consultations: keyById(Object.values(payload.consultationsByConversation ?? {}).flat()),
     agents: keyById(payload.agents),
     agentIds: payload.agents.map((agent) => agent.id),
     conversations: keyById(conversations),

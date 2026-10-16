@@ -415,6 +415,9 @@ describe("stageLabel", () => {
     expect(stageLabel("dispatch")).toBe("正在执行各个任务");
     expect(stageLabel("recovery")).toBe("正在为失败的任务重新规划");
     expect(stageLabel("aggregate")).toBe("正在汇总结果");
+    expect(stageLabel("discussion")).toBe("讨论中");
+    expect(stageLabel("admission.followup")).toBe("补充已排队，等待生效");
+    expect(stageLabel("handoff")).toBe("正在交接任务");
   });
 
   it("shows an unfamiliar stage as itself, escaped, rather than hiding it", () => {

@@ -545,9 +545,13 @@ describe("bash", () => {
       JSON.stringify({ scripts: { test: "node -e \"console.log('app-test-ok')\"" } })
     );
 
-    const declared = await toolRegistry.execute("bash", { command: "cd app && npm run test" }, ctx());
+    const command = process.platform === "win32" ? "Set-Location -LiteralPath app; npm run test" : "cd app && npm run test";
+    const declared = await toolRegistry.execute("bash", { command }, ctx());
     expect(declared.ok).toBe(true);
-    if (declared.ok) expect((declared.value as { output: string }).output).toContain("app-test-ok");
+    if (declared.ok) {
+      expect((declared.value as { exitCode: number }).exitCode).toBe(0);
+      expect((declared.value as { output: string }).output).toContain("app-test-ok");
+    }
   }, 20000);
 
   it("does not claim a script is undeclared when there is no package.json", async () => {
@@ -640,7 +644,9 @@ describe("bash", () => {
 
     const redirectResult = await toolRegistry.execute("bash", { command: "node -e \"console.log('redirected')\" > build.log" }, ctx());
     expect(redirectResult.ok, !redirectResult.ok ? redirectResult.error : "").toBe(true);
-    expect(fs.readFileSync(path.join(workspacePath, "build.log"), "utf-8")).toContain("redirected");
+    // Windows PowerShell 5.1 writes UTF-16LE for `>`; this is real shell
+    // behavior, not a source-mutation refusal or a broken redirect.
+    expect(fs.readFileSync(path.join(workspacePath, "build.log"), process.platform === "win32" ? "utf16le" : "utf8")).toContain("redirected");
   }, 20000);
 });
 

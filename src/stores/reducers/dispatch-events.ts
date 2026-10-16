@@ -57,6 +57,8 @@ export function applyDispatchEvent(state: StoreDraft, event: StreamEvent) {
     dispatch.taskStatus[event.taskId] = "running";
     dispatch.childRunIds[event.taskId] = event.childRunId;
     dispatch.attempts[event.taskId] = event.attempt;
+    const task = dispatch.plan.find(task => task.id === event.taskId);
+    if (task) task.agentId = event.agentId;
     return true;
   }
 
@@ -85,6 +87,7 @@ export function applyDispatchEvent(state: StoreDraft, event: StreamEvent) {
       dispatch.attemptIdsByTask[event.taskId].push(event.attemptId);
     }
     dispatch.activeAttemptByTask[event.taskId] = event.attemptId;
+    dispatch.verificationStatusByTask[event.taskId] = "checking";
     dispatch.contextSummaryByAttempt[event.attemptId] = {
       tokenEstimate: event.tokenEstimate,
       includedCount: event.includedCount,

@@ -4,14 +4,19 @@ import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent, updateAgent } from "@/server/agent-service";
-import { createConversation } from "@/server/conversation-service";
-import { createMessage, getWorkspaceForConversation, getRun, listMessages } from "@/server/repositories";
+import { createConversation, patchConversation, sendMessage } from "@/server/conversation-service";
+import { createMessage, createRun, getWorkspaceForConversation, getRun, listMessages, updateRunStatus } from "@/server/repositories";
+import { listConsultations } from "@/server/collaboration/consultations";
+import { submitPiFollowup, type PiFollowupReceipt } from "./controls";
 import { newMessageId, newRunId } from "@/shared/ids";
 import { runPiInvocation } from "./runtime";
 import { getPiDoctor } from "./config";
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
-import { startAgentRun, abortRun } from "@/server/agent-runner";
+import { startAgentRun, abortRun, isRunActive } from "@/server/agent-runner";
+import { listCollaborationTurns } from "@/server/collaboration/turns";
+import { decideHandoff, getHandoff, proposeHandoff } from "@/server/collaboration/handoffs";
+import { listTaskAttempts } from "@/server/repositories/evidence-repository";
 import { approvePlan } from "@/server/dispatch-plan-manager";
 import { SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import type { PiInvocationInput } from "./types";
@@ -61,6 +66,272 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it("promotes a selected discussion option into one scoped implementation without inventing a role pipeline", async () => {
+    let conversationId = "", workerTurns = 0, planningTurns = 0;
+    const oldHtml = "<!doctype html><html><body><main>ORIGINAL_LAYOUT</main></body></html>";
+    const newHtml = "<!doctype html><html><body><main>SECOND_OPTION_COMPACT</main></body></html>";
+    const call = (response: http.ServerResponse, name: string, args: object, id: string) => complete(response, { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls");
+    const url = await modelServer((request, response) => {
+      const text = JSON.stringify(request.messages);
+      if (text.includes("AGENTMELD_TURN_CLASSIFIER_V1")) {
+        complete(response, { content: JSON.stringify({ intent: "new_task", mode: "execution", targetRunId: null, reason: "The human explicitly selected the prior second option for implementation." }) });
+      } else if (request.model === "fixture-adaptive-worker") {
+        if (++workerTurns === 1) call(response, "edit", { path: "index.html", edits: [{ oldText: "ORIGINAL_LAYOUT", newText: "SECOND_OPTION_COMPACT" }] }, "adaptive-edit");
+        else if (workerTurns === 2) call(response, "deploy_workspace", { path: ".", title: "Selected compact layout", outputKey: "web_app" }, "adaptive-deploy");
+        else call(response, "report_task_result", { status: "complete", summary: "Implemented the selected compact option in index.html and verified its deployment.", acceptanceResults: [], blockers: [] }, "adaptive-report");
+      } else if ((request.tools as Array<{ function: { name: string } }>).some(tool => tool.function.name === "plan_tasks")) {
+        planningTurns++;
+        expect(text).toContain("SECOND_OPTION_COMPACT");
+        expect(text).toContain("按第二个方案改");
+        call(response, "plan_tasks", { reasoning: "One existing-file layout change needs only the frontend Agent; no new PRD, style guide or review workflow.", tasks: [{
+          id: "compact-layout", agentId: "ag_mock_builder", title: "Apply selected layout", prompt: "Apply the selected SECOND_OPTION_COMPACT layout by changing only index.html. Deploy the existing static directory and report real evidence.",
+          taskIntent: "delivery", dependsOn: [], targetPaths: ["index.html"], expectedOutputs: [{ id: "web_app", type: "web_app", required: true }], acceptanceCriteria: [], maxAttempts: 1,
+        }] }, "adaptive-plan");
+      } else complete(response, { content: "SELECTED_OPTION_IMPLEMENTED" });
+    });
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-adaptive-coordinator", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["plan_tasks", "read_artifact"] });
+    updateAgent("ag_mock_builder", { modelProvider: "openai-compatible", modelId: "fixture-adaptive-worker", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["fs_patch", "deploy_workspace"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", "ag_mock_builder", "ag_designer"], fsWriteApprovalMode: "auto" });
+    conversationId = conversation.id;
+    const workspace = getWorkspaceForConversation(conversation.id)!;
+    fs.writeFileSync(path.join(workspace.rootPath, "index.html"), oldHtml);
+    createMessage({ id: newMessageId(), conversationId, origin: "human", role: "user", parts: [{ type: "text", content: "比较一下布局，先别改。" }], status: "complete", now: Date.now() - 100 });
+    createMessage({ id: newMessageId(), conversationId, origin: "bot", role: "agent", agentId: "ag_designer", parts: [{ type: "text", content: "第二个方案使用紧凑布局，标记为 SECOND_OPTION_COMPACT。" }], status: "complete", now: Date.now() - 50 });
+    let approvals = 0;
+    const stop = eventBus.subscribe(({ event }) => {
+      if (event.type === "dispatch.plan.pending" && event.conversationId === conversationId) {
+        approvals++;
+        expect(event.pendingPlan.plan).toHaveLength(1);
+        expect(event.pendingPlan.plan[0].agentId).toBe("ag_mock_builder");
+        expect(event.pendingPlan.plan[0].inputs ?? []).toEqual([]);
+        expect(fs.readFileSync(path.join(workspace.rootPath, "index.html"), "utf8")).toBe(oldHtml);
+        approvePlan(event.pendingPlan.id, undefined, "owner-session:adaptive-implementation-fixture");
+      }
+    });
+    const sent = await sendMessage({ origin: "human", conversationId, content: "按第二个方案改，只修改 index.html。", clientRequestId: "adaptive-selected-option" });
+    try {
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getRun(sent.runIds[0])?.status).toBe("complete");
+      expect([planningTurns, approvals, workerTurns]).toEqual([1, 1, 3]);
+      expect(fs.readFileSync(path.join(workspace.rootPath, "index.html"), "utf8")).toBe(newHtml);
+      const tasks = getDatabase().prepare("SELECT task_id,agent_id,status FROM conductor_task_results WHERE conductor_run_id=?").all(sent.runIds[0]);
+      expect(tasks).toEqual([{ task_id: "compact-layout", agent_id: "ag_mock_builder", status: "complete" }]);
+      expect(getDatabase().prepare("SELECT type FROM artifacts WHERE conversation_id=?").all(conversationId)).toEqual([{ type: "web_app" }]);
+      const attempt = listTaskAttempts(sent.runIds[0], "compact-layout")[0];
+      expect(attempt.verificationStatus).toBe("verified");
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM task_evidence WHERE attempt_id=? AND type='file_written' AND status='valid'").get(attempt.id)).toEqual({ n: 1 });
+      expect(listCollaborationTurns(conversationId)).toMatchObject([{ intent: "new_task", mode: "execution", status: "applied" }]);
+    } finally { stop(); abortRun(sent.runIds[0]); await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 30000 }); }
+  }, process.platform === "win32" ? 150000 : 90000);
+
+  it("hands off an active task between real Pi processes only after the original writer has exited", async () => {
+    let sourceRequested = false;
+    let sourceId = "", targetId = "";
+    let targetTurns = 0;
+    const taskId = "handoff-inspection";
+    const url = await modelServer((request, response) => {
+      if (request.model === "fixture-handoff-source") { sourceRequested = true; return; }
+      if (request.model === "fixture-handoff-target") {
+        if (++targetTurns === 1) complete(response, { tool_calls: [{ index: 0, id: "handoff-report", type: "function", function: { name: "report_task_result",
+          arguments: JSON.stringify({ status: "complete", summary: "Completed the bounded inspection after takeover.", acceptanceResults: [], blockers: [], artifacts: {} }) } }] }, "tool_calls");
+        else complete(response, { content: "The bounded inspection is complete." });
+        return;
+      }
+      const tools = request.tools as Array<{ function: { name: string } }>;
+      if (tools.some(tool => tool.function.name === "plan_tasks")) complete(response, { tool_calls: [{ index: 0, id: "handoff-plan", type: "function", function: { name: "plan_tasks",
+        arguments: JSON.stringify({ reasoning: "One explicitly scoped diagnostic task.", tasks: [{ id: taskId, agentId: sourceId, title: "Bounded inspection", prompt: "Inspect the assigned question and report the result.", taskIntent: "diagnosis", contractProfile: "minimal", dependsOn: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 }] }) } }] }, "tool_calls");
+      else complete(response, { content: "The teammate completed the handed-off task." });
+    });
+    const source = createAgent({ name: "Handoff source", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-handoff-source", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    const target = createAgent({ name: "Handoff target", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-handoff-target", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    sourceId = source.id; targetId = target.id;
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-handoff-coordinator", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["plan_tasks", "read_artifact"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", sourceId, targetId] });
+    const unsubscribe = eventBus.subscribe(({ event }) => { if (event.type === "dispatch.plan.pending" && event.conversationId === conversation.id) approvePlan(event.pendingPlan.id, undefined, "owner-session:pi-handoff-fixture"); });
+    const sent = await sendMessage({ origin: "human", conversationId: conversation.id, content: "Perform one scoped diagnostic task.", action: "new_task" });
+    try {
+      await vi.waitFor(() => expect(sourceRequested).toBe(true), { timeout: 40000 });
+      const original = listTaskAttempts(sent.runIds[0], taskId)[0];
+      const owner = { kind: "owner-session" as const, sessionId: "pi-handoff-fixture", createdAt: Date.now() };
+      const proposal = await proposeHandoff(original.id, targetId, owner);
+      await decideHandoff(proposal.id, "accept", owner);
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getHandoff(proposal.id)?.executionStatus).toBe("complete");
+      const attempts = listTaskAttempts(sent.runIds[0], taskId);
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]).toMatchObject({ taskId, attempt: 2, agentId: targetId, verificationStatus: "verified" });
+      expect(attempts[0].contextSnapshotId).not.toBe(attempts[1].contextSnapshotId);
+      const receipts = getDatabase().prepare("SELECT run_id,started_at,finished_at,status FROM harness_executions WHERE run_id IN (?,?) ORDER BY started_at").all(original.childRunId, attempts[1].childRunId) as Array<{ run_id: string; started_at: number; finished_at: number | null; status: string }>;
+      const old = receipts.find(receipt => receipt.run_id === original.childRunId)!;
+      const replacement = receipts.find(receipt => receipt.run_id === attempts[1].childRunId)!;
+      expect(old.finished_at).not.toBeNull();
+      expect(replacement.started_at).toBeGreaterThanOrEqual(old.finished_at!);
+      expect(replacement.status).toBe("complete");
+      const physical = fs.realpathSync.native(getWorkspaceForConversation(conversation.id)!.rootPath);
+      const key = process.platform === "win32" ? path.normalize(physical).toLowerCase() : physical;
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases WHERE workspace_key=?").get(key)).toEqual({ n: 0 });
+    } finally {
+      unsubscribe(); abortRun(sent.runIds[0]);
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 30000 });
+    }
+  }, process.platform === "win32" ? 150000 : 90000);
+
+  it("admits a human group discussion, consults a real Pi peer, and creates no plan or artifact", async () => {
+    let peerId = "";
+    let sourceTurns = 0;
+    let classifierTurns = 0;
+    let peerTurns = 0;
+    const url = await modelServer((request, response) => {
+      const messages = JSON.stringify(request.messages);
+      if (messages.includes("AGENTMELD_TURN_CLASSIFIER_V1")) {
+        classifierTurns++;
+        complete(response, { content: JSON.stringify({ intent: "discussion", targetRunId: null, mode: "discussion", reason: "The user requests opinions, not implementation." }) });
+      } else if (request.model === "fixture-group-peer") {
+        peerTurns++;
+        complete(response, { tool_calls: [{ index: 0, id: "group-peer-response", type: "function", function: { name: "respond_to_consultation",
+          arguments: JSON.stringify({ status: "replied", answer: "Use a compact sidebar and keep the content column readable." }) } }] }, "tool_calls");
+      } else {
+        const tools = ((request.tools ?? []) as Array<{ function: { name: string } }>).map(tool => tool.function.name);
+        expect(tools).toEqual(expect.arrayContaining(["consult_agent", "read_artifact"]));
+        expect(tools).toEqual(expect.arrayContaining(["read", "write", "edit", "bash", "deploy_workspace"]));
+        expect(tools).not.toContain("plan_tasks");
+        if (++sourceTurns === 1) complete(response, { tool_calls: [{ index: 0, id: "group-consult", type: "function", function: { name: "consult_agent",
+          arguments: JSON.stringify({ requestKey: "group-layout", targetAgentId: peerId, question: "Give a read-only design opinion; do not modify files." }) } }] }, "tool_calls");
+        else complete(response, { content: "The team recommends the compact sidebar. No files were modified." });
+      }
+    });
+    const peer = createAgent({ name: "Group designer", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-group-peer", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [], capabilities: ["design"] });
+    peerId = peer.id;
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-group-source", apiKey: "fixture-key", apiBaseUrl: url,
+      toolNames: ["consult_agent", "read_artifact", "plan_tasks", "fs_write", "bash"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", peer.id] });
+    const result = await sendMessage({ origin: "human", conversationId: conversation.id, content: "请和设计师讨论布局，先别改。", clientRequestId: "real-group-discussion" });
+    try {
+      await vi.waitFor(() => expect(isRunActive(result.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getRun(result.runIds[0])?.status).toBe("complete");
+      expect([classifierTurns, sourceTurns, peerTurns]).toEqual([1, 2, 1]);
+      expect(listCollaborationTurns(conversation.id)).toMatchObject([{ mode: "discussion", status: "applied" }]);
+      expect(listConsultations(conversation.id)).toMatchObject([{ status: "replied" }]);
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM conductor_plans WHERE conversation_id=?").get(conversation.id)).toEqual({ n: 0 });
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM artifacts WHERE conversation_id=?").get(conversation.id)).toEqual({ n: 0 });
+      expect(fs.readdirSync(getWorkspaceForConversation(conversation.id)!.rootPath)).toEqual([]);
+    } finally { abortRun(result.runIds[0]); }
+  }, process.platform === "win32" ? 120000 : 60000);
+
+  it("stops a full-tool real Pi discussion before applying a human supplement", async () => {
+    let heldResponse: http.ServerResponse | undefined;
+    let requests = 0;
+    let nextTurnReceivedSupplement = false;
+    const supplementText = "Focus on the second compact layout option.";
+    const url = await modelServer((request, response) => {
+      if (++requests === 1) heldResponse = response;
+      else {
+        nextTurnReceivedSupplement = JSON.stringify(request.messages).includes(supplementText);
+        complete(response, { content: "The second layout is the more compact option." });
+      }
+    });
+    const agent = createAgent({ name: "Live discussion", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-model", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
+    const original = await sendMessage({ origin: "human", conversationId: conversation.id, content: "Discuss the layout options.", action: "discussion", clientRequestId: "live-original" });
+    try {
+      await vi.waitFor(() => expect(heldResponse).toBeDefined(), { timeout: 30000 });
+      const followup = await sendMessage({ origin: "human", conversationId: conversation.id, content: supplementText,
+        action: "supplement", targetRunId: original.runIds[0], clientRequestId: "live-supplement" });
+      await vi.waitFor(() => expect(isRunActive(original.runIds[0]) || isRunActive(followup.runIds[0])).toBe(false), { timeout: 30000 });
+      expect(nextTurnReceivedSupplement).toBe(true);
+      expect(requests).toBe(2);
+      expect(listCollaborationTurns(conversation.id).map(turn => turn.status)).toEqual(["applied", "applied"]);
+      expect(getRun(original.runIds[0])?.status).toBe("aborted");
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_executions WHERE run_id IN (?,?)").get(original.runIds[0], followup.runIds[0])).toEqual({ n: 2 });
+    } finally { abortRun(original.runIds[0]); }
+  }, process.platform === "win32" ? 90000 : 45000);
+
+  it.each(["steer", "follow_up"] as const)("confirms real Pi %s consumption separately from the RPC acknowledgement", async kind => {
+    let firstResponse: http.ServerResponse | undefined;
+    let signalFirst!: () => void;
+    const firstRequest = new Promise<void>(resolve => { signalFirst = resolve; });
+    let requests = 0;
+    let modelReceivedFollowup = false;
+    const text = `Discuss the compact layout via ${kind}; do not change files.`;
+    const url = await modelServer((request, response) => {
+      if (++requests === 1) { firstResponse = response; signalFirst(); }
+      else {
+        modelReceivedFollowup = JSON.stringify(request.messages).includes(text);
+        complete(response, { content: "The updated discussion is complete." });
+      }
+    });
+    const input = invocation(url);
+    input.accessMode = "conversation";
+    const controller = new AbortController();
+    const receipts: PiFollowupReceipt[] = [];
+    const pending = (async () => { for await (const event of runPiInvocation(input, controller.signal)) void event; })();
+    try {
+      await Promise.race([firstRequest, pending.then(() => { throw new Error("Pi ended before requesting the model."); })]);
+      const queued = await submitPiFollowup(input.runId, { id: `followup-${kind}`, kind, text }, receipt => receipts.push(receipt));
+      expect(queued.state).toBe("queued");
+      expect(receipts.map(receipt => receipt.state)).toEqual(["queued"]);
+      complete(firstResponse!, { content: "Initial discussion reply." });
+      await pending;
+      expect(requests).toBe(2);
+      expect(modelReceivedFollowup).toBe(true);
+      expect(receipts.map(receipt => receipt.state)).toEqual(["queued", "applied"]);
+    } finally { controller.abort(); await pending.catch(() => {}); }
+  }, process.platform === "win32" ? 75000 : 30000);
+
+  it("lends the source workspace to a full-tool real Pi peer and restores it after teardown", async () => {
+    let peerId = "";
+    let sourceTurns = 0;
+    let peerTurns = 0;
+    let peerSawWriterLease = false;
+    const url = await modelServer((request, response) => {
+      if (request.model === "fixture-peer") {
+        peerTurns++;
+        const tools = request.tools as Array<{ function: { name: string } }>;
+        expect(tools.map(tool => tool.function.name)).toEqual(expect.arrayContaining(["respond_to_consultation", "read", "write", "edit", "bash", "deploy_workspace"]));
+        peerSawWriterLease = Number((getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get() as { n: number }).n) === 1;
+        if (peerTurns === 1) {
+          complete(response, { tool_calls: [{ index: 0, id: "peer-read", type: "function", function: {
+            name: "read", arguments: JSON.stringify({ path: "layout.txt" }),
+          } }] }, "tool_calls");
+          return;
+        }
+        expect(JSON.stringify(request.messages)).toContain("COMPACT_LAYOUT_REFERENCE");
+        complete(response, { tool_calls: [{ index: 0, id: "peer-opinion", type: "function", function: {
+          name: "respond_to_consultation", arguments: JSON.stringify({ status: "replied", answer: "Choose the compact sidebar; no files were modified." }),
+        } }] }, "tool_calls");
+      } else if (++sourceTurns === 1) {
+        complete(response, { tool_calls: [{ index: 0, id: "consult-peer", type: "function", function: {
+          name: "consult_agent", arguments: JSON.stringify({ requestKey: "layout-review", targetAgentId: peerId, question: "Please advise on a compact sidebar. Do not change files." }),
+        } }] }, "tool_calls");
+      } else complete(response, { content: "The peer recommends the compact sidebar. Awaiting your decision." });
+    });
+    const input = invocation(url, ["consult_agent"]);
+    fs.writeFileSync(path.join(input.workspacePath, "layout.txt"), "COMPACT_LAYOUT_REFERENCE");
+    const peer = createAgent({ name: "Pi consultation peer", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-peer",
+      apiKey: "fixture-not-a-real-credential", apiBaseUrl: url, toolNames: [], description: "Read-only design consultation" });
+    peerId = peer.id;
+    input.conversation = patchConversation(input.conversationId, { mode: "group", agentIds: [input.agent.id, peer.id] })!;
+    createRun({ id: input.runId, conversationId: input.conversationId, agentId: input.agent.id,
+      triggerMessageId: input.triggerMessage.id, status: "running", now: Date.now() });
+    const events: StreamEvent[] = [];
+    for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(sourceTurns).toBe(2);
+    expect(peerTurns).toBe(2);
+    expect(peerSawWriterLease).toBe(true);
+    expect(listConsultations(input.conversationId)).toMatchObject([{ status: "replied", sourceRunId: input.runId, targetAgentId: peer.id }]);
+    expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
+    expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get()).toEqual({ n: 0 });
+    expect(fs.readFileSync(path.join(input.workspacePath, "layout.txt"), "utf8")).toBe("COMPACT_LAYOUT_REFERENCE");
+    const peerRunId = listConsultations(input.conversationId)[0].targetRunId!;
+    const executions = getDatabase().prepare("SELECT run_id,started_at,finished_at,status FROM harness_executions WHERE run_id IN (?,?) ORDER BY started_at").all(input.runId, peerRunId) as Array<{ run_id: string; started_at: number; finished_at: number | null; status: string }>;
+    expect(executions).toHaveLength(2);
+    const sourceReceipt = executions.find(execution => execution.run_id === input.runId)!;
+    const peerReceipt = executions.find(execution => execution.run_id !== input.runId)!;
+    expect(peerReceipt.status).toBe("complete");
+    expect(sourceReceipt.finished_at!).toBeGreaterThanOrEqual(peerReceipt.finished_at!);
+    updateRunStatus(input.runId, "complete", null, Date.now());
+  }, process.platform === "win32" ? 120000 : 60000);
+
   it("loads the pinned CLI and permission extension and commits streamed text", async () => {
     expect(getPiDoctor().available).toBe(true);
     const url = await modelServer((_request, response) => complete(response, { content: "Pi fixture answer" }));
@@ -227,7 +498,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
           { id: "produce", agentId: producerId, title: "Fixture document", prompt: "Write the requested document.", expectedOutputs: [{ id: "fixture_doc", type: "document", required: true }] },
           { id: "audit", agentId: reviewerId, title: "Fixture audit", prompt: "Read the upstream document and write an audit.", dependsOn: ["produce"], inputs: [{ fromTaskId: "produce", outputId: "fixture_doc", required: true }], expectedOutputs: [{ id: "fixture_audit", type: "document", required: true }] },
         ] }, "fixture-plan");
-      } else if (tools.includes("report_task_result")) {
+      } else if (messages.includes("PI_FIXTURE_PRODUCER") || messages.includes("PI_FIXTURE_AUDITOR")) {
         const review = messages.includes("PI_FIXTURE_AUDITOR");
         const stage = review ? "audit" : "produce";
         const count = (turns.get(stage) ?? 0) + 1;
