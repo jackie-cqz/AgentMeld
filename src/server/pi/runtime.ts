@@ -13,6 +13,7 @@ import type { PiInvocationInput, PiInvocationStream } from "./types";
 import { getAttachment } from "@/server/attachment-service";
 import { assertRealPathWithinWorkspace } from "@/server/workspace-utils";
 import { assertPiAccessProfile } from "./access-profile";
+import { registerPiControl } from "./controls";
 
 /** No LLM loop lives here: one invocation drives a pinned Pi process to its terminal event. */
 export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSignal): PiInvocationStream {
@@ -35,6 +36,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
   let completed = false;
   let failure: unknown = null;
   let abortListener: (() => void) | undefined;
+  let control: ReturnType<typeof registerPiControl> | undefined;
   const projection = new PiEventProjection(input.conversationId, input.agent.modelId ?? "unknown");
   try {
     effective.throwIfAborted();
@@ -60,10 +62,15 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
     if (!bridge.isReady()) throw new PiRuntimeError("The required AgentMeld Pi permission extension did not initialize. No model task was started.", "extension_unavailable");
     if (typeof state?.sessionId !== "string") throw new PiRuntimeError("Pi did not return a native session identity.", "protocol");
     updatePiSession(execution.invocationId, state.sessionId, typeof state.sessionFile === "string" ? state.sessionFile : null);
+    control = registerPiControl({ runId: input.runId, signal: effective,
+      allowFollowup: input.accessMode === "conversation" && !input.parentRunId && !input.taskExecution && !input.toolNames.includes("respond_to_consultation"),
+      request: (kind, params) => ownedChild.request(kind, params),
+    });
     await child.request("prompt", { message: buildPiTaskPacket(input) });
     const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
     for await (const record of child.events) {
       effective.throwIfAborted();
+      control.observe(record);
       for (const event of projection.consume(record)) yield event;
       if (record.type === "tool_execution_start") {
         if (typeof record.toolCallId !== "string" || typeof record.toolName !== "string") {
@@ -115,6 +122,9 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
     if (signal.aborted) throw new PiRuntimeError("Pi invocation was cancelled.", "aborted");
     throw error;
   } finally {
+    let controlFailure: unknown = null;
+    try { control?.close(); }
+    catch (error) { controlFailure = error; failure ??= error; }
     if (abortListener) effective.removeEventListener("abort", abortListener);
     cancelPiApprovals(input.runId);
     const cleanup = await Promise.allSettled([child?.close(), bridge?.close(), cancelJobsForRun(input.runId)]);
@@ -133,6 +143,10 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
           budget.signal.aborted ? "turn_limit" : deadline.aborted ? "timeout" : failure instanceof PiRuntimeError ? failure.category : failure ? "runtime" : null);
       }
     } finally { lease?.release(); }
+    // Receipt storage must never skip process/bridge teardown or report a
+    // successful run when pending user input could not be settled durably.
+    // eslint-disable-next-line no-unsafe-finally -- Propagate only after all cleanup and ownership release.
+    if (controlFailure) throw new PiRuntimeError("Pi follow-up receipt could not be settled.", "control_receipt_failed");
   }
 }
 

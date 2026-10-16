@@ -7,6 +7,7 @@ import { createAgent, updateAgent } from "@/server/agent-service";
 import { createConversation, patchConversation } from "@/server/conversation-service";
 import { createMessage, createRun, getWorkspaceForConversation, getRun, listMessages, updateRunStatus } from "@/server/repositories";
 import { listConsultations } from "@/server/collaboration/consultations";
+import { submitPiFollowup, type PiFollowupReceipt } from "./controls";
 import { newMessageId, newRunId } from "@/shared/ids";
 import { runPiInvocation } from "./runtime";
 import { getPiDoctor } from "./config";
@@ -62,6 +63,38 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it.each(["steer", "follow_up"] as const)("confirms real Pi %s consumption separately from the RPC acknowledgement", async kind => {
+    let firstResponse: http.ServerResponse | undefined;
+    let signalFirst!: () => void;
+    const firstRequest = new Promise<void>(resolve => { signalFirst = resolve; });
+    let requests = 0;
+    let modelReceivedFollowup = false;
+    const text = `Discuss the compact layout via ${kind}; do not change files.`;
+    const url = await modelServer((request, response) => {
+      if (++requests === 1) { firstResponse = response; signalFirst(); }
+      else {
+        modelReceivedFollowup = JSON.stringify(request.messages).includes(text);
+        complete(response, { content: "The updated discussion is complete." });
+      }
+    });
+    const input = invocation(url);
+    input.accessMode = "conversation";
+    const controller = new AbortController();
+    const receipts: PiFollowupReceipt[] = [];
+    const pending = (async () => { for await (const event of runPiInvocation(input, controller.signal)) void event; })();
+    try {
+      await Promise.race([firstRequest, pending.then(() => { throw new Error("Pi ended before requesting the model."); })]);
+      const queued = await submitPiFollowup(input.runId, { id: `followup-${kind}`, kind, text }, receipt => receipts.push(receipt));
+      expect(queued.state).toBe("queued");
+      expect(receipts.map(receipt => receipt.state)).toEqual(["queued"]);
+      complete(firstResponse!, { content: "Initial discussion reply." });
+      await pending;
+      expect(requests).toBe(2);
+      expect(modelReceivedFollowup).toBe(true);
+      expect(receipts.map(receipt => receipt.state)).toEqual(["queued", "applied"]);
+    } finally { controller.abort(); await pending.catch(() => {}); }
+  }, process.platform === "win32" ? 75000 : 30000);
+
   it("runs a real Pi peer consultation while the source holds the workspace writer lease", async () => {
     let peerId = "";
     let sourceTurns = 0;

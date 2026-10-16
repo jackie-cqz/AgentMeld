@@ -15,7 +15,7 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 | --- | --- | --- |
 | Recipient precedence and reply membership | Implemented; final audit pending | Shared resolver, ingress and composer integration, rejection tests |
 | Conductor bounded history and active facts | Implemented; final audit pending | Captured invocation and context budget tests |
-| In-flight follow-up, correction, cancellation and idempotency | Pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
+| In-flight follow-up, correction, cancellation and idempotency | Native control receipts implemented; persistent ingress and re-attempt flow pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
 | Bounded peer consultation | Core implemented; policy and final audit pending | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
 | Adaptive plans and explicit dependency contracts | Dependency compilation and prompts updated; admission policy pending | Discussion without writes, simple task promotion, DAG regression tests |
 | Handoff integration | Pending | Stable task identity, new attempt/context, confirmed old-run teardown |
@@ -78,3 +78,20 @@ unavailable, must be reported separately from deterministic projection tests.
    snapshots/evidence appropriately, and compile a fresh authorized attempt.
 4. Integrate formal handoff with stable task identity and fresh attempts, then
    verify UI, reload, channel projection and the complete acceptance checklist.
+
+## Native Follow-Up Contract Checkpoint
+
+- Pi 0.84.2's installed RPC source and real subprocess tests confirm both steer
+  and follow_up enqueue successfully before consumption. The control registry
+  keeps those requests queued until an exact matching user message_end arrives.
+- Tests confirm that the next deterministic model request actually includes
+  the supplemental input. Both RPC variants pass with real Pi processes.
+- Only ordinary conversation-only invocations admit live controls. Workspace
+  execution, delegated contracts and bounded peer consultations reject steering
+  and must go through the upcoming re-attempt/admission path.
+- The registry bounds and deduplicates input, rejects arbitrary RPC names, and
+  settles unused inputs on exit. Receipt callback failure cannot skip child,
+  bridge or workspace teardown.
+- This is an internal runtime capability, not yet a completed user-facing
+  follow-up feature. Persistent follow-up records, authenticated ingress,
+  semantic intent selection and UI delivery state remain to be implemented.
