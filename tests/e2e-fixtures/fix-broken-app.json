@@ -4,7 +4,7 @@
   "title": "Fix Broken App",
   "description": "Debugging scenario testing diagnosis handoff, source repair, build evidence, bounded retries, and deployment.",
   "category": "recovery",
-  "prompt": "这是明确的多 Agent 协作任务，Conductor 必须调用 plan_tasks，不能自己直接诊断或修改。请先由 PM 读取现有源码并形成 outputKey=diagnosis 的诊断产物，再由前端工程师通过 dependsOn 和 inputs 读取 diagnosis 与现有源码，使用 fs_patch 对 React Todo App 做最小语法修复。只修复现有 JSX 闭合错误，不扩展功能、不重写组件。前端工程师必须运行 npm run build；第一次构建失败后根据真实错误重试，最终通过 deploy_workspace 部署 dist。项目文件已在当前 workspace。",
+  "prompt": "这是明确的多 Agent 协作任务，Conductor 必须调用 plan_tasks，不能自己直接诊断或修改。请先由 PM 读取现有源码并形成 outputKey=diagnosis 的诊断产物，再由前端工程师通过 dependsOn 和 inputs 读取 diagnosis 与现有源码，使用 fs_patch 对 React Todo App 做最小语法修复。只修复现有 JSX 闭合错误，不扩展功能、不重写组件。前端工程师必须运行 npm run build；第一次构建失败后根据真实错误重试，最终通过 deploy_workspace 部署 dist。项目文件已在当前 workspace。运行构建时必须单独执行 npm run build，不要追加 ; echo $?、管道或其它命令：平台需要记录每次构建的真实退出码，才能验证「第一次失败、修复后成功」的重试过程。",
   "expectedRoles": ["pm", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
