@@ -31,6 +31,7 @@ import { createMessage, createRun, getRun, getWorkspaceForConversation, updateRu
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { ToolContext } from "@/server/tools/types";
 import { abortConsultationRun, listConsultations, proposeConsultationResponse, requestConsultation } from "./consultations";
+import { waitForRunTreeStop } from "@/server/agent-runner";
 
 beforeEach(() => { fixture.mode = "replied"; fixture.inputs.length = 0; });
 
@@ -127,6 +128,44 @@ describe("bounded authenticated peer consultations", () => {
     expect(abortConsultationRun(fixture.inputs[0].runId)).toBe(true);
     expect((await pending).status).toBe("cancelled");
     expect(abortConsultationRun(fixture.inputs[0].runId)).toBe(false);
+  });
+
+  it("waits for owned peer teardown even though the peer is not a delegated child run", async () => {
+    fixture.mode = "hold";
+    const { ctx, request, source, controller } = world();
+    const pending = requestConsultation(request, ctx);
+    await vi.waitFor(() => expect(fixture.inputs).toHaveLength(1));
+    updateRunStatus(source.id, "aborted", null, Date.now());
+    let stopped = false;
+    const wait = waitForRunTreeStop(source.id, new AbortController().signal).then(() => { stopped = true; });
+    try {
+      await Promise.resolve(); await Promise.resolve();
+      expect(stopped).toBe(false);
+      controller.abort();
+      await pending; await wait;
+      expect(stopped).toBe(true);
+      expect(getRun(fixture.inputs[0].runId)?.status).toBe("aborted");
+    } finally { controller.abort(); await pending; await wait; }
+  });
+
+  it("expires an unused consultation grant and never relaunches it on replay", async () => {
+    const { ctx, request, conversation } = world();
+    const timer = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => AbortSignal.abort(new DOMException("Fixture TTL expired", "TimeoutError")));
+    try {
+      const result = await requestConsultation(request, ctx);
+      expect(result.status).toBe("expired");
+      expect(result.answer).toBeNull();
+      expect((await requestConsultation(request, ctx)).id).toBe(result.id);
+      expect(listConsultations(conversation.id)).toHaveLength(1);
+      expect(fixture.inputs).toHaveLength(0);
+    } finally { timer.mockRestore(); }
+  });
+
+  it("refuses an oversized consultation context before opening a peer run", async () => {
+    const { ctx, request, conversation } = world();
+    await expect(requestConsultation({ ...request, question: "x".repeat(50_000) }, ctx)).rejects.toThrow("context budget");
+    expect(fixture.inputs).toHaveLength(0);
+    expect(listConsultations(conversation.id)).toEqual([]);
   });
 
   it("enforces conversation concurrency and does not recursively consult", async () => {

@@ -70,6 +70,16 @@ function world(overrides: Partial<ParsedTask> = {}) {
 }
 
 describe("formal Pi task handoff", () => {
+  it("keeps durable handoff versions increasing even when the wall clock moves backwards", async () => {
+    const state = world();
+    const proposal = await proposeHandoff(state.attemptId, "ag_designer", owner);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(proposal.updatedAt - 1000);
+    try {
+      const declined = await decideHandoff(proposal.id, "decline", owner);
+      expect(declined.updatedAt).toBeGreaterThan(proposal.updatedAt);
+      expect((await decideHandoff(proposal.id, "decline", owner)).updatedAt).toBe(declined.updatedAt);
+    } finally { clock.mockRestore(); }
+  });
   it("selects the latest plan revision rather than a larger retry number from an obsolete plan", async () => {
     const state = world();
     getDatabase().prepare("UPDATE task_attempts SET attempt=5 WHERE id=?").run(state.attemptId);

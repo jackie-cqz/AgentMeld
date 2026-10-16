@@ -66,6 +66,64 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it("promotes a selected discussion option into one scoped implementation without inventing a role pipeline", async () => {
+    let conversationId = "", workerTurns = 0, planningTurns = 0;
+    const oldHtml = "<!doctype html><html><body><main>ORIGINAL_LAYOUT</main></body></html>";
+    const newHtml = "<!doctype html><html><body><main>SECOND_OPTION_COMPACT</main></body></html>";
+    const call = (response: http.ServerResponse, name: string, args: object, id: string) => complete(response, { tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: JSON.stringify(args) } }] }, "tool_calls");
+    const url = await modelServer((request, response) => {
+      const text = JSON.stringify(request.messages);
+      if (text.includes("AGENTMELD_TURN_CLASSIFIER_V1")) {
+        complete(response, { content: JSON.stringify({ intent: "new_task", mode: "execution", targetRunId: null, reason: "The human explicitly selected the prior second option for implementation." }) });
+      } else if (request.model === "fixture-adaptive-worker") {
+        if (++workerTurns === 1) call(response, "edit", { path: "index.html", edits: [{ oldText: "ORIGINAL_LAYOUT", newText: "SECOND_OPTION_COMPACT" }] }, "adaptive-edit");
+        else if (workerTurns === 2) call(response, "deploy_workspace", { path: ".", title: "Selected compact layout", outputKey: "web_app" }, "adaptive-deploy");
+        else call(response, "report_task_result", { status: "complete", summary: "Implemented the selected compact option in index.html and verified its deployment.", acceptanceResults: [], blockers: [] }, "adaptive-report");
+      } else if ((request.tools as Array<{ function: { name: string } }>).some(tool => tool.function.name === "plan_tasks")) {
+        planningTurns++;
+        expect(text).toContain("SECOND_OPTION_COMPACT");
+        expect(text).toContain("按第二个方案改");
+        call(response, "plan_tasks", { reasoning: "One existing-file layout change needs only the frontend Agent; no new PRD, style guide or review workflow.", tasks: [{
+          id: "compact-layout", agentId: "ag_mock_builder", title: "Apply selected layout", prompt: "Apply the selected SECOND_OPTION_COMPACT layout by changing only index.html. Deploy the existing static directory and report real evidence.",
+          taskIntent: "delivery", dependsOn: [], targetPaths: ["index.html"], expectedOutputs: [{ id: "web_app", type: "web_app", required: true }], acceptanceCriteria: [], maxAttempts: 1,
+        }] }, "adaptive-plan");
+      } else complete(response, { content: "SELECTED_OPTION_IMPLEMENTED" });
+    });
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-adaptive-coordinator", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["plan_tasks", "read_artifact"] });
+    updateAgent("ag_mock_builder", { modelProvider: "openai-compatible", modelId: "fixture-adaptive-worker", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["fs_patch", "deploy_workspace"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", "ag_mock_builder", "ag_designer"], fsWriteApprovalMode: "auto" });
+    conversationId = conversation.id;
+    const workspace = getWorkspaceForConversation(conversation.id)!;
+    fs.writeFileSync(path.join(workspace.rootPath, "index.html"), oldHtml);
+    createMessage({ id: newMessageId(), conversationId, origin: "human", role: "user", parts: [{ type: "text", content: "比较一下布局，先别改。" }], status: "complete", now: Date.now() - 100 });
+    createMessage({ id: newMessageId(), conversationId, origin: "bot", role: "agent", agentId: "ag_designer", parts: [{ type: "text", content: "第二个方案使用紧凑布局，标记为 SECOND_OPTION_COMPACT。" }], status: "complete", now: Date.now() - 50 });
+    let approvals = 0;
+    const stop = eventBus.subscribe(({ event }) => {
+      if (event.type === "dispatch.plan.pending" && event.conversationId === conversationId) {
+        approvals++;
+        expect(event.pendingPlan.plan).toHaveLength(1);
+        expect(event.pendingPlan.plan[0].agentId).toBe("ag_mock_builder");
+        expect(event.pendingPlan.plan[0].inputs ?? []).toEqual([]);
+        expect(fs.readFileSync(path.join(workspace.rootPath, "index.html"), "utf8")).toBe(oldHtml);
+        approvePlan(event.pendingPlan.id, undefined, "owner-session:adaptive-implementation-fixture");
+      }
+    });
+    const sent = await sendMessage({ origin: "human", conversationId, content: "按第二个方案改，只修改 index.html。", clientRequestId: "adaptive-selected-option" });
+    try {
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getRun(sent.runIds[0])?.status).toBe("complete");
+      expect([planningTurns, approvals, workerTurns]).toEqual([1, 1, 3]);
+      expect(fs.readFileSync(path.join(workspace.rootPath, "index.html"), "utf8")).toBe(newHtml);
+      const tasks = getDatabase().prepare("SELECT task_id,agent_id,status FROM conductor_task_results WHERE conductor_run_id=?").all(sent.runIds[0]);
+      expect(tasks).toEqual([{ task_id: "compact-layout", agent_id: "ag_mock_builder", status: "complete" }]);
+      expect(getDatabase().prepare("SELECT type FROM artifacts WHERE conversation_id=?").all(conversationId)).toEqual([{ type: "web_app" }]);
+      const attempt = listTaskAttempts(sent.runIds[0], "compact-layout")[0];
+      expect(attempt.verificationStatus).toBe("verified");
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM task_evidence WHERE attempt_id=? AND type='file_written' AND status='valid'").get(attempt.id)).toEqual({ n: 1 });
+      expect(listCollaborationTurns(conversationId)).toMatchObject([{ intent: "new_task", mode: "execution", status: "applied" }]);
+    } finally { stop(); abortRun(sent.runIds[0]); await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 30000 }); }
+  }, process.platform === "win32" ? 150000 : 90000);
+
   it("hands off an active task between real Pi processes only after the original writer has exited", async () => {
     let sourceRequested = false;
     let sourceId = "", targetId = "";

@@ -39,7 +39,7 @@ import { consumeDelegation } from "@/server/delegation";
 import { recordRunRefusal } from "@/server/run-refusals";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
 import { cancelJobsForRun, hasRunningJobs } from "@/server/tools/command-jobs";
-import { abortConsultationRun, getConsultationCompletion, isConsultationRunActive } from "@/server/collaboration/consultations";
+import { abortConsultationRun, getConsultationCompletion, isConsultationRunActive, listConsultations } from "@/server/collaboration/consultations";
 import { admitHumanTurn, publishRunStage, rejectUnappliedTurn, type TurnAdmission } from "@/server/collaboration/turn-admission";
 import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
 import { CONVERSATION_TOOL_NAMES } from "@/server/pi/access-profile";
@@ -98,8 +98,14 @@ export async function waitForRunTreeStop(runId: string, signal: AbortSignal): Pr
   for (;;) {
     deadline.throwIfAborted();
     const all = listRuns(root.conversationId);
+    const consultations = listConsultations(root.conversationId);
     const ids = new Set([runId]);
-    for (let i = 0; i < all.length; i++) for (const candidate of all) if (candidate.parentRunId && ids.has(candidate.parentRunId)) ids.add(candidate.id);
+    for (let i = 0; i < all.length + consultations.length; i++) {
+      for (const candidate of all) if (candidate.parentRunId && ids.has(candidate.parentRunId)) ids.add(candidate.id);
+      // A peer opinion is not delegated execution and intentionally has no
+      // parentRunId, but it still belongs to its source's teardown scope.
+      for (const consultation of consultations) if (ids.has(consultation.sourceRunId) && consultation.targetRunId && getRun(consultation.targetRunId)) ids.add(consultation.targetRunId);
+    }
     const promises = [...ids].flatMap(id => {
       const promise = activeRunPromises.get(id) ?? getConsultationCompletion(id);
       return promise ? [promise] : [];

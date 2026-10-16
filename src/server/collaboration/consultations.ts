@@ -200,7 +200,7 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
       .run(status, cleanupFailed ? "Peer process teardown was not confirmed." : error instanceof PiRuntimeError ? error.message : status === "failed" ? "Peer consultation failed." : `Consultation ${status}.`, Date.now(), id);
     if (started) {
       const runStatus = status === "cancelled" ? "aborted" : "failed";
-      updateRunStatus(childRunId, runStatus, null, Date.now(), status);
+      updateRunStatus(childRunId, runStatus, null, Date.now(), cleanupFailed ? "cleanup_failed" : status);
       if (responseId) {
         updateMessageStatus(responseId, runStatus === "aborted" ? "aborted" : "error", Date.now());
         eventBus.publish({ type: "message.end", conversationId: ctx.conversationId, timestamp: Date.now(), messageId: responseId, status: runStatus === "aborted" ? "aborted" : "error" });
