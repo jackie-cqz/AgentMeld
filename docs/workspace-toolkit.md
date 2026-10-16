@@ -2,6 +2,8 @@
 
 AgentMeld exposes these tools to every Pi-backed Agent. They are not gated by a per-Agent tool permission or a tool preset: Agents run with the full native toolset, and tools Pi does not provide are registered as Pi extension tools. **System Prompt** is a separate tab. SDK adapters keep their own native tools; this is not an external MCP client.
 
+Two platform tools are not part of an Agent run: the Conductor PLAN stage's `plan_tasks` protocol tool, and `list_team_members`, which returns the conversation roster. The roster is conversation-scoped, so it is provisioned only for the Conductor's PLAN stage and its handler refuses other callers; the editor lists it nowhere in the Agent toolset.
+
 ## Locate, Read, Edit
 
 | Tool | Purpose | Limits |

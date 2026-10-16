@@ -9,6 +9,16 @@ export type ToolPresetName =
 /** Historical grants remain readable, but cannot execute under the Pi-only core. */
 export const PI_RETIRED_TOOLS: readonly string[] = ["job_start", "job_read", "job_wait", "job_cancel"];
 
+/**
+ * Record-keeping vocabulary, not capability.
+ *
+ * Since issue #79 every Agent run is provisioned with the full Pi toolset
+ * (`provisionedPlatformToolNames()` in `src/server/pi/tool-surface.ts` is the
+ * runtime truth). These presets and `ALL_TOOL_NAMES` only describe the per-Agent
+ * list that is stored and displayed as a record; selecting or clearing one
+ * authorizes nothing and restricts nothing. The Agent editor labels them as a
+ * record and shows the provisioned set read-only.
+ */
 export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string[] }> = {
   "all-purpose": {
     label: "全能助手",
@@ -49,6 +59,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
   }
 };
 
+/** Record vocabulary for the stored list; never used to authorize a tool call. */
 export const ALL_TOOL_NAMES = [
   "fs_glob", "fs_search", "job_start", "job_read", "job_wait", "job_cancel", "web_fetch", "web_search", "git_inspect", "browser_check",
   "fs_list",

@@ -36,7 +36,7 @@ AgentMeld is built for local, inspectable workflows such as:
 
 - Team-chat interface for single-agent or multi-agent conversations.
 - Conductor-led requirement clarification, task planning, DAG scheduling, retry, and aggregation.
-- Specialist agents with independent model, API key, base URL, system prompt, capabilities, and tool permissions.
+- Specialist agents with independent model, API key, base URL, system prompt, and capabilities. Every Agent run is provisioned with the full Pi toolset; the stored per-Agent tool list is a record only and does not grant or restrict capability.
 - Plan review flow before executing multi-step work.
 
 ### Evidence-Aware Runtime

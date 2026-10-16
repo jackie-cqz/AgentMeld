@@ -94,10 +94,10 @@ try {
   await page.getByLabel('搜索 Agent', { exact: true }).fill('no-such-agent-fixture'); await page.getByRole('button', { name: '清除筛选', exact: true }).click();
   assert.equal(await page.locator('.workspace-agent-row').count(), bootstrap.agents.length);
   await page.getByTitle('新建 Agent', { exact: true }).click(); await page.getByRole('button', { name: /详细配置/ }).click();
-  await page.getByRole('tab', { name: '工具权限', exact: true }).click();
+  await page.getByRole('tab', { name: '工具记录', exact: true }).click();
   await page.getByLabel('搜索工具', { exact: true }).fill('fs_patch'); assert.equal(await page.getByRole('checkbox').count(), 2);
   await page.getByLabel('搜索工具', { exact: true }).fill('');
-  await page.getByRole('checkbox', { name: '仅看已授权', exact: true }).check();
+  await page.getByRole('checkbox', { name: '仅看已记录', exact: true }).check();
   for (const checkbox of await page.locator('.ui-tool-option input').all()) assert(await checkbox.isChecked());
   await capture('tool-filter');
   await page.getByRole('tab', { name: '模型与适配器', exact: true }).click(); await page.getByRole('button', { name: '供应商 *', exact: true }).click();

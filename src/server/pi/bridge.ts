@@ -5,6 +5,7 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext, ToolResult } from "@/server/tools/types";
 import type { PiInvocationInput } from "./types";
 import { authorizeNativeTool, authorizeNativeChange, captureNativeResult, nativeToolNames, PI_NATIVE_TO_PLATFORM, type NativeAdmission } from "./native-tools";
+import { CONVERSATION_ROSTER_TOOL } from "./tool-surface";
 import { cancelPendingBashForRun } from "@/server/pending-bash";
 import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
@@ -56,7 +57,16 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       if (request.method === "GET" && request.url === "/manifest") {
         const systemPrompt = Object.entries(PI_NATIVE_TO_PLATFORM).reduce((prompt, [native, platform]) =>
           native === platform ? prompt : prompt.replace(new RegExp(`\\b${platform}\\b`, "g"), native), input.systemPrompt);
-        send({ definitions, native, systemPrompt: `${systemPrompt}${businessNames.includes("list_team_members") ? "\nBefore planning, use list_team_members for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements." : ""}`,
+        // Only the Conductor's PLAN stage is provisioned with the roster tool
+        // (see tool-surface.ts), so this line is emitted exactly where querying
+        // the roster is permitted. Advertising it to every Agent is what taught
+        // workers a call their run cannot make: the roster is conversation-
+        // scoped information, and issue #79's full-toolset decision was about
+        // capability, not disclosure.
+        const rosterGuidance = businessNames.includes(CONVERSATION_ROSTER_TOOL)
+          ? `\nBefore planning, use ${CONVERSATION_ROSTER_TOOL} for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements.`
+          : "";
+        send({ definitions, native, systemPrompt: `${systemPrompt}${rosterGuidance}`,
           needsReport: Boolean(input.parentRunId), maxTurns: 64 });
         return;
       }

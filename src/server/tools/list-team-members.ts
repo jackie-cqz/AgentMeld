@@ -10,8 +10,15 @@ export const listTeamMembersTool: ToolDef = {
   capabilities: TOOL_CAPABILITIES.list_team_members,
   async handler(_args, ctx) {
     const conversation = getConversation(ctx.conversationId);
+    if (!conversation) return { ok: false, error: "This conversation no longer exists, so its execution roster cannot be queried.", category: "security_policy" };
     const caller = getAgent(ctx.agentId);
-    if (!conversation || !caller?.isConductor || !conversation.agentIds.includes(caller.id)) return { ok: false, error: "Only this conversation's Conductor may query its execution roster.", category: "security_policy" };
+    // The authoritative role rule. The tool is also excluded from the open run
+    // toolset (see tool-surface.ts), so a worker never reaches this branch; the
+    // check stays because the rule is about the roster being conversation-scoped
+    // information, not about capability, and it must hold for any caller.
+    if (!caller?.isConductor || !conversation.agentIds.includes(caller.id)) {
+      return { ok: false, error: "Only this conversation's Conductor may query its execution roster, and only during planning. This run was not provisioned with the roster tool.", category: "security_policy" };
+    }
     // Issue #79: every Agent is provisioned with the whole Pi toolset, so the
     // roster reports that, not the stored grants (which no longer restrict or
     // authorize anything). A planner told "this member has no bash" would skip a

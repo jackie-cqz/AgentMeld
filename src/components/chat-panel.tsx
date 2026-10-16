@@ -592,8 +592,11 @@ function AgentProfileCard({
   onEdit: () => void;
 }) {
   const description = buildAgentDescription(agent);
-  const tools = agent.toolNames.slice(0, 10);
-  const hiddenToolCount = Math.max(agent.toolNames.length - tools.length, 0);
+  // Capability is open (issue #79): every Agent run gets the same toolset, so
+  // the profile shows the server-provided runtime truth, not the stored record.
+  const provisionedToolNames = useAppStore((state) => state.provisionedToolNames);
+  const tools = provisionedToolNames.slice(0, 10);
+  const hiddenToolCount = Math.max(provisionedToolNames.length - tools.length, 0);
 
   return (
     <Popover x={x} y={y} label={`${agent.name} 信息`} onClose={onClose}>
@@ -645,7 +648,10 @@ function AgentProfileCard({
           </div>
         ) : null}
 
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+          运行时工具集 · 所有 Agent 相同（{provisionedToolNames.length} 个）
+        </div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
           {tools.map((tool) => (
             <span key={tool} className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {tool}
@@ -658,7 +664,7 @@ function AgentProfileCard({
           ) : null}
           {tools.length === 0 ? (
             <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-              无手动工具
+              运行时工具集暂不可用
             </span>
           ) : null}
         </div>

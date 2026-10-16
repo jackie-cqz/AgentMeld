@@ -36,6 +36,7 @@ export const useAppStore = create<AppState>()(
     agentIds: [],
     conversations: {},
     conversationOrder: [],
+    provisionedToolNames: [],
     messages: {},
     messageIdsByConversation: {},
     runs: {},

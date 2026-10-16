@@ -132,7 +132,7 @@ fix-broken-app
 - Git commit。
 - 模型和 API Provider。
 - Prompt 版本或哈希。
-- Agent 配置和工具权限。
+- Agent 配置和工具记录。
 - Context Strategy。
 - 操作系统和 Node 版本。
 - Token / 时间 / 工具调用预算。
@@ -1159,7 +1159,7 @@ candidate：evidence_aware_context
 
 - 相同模型和模型参数。
 - 相同 Agent Prompt 版本。
-- 相同工具权限。
+- 相同工具集（每个 Agent 运行时都获得完整工具集）。
 - 相同 Case 和 User Script。
 - 相同运行次数。
 - 相同预算。
