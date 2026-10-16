@@ -7,7 +7,8 @@ import { getSettings, resolveApiKey } from "@/server/settings-service";
 import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import type { PiInvocationInput, PiProviderSnapshot } from "./types";
 import type { Agent } from "@/shared/types";
-import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { createRequire } from "node:module";
+import type { deepseekProvider as DeepseekProviderFn } from "@earendil-works/pi-ai/providers/deepseek";
 import { PI_RETIRED_TOOLS } from "@/shared/agent-constants";
 import { PiRuntimeError } from "./process";
 import type { UsagePayload } from "@/shared/types";
@@ -45,6 +46,33 @@ export function getPiDoctor(): PiDoctorResult {
   return result;
 }
 
+/**
+ * The DeepSeek model catalog, loaded without the package's exports map.
+ *
+ * `@earendil-works/pi-ai` declares `./providers/*` with only a `types` and an
+ * `import` condition — no `require`. The app bundles it as ESM and is fine, but
+ * anything resolving it as CommonJS (the benchmark harness, via tsx) fails with
+ * "Package subpath './providers/deepseek' is not defined by exports" even
+ * though the file is right there in `dist/`. Resolving the built file by
+ * absolute path sidesteps the map; the catalog only tunes limits, so a failure
+ * falls back to the built-in numbers instead of taking the runtime down.
+ */
+let cachedDeepseekProvider: typeof DeepseekProviderFn | null = null;
+let deepseekProviderResolved = false;
+function loadDeepseekProvider(): typeof DeepseekProviderFn | null {
+  if (deepseekProviderResolved) return cachedDeepseekProvider;
+  deepseekProviderResolved = true;
+  try {
+    const requireFromProject = createRequire(path.join(process.cwd(), "package.json"));
+    const entry = requireFromProject.resolve("@earendil-works/pi-ai");
+    const module_ = requireFromProject(path.join(path.dirname(entry), "providers", "deepseek.js"));
+    cachedDeepseekProvider = typeof module_.deepseekProvider === "function" ? module_.deepseekProvider : null;
+  } catch {
+    cachedDeepseekProvider = null;
+  }
+  return cachedDeepseekProvider;
+}
+
 export function preparePiInvocation(input: PiInvocationInput) {
   const doctor = getPiDoctor();
   if (!doctor.available) throw new PiRuntimeError(doctor.error ?? "Pi is unavailable.", "startup");
@@ -63,7 +91,10 @@ export function preparePiInvocation(input: PiInvocationInput) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const limits = getModelLimits(input.agent.modelProvider);
   const deepseek = (input.catalogProvider ?? provider) === "deepseek";
-  const nativeModel = deepseek ? deepseekProvider().getModels().find(model => model.id === input.agent.modelId) : undefined;
+  const catalogProvider = deepseek ? loadDeepseekProvider() : null;
+  const nativeModel = catalogProvider
+    ? catalogProvider().getModels().find(model => model.id === input.agent.modelId)
+    : undefined;
   // Preserve master's verified 64K output allowance for legacy DeepSeek aliases.
   // Known models use the locked Pi catalog, rather than hand-maintained limits.
   const contextWindow = nativeModel?.contextWindow ?? (deepseek ? 128_000 : limits.contextWindow);
