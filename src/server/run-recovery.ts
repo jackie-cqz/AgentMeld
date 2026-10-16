@@ -31,7 +31,7 @@ import { getDatabase } from "@/db/client";
  */
 export function recoverOrphanedRuns() {
   const now = Date.now();
-  getDatabase().prepare("UPDATE task_handoffs SET execution_status='interrupted',error='Control process restarted; accepted handoff will not be automatically dispatched again.',updated_at=? WHERE execution_status IN ('stopping','running')").run(now);
+  getDatabase().prepare("UPDATE task_handoffs SET execution_status='interrupted',error='Control process restarted; accepted handoff will not be automatically dispatched again.',updated_at=MAX(updated_at+1,?) WHERE execution_status IN ('stopping','running')").run(now);
   getDatabase().prepare("UPDATE collaboration_turns SET status='rejected',reason='控制进程已重启，未确认消息生效。',updated_at=? WHERE status IN ('received','classifying','queued')").run(now);
   getDatabase().prepare("UPDATE message_submissions SET status='interrupted',updated_at=? WHERE status='received'").run(now);
   getDatabase().prepare("UPDATE agent_consultations SET status='failed',answer=NULL,error='Control process restarted; consultation was interrupted.',updated_at=? WHERE status IN ('requested','running')").run(now);

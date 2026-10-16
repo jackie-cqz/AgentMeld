@@ -39,6 +39,7 @@ import { getDatabase } from "@/db/client";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { AuthPrincipal } from "@/server/auth";
 import { recoverOrphanedRuns } from "@/server/run-recovery";
+import { persistedDispatches } from "./dispatch-projection";
 
 const owner: AuthPrincipal = { kind: "owner-session", sessionId: "fixture-owner", createdAt: 1 };
 beforeEach(() => { fixture.inputs.length = 0; fixture.stopped.length = 0; fixture.report = true; fixture.plan = null; fixture.holdSource = false; });
@@ -69,6 +70,23 @@ function world(overrides: Partial<ParsedTask> = {}) {
 }
 
 describe("formal Pi task handoff", () => {
+  it("selects the latest plan revision rather than a larger retry number from an obsolete plan", async () => {
+    const state = world();
+    getDatabase().prepare("UPDATE task_attempts SET attempt=5 WHERE id=?").run(state.attemptId);
+    const now = Date.now() + 1000, planId = `later_${state.planId}`, attemptId = `later_${state.attemptId}`, contextSnapshotId = `later_ctx_${state.attemptId}`;
+    const child = createRun({ id: `later_${state.source.id}`, conversationId: state.conversation.id, agentId: "ag_designer", parentRunId: state.parent.id, triggerMessageId: state.source.triggerMessageId, status: "failed", now });
+    const task = { ...state.task, agentId: child.agentId, prompt: "Updated approved task scope" };
+    persistConductorPlan({ id: planId, conductorRunId: state.parent.id, conversationId: state.conversation.id, revision: 1, planJson: JSON.stringify([task]), status: "active", now });
+    createTaskAttempt({ id: attemptId, conductorRunId: state.parent.id, conversationId: state.conversation.id, planId, planRevision: 1, taskId: task.id,
+      agentId: child.agentId, childRunId: child.id, attempt: 1, contextSnapshotId, executionStatus: "failed", verificationStatus: "rejected", createdAt: now, updatedAt: now });
+    const envelope = buildMinimalContextEnvelope({ conductorRunId: state.parent.id, planId, planRevision: 1, taskId: task.id, attemptId, attempt: 1, contextSnapshotId }, task, [], []);
+    insertContextSnapshot({ id: contextSnapshotId, conversationId: state.conversation.id, conductorRunId: state.parent.id, planId, taskId: task.id, attemptId,
+      policyVersion: envelope.policyVersion, schemaVersion: 1, envelopeJson: JSON.stringify(envelope), manifestJson: "[]", tokenEstimate: 1, requiredTokenEstimate: 1, omittedTokenEstimate: 0, createdAt: now });
+    await expect(proposeHandoff(state.attemptId, "ag_designer", owner)).rejects.toThrow("latest unfinished");
+    const proposal = await proposeHandoff(attemptId, "ag_mock_builder", owner);
+    expect(getHandoffPackage(proposal.id).task.prompt).toBe("Updated approved task scope");
+    expect(persistedDispatches(state.conversation.id)[state.parent.id]).toMatchObject({ activeAttemptByTask: { t1: attemptId }, attempts: { t1: 1 }, plan: [expect.objectContaining({ agentId: "ag_designer" })] });
+  });
   it("hands an in-flight DAG task to a new Agent only after its original owner promise exits", async () => {
     const state = world();
     fixture.holdSource = true; fixture.plan = [state.task];

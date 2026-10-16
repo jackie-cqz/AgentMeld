@@ -7,7 +7,8 @@ import type { DispatchState } from "@/shared/dispatch-state";
 /** Reconstruct display state from durable facts. Never dispatches or resumes execution. */
 export function persistedDispatches(conversationId: string): Record<string, DispatchState> {
   const db = getDatabase();
-  const plans = db.prepare("SELECT conductor_run_id,plan_json FROM conductor_plans WHERE conversation_id=? ORDER BY created_at,id").all(conversationId) as Array<{ conductor_run_id: string; plan_json: string }>;
+  const plans = db.prepare("SELECT id,conductor_run_id,plan_json FROM conductor_plans WHERE conversation_id=? ORDER BY created_at,rowid").all(conversationId) as Array<{ id: string; conductor_run_id: string; plan_json: string }>;
+  const planOrder = new Map(plans.map((plan, index) => [plan.id, index]));
   const messages = listMessages(conversationId), runs = listRuns(conversationId);
   const states: Record<string, DispatchState> = {};
   for (const row of plans) {
@@ -32,7 +33,8 @@ export function persistedDispatches(conversationId: string): Record<string, Disp
     const results = db.prepare("SELECT task_id,status,child_run_id,summary FROM conductor_task_results WHERE conductor_run_id=?").all(state.runId) as Array<{ task_id: string; status: string; child_run_id: string | null; summary: string | null }>;
     let hasExecution = results.length > 0;
     for (const task of state.plan) {
-      const attempts = listTaskAttempts(state.runId, task.id);
+      const attempts = listTaskAttempts(state.runId, task.id).sort((a, b) =>
+        (planOrder.get(a.planId) ?? -1) - (planOrder.get(b.planId) ?? -1) || a.attempt - b.attempt || a.createdAt - b.createdAt);
       hasExecution ||= attempts.length > 0;
       state.attemptIdsByTask[task.id] = attempts.map(attempt => attempt.id);
       for (const attempt of attempts) {

@@ -68,7 +68,7 @@ function HandoffRow({ handoff }: { handoff: TaskHandoff }) {
       setDetails({ criteria: data.package.task.acceptanceCriteria, files: data.package.files.map(file => file.path), evidenceCount: data.package.evidence.length, failure: data.package.failure });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "无法查看交接内容。"); }
   };
-  const status = handoff.status === "accepted" ? ({ not_started: "待接手", stopping: "等待原执行停止", running: "接手执行中", complete: "接手完成", failed: "接手失败", interrupted: "接手中断" })[handoff.executionStatus]
+  const status = handoff.status === "accepted" ? ({ not_started: "待接手", stopping: "等待原执行停止", running: handoff.targetRunId ? "接手执行中" : "正在验证交接条件", complete: "接手完成", failed: "接手失败", interrupted: "接手中断" })[handoff.executionStatus]
     : ({ proposed: "待确认交接", declined: "已拒绝", cancelled: "已取消", expired: "已过期" })[handoff.status];
   return <div className="mb-2 min-w-0 border-l-2 border-[var(--ui-border)] pl-2.5">
     <div className="flex flex-wrap items-center gap-1.5">

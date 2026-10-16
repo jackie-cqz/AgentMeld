@@ -60,7 +60,7 @@ function publish(id: string): TaskHandoff {
   return handoff;
 }
 function expireProposals(): void {
-  getDatabase().prepare("UPDATE task_handoffs SET status='expired',updated_at=? WHERE status='proposed' AND expires_at<=?").run(Date.now(), Date.now());
+  getDatabase().prepare("UPDATE task_handoffs SET status='expired',updated_at=MAX(updated_at+1,?) WHERE status='proposed' AND expires_at<=?").run(Date.now(), Date.now());
 }
 function actor(principal: AuthPrincipal): string {
   const value = describePrincipal(principal);
@@ -68,6 +68,15 @@ function actor(principal: AuthPrincipal): string {
   return value;
 }
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
+function latestAttemptId(conductorRunId: string, taskId: string): string | undefined {
+  // Attempt numbering restarts across plan revisions. A retry from an older
+  // plan must not win just because its numeric attempt is larger.
+  return (getDatabase().prepare(`SELECT attempt.id FROM task_attempts attempt
+    JOIN conductor_plans plan ON plan.id=attempt.plan_id
+    WHERE attempt.conductor_run_id=? AND attempt.task_id=?
+    ORDER BY plan.created_at DESC,plan.rowid DESC,attempt.attempt DESC,attempt.rowid DESC LIMIT 1`)
+    .get(conductorRunId, taskId) as { id: string } | undefined)?.id;
+}
 function factsHash(conversationId: string): string {
   return hash(JSON.stringify(loadActiveFacts(conversationId).map(fact => ({ id: fact.id, key: fact.canonicalKey, value: fact.value, updatedAt: fact.updatedAt })).sort((a, b) => a.id.localeCompare(b.id))));
 }
@@ -133,8 +142,7 @@ export async function proposeHandoff(sourceAttemptId: string, targetAgentId: str
   if (getDatabase().prepare("SELECT id FROM task_handoffs WHERE source_attempt_id=? AND status='accepted' AND (target_attempt_id IS NOT NULL OR execution_status='complete') LIMIT 1").get(source.id)) {
     throw new Error("This source attempt has been superseded by a handoff; select the latest receiving attempt instead.");
   }
-  const latest = getDatabase().prepare("SELECT id FROM task_attempts WHERE conductor_run_id=? AND task_id=? ORDER BY attempt DESC LIMIT 1").get(source.conductorRunId, source.taskId) as { id: string } | undefined;
-  if (latest?.id !== source.id || source.verificationStatus === "verified") throw new Error("Only the latest unfinished or failed attempt can be handed off.");
+  if (latestAttemptId(source.conductorRunId, source.taskId) !== source.id || source.verificationStatus === "verified") throw new Error("Only the latest unfinished or failed attempt can be handed off.");
   const plan = getDatabase().prepare("SELECT plan_json FROM conductor_plans WHERE id=? AND conductor_run_id=? AND conversation_id=?").get(source.planId, source.conductorRunId, source.conversationId) as { plan_json: string } | undefined;
   const tasks = plan ? JSON.parse(plan.plan_json) as ParsedTask[] : [];
   const originalTask = tasks.find(task => task.id === source.taskId);
@@ -184,8 +192,7 @@ export function validateHandoffPackage(id: string): HandoffPackage {
     const binding = listOutputBindings(packet.sourcePlanId).find(row => `${row.producer_task_id}.${row.output_key}` === input.key);
     if (!artifact || artifact.conversationId !== handoff.conversationId || artifact.version !== input.version || binding?.artifact_id !== artifact.id) throw new Error("Upstream inputs changed; create a fresh handoff proposal.");
   }
-  const latest = getDatabase().prepare("SELECT id FROM task_attempts WHERE conductor_run_id=? AND task_id=? ORDER BY attempt DESC LIMIT 1").get(packet.sourceConductorRunId, handoff.taskId) as { id: string } | undefined;
-  if (latest?.id !== handoff.sourceAttemptId) throw new Error("A newer task attempt already exists.");
+  if (latestAttemptId(packet.sourceConductorRunId, handoff.taskId) !== handoff.sourceAttemptId) throw new Error("A newer task attempt already exists.");
   return packet;
 }
 
@@ -197,7 +204,7 @@ export async function decideHandoff(id: string, decision: "accept" | "decline" |
   if (handoff.status === status) return handoff;
   if (handoff.status !== "proposed") throw new Error("This handoff decision is already settled.");
   if (decision !== "accept") {
-    getDatabase().prepare("UPDATE task_handoffs SET status=?,decided_by=?,updated_at=? WHERE id=? AND status='proposed'").run(status, by, Date.now(), id);
+    getDatabase().prepare("UPDATE task_handoffs SET status=?,decided_by=?,updated_at=MAX(updated_at+1,?) WHERE id=? AND status='proposed'").run(status, by, Date.now(), id);
     return publish(id);
   }
   const packet = validateHandoffPackage(id);
@@ -209,7 +216,7 @@ export async function decideHandoff(id: string, decision: "accept" | "decline" |
   const coordinator = getAgent(parent.agentId);
   if (!live && (!coordinator || !getConversation(handoff.conversationId)?.agentIds.includes(coordinator.id) || coordinator.id === handoff.targetAgentId)) throw new Error("The original coordinator is no longer available.");
   const coordinatorRunId = live ? parent.id : newRunId();
-  const changed = getDatabase().prepare("UPDATE task_handoffs SET status='accepted',execution_status='stopping',coordinator_run_id=?,decided_by=?,updated_at=? WHERE id=? AND status='proposed'").run(coordinatorRunId, by, Date.now(), id) as { changes: number };
+  const changed = getDatabase().prepare("UPDATE task_handoffs SET status='accepted',execution_status='stopping',coordinator_run_id=?,decided_by=?,updated_at=MAX(updated_at+1,?) WHERE id=? AND status='proposed'").run(coordinatorRunId, by, Date.now(), id) as { changes: number };
   if (!changed.changes) return getHandoff(id)!;
   publish(id);
   if (live) { abortRun(handoff.sourceRunId); return getHandoff(id)!; }
@@ -226,13 +233,13 @@ export async function decideHandoff(id: string, decision: "accept" | "decline" |
 }
 
 export function claimHandoff(id: string, coordinatorRunId: string): boolean {
-  return !!(getDatabase().prepare("UPDATE task_handoffs SET execution_status='running',updated_at=? WHERE id=? AND status='accepted' AND execution_status='stopping' AND coordinator_run_id=?").run(Date.now(), id, coordinatorRunId) as { changes: number }).changes;
+  return !!(getDatabase().prepare("UPDATE task_handoffs SET execution_status='running',updated_at=MAX(updated_at+1,?) WHERE id=? AND status='accepted' AND execution_status='stopping' AND coordinator_run_id=?").run(Date.now(), id, coordinatorRunId) as { changes: number }).changes;
 }
 export function bindHandoffAttempt(id: string, attemptId: string, runId: string): void {
-  getDatabase().prepare("UPDATE task_handoffs SET target_attempt_id=?,target_run_id=?,updated_at=? WHERE id=? AND execution_status='running'").run(attemptId, runId, Date.now(), id);
+  getDatabase().prepare("UPDATE task_handoffs SET target_attempt_id=?,target_run_id=?,updated_at=MAX(updated_at+1,?) WHERE id=? AND execution_status='running'").run(attemptId, runId, Date.now(), id);
   publish(id);
 }
 export function finishHandoff(id: string, complete: boolean, error?: string): void {
-  getDatabase().prepare("UPDATE task_handoffs SET execution_status=?,error=?,updated_at=? WHERE id=? AND execution_status IN ('stopping','running')").run(complete ? "complete" : "failed", error ?? null, Date.now(), id);
+  getDatabase().prepare("UPDATE task_handoffs SET execution_status=?,error=?,updated_at=MAX(updated_at+1,?) WHERE id=? AND execution_status IN ('stopping','running')").run(complete ? "complete" : "failed", error ?? null, Date.now(), id);
   publish(id);
 }

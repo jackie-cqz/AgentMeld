@@ -117,7 +117,7 @@ unavailable, must be reported separately from deterministic projection tests.
 - Five initial handoff regressions plus a real runner/approval/DAG/owner-promise
   handoff fixture pass. These use a deterministic runtime substitute and do not
   replace the required pinned-Pi subprocess and browser acceptance checks.
-- Current admission regression suite: 13 passing tests, including correction to
+- Current admission regression suite: 14 passing tests, including correction to
   discussion, executable supplements, immutable snapshot chains and authenticated
   idempotent clarification resolution. Store regressions: 45 passing tests.
 - Latest full run (before the last fixture adjustment): 1,881 passed, 8 failed,
@@ -168,6 +168,16 @@ unavailable, must be reported separately from deterministic projection tests.
   assertions execute; running outside the restricted token did not grant that OS
   privilege. Those tests remain unchanged and must pass in the Linux CI job.
   The native Pi cancellation/shell-discovery regression now passes in the full run.
+- The final review subsequently added latest-plan ordering and strictly monotonic
+  handoff versions. A larger retry number from an obsolete plan cannot supersede
+  a new plan's first attempt; the bootstrap projection uses the same ordering.
+  Handoff/context/control/store selection after those fixes: 57 passed. Final
+  TypeScript passes. The full suite must be rerun on the final PR revision.
+- Default Turbopack build also completed in the isolated copy. Its shared dependency
+  junction required a verification-only filesystem-root override in that copy and
+  unsandboxed ancestor metadata access. This produced two broad-file-tracing
+  warnings; the repository's next.config.ts was not changed. CI must still run the
+  unmodified shipped configuration in a normal checkout.
 - TypeScript passes; focused ESLint over all newly added collaboration modules,
   projections, controls and changed Pi tests reports no errors or warnings.
 - Deterministic Feishu projections carry the same handoffId, preserve source bot
@@ -179,8 +189,9 @@ unavailable, must be reported separately from deterministic projection tests.
 1. Finish the issue checklist audit, including a scoped single-task implementation
    versus the existing delivery contracts, late-result/teardown cases and budget
    boundaries. Do not assume that a successful discussion proves delivery behavior.
-2. Complete the shipped production build after the final fixes. The latest full
-   run has 1,894 passing tests and seven Windows symlink EPERM failures. Required Linux CI
+2. Run the final revision's full suite and production build in a normal checkout.
+   Local full run has 1,894 passing tests and seven Windows symlink EPERM failures;
+   isolated webpack and Turbopack builds pass with the caveats above. Required Linux CI
    must exercise the symlink security tests without weakening or skipping them.
 3. Finish the complete diff review, commit final fixes, open/attach the PR, inspect
    all required checks and review feedback, and merge only after those gates pass.
