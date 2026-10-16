@@ -18,6 +18,10 @@ import type {
   WorkspaceMode
 } from "@/shared/types";
 
+export const appMigrations = sqliteTable("app_migrations", {
+  id: text("id").primaryKey(), appliedAt: integer("applied_at").notNull(),
+});
+
 export const modelProviderProfiles = sqliteTable("model_provider_profiles", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -189,6 +193,30 @@ export const agentRuns = sqliteTable(
 );
 
 // ── Conductor, approval and compaction runtime tables ──────────────────────
+
+export const agentConsultations = sqliteTable("agent_consultations", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  sourceRunId: text("source_run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  sourceAgentId: text("source_agent_id").notNull().references(() => agents.id),
+  targetAgentId: text("target_agent_id").notNull().references(() => agents.id),
+  targetRunId: text("target_run_id").unique(),
+  requestKey: text("request_key").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  question: text("question").notNull(),
+  contextJson: text("context_json").notNull(),
+  taskIdentityJson: text("task_identity_json"),
+  status: text("status").notNull(),
+  proposedStatus: text("proposed_status"),
+  answer: text("answer"),
+  error: text("error"),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, table => [
+  uniqueIndex("idx_consultations_request").on(table.sourceRunId, table.requestKey),
+  index("idx_consultations_conversation").on(table.conversationId, table.createdAt),
+]);
 
 export const conductorTaskResults = sqliteTable(
   "conductor_task_results",

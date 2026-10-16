@@ -28,6 +28,8 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   fs_patch: "文件修改",
   plan_tasks: "拆分任务",
   list_team_members: "查询团队成员",
+  consult_agent: "咨询同事",
+  respond_to_consultation: "回复咨询",
   read_artifact: "读取产物",
   read_attachment: "读取附件",
   report_task_result: "汇报任务结果",

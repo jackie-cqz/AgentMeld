@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -28,6 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   resetBootstrapForTests();
   resetClientForTests();
   delete process.env.AGENTMELD_DATA_DIR;
@@ -336,11 +337,13 @@ describe("context budget and compaction", () => {
   });
 
   it("publishes an explicit error when no compaction API key is configured", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
     const events: string[] = [];
     const unsubscribe = eventBus.subscribe(({ event }) => events.push(event.type));
 
     await expect(runCompaction(
-      "conv_missing_key",
+      conversation.id,
       [{ role: "user", content: "important context" }],
       "msg_last",
       1,

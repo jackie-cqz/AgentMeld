@@ -13,6 +13,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
   "all-purpose": {
     label: "全能助手",
     tools: [
+      "consult_agent",
       "read_artifact",
       "write_artifact",
       "deploy_artifact",
@@ -29,7 +30,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
   },
   "local-code": {
     label: "本地代码",
-    tools: ["fs_list", "fs_glob", "fs_search", "fs_mkdir", "fs_read", "fs_write", "fs_patch", "bash", "git_inspect", "browser_check", "read_artifact"]
+    tools: ["consult_agent", "fs_list", "fs_glob", "fs_search", "fs_mkdir", "fs_read", "fs_write", "fs_patch", "bash", "git_inspect", "browser_check", "read_artifact"]
   },
   artifact: {
     label: "产物创作",
@@ -50,6 +51,7 @@ export const TOOL_PRESETS: Record<ToolPresetName, { label: string; tools: string
 };
 
 export const ALL_TOOL_NAMES = [
+  "consult_agent",
   "fs_glob", "fs_search", "job_start", "job_read", "job_wait", "job_cancel", "web_fetch", "web_search", "git_inspect", "browser_check",
   "fs_list",
   "fs_mkdir",

@@ -20,6 +20,7 @@ const sampleMessage: Message = {
 
 beforeEach(() => {
   useAppStore.setState({
+    consultations: {},
     agents: {},
     agentIds: [],
     conversations: {},

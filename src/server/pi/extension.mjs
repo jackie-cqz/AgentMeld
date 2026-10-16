@@ -68,7 +68,7 @@ export default async function agentMeldExtension(pi) {
       async execute(callId, args, signal) {
         const result = await call("/tool", { callId, name: definition.name, args }, signal);
         return { content: [{ type: "text", text: JSON.stringify(result.value) }], details: { agentmeld: result },
-          terminate: definition.name === "plan_tasks" || definition.name === "report_task_result" };
+          terminate: ["plan_tasks", "report_task_result", "respond_to_consultation"].includes(definition.name) };
       },
     });
   }

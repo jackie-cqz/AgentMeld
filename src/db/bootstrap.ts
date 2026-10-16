@@ -21,6 +21,11 @@ export function ensureDatabase() {
   const db = getDatabase();
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS app_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS model_provider_profiles (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -69,6 +74,29 @@ export function ensureDatabase() {
       workspace_key TEXT PRIMARY KEY, token TEXT NOT NULL, owner_pid INTEGER NOT NULL,
       child_pid INTEGER, status TEXT NOT NULL, created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent_consultations (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      source_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_run_id TEXT UNIQUE,
+      request_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      question TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      task_identity_json TEXT,
+      status TEXT NOT NULL,
+      proposed_status TEXT,
+      answer TEXT,
+      error TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(source_run_id, request_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_consultations_conversation ON agent_consultations(conversation_id, created_at);
 
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
@@ -794,6 +822,7 @@ function seedBuiltinAgents() {
   migrateLegacyBuiltinPrompts(now);
   migrateLegacyBuiltinToolPresets(now);
   migrateFrontendMkdirTool(now);
+  migrateBuiltinConsultationTool(now);
   upgradeBuiltinConductorPrompt(now);
   // Retain identities, channel bindings and history while replacing the retired execution engine.
   // SDK placeholders are not converted: their incompatible configuration requires explicit action.
@@ -832,7 +861,7 @@ function migrateLegacyBuiltinToolPresets(now: number) {
     const currentTools = parseToolNames(row.tool_names);
     if (!sameStringArray(currentTools, legacyTools)) continue;
 
-    update.run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
+    update.run(JSON.stringify(builtinMigrationTools(agent.toolNames, currentTools)), now, agent.id, row.tool_names);
   }
 }
 
@@ -847,14 +876,32 @@ function migrateFrontendMkdirTool(now: number) {
 
   const currentTools = parseToolNames(row.tool_names);
   const previousDefault = agent.toolNames.filter((tool) => tool !== "fs_mkdir");
-  if (!sameStringArray(currentTools, previousDefault)) return;
+  if (!sameStringArray(currentTools, previousDefault) &&
+    !sameStringArray(currentTools, previousDefault.filter(tool => tool !== "consult_agent"))) return;
 
   db.prepare(`
     UPDATE agents
     SET tool_names = ?, updated_at = ?
     WHERE id = ?
       AND is_builtin = 1
-  `).run(JSON.stringify(agent.toolNames), now, agent.id);
+  `).run(JSON.stringify(builtinMigrationTools(agent.toolNames, currentTools)), now, agent.id);
+}
+
+function migrateBuiltinConsultationTool(now: number) {
+  const db = getDatabase();
+  if (db.prepare("SELECT id FROM app_migrations WHERE id='consultation-presets-v1'").get()) return;
+  for (const agent of BUILTIN_AGENTS) {
+    const row = db.prepare("SELECT tool_names FROM agents WHERE id=? AND is_builtin=1").get(agent.id) as { tool_names: string } | undefined;
+    if (!row || !sameStringArray(parseToolNames(row.tool_names), agent.toolNames.filter(tool => tool !== "consult_agent"))) continue;
+    db.prepare("UPDATE agents SET tool_names=?,updated_at=? WHERE id=? AND tool_names=?")
+      .run(JSON.stringify(agent.toolNames), now, agent.id, row.tool_names);
+  }
+  db.prepare("INSERT OR IGNORE INTO app_migrations (id,applied_at) VALUES ('consultation-presets-v1',?)").run(now);
+}
+
+function builtinMigrationTools(defaults: string[], current: string[]): string[] {
+  const migrated = getDatabase().prepare("SELECT id FROM app_migrations WHERE id='consultation-presets-v1'").get();
+  return migrated && !current.includes("consult_agent") ? defaults.filter(tool => tool !== "consult_agent") : defaults;
 }
 
 function parseToolNames(raw: string): string[] {

@@ -31,6 +31,7 @@ import { getDatabase } from "@/db/client";
  */
 export function recoverOrphanedRuns() {
   const now = Date.now();
+  getDatabase().prepare("UPDATE agent_consultations SET status='failed',answer=NULL,error='Control process restarted; consultation was interrupted.',updated_at=? WHERE status IN ('requested','running')").run(now);
   // A durable Pi session is history, not a resumable OS process. Keep workspace
   // leases: a still-live orphan child must exclude a replacement writer.
   getDatabase().prepare("UPDATE harness_executions SET status='interrupted', error_category='control_process_interrupted', finished_at=? WHERE finished_at IS NULL")

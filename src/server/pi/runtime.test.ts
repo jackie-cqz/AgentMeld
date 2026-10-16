@@ -4,8 +4,9 @@ import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent, updateAgent } from "@/server/agent-service";
-import { createConversation } from "@/server/conversation-service";
-import { createMessage, getWorkspaceForConversation, getRun, listMessages } from "@/server/repositories";
+import { createConversation, patchConversation } from "@/server/conversation-service";
+import { createMessage, createRun, getWorkspaceForConversation, getRun, listMessages, updateRunStatus } from "@/server/repositories";
+import { listConsultations } from "@/server/collaboration/consultations";
 import { newMessageId, newRunId } from "@/shared/ids";
 import { runPiInvocation } from "./runtime";
 import { getPiDoctor } from "./config";
@@ -61,6 +62,44 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it("runs a real Pi peer consultation while the source holds the workspace writer lease", async () => {
+    let peerId = "";
+    let sourceTurns = 0;
+    let peerTurns = 0;
+    let peerSawWriterLease = false;
+    const url = await modelServer((request, response) => {
+      if (request.model === "fixture-peer") {
+        peerTurns++;
+        const tools = request.tools as Array<{ function: { name: string } }>;
+        expect(tools.map(tool => tool.function.name)).toEqual(["respond_to_consultation"]);
+        peerSawWriterLease = Number((getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get() as { n: number }).n) === 1;
+        complete(response, { tool_calls: [{ index: 0, id: "peer-opinion", type: "function", function: {
+          name: "respond_to_consultation", arguments: JSON.stringify({ status: "replied", answer: "Choose the compact sidebar; no files were modified." }),
+        } }] }, "tool_calls");
+      } else if (++sourceTurns === 1) {
+        complete(response, { tool_calls: [{ index: 0, id: "consult-peer", type: "function", function: {
+          name: "consult_agent", arguments: JSON.stringify({ requestKey: "layout-review", targetAgentId: peerId, question: "Please advise on a compact sidebar. Do not change files." }),
+        } }] }, "tool_calls");
+      } else complete(response, { content: "The peer recommends the compact sidebar. Awaiting your decision." });
+    });
+    const input = invocation(url, ["consult_agent"]);
+    const peer = createAgent({ name: "Pi consultation peer", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-peer",
+      apiKey: "fixture-not-a-real-credential", apiBaseUrl: url, toolNames: [], description: "Read-only design consultation" });
+    peerId = peer.id;
+    input.conversation = patchConversation(input.conversationId, { mode: "group", agentIds: [input.agent.id, peer.id] })!;
+    createRun({ id: input.runId, conversationId: input.conversationId, agentId: input.agent.id,
+      triggerMessageId: input.triggerMessage.id, status: "running", now: Date.now() });
+    const events: StreamEvent[] = [];
+    for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
+    expect(sourceTurns).toBe(2);
+    expect(peerTurns).toBe(1);
+    expect(peerSawWriterLease).toBe(true);
+    expect(listConsultations(input.conversationId)).toMatchObject([{ status: "replied", sourceRunId: input.runId, targetAgentId: peer.id }]);
+    expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
+    expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get()).toEqual({ n: 0 });
+    updateRunStatus(input.runId, "complete", null, Date.now());
+  }, process.platform === "win32" ? 120000 : 60000);
+
   it("loads the pinned CLI and permission extension and commits streamed text", async () => {
     expect(getPiDoctor().available).toBe(true);
     const url = await modelServer((_request, response) => complete(response, { content: "Pi fixture answer" }));

@@ -1,3 +1,5 @@
+import type { AgentConsultation } from "./collaboration-types";
+
 /** Legacy values remain readable for migration; new production agents use Pi only. */
 export type AdapterName = "pi" | "claude-code" | "codex" | "custom" | "mock";
 
@@ -553,6 +555,7 @@ export type StreamEvent =
       parentRunId?: string | null;
     })
   | (BaseEvent & { type: "run.end"; runId: string; status: AgentRunStatus; error?: string })
+  | (BaseEvent & { type: "collaboration.consultation"; consultation: AgentConsultation })
   | (BaseEvent & { type: "run.usage"; runId: string; usage: UsagePayload })
   | (BaseEvent & { type: "message.added"; message: Message })
   | (BaseEvent & { type: "message.removed"; messageIds: string[]; artifactIds: string[] })

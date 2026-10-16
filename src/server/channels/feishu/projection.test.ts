@@ -223,6 +223,7 @@ describe("projectMessage", () => {
     });
     // The inbound record points at the local message it became, which is what
     // the run was triggered by.
+    createMessage({ id: "msg_trigger", conversationId: "conv_1", role: "user", parts: [{ type: "text", content: "Question" }], status: "complete", now: 1 });
     setChannelInboundMessageId("cim_1", "msg_trigger");
     createRun({
       id: "run_1",
@@ -273,6 +274,7 @@ describe("projectMessage", () => {
       threadId: "omt_my_topic",
       now: 2
     });
+    createMessage({ id: "msg_trigger", conversationId: "conv_1", role: "user", parts: [{ type: "text", content: "My question" }], status: "complete", now: 2 });
     setChannelInboundMessageId("cim_mine", "msg_trigger");
     createRun({
       id: "run_1",
@@ -288,6 +290,36 @@ describe("projectMessage", () => {
 
     expect(replied).toHaveLength(1);
     expect(replied[0].target).toMatchObject({ messageId: "om_mine", threadId: "omt_my_topic" });
+  });
+
+  it("keeps a peer consultation reply in the initiating human's topic", async () => {
+    linkChat();
+    connect("ag_pm");
+    const root = createMessage({ id: "msg_topic_root", conversationId: "conv_1", role: "user", origin: "human",
+      parts: [{ type: "text", content: "Discuss this layout" }], status: "complete", now: 1 });
+    claimChannelInboundMessage({ id: "cim_consult", channel: "feishu", chatId: "oc_1", externalMessageId: "om_root",
+      conversationId: "conv_1", agentId: "ag_pm", threadId: "omt_consult", now: 1 });
+    setChannelInboundMessageId("cim_consult", root.id);
+    const question = createMessage({ id: "msg_peer_question", conversationId: "conv_1", role: "agent", origin: "internal", agentId: "ag_mock_builder",
+      parts: [{ type: "text", content: "Which layout?" }], status: "complete", parentMessageId: root.id, now: 2 });
+    createRun({ id: "run_1", conversationId: "conv_1", agentId: "ag_pm", triggerMessageId: question.id, status: "running", now: 2 });
+    await projectMessage(agentMessage({ parentMessageId: question.id }));
+    expect(sent).toHaveLength(0);
+    expect(replied).toHaveLength(1);
+    expect(replied[0].target).toMatchObject({ messageId: "om_root", threadId: "omt_consult" });
+  });
+
+  it("never follows a forged reply chain into another conversation's topic", async () => {
+    linkChat();
+    connect("ag_pm");
+    createConversation({ id: "conv_private", title: "Private", mode: "single", agentIds: ["ag_pm"], fsWriteApprovalMode: "auto", now: 1 });
+    const root = createMessage({ id: "msg_private", conversationId: "conv_private", role: "user", parts: [], status: "complete", now: 1 });
+    claimChannelInboundMessage({ id: "cim_private", channel: "feishu", chatId: "oc_private", externalMessageId: "om_private",
+      conversationId: "conv_private", agentId: "ag_pm", threadId: "omt_private", now: 1 });
+    setChannelInboundMessageId("cim_private", root.id);
+    await projectMessage(agentMessage({ runId: null, parentMessageId: root.id }));
+    expect(replied).toHaveLength(0);
+    expect(sent).toHaveLength(1);
   });
 
   it("does not put a dispatched sub-task's answer in the parent's topic", async () => {

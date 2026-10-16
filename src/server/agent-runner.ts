@@ -9,6 +9,7 @@ import {
   createMessage,
   createRun,
   getAgent,
+  listAgents,
   getConversation,
   getRun,
   getMessage,
@@ -36,6 +37,7 @@ import { consumeDelegation } from "@/server/delegation";
 import { recordRunRefusal } from "@/server/run-refusals";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
 import { cancelJobsForRun, hasRunningJobs } from "@/server/tools/command-jobs";
+import { abortConsultationRun } from "@/server/collaboration/consultations";
 
 // ---------------------------------------------------------------------------
 // In-memory abort map — not persisted, dev-server restart clears it.
@@ -45,7 +47,7 @@ const activeRuns = new Map<string, AbortController>();
 
 export function abortRun(runId: string): boolean {
   const controller = activeRuns.get(runId);
-  if (!controller) return false;
+  if (!controller) return abortConsultationRun(runId);
   controller.abort();
   settlePendingApprovalsForRun(runId);
 
@@ -560,6 +562,11 @@ export function buildSystemPrompt(agent: Agent, conversation: Conversation, work
       "- 不带前缀的 user 消息才是用户本人发给群里的话。\n" +
       "- 历史里的产物只折叠成 `[产物: 标题 (id=...)]` 占位；需要完整内容时用 read_artifact 按 id 获取。"
     );
+    if (agent.toolNames.includes("consult_agent")) {
+      const peers = listAgents().filter(peer => conversation.agentIds.includes(peer.id) && peer.id !== agent.id)
+        .map(peer => ({ id: peer.id, name: peer.name, capabilities: peer.capabilities }));
+      parts.push(`\n## 团队咨询\n可以用 consult_agent 征求同事的一次只读意见。不要用文字 @ 伪装执行或审批授权；意见不是验收证据。复用 requestKey 只可重试同一问题。对方不能读取实时源码，必要材料请通过 artifactIds 提供。\n<consultation_peers>${JSON.stringify(peers)}</consultation_peers>`);
+    }
   }
 
   return parts.join("\n");

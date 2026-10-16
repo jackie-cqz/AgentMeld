@@ -10,6 +10,7 @@ import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { recordTaskArtifact } from "@/server/dispatch-task-results";
+import { assertPiAccessProfile } from "./access-profile";
 
 const callSchema = z.object({ callId: z.string().min(1).max(200), name: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) });
 const outcomeSchema = z.object({ callId: z.string().min(1).max(200), result: z.unknown(), isError: z.boolean() });
@@ -23,6 +24,9 @@ export function cancelPiApprovals(runId: string): void {
 
 /** A private, invocation-scoped tool bridge. Nothing is registered in the public Next API. */
 export async function createPiBridge(input: PiInvocationInput, signal: AbortSignal, onBudgetExceeded: () => void) {
+  assertPiAccessProfile(input.accessMode, input.toolNames);
+  const maxTurns = input.maxTurns ?? 64;
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 64) throw new Error("Invalid Pi turn limit.");
   const token = randomBytes(32).toString("hex");
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const ctx: ToolContext = { conversationId: input.conversationId, agentId: input.agent.id,
@@ -54,7 +58,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
         const systemPrompt = Object.entries(PI_NATIVE_TO_PLATFORM).reduce((prompt, [native, platform]) =>
           native === platform ? prompt : prompt.replace(new RegExp(`\\b${platform}\\b`, "g"), native), input.systemPrompt);
         send({ definitions, native, systemPrompt: `${systemPrompt}${businessNames.includes("list_team_members") ? "\nBefore planning, use list_team_members for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements." : ""}`,
-          needsReport: Boolean(input.parentRunId), maxTurns: 64 });
+          needsReport: Boolean(input.parentRunId), maxTurns });
         return;
       }
       if (request.method !== "POST") { send({ error: "Unknown bridge operation." }, 404); return; }
@@ -70,7 +74,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (request.url === "/ready") { ready = true; send({ ok: true }); return; }
       if (request.url === "/turn") {
-        if (++turns > 64) { send({ ok: false, error: "Pi turn budget exhausted." }, 409); onBudgetExceeded(); }
+        if (++turns > maxTurns) { send({ ok: false, error: "Pi turn budget exhausted." }, 409); onBudgetExceeded(); }
         else send({ ok: true });
         return;
       }
@@ -118,7 +122,7 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
           }
         }
         results.set(call.callId, result);
-        if (result.ok && (call.name === "plan_tasks" || call.name === "report_task_result")) terminalToolAccepted = true;
+        if (result.ok && ["plan_tasks", "report_task_result", "respond_to_consultation"].includes(call.name)) terminalToolAccepted = true;
         send(result);
       } else send({ ok: false, error: "Tool is not authorized for this invocation." }, 403);
     } catch (error) {

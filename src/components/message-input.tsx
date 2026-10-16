@@ -9,6 +9,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { useAppStore } from "@/stores/app-store";
 import { selectConversationPendingDispatchPlans } from "@/stores/selectors";
 import type { Agent, Attachment, Conversation, MessagePart } from "@/shared/types";
+import { resolveMessageRecipients } from "@/shared/collaboration-routing";
 
 const EMPTY_ATTACHMENTS: Attachment[] = [];
 
@@ -38,7 +39,15 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
   const mentionedAgents = useMemo(() => agents.filter(agent => mentionedIds.includes(agent.id)), [agents, mentionedIds]);
   const pendingPlan = pendingPlans[0] ?? null;
   const revising = revisePlanId !== null && pendingPlan?.id === revisePlanId;
-  const primaryAgent = mentionedAgents[0] ?? agents.find(agent => agent.isConductor) ?? agents[0];
+  let recipientIds: string[] = [];
+  let recipientError: string | null = null;
+  try {
+    recipientIds = resolveMessageRecipients({ mode: agents.length > 1 ? "group" : "single", agentIds: agents.map(agent => agent.id) }, agents, mentionedAgents.map(agent => agent.id), replyTarget);
+  } catch {
+    recipientError = "回复对象已离开会话，请选择接收者。";
+  }
+  const recipients = agents.filter(agent => recipientIds.includes(agent.id));
+  const primaryAgent = recipients[0];
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -48,7 +57,7 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
   }, [draft]);
 
   const submit = async () => {
-    if (!draft.trim() || submitting || uploading) return;
+    if (!draft.trim() || submitting || uploading || recipientError) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -101,7 +110,7 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
         <button type="button" onClick={() => setRevisePlanId(revising ? null : pendingPlan.id)}>{revising ? "取消修订" : "修改计划"}</button>
       </div> : null}
       <div className="workspace-compose-box">
-        {replyTarget ? <div className="workspace-compose-reply"><span>回复 {replyTarget.role === "user" ? "我" : "Agent"} · {messageSummary(replyTarget.parts)}</span>
+        {replyTarget ? <div className="workspace-compose-reply"><span>回复 {replyTarget.role === "user" ? "我" : agents.find(agent => agent.id === replyTarget.agentId)?.name ?? "已离开的 Agent"} · {messageSummary(replyTarget.parts)}</span>
           <button className="ui-icon-button" title="取消引用" onClick={() => setReplyTarget(conversationId, null)}><X size={13} /></button></div> : null}
         {attachments.length ? <div className="workspace-compose-attachments">{attachments.map(item => <span key={item.id}><File size={13} /><span>{item.fileName}</span>
           <button type="button" title={`移除附件 ${item.fileName}`} onClick={() => removePendingAttachment(conversationId, item.id)}><X size={13} /></button></span>)}</div> : null}
@@ -125,12 +134,12 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
           <div className="workspace-compose-options">
             {!revising ? <button type="button" title={`当前：${approvalMode === "auto" ? "自动写入" : "需审批"}，点击切换`} aria-label="自动审批" aria-pressed={approvalMode === "auto"} disabled={updatingMode || submitting}
               className="workspace-approval-mode" onClick={() => void toggleApproval()}>{updatingMode ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}<span>{approvalMode === "auto" ? "Auto" : "Review"}</span></button> : null}
-            <button className="workspace-send" type="button" title={revising ? "提交修改意见" : "发送"} disabled={!draft.trim() || submitting || uploading} onClick={() => void submit()}>{submitting ? <Loader2 size={17} className="animate-spin" /> : <ArrowUp size={18} />}</button>
+            <button className="workspace-send" type="button" title={revising ? "提交修改意见" : "发送"} disabled={!draft.trim() || submitting || uploading || Boolean(recipientError)} onClick={() => void submit()}>{submitting ? <Loader2 size={17} className="animate-spin" /> : <ArrowUp size={18} />}</button>
           </div>
         </div>
       </div>
-      <div className="workspace-compose-status"><span title={primaryAgent?.modelId || "未配置模型"}>{primaryAgent?.modelId || primaryAgent?.adapterName || "未配置模型"}</span><span>{uploading ? "附件上传中…" : mentionedAgents.length ? `已指定 ${mentionedAgents.length} 位 Agent` : `${agents.length} 位 Agent`}</span></div>
-      {error ? <p className="workspace-compose-error" role="alert">{error}</p> : null}
+      <div className="workspace-compose-status"><span title={primaryAgent?.modelId || "未配置模型"}>{primaryAgent?.modelId || primaryAgent?.adapterName || "未配置模型"}</span><span>{uploading ? "附件上传中…" : recipients.length ? `发送给 ${recipients.map(agent => agent.name).join("、")}` : "尚未指定接收者"}</span></div>
+      {error || recipientError ? <p className="workspace-compose-error" role="alert">{error ?? recipientError}</p> : null}
     </div>
     {recipientMenu ? <Popover {...recipientMenu} label="选择回复 Agent" className="workspace-recipient-menu" onClose={() => setRecipientMenu(null)}>
       <button className="workspace-recipient-option" onClick={() => setMentionedIds([])}><Users size={17} /><span><strong>团队协作</strong><small>由会话默认规则分派</small></span>{!mentionedAgents.length ? <Check size={15} /> : null}</button>

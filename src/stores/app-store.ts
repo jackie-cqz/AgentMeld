@@ -32,6 +32,7 @@ let searchRequestId = 0;
 
 export const useAppStore = create<AppState>()(
   immer((set, get) => ({
+    consultations: {},
     agents: {},
     agentIds: [],
     conversations: {},

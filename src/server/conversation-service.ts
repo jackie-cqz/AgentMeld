@@ -26,6 +26,8 @@ import {
 import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
 import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
+import { resolveMessageRecipients } from "@/shared/collaboration-routing";
+import { listConsultations } from "@/server/collaboration/consultations";
 
 interface BootstrapPayload {
   agents: Agent[];
@@ -37,6 +39,7 @@ interface BootstrapPayload {
   pendingBashCommands: ReturnType<typeof getAllPendingBashCommands>;
   pendingDispatchPlans: ReturnType<typeof getAllPendingPlans>;
   pendingQuestions: ReturnType<typeof getAllPendingQuestions>;
+  consultationsByConversation: Record<string, ReturnType<typeof listConsultations>>;
 }
 
 interface CreateConversationInput {
@@ -77,6 +80,7 @@ export function getBootstrapPayload(): BootstrapPayload {
   return {
     agents: listAgents(),
     conversations,
+    consultationsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, listConsultations(conversation.id)])),
     messagesByConversation: Object.fromEntries(
       conversations.map((conversation) => [conversation.id, listMessages(conversation.id)])
     ),
@@ -123,6 +127,7 @@ export function getConversationPayload(conversationId: string) {
 
   return {
     conversation,
+    consultations: listConsultations(conversationId),
     messages: listMessages(conversationId),
     runs: listRuns(conversationId),
     artifacts: listArtifacts(conversationId)
@@ -171,15 +176,20 @@ export async function sendMessage(input: SendMessageInput) {
 
   const conversation = getConversation(input.conversationId);
   if (!conversation) throw new Error("Conversation not found.");
+  const parent = input.parentMessageId ? getMessage(input.parentMessageId) : null;
   if (input.parentMessageId) {
-    const parent = getMessage(input.parentMessageId);
     if (!parent || parent.conversationId !== input.conversationId) {
       throw new Error("Reply target does not belong to this conversation.");
     }
   }
 
   const now = Date.now();
-  const mentionedAgentIds = input.mentionedAgentIds ?? [];
+  const mentionedAgentIds = [...new Set(input.mentionedAgentIds ?? [])];
+  // Resolve before writing, so invalid explicit targets cannot silently fall
+  // back to a different Agent or leave an apparently accepted message behind.
+  const responderIds = origin === "human"
+    ? resolveMessageRecipients(conversation, listAgents(), mentionedAgentIds, parent)
+    : [];
 
   // Build parts: text + attachment references
   const parts: Message["parts"] = [{ type: "text", content }];
@@ -227,7 +237,6 @@ export async function sendMessage(input: SendMessageInput) {
     };
   }
 
-  const responderIds = dispatchTargets(conversation, origin, mentionedAgentIds);
   const handles = responderIds.map((agentId) =>
     startAgentRun({
       conversationId: input.conversationId,
@@ -243,48 +252,13 @@ export async function sendMessage(input: SendMessageInput) {
  * The type makes `origin` required, but that only constrains TypeScript
  * callers. A caller that bypasses the type — or arrives from untyped code —
  * would otherwise have `createMessage` fall back to the role default and write
- * 'human' while `dispatchTargets` refuses to dispatch, producing a row that
+ * 'human' while ingress refuses to dispatch, producing a row that
  * says human but behaves as though it were not. Fail loudly instead, before
  * anything is written.
  */
 function assertMessageOrigin(value: unknown): MessageOrigin {
   if (value === "human" || value === "bot" || value === "internal") return value;
   throw new Error("sendMessage requires an explicit origin of human, bot, or internal.");
-}
-
-/**
- * Which agents a message may start work for.
- *
- * Only human-authored messages dispatch. `pickResponders` falls back to the
- * conductor whenever nothing is mentioned, so without this gate a single
- * bot-authored message — a channel echo, a projected internal event — would
- * start a new conductor run, whose output would be projected back and start
- * another: an unbounded loop. Non-human messages are still recorded in the
- * conversation for context; they simply never start a run.
- */
-function dispatchTargets(
-  conversation: Conversation,
-  origin: MessageOrigin,
-  mentionedAgentIds: string[]
-): string[] {
-  if (origin !== "human") return [];
-  return pickResponders(conversation, mentionedAgentIds);
-}
-
-function pickResponders(conversation: Conversation, mentionedAgentIds: string[]) {
-  if (conversation.mode === "single") {
-    return conversation.agentIds.slice(0, 1);
-  }
-
-  const allowedMentionIds = mentionedAgentIds.filter((agentId) => conversation.agentIds.includes(agentId));
-  if (allowedMentionIds.length > 0) {
-    return allowedMentionIds;
-  }
-
-  const conductor = listAgents().find(
-    (agent) => agent.isConductor && conversation.agentIds.includes(agent.id)
-  );
-  return conductor ? [conductor.id] : [];
 }
 
 /**

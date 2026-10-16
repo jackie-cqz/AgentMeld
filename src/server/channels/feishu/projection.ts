@@ -197,12 +197,22 @@ function replyTargetForMessage(
   message: Message,
   chatId: string
 ): { chatId: string; messageId: string; threadId: string } | null {
-  if (!message.runId) return null;
-  const run = getRun(message.runId);
-  if (!run?.triggerMessageId) return null;
-  const inbound = getChannelInboundThread(run.triggerMessageId);
-  if (!inbound?.threadId) return null;
-  return { chatId, messageId: inbound.externalMessageId, threadId: inbound.threadId };
+  const triggerId = message.runId ? getRun(message.runId)?.triggerMessageId : null;
+  const queue = [triggerId, message.parentMessageId].filter((id): id is string => Boolean(id));
+  const seen = new Set<string>();
+  // Consultation replies refer to a platform-authored question. Follow its
+  // parent to the same ingress topic without ever crossing conversations.
+  while (queue.length && seen.size < 16) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const parent = getMessage(id);
+    if (!parent || parent.conversationId !== message.conversationId) continue;
+    const inbound = getChannelInboundThread(id);
+    if (inbound?.threadId) return { chatId, messageId: inbound.externalMessageId, threadId: inbound.threadId };
+    if (parent.parentMessageId) queue.push(parent.parentMessageId);
+  }
+  return null;
 }
 
 export async function projectMessage(message: Message, now = Date.now()): Promise<ProjectionOutcome> {

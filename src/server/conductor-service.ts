@@ -42,6 +42,7 @@ import {
   listEvidenceForAttempt,
 } from "@/server/repositories/evidence-repository";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
+import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -1615,7 +1616,7 @@ export function buildConductorPlanPrompt(
   // agent record's list: a conductor configured with bash still cannot run a
   // command while planning, and telling it it can would contradict the stage
   // instructions two blocks down.
-  blocks.push(workspaceInfoBlock(CONDUCTOR_PLAN_TOOLS, workspacePath));
+  blocks.push(workspaceInfoBlock(agent.toolNames.includes("consult_agent") ? [...CONDUCTOR_PLAN_TOOLS, "consult_agent"] : CONDUCTOR_PLAN_TOOLS, workspacePath));
 
   // Block 2: Conductor persona
   blocks.push(agent.systemPrompt);
@@ -1624,6 +1625,7 @@ export function buildConductorPlanPrompt(
   blocks.push(`## 你的工作流
 1. 阅读用户最新请求与上下文。
 2. 在调用任何工具前，先基于语义判断当前请求属于：
+   - DISCUSSION：用户在讨论方案、征求意见、询问进度或解释，尚未授权实际交付。
    - NEEDS_CLARIFICATION：存在多个合理方案，且不同选择会显著改变最终产物。
    - READY_TO_PLAN：信息足以形成可靠计划，或用户已明确授权你自行做决定。
 3. 对“创建应用 / 网站 / 工具 / 游戏 / 页面”类请求，重点检查：
@@ -1635,12 +1637,14 @@ export function buildConductorPlanPrompt(
    - 不要自行把常见默认值当作用户已经确认的选择。
    例如“帮我做一个番茄时钟”通常仍有计时规则、功能范围或视觉方向等高影响选择，
    应先判断这些选择是否需要用户确认。
-5. 如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
+5. DISCUSSION 时直接对话；需要专业意见且工具可用时调用 consult_agent，不调用 plan_tasks，不强制创建 PRD、风格指南或其他产物。
+   用户说“先别改”“先讨论”时，即使点名多位 Agent 也只进行咨询；不能把咨询结果当作用户已经批准执行。
+   如果判断为 READY_TO_PLAN，直接调用 plan_tasks，不要为了形式感提问。
    例如用户已明确“React+TS、25+5、极简、不需要后端”，或明确说“细节你决定”。
 6. 系统会自动执行 plan 并把子任务结果回传给你，由你做最终总结。
-7. 用户明确指定两个或以上角色、明确要求“先由 A 再由 B”、或明确要求 Agent 间产物交接时，
-   该请求必定属于 READY_TO_PLAN；你必须调用 plan_tasks。只读侦察只能帮助形成计划，
-   不能在侦察后由 Conductor 自己完成诊断、实现或审查并直接回复。
+7. 用户明确指定两个或以上角色执行实际交付、明确要求“先由 A 再由 B”执行、或明确要求 Agent 间正式产物交接时，
+   信息充分后你必须调用 plan_tasks；单个专业 Agent 足够时，计划只需一个任务，不额外插入需求、设计或审查步骤。
+   上述规则不适用于只读咨询或讨论。这些平台规则优先于角色模板里固定的多角色工作流。
 
 ## 可用 Agent
 
@@ -1658,7 +1662,7 @@ ${agentList}
 - 需要创建或修改网页、组件、源码、运行构建时优先找前端 / 工程类 Agent。
 - 需要检查完成度、代码质量、需求一致性或风险时优先找 Reviewer / QA 类 Agent。
 - 一个任务只分派给一个最合适的 Agent；不要把同一职责同时派给多个 Agent。
-- 多角色链路必须用 dependsOn 串起来，例如 PRD -> 风格指南 -> 实现 -> 审查。
+- 只有存在实际输入依赖的角色才用 dependsOn 串起来；不要因为角色不同或带有“审查/测试”字样就强制串行。
 - 如果当前群聊缺少某类 Agent，就用已有最接近能力者降级完成，并在任务 prompt 中说明边界；不要编造新 Agent。
 
 ## agentId 严格规则
@@ -1671,9 +1675,9 @@ ${agentList}
 - 充分利用每个 Agent 的 capabilities，不要把任务派给不合适的人。
 - 每个子任务必须独立可执行（被分派的 Agent 看不到完整群聊上下文，
   必要上下文要写进 task）。
-- 计划阶段只能调用 ask_user、plan_tasks 和只读侦察工具
+- 计划阶段只能调用 ask_user、plan_tasks、已授权的 consult_agent 和只读侦察工具
   （fs_list / fs_read / read_artifact / read_attachment）；不要写文件或执行命令。
-- NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
+- DISCUSSION 时直接回复或受控咨询；NEEDS_CLARIFICATION 时先 ask_user；READY_TO_PLAN 时直接 plan_tasks。
 - 给工程类 Agent 写任务时，不要把“必须先 npm install / npm run dev”作为硬流程；如果确实需要安装依赖，只写“需要时通过 bash 发起依赖安装审批”。验证优先写 build/test/lint/typecheck/check。
 
 ## 依赖关系（执行顺序的唯一来源，务必读完）
@@ -1683,8 +1687,7 @@ ${agentList}
   你【必须】在 B 的 dependsOn 里写上 A 的 id。
 - 在 task 文本里写「先做 A」「基于上一步」之类【没有任何效果】
   ——执行顺序只认 dependsOn 字段。
-- 只有彼此真正无关、可同时进行的任务才留空 dependsOn；
-  拿不准时倾向加依赖（串行更安全）。
+- 彼此独立的任务留空 dependsOn；不确定实际输入时先澄清，不用无关依赖掩盖不确定性。
 - Only declare expectedOutputs when the assigned agent must create a real artifact
   via write_artifact for downstream handoff or user inspection.
 - Reviewer tasks use the standard review_report document output so the review can
@@ -1985,7 +1988,11 @@ async function runConductorAssess(
 
   // Build the PLAN stage system prompt from the extracted pure function
   const assessSystemPrompt = buildConductorPlanPrompt(agent, otherAgents, workspacePath);
-  const assessToolNames = [...CONDUCTOR_PLAN_TOOLS];
+  const assessToolNames: string[] = [...CONDUCTOR_PLAN_TOOLS];
+  if (agent.toolNames.includes("consult_agent")) assessToolNames.push("consult_agent");
+  const { history, recentMessages } = await buildCollaborationHistory({
+    agent, triggerMessage: input.triggerMessage, systemPrompt: assessSystemPrompt, currentText: userText,
+  });
   const invocationInput: PiInvocationInput = {
     conversationId: input.conversationId,
     runId: input.conductorRunId,
@@ -1993,7 +2000,8 @@ async function runConductorAssess(
     conversation,
     workspace,
     triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] },
-    recentMessages: [],
+    recentMessages,
+    history,
     toolNames: assessToolNames,
     systemPrompt: assessSystemPrompt,
     ...input.piConfiguration,

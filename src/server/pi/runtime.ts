@@ -12,9 +12,11 @@ import { acquirePiWorkspace, type PiWorkspaceLease } from "./workspace-lease";
 import type { PiInvocationInput, PiInvocationStream } from "./types";
 import { getAttachment } from "@/server/attachment-service";
 import { assertRealPathWithinWorkspace } from "@/server/workspace-utils";
+import { assertPiAccessProfile } from "./access-profile";
 
 /** No LLM loop lives here: one invocation drives a pinned Pi process to its terminal event. */
 export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSignal): PiInvocationStream {
+  assertPiAccessProfile(input.accessMode, input.toolNames);
   // Freeze provider resolution before waiting behind another workspace owner.
   input = capturePiConfiguration(input);
   // Pi and its native write callback must use the same physical root as the
@@ -22,7 +24,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
   try { input = { ...input, workspacePath: fs.realpathSync.native(input.workspacePath) }; }
   catch { throw new PiRuntimeError("The Pi workspace directory is not accessible.", "configuration"); }
   const budget = new AbortController();
-  const timeoutMs = Number(process.env.AGENTMELD_PI_RUN_TIMEOUT_MS ?? 20 * 60 * 1000);
+  const timeoutMs = input.timeoutMs ?? Number(process.env.AGENTMELD_PI_RUN_TIMEOUT_MS ?? 20 * 60 * 1000);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 24 * 60 * 60 * 1000) throw new PiRuntimeError("Invalid Pi invocation timeout configuration.", "configuration");
   const deadline = AbortSignal.timeout(timeoutMs);
   const effective = AbortSignal.any([signal, deadline, budget.signal]);
@@ -36,7 +38,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
   const projection = new PiEventProjection(input.conversationId, input.agent.modelId ?? "unknown");
   try {
     effective.throwIfAborted();
-    lease = await acquirePiWorkspace(input.workspacePath, effective);
+    if (input.accessMode !== "conversation") lease = await acquirePiWorkspace(input.workspacePath, effective);
     execution = preparePiInvocation(input);
     bridge = await createPiBridge(input, effective, () => budget.abort());
     Object.assign(execution.env, { AGENTMELD_PI_BRIDGE_URL: bridge.url, AGENTMELD_PI_BRIDGE_TOKEN: bridge.token });
@@ -48,7 +50,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
       "--session-dir", path.join(execution.home, "sessions"), "--tools", tools.length ? tools.join(",") : "",
     ] });
     const ownedChild = child;
-    if (child.pid !== undefined) lease.attachChild(child.pid);
+    if (child.pid !== undefined) lease?.attachChild(child.pid);
     abortListener = () => {
       cancelPiApprovals(input.runId);
       void ownedChild.close().catch(() => { /* Awaited again by the invocation's finally. */ });

@@ -36,9 +36,11 @@ const TOOL_GROUPS = [
   { label: "Artifact", tone: "safe", tools: ["write_artifact"] as const },
   { label: "部署", tone: "danger", tools: ["deploy_artifact", "deploy_workspace"] as const },
   { label: "用户交互与上下文", tone: "safe", tools: ["ask_user", "update_context_facts"] as const },
+  { label: "团队协作", tone: "safe", tools: ["consult_agent"] as const },
 ];
 
 const TOOL_META: Record<string, { label: string; description: string }> = {
+  consult_agent: { label: "咨询同事", description: "向当前团队成员征询有界只读意见，不授予执行或审批权限" },
   fs_list: { label: "列出文件", description: "查看工作区目录结构" },
   fs_glob: { label: "查找文件", description: "按文件名模式定位，排除依赖和敏感文件" },
   fs_search: { label: "搜索内容", description: "按文本搜索代码，返回文件与行号" },

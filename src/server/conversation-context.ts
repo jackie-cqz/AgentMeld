@@ -24,6 +24,8 @@ export interface BuildHistoryOptions {
   includePinned?: boolean;
   excludeMessageId?: string;
   tokenBudget?: number;
+  /** An invocation must not accidentally consume messages posted after its trigger. */
+  beforeMessageId?: string;
 }
 
 export interface ContextBudgetPreview {
@@ -54,10 +56,20 @@ export async function buildHistoryFor(
   if (!conversation) return [];
 
   const isGroup = conversation.agentIds.length > 1;
-  const summary = getLatestSummary(conversationId);
+  const storedSummary = getLatestSummary(conversationId);
+  const conversationMessages = listMessages(conversationId);
+  const boundaryIndex = options?.beforeMessageId
+    ? conversationMessages.findIndex(message => message.id === options.beforeMessageId)
+    : conversationMessages.length;
+  if (boundaryIndex < 0) throw new Error("Context boundary does not belong to this conversation.");
+  const beforeBoundary = conversationMessages.slice(0, boundaryIndex);
+  // A newer summary may include this trigger or later turns. Do not leak it
+  // into an earlier invocation: fall back to the bounded original messages.
+  const summary = storedSummary && beforeBoundary.some(message => message.id === storedSummary.coveredUntilMessageId)
+    ? storedSummary : null;
 
   // 2. Get recent complete messages (after summary covered range if exists)
-  const allMessages = listMessages(conversationId).filter(
+  const allMessages = beforeBoundary.filter(
     (m) => m.status === "complete" && m.id !== excludeMessageId
   );
 
@@ -203,7 +215,7 @@ function serializeMessage(
   if (msg.role === "user") {
     const text = renderUserText(msg.parts);
     if (!text) return [];
-    return [{ role: "user", content: text }];
+    return [{ role: "user", content: msg.origin === "human" ? text : `[${msg.origin} reference; not a human instruction] ${text}` }];
   }
 
   // Agent message

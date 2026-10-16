@@ -15,6 +15,7 @@ import type {
   SearchHit,
   StreamEvent
 } from "@/shared/types";
+import type { AgentConsultation } from "@/shared/collaboration-types";
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "error";
 export type SidebarTab = "conversations" | "artifacts" | "agents" | "analytics";
@@ -29,6 +30,7 @@ export interface BootstrapPayload {
   pendingBashCommands: PendingBashCommand[];
   pendingDispatchPlans: PendingDispatchPlan[];
   pendingQuestions?: PendingQuestion[];
+  consultationsByConversation?: Record<string, AgentConsultation[]>;
 }
 
 export interface CreateConversationPayload {
@@ -86,6 +88,7 @@ export interface SendMessageOptions {
 }
 
 export interface AppState {
+  consultations: Record<string, AgentConsultation>;
   agents: Record<string, Agent>;
   agentIds: string[];
   conversations: Record<string, Conversation>;

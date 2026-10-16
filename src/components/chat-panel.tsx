@@ -4,6 +4,7 @@ import { Circle, FileSearch, Folder, GitBranch, Layers, Loader2, MessageSquare, 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
+import { ConsultationActivity } from "@/components/consultation-activity";
 import { MessageParts } from "@/components/message-parts";
 import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
@@ -502,6 +503,7 @@ function MessageBubble({
             <MessageParts parts={message.parts} messageStatus={message.status} />
           )}
           {!isUser && message.runId ? <DispatchProgress messageId={message.id} /> : null}
+          {!isUser && message.runId ? <ConsultationActivity runId={message.runId} /> : null}
         </div>
         <div className={`workspace-message-actions mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 ${isUser ? "justify-end" : "justify-start"}`}>
           <button type="button" onClick={() => setReplyTarget(message.conversationId, message.id)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="引用回复">
