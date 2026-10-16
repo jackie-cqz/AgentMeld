@@ -4,7 +4,7 @@ import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent, updateAgent } from "@/server/agent-service";
-import { createConversation, patchConversation } from "@/server/conversation-service";
+import { createConversation, patchConversation, sendMessage } from "@/server/conversation-service";
 import { createMessage, createRun, getWorkspaceForConversation, getRun, listMessages, updateRunStatus } from "@/server/repositories";
 import { listConsultations } from "@/server/collaboration/consultations";
 import { submitPiFollowup, type PiFollowupReceipt } from "./controls";
@@ -13,7 +13,8 @@ import { runPiInvocation } from "./runtime";
 import { getPiDoctor } from "./config";
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
-import { startAgentRun, abortRun } from "@/server/agent-runner";
+import { startAgentRun, abortRun, isRunActive } from "@/server/agent-runner";
+import { listCollaborationTurns } from "@/server/collaboration/turns";
 import { approvePlan } from "@/server/dispatch-plan-manager";
 import { SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import type { PiInvocationInput } from "./types";
@@ -63,6 +64,76 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it("admits a human group discussion, consults a real Pi peer, and creates no plan or artifact", async () => {
+    let peerId = "";
+    let sourceTurns = 0;
+    let classifierTurns = 0;
+    let peerTurns = 0;
+    const url = await modelServer((request, response) => {
+      const messages = JSON.stringify(request.messages);
+      if (messages.includes("AGENTMELD_TURN_CLASSIFIER_V1")) {
+        classifierTurns++;
+        complete(response, { content: JSON.stringify({ intent: "discussion", targetRunId: null, mode: "discussion", reason: "The user requests opinions, not implementation." }) });
+      } else if (request.model === "fixture-group-peer") {
+        peerTurns++;
+        complete(response, { tool_calls: [{ index: 0, id: "group-peer-response", type: "function", function: { name: "respond_to_consultation",
+          arguments: JSON.stringify({ status: "replied", answer: "Use a compact sidebar and keep the content column readable." }) } }] }, "tool_calls");
+      } else {
+        const tools = ((request.tools ?? []) as Array<{ function: { name: string } }>).map(tool => tool.function.name);
+        expect(tools).toEqual(expect.arrayContaining(["consult_agent", "read_artifact"]));
+        expect(tools).not.toContain("write"); expect(tools).not.toContain("plan_tasks");
+        if (++sourceTurns === 1) complete(response, { tool_calls: [{ index: 0, id: "group-consult", type: "function", function: { name: "consult_agent",
+          arguments: JSON.stringify({ requestKey: "group-layout", targetAgentId: peerId, question: "Give a read-only design opinion; do not modify files." }) } }] }, "tool_calls");
+        else complete(response, { content: "The team recommends the compact sidebar. No files were modified." });
+      }
+    });
+    const peer = createAgent({ name: "Group designer", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-group-peer", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [], capabilities: ["design"] });
+    peerId = peer.id;
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-group-source", apiKey: "fixture-key", apiBaseUrl: url,
+      toolNames: ["consult_agent", "read_artifact", "plan_tasks", "fs_write", "bash"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", peer.id] });
+    const result = await sendMessage({ origin: "human", conversationId: conversation.id, content: "请和设计师讨论布局，先别改。", clientRequestId: "real-group-discussion" });
+    try {
+      await vi.waitFor(() => expect(isRunActive(result.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getRun(result.runIds[0])?.status).toBe("complete");
+      expect([classifierTurns, sourceTurns, peerTurns]).toEqual([1, 2, 1]);
+      expect(listCollaborationTurns(conversation.id)).toMatchObject([{ mode: "discussion", status: "applied" }]);
+      expect(listConsultations(conversation.id)).toMatchObject([{ status: "replied" }]);
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM conductor_plans WHERE conversation_id=?").get(conversation.id)).toEqual({ n: 0 });
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM artifacts WHERE conversation_id=?").get(conversation.id)).toEqual({ n: 0 });
+      expect(fs.readdirSync(getWorkspaceForConversation(conversation.id)!.rootPath)).toEqual([]);
+    } finally { abortRun(result.runIds[0]); }
+  }, process.platform === "win32" ? 120000 : 60000);
+
+  it("persists a human supplement and applies it to the same real Pi discussion without another task invocation", async () => {
+    let heldResponse: http.ServerResponse | undefined;
+    let requests = 0;
+    let nextTurnReceivedSupplement = false;
+    const supplementText = "Focus on the second compact layout option.";
+    const url = await modelServer((request, response) => {
+      if (++requests === 1) heldResponse = response;
+      else {
+        nextTurnReceivedSupplement = JSON.stringify(request.messages).includes(supplementText);
+        complete(response, { content: "The second layout is the more compact option." });
+      }
+    });
+    const agent = createAgent({ name: "Live discussion", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-model", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
+    const original = await sendMessage({ origin: "human", conversationId: conversation.id, content: "Discuss the layout options.", action: "discussion", clientRequestId: "live-original" });
+    try {
+      await vi.waitFor(() => expect(heldResponse).toBeDefined(), { timeout: 30000 });
+      const followup = await sendMessage({ origin: "human", conversationId: conversation.id, content: supplementText,
+        action: "supplement", targetRunId: original.runIds[0], clientRequestId: "live-supplement" });
+      await vi.waitFor(() => expect(listCollaborationTurns(conversation.id).find(turn => turn.runId === followup.runIds[0])?.status).toBe("queued"));
+      complete(heldResponse!, { content: "I have compared both layouts." });
+      await vi.waitFor(() => expect(isRunActive(original.runIds[0]) || isRunActive(followup.runIds[0])).toBe(false), { timeout: 30000 });
+      expect(nextTurnReceivedSupplement).toBe(true);
+      expect(requests).toBe(2);
+      expect(listCollaborationTurns(conversation.id).map(turn => turn.status)).toEqual(["applied", "applied"]);
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_executions WHERE run_id IN (?,?)").get(original.runIds[0], followup.runIds[0])).toEqual({ n: 1 });
+    } finally { abortRun(original.runIds[0]); }
+  }, process.platform === "win32" ? 90000 : 45000);
+
   it.each(["steer", "follow_up"] as const)("confirms real Pi %s consumption separately from the RPC acknowledgement", async kind => {
     let firstResponse: http.ServerResponse | undefined;
     let signalFirst!: () => void;

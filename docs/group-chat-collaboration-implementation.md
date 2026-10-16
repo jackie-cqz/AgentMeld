@@ -15,11 +15,11 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 | --- | --- | --- |
 | Recipient precedence and reply membership | Implemented; final audit pending | Shared resolver, ingress and composer integration, rejection tests |
 | Conductor bounded history and active facts | Implemented; final audit pending | Captured invocation and context budget tests |
-| In-flight follow-up, correction, cancellation and idempotency | Native control receipts implemented; persistent ingress and re-attempt flow pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
+| In-flight follow-up, correction, cancellation and idempotency | Persistent admission, authenticated resolution, native consumption and safe replacement implemented; final audit pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
 | Bounded peer consultation | Core implemented; policy and final audit pending | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
-| Adaptive plans and explicit dependency contracts | Dependency compilation and prompts updated; admission policy pending | Discussion without writes, simple task promotion, DAG regression tests |
-| Handoff integration | Pending | Stable task identity, new attempt/context, confirmed old-run teardown |
-| UI and channel state projections | Consultation SSE/bootstrap implemented; channel mapping pending | Reload recovery, recipient and status inspection, shared semantic IDs |
+| Adaptive plans and explicit dependency contracts | Discussion admission is enforced by a closed read-only tool profile; contract audit pending | Discussion without writes, simple task promotion, DAG regression tests |
+| Handoff integration | Pi task-boundary and failed-task takeover implemented; final integration audit pending | Stable task identity, new attempt/context, confirmed old-run teardown |
+| UI and channel state projections | Turn/consultation/handoff SSE and bootstrap implemented; rendered UI and channel validation pending | Reload recovery, recipient and status inspection, shared semantic IDs |
 | Verification and review | Pending | Full checks, real Pi consultation smoke, independent review findings addressed |
 | PR and merge | Pending | Required checks and verified merged PR |
 
@@ -70,14 +70,11 @@ unavailable, must be reported separately from deterministic projection tests.
 
 ## Next Critical Work
 
-1. Add persistent human-turn admission/intent decisions and follow-up records.
-   Enforce discussion tool restrictions in code, not only in role prompts.
-2. Wire the pinned Pi steer/follow_up RPC contract with actual consumption
-   receipts. Distinguish queued/accepted from applied; handle settling races.
-3. For changes to execution contracts, stop the old writer, retire obsolete
-   snapshots/evidence appropriately, and compile a fresh authorized attempt.
-4. Integrate formal handoff with stable task identity and fresh attempts, then
-   verify UI, reload, channel projection and the complete acceptance checklist.
+1. Complete the requirement-by-requirement security and lifecycle audit, including
+   handoff races, stale inputs, restart behavior and native integration.
+2. Verify rendered UI, reload, network-loss retry and channel projection.
+3. Run fresh full checks and production build, review the entire change, address
+   findings, then open the PR and require passing CI before merge.
 
 ## Native Follow-Up Contract Checkpoint
 
@@ -92,6 +89,39 @@ unavailable, must be reported separately from deterministic projection tests.
 - The registry bounds and deduplicates input, rejects arbitrary RPC names, and
   settles unused inputs on exit. Receipt callback failure cannot skip child,
   bridge or workspace teardown.
-- This is an internal runtime capability, not yet a completed user-facing
-  follow-up feature. Persistent follow-up records, authenticated ingress,
-  semantic intent selection and UI delivery state remain to be implemented.
+- This checkpoint has now been connected to persistent human-turn admission,
+  authenticated resolution and UI delivery states; final acceptance remains open.
+
+## Human Turn And Handoff Checkpoint
+
+- Every authenticated human send has an idempotent submission identity. Lost HTTP
+  responses can be retried without re-execution; SSE correlation preserves user
+  message order and avoids a duplicate optimistic bubble after acceptance.
+- A bounded, tool-free Pi classification chooses discussion, execution, progress,
+  supplement, correction, cancellation or clarification. Explicit human controls
+  bypass classification, but discussion-only corrections still remove write access.
+- Input delivery is separate from task outcome: queued input becomes applied only
+  on native consumption, and a later task failure does not rewrite that receipt.
+- Mutable corrections await actual owner promises and native teardown receipts,
+  retire old binding/evidence eligibility, then rebuild current context. Context
+  snapshots append an immutable predecessor chain; public events omit packet bodies.
+- Formal handoffs preserve the executed task snapshot, not a pre-approval draft.
+  A human-accepted assignment creates a new attempt/run/context under the same
+  logical task ID. In-flight DAG handoffs keep the coordinator; terminal-plan
+  takeover creates an explicitly authorized new coordinator for that task only.
+  It does not claim to restart every downstream task of the old failed DAG.
+- Packages bind source attempt, task contract, prior failure/evidence references,
+  active-fact fingerprint, upstream artifact versions and bounded file hashes.
+  Stale references, an uncertain old process, or oral success without a verified
+  report fail closed. No credentials or internal reasoning are transferred.
+- Five initial handoff regressions plus a real runner/approval/DAG/owner-promise
+  handoff fixture pass. These use a deterministic runtime substitute and do not
+  replace the required pinned-Pi subprocess and browser acceptance checks.
+- Current admission regression suite: 13 passing tests, including correction to
+  discussion, executable supplements, immutable snapshot chains and authenticated
+  idempotent clarification resolution. Store regressions: 45 passing tests.
+- Latest full run (before the last fixture adjustment): 1,881 passed, 8 failed,
+  3 skipped. Seven failures were Windows EPERM when creating security-test
+  symlinks. The other was an old provider-only fixture feeding application prose
+  to the new classifier; it now specifies explicit execution and its 9-test suite
+  passes. A fresh full run and Linux CI remain required; security tests are intact.

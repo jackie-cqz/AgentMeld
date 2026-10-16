@@ -132,7 +132,7 @@ export function MessageInput({ conversationId, agents }: { conversationId: strin
             </button>
           </div>
           <div className="workspace-compose-options">
-            {!revising ? <button type="button" title={`当前：${approvalMode === "auto" ? "自动写入" : "需审批"}，点击切换`} aria-label="自动审批" aria-pressed={approvalMode === "auto"} disabled={updatingMode || submitting}
+            {!revising ? <button type="button" title={`文件写入：${approvalMode === "auto" ? "自动" : "需审批"}。计划和命令仍遵循各自的审批规则。`} aria-label="文件写入审批" aria-pressed={approvalMode === "auto"} disabled={updatingMode || submitting}
               className="workspace-approval-mode" onClick={() => void toggleApproval()}>{updatingMode ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}<span>{approvalMode === "auto" ? "Auto" : "Review"}</span></button> : null}
             <button className="workspace-send" type="button" title={revising ? "提交修改意见" : "发送"} disabled={!draft.trim() || submitting || uploading || Boolean(recipientError)} onClick={() => void submit()}>{submitting ? <Loader2 size={17} className="animate-spin" /> : <ArrowUp size={18} />}</button>
           </div>

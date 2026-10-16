@@ -14,6 +14,7 @@ const TTL_MS = 120_000;
 const MAX_PER_RUN = 4;
 const MAX_CONCURRENT = 2;
 const controllers = new Map<string, AbortController>();
+const completionPromises = new Map<string, Promise<void>>();
 type Row = Record<string, unknown>;
 
 function mapConsultation(row: Row): AgentConsultation {
@@ -49,6 +50,9 @@ export function abortConsultationRun(runId: string): boolean {
   controller.abort();
   return true;
 }
+
+export function isConsultationRunActive(runId: string): boolean { return controllers.has(runId); }
+export function getConsultationCompletion(runId: string): Promise<void> | undefined { return completionPromises.get(runId); }
 
 /** A private bridge call, not bot ingress, is the authority to request a bounded peer opinion. */
 function assertSource(ctx: ToolContext) {
@@ -139,6 +143,8 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
   const deadline = AbortSignal.timeout(TTL_MS);
   const signal = AbortSignal.any([ctx.abortSignal, ownAbort.signal, deadline]);
   controllers.set(childRunId, ownAbort);
+  let markStopped!: () => void;
+  completionPromises.set(childRunId, new Promise<void>(resolve => { markStopped = resolve; }));
   let responseId: string | null = null;
   let started = false;
   try {
@@ -203,6 +209,8 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
     }
   } finally {
     controllers.delete(childRunId);
+    completionPromises.delete(childRunId);
+    markStopped();
   }
   return publish(id);
 }

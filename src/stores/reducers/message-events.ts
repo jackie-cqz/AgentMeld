@@ -9,6 +9,10 @@ import {
 
 export function applyMessageEvent(state: StoreDraft, event: StreamEvent) {
   if (event.type === "message.added") {
+    if (event.message.clientRequestId) {
+      const locals = (state.messageIdsByConversation[event.conversationId] ?? []).filter(id => id.startsWith("local-") && state.messages[id]?.clientRequestId === event.message.clientRequestId);
+      removeMessages(state, event.conversationId, locals);
+    }
     upsertMessage(state, event.message);
     state.conversationOrder = [
       event.conversationId,

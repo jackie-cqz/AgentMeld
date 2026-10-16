@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { useShallow } from "zustand/react/shallow";
 import { MessageInput } from "@/components/message-input";
 import { ConsultationActivity } from "@/components/consultation-activity";
+import { MessageTurnStatus, RunStageBadge } from "@/components/message-turn-status";
 import { MessageParts } from "@/components/message-parts";
 import { DispatchProgress } from "@/components/dispatch-progress";
 import { PendingApprovalPanel } from "@/components/pending-approval-panel";
@@ -467,6 +468,7 @@ function MessageBubble({
         <div className={`workspace-message-meta flex items-center gap-2 text-xs text-[var(--ui-muted)] ${isUser ? "justify-end" : "justify-start"}`}>
           {!isUser ? <span className="font-semibold text-[var(--foreground)]">{agentLabel}</span> : null}
           <span>{formatTime(message.createdAt)}</span>
+          {!isUser && message.runId ? <RunStageBadge runId={message.runId} /> : null}
           {!isUser && message.status === "streaming" ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
         </div>
         <div
@@ -505,6 +507,7 @@ function MessageBubble({
           {!isUser && message.runId ? <DispatchProgress messageId={message.id} /> : null}
           {!isUser && message.runId ? <ConsultationActivity runId={message.runId} /> : null}
         </div>
+        {isUser ? <MessageTurnStatus messageId={message.id} /> : null}
         <div className={`workspace-message-actions mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 ${isUser ? "justify-end" : "justify-start"}`}>
           <button type="button" onClick={() => setReplyTarget(message.conversationId, message.id)} className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="引用回复">
             <Reply className="h-3.5 w-3.5" />

@@ -15,7 +15,7 @@ import type {
   SearchHit,
   StreamEvent
 } from "@/shared/types";
-import type { AgentConsultation } from "@/shared/collaboration-types";
+import type { AgentConsultation, CollaborationTurn, CollaborationAction, TaskHandoff } from "@/shared/collaboration-types";
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "error";
 export type SidebarTab = "conversations" | "artifacts" | "agents" | "analytics";
@@ -31,6 +31,8 @@ export interface BootstrapPayload {
   pendingDispatchPlans: PendingDispatchPlan[];
   pendingQuestions?: PendingQuestion[];
   consultationsByConversation?: Record<string, AgentConsultation[]>;
+  collaborationTurnsByConversation?: Record<string, CollaborationTurn[]>;
+  handoffsByConversation?: Record<string, TaskHandoff[]>;
 }
 
 export interface CreateConversationPayload {
@@ -85,9 +87,14 @@ export interface SendMessageOptions {
   mentionedAgentIds?: string[];
   attachmentIds?: string[];
   parentMessageId?: string | null;
+  clientRequestId?: string;
+  action?: CollaborationAction;
+  targetRunId?: string;
 }
 
 export interface AppState {
+  handoffs: Record<string, TaskHandoff>;
+  collaborationTurns: Record<string, CollaborationTurn>;
   consultations: Record<string, AgentConsultation>;
   agents: Record<string, Agent>;
   agentIds: string[];

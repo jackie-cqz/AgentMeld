@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { getArtifact } from "@/server/repositories";
 import { getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 import { cancelJobsForRun } from "@/server/tools/command-jobs";
@@ -40,7 +41,11 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
   const projection = new PiEventProjection(input.conversationId, input.agent.modelId ?? "unknown");
   try {
     effective.throwIfAborted();
-    if (input.accessMode !== "conversation") lease = await acquirePiWorkspace(input.workspacePath, effective);
+    if (input.accessMode !== "conversation") {
+      input.onStage?.("queued");
+      lease = await acquirePiWorkspace(input.workspacePath, effective);
+    }
+    input.onStage?.("running");
     execution = preparePiInvocation(input);
     bridge = await createPiBridge(input, effective, () => budget.abort());
     Object.assign(execution.env, { AGENTMELD_PI_BRIDGE_URL: bridge.url, AGENTMELD_PI_BRIDGE_TOKEN: bridge.token });
@@ -66,11 +71,20 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
       allowFollowup: input.accessMode === "conversation" && !input.parentRunId && !input.taskExecution && !input.toolNames.includes("respond_to_consultation"),
       request: (kind, params) => ownedChild.request(kind, params),
     });
-    await child.request("prompt", { message: buildPiTaskPacket(input) });
+    const initialPacket = buildPiTaskPacket(input);
+    input.onContextCaptured?.({ packet: initialPacket, systemPromptHash: createHash("sha256").update(input.systemPrompt).digest("hex"),
+      toolNames: [...input.toolNames], accessMode: input.accessMode ?? "workspace" });
+    let taskAccepted = false;
+    await child.request("prompt", { message: initialPacket });
     const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
     for await (const record of child.events) {
       effective.throwIfAborted();
       control.observe(record);
+      const committed = object(record.message);
+      if (!taskAccepted && record.type === "message_end" && committed?.role === "user" && Array.isArray(committed.content)) {
+        const text = committed.content.map(part => { const block = object(part); return block?.type === "text" && typeof block.text === "string" ? block.text : ""; }).join("");
+        if (text === initialPacket) { input.onTaskAccepted?.(); taskAccepted = true; }
+      }
       for (const event of projection.consume(record)) yield event;
       if (record.type === "tool_execution_start") {
         if (typeof record.toolCallId !== "string" || typeof record.toolName !== "string") {

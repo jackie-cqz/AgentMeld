@@ -26,6 +26,10 @@ export interface PiInvocationInput {
   accessMode?: PiAccessMode;
   maxTurns?: number;
   timeoutMs?: number;
+  /** Receipt for the initial task entering Pi's committed user-message context. */
+  onTaskAccepted?: () => void;
+  onStage?: (stage: "queued" | "running") => void;
+  onContextCaptured?: (snapshot: { packet: string; systemPromptHash: string; toolNames: string[]; accessMode: string }) => void;
   /** Public configuration revision only; never a credential value or hash. */
   providerRevision?: string;
   catalogProvider?: string;

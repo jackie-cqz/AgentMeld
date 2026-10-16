@@ -15,6 +15,7 @@ import type { VerdictItem } from "@/components/criterion-verdict-list";
 import type { ManifestEntry } from "@/components/task-context-manifest";
 import type { AttemptRecord } from "@/components/task-attempt-timeline";
 import { ContextTraceDrawer } from "@/components/context-trace-drawer";
+import { TaskHandoffControl } from "@/components/task-handoff-control";
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
@@ -300,6 +301,7 @@ function DispatchTaskRow({ dispatch, taskId, onOpenDrawer, onOpenTrace }: { disp
           {dispatch.errors[taskId] ? (
             <p className="mt-1 text-xs text-red-600">{dispatch.errors[taskId]}</p>
           ) : null}
+          <TaskHandoffControl runId={dispatch.runId} taskId={taskId} attemptId={activeAttemptId} sourceAgentId={task.agentId} verified={verificationStatus === "verified"} />
         </div>
       </div>
     </div>

@@ -218,6 +218,45 @@ export const agentConsultations = sqliteTable("agent_consultations", {
   index("idx_consultations_conversation").on(table.conversationId, table.createdAt),
 ]);
 
+export const taskHandoffs = sqliteTable("task_handoffs", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  sourceAttemptId: text("source_attempt_id").notNull().references(() => taskAttempts.id, { onDelete: "cascade" }),
+  sourceRunId: text("source_run_id").notNull(), sourceAgentId: text("source_agent_id").notNull().references(() => agents.id),
+  targetAgentId: text("target_agent_id").notNull().references(() => agents.id), taskId: text("task_id").notNull(), title: text("title").notNull(),
+  status: text("status").notNull(), executionStatus: text("execution_status").notNull(),
+  coordinatorRunId: text("coordinator_run_id"), targetRunId: text("target_run_id"), targetAttemptId: text("target_attempt_id"),
+  decidedBy: text("decided_by"), packageJson: text("package_json").notNull(), error: text("error"), expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull(), updatedAt: integer("updated_at").notNull(),
+}, table => [index("idx_handoffs_conversation").on(table.conversationId, table.createdAt)]);
+
+export const collaborationTurns = sqliteTable("collaboration_turns", {
+  id: text("id").primaryKey(),
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  runId: text("run_id").notNull().unique().references(() => agentRuns.id, { onDelete: "cascade" }),
+  targetRunId: text("target_run_id"), topicMessageId: text("topic_message_id").notNull(),
+  intent: text("intent"), mode: text("mode"), status: text("status").notNull(),
+  contextSnapshotId: text("context_snapshot_id"), contextJson: text("context_json"), reason: text("reason"),
+  resolvedBy: text("resolved_by"), resolutionMessageId: text("resolution_message_id"), resolvedAt: integer("resolved_at"),
+  createdAt: integer("created_at").notNull(), updatedAt: integer("updated_at").notNull(),
+}, table => [index("idx_collaboration_turns_conversation").on(table.conversationId, table.createdAt)]);
+
+export const messageSubmissions = sqliteTable("message_submissions", {
+  conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  requestKey: text("request_key").notNull(), payloadHash: text("payload_hash").notNull(),
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  status: text("status").notNull(), responseJson: text("response_json"),
+  createdAt: integer("created_at").notNull(), updatedAt: integer("updated_at").notNull(),
+}, table => [primaryKey({ columns: [table.conversationId, table.requestKey] })]);
+
+export const collaborationContextSnapshots = sqliteTable("collaboration_context_snapshots", {
+  id: text("id").primaryKey(),
+  turnId: text("turn_id").notNull().references(() => collaborationTurns.id, { onDelete: "cascade" }),
+  previousSnapshotId: text("previous_snapshot_id"), contextJson: text("context_json").notNull(), createdAt: integer("created_at").notNull(),
+});
+
 export const conductorTaskResults = sqliteTable(
   "conductor_task_results",
   {

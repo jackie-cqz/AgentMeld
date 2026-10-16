@@ -98,6 +98,70 @@ export function ensureDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_consultations_conversation ON agent_consultations(conversation_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      source_attempt_id TEXT NOT NULL REFERENCES task_attempts(id) ON DELETE CASCADE,
+      source_run_id TEXT NOT NULL,
+      source_agent_id TEXT NOT NULL REFERENCES agents(id),
+      target_agent_id TEXT NOT NULL REFERENCES agents(id),
+      task_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      execution_status TEXT NOT NULL,
+      coordinator_run_id TEXT,
+      target_run_id TEXT,
+      target_attempt_id TEXT,
+      decided_by TEXT,
+      package_json TEXT NOT NULL,
+      error TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_handoffs_conversation ON task_handoffs(conversation_id,created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_handoffs_source ON task_handoffs(source_attempt_id) WHERE status='proposed' OR (status='accepted' AND execution_status IN ('stopping','running'));
+
+    CREATE TABLE IF NOT EXISTS collaboration_turns (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+      target_run_id TEXT,
+      topic_message_id TEXT NOT NULL,
+      intent TEXT,
+      mode TEXT,
+      status TEXT NOT NULL,
+      context_snapshot_id TEXT,
+      context_json TEXT,
+      reason TEXT,
+      resolved_by TEXT,
+      resolution_message_id TEXT,
+      resolved_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_collaboration_turns_conversation ON collaboration_turns(conversation_id,created_at);
+    CREATE TABLE IF NOT EXISTS collaboration_context_snapshots (
+      id TEXT PRIMARY KEY,
+      turn_id TEXT NOT NULL REFERENCES collaboration_turns(id) ON DELETE CASCADE,
+      previous_snapshot_id TEXT,
+      context_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS message_submissions (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      response_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(conversation_id,request_key)
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -599,6 +663,9 @@ function migrateLegacyTables() {
   ensureColumn("agents", "api_base_url", "TEXT");
   ensureColumn("agents", "is_conductor", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("agents", "supports_vision", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("collaboration_turns", "resolved_by", "TEXT");
+  ensureColumn("collaboration_turns", "resolution_message_id", "TEXT");
+  ensureColumn("collaboration_turns", "resolved_at", "INTEGER");
 
   ensureColumn("conversations", "archived", "INTEGER NOT NULL DEFAULT 0");
 

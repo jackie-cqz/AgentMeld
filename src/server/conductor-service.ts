@@ -43,6 +43,8 @@ import {
 } from "@/server/repositories/evidence-repository";
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
 import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
+import { acceptedHandoffForAttempt, bindHandoffAttempt, claimHandoff, finishHandoff, getHandoff, validateHandoffPackage } from "@/server/collaboration/handoffs";
+import { getTaskAttemptByChildRun } from "@/server/repositories/evidence-repository";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -58,9 +60,19 @@ export interface ConductorInput {
   messageId: string;
   signal?: AbortSignal;
   piConfiguration?: PiProviderSnapshot;
+  objectiveContext?: string;
+  onTaskAccepted?: () => void;
+  onContextCaptured?: PiInvocationInput["onContextCaptured"];
+}
+
+function setConductorStage(conversationId: string, runId: string, stage: string): void {
+  const now = Date.now();
+  updateRunStage(runId, stage, now);
+  eventBus.publish({ type: "run.stage", conversationId, timestamp: now, runId, stage });
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
+  setConductorStage(input.conversationId, input.conductorRunId, "planning");
   const agent = listAgents().find(agent => agent.id === input.conductorAgentId);
   if (agent) input.piConfiguration ??= snapshotPiProvider(agent);
   // Stage 0: FACT EXTRACTION — extract structured facts from user message
@@ -82,7 +94,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
   }
 
   // Stage 1: ASSESS — LLM decides whether this needs a plan or is a simple chat
-  const assessResult = await runConductorAssess(input, userText);
+  const assessResult = await runConductorAssess(input, input.objectiveContext ?? userText);
 
   // Case A: Direct response — LLM answered directly (simple chat, greeting, question)
   if (assessResult.mode === "direct") {
@@ -174,6 +186,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
       contractSelectionVersion: t.contractSelectionVersion
     }));
 
+    setConductorStage(input.conversationId, input.conductorRunId, "awaiting_approval");
     const result = await registerPendingPlan(input.conversationId, input.conductorRunId, planItems);
 
     if (!result.approved) {
@@ -334,7 +347,7 @@ export async function executeConductorPlan(
   const waves = topologicalWaves(validTasks);
 
   // ── Stage 1: DISPATCH — execute waves with per-wave conflict detection ──
-  updateRunStage(conductorRunId, "dispatch", Date.now());
+  setConductorStage(conversationId, conductorRunId, "dispatch");
   publishDispatchPlan(conversationId, conductorRunId, validTasks);
 
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
@@ -382,7 +395,7 @@ export async function executeConductorPlan(
               conductorRunId,
               conversationId,
               taskId: task.id,
-              agentId: task.agentId,
+              agentId: r.childRunId ? getRun(r.childRunId)?.agentId ?? task.agentId : task.agentId,
               title: task.title,
               status: r.status,
               summary: r.summary,
@@ -462,7 +475,7 @@ export async function executeConductorPlan(
   }
 
   // ── Stage 2: RECOVERY — LLM-driven re-plan for failures ──
-  updateRunStage(conductorRunId, "recovery", Date.now());
+  setConductorStage(conversationId, conductorRunId, "recovery");
   let recovered = false;
   const hasFailures = Array.from(results.values()).some(
     (r) => r.status === "failed" || r.status === "blocked"
@@ -548,7 +561,7 @@ export async function executeConductorPlan(
   }
 
   // ── Stage 3: AGGREGATE — accurate completion status ──
-  updateRunStage(conductorRunId, "aggregate", Date.now());
+  setConductorStage(conversationId, conductorRunId, "aggregate");
   const completionStatus = determineCompletionStatus(results, recovered);
 
   await runAggregateStage(
@@ -684,6 +697,61 @@ async function runChildTask(
   outputBindings: Map<string, string>,
   signal: AbortSignal
 ): Promise<TaskResult> {
+  let result = await executeChildTaskAttempts(conversationId, task, triggerMessage, parentRunId, planId, outputBindings, signal);
+  for (let hop = 0; hop < 4; hop++) {
+    const source = result.childRunId ? getTaskAttemptByChildRun(result.childRunId) : undefined;
+    const handoff = source ? acceptedHandoffForAttempt(source.id) : null;
+    if (!handoff) return result;
+    result = await executeTaskHandoff(handoff.id, parentRunId, triggerMessage, signal, outputBindings);
+  }
+  return result;
+}
+
+/** An accepted handoff changes assignment, not the logical task or its evidence contract. */
+export async function executeTaskHandoff(id: string, coordinatorRunId: string, triggerMessage: Message, signal: AbortSignal,
+  outputBindings = new Map<string, string>()): Promise<TaskResult> {
+  const handoff = getHandoff(id);
+  if (!handoff || handoff.coordinatorRunId !== coordinatorRunId || !claimHandoff(id, coordinatorRunId)) throw new Error("Handoff has already been claimed or is not authorized.");
+  try {
+    const { waitForRunTreeStop } = await import("@/server/agent-runner");
+    await waitForRunTreeStop(handoff.sourceRunId, signal);
+    const packet = validateHandoffPackage(id);
+    signal.throwIfAborted();
+    const parent = getRun(coordinatorRunId);
+    if (!parent || parent.status !== "running" || parent.conversationId !== handoff.conversationId) throw new Error("The handoff coordinator is not active.");
+    // Prior evidence remains inspectable, but is not current-attempt proof.
+    getDatabase().prepare("UPDATE task_evidence SET status='stale',invalidated_at=? WHERE attempt_id=? AND invalidated_at IS NULL").run(Date.now(), handoff.sourceAttemptId);
+    updateTaskAttemptVerification(handoff.sourceAttemptId, "rejected", JSON.stringify({ handoffId: id, reason: "Superseded by an explicitly accepted handoff." }), Date.now());
+    const task = { ...packet.task, agentId: handoff.targetAgentId };
+    let planId = packet.sourcePlanId;
+    if (coordinatorRunId !== packet.sourceConductorRunId) {
+      planId = `plan_${coordinatorRunId}_handoff`;
+      persistConductorPlan({ id: planId, conductorRunId: coordinatorRunId, conversationId: handoff.conversationId,
+        planJson: JSON.stringify([task]), status: "active", stageAtCreation: "handoff", resumedFromRunId: packet.sourceConductorRunId, now: Date.now() });
+      for (const input of packet.inputs) outputBindings.set(input.key, input.artifactId);
+      publishDispatchPlan(handoff.conversationId, coordinatorRunId, [task]);
+    }
+    setConductorStage(handoff.conversationId, coordinatorRunId, "handoff");
+    const result = await executeChildTaskAttempts(handoff.conversationId, task, triggerMessage, coordinatorRunId, planId, outputBindings, signal,
+      { id, sourceAttemptId: handoff.sourceAttemptId, sourceRunId: handoff.sourceRunId, sourceAttempt: packet.sourceAttempt,
+        failure: packet.failure ?? "The human requested another Agent to continue this exact task; inspect prior evidence, do not treat it as current success." });
+    finishHandoff(id, result.status === "complete", result.status !== "complete" ? result.summary : undefined);
+    if (coordinatorRunId !== packet.sourceConductorRunId) persistConductorTask({ id: `${coordinatorRunId}_${task.id}`, conductorRunId: coordinatorRunId,
+      conversationId: handoff.conversationId, taskId: task.id, agentId: handoff.targetAgentId, title: task.title, status: result.status,
+      summary: result.summary, childRunId: result.childRunId ?? null, verificationStatus: result.verificationStatus,
+      attempt: packet.sourceAttempt + 1, now: Date.now() });
+    return result;
+  } catch (error) {
+    finishHandoff(id, false, error instanceof Error ? error.message : "Handoff failed.");
+    throw error;
+  }
+}
+
+async function executeChildTaskAttempts(
+  conversationId: string, task: ParsedTask, triggerMessage: Message, parentRunId: string, planId: string,
+  outputBindings: Map<string, string>, signal: AbortSignal,
+  handoff?: { id: string; sourceAttemptId: string; sourceRunId: string; sourceAttempt: number; failure: string }
+): Promise<TaskResult> {
   const effectiveOutputBindings = hydrateOutputBindings(outputBindings, planId);
   // Resolve inputs — check if required inputs are available
   const resolvedInputs = resolveTaskInputs(task, effectiveOutputBindings);
@@ -775,9 +843,9 @@ async function runChildTask(
     // On the first attempt these are empty — there is no previous run.
     // After each failed attempt, they are updated so the next iteration can
     // pass them into compileTaskContext → buildFailureContext.
-    let previousRunId = "";
-    let previousAttemptId = "";
-    let previousError: string | undefined;
+    let previousRunId = handoff?.sourceRunId ?? "";
+    let previousAttemptId = handoff?.sourceAttemptId ?? "";
+    let previousError: string | undefined = handoff?.failure;
     // Post-loop references: finalRunId for dispatch events, finalAttemptId for
     // verification-status updates.
     let finalRunId = "";
@@ -787,7 +855,8 @@ async function runChildTask(
     let finalReport: ReturnType<typeof getTaskReport>;
     let finalEvaluation: ReturnType<typeof evaluateChildTaskResult> = { status: "failed", error: "not started" };
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const lastAttempt = (handoff?.sourceAttempt ?? 0) + maxAttempts;
+    for (let attempt = (handoff?.sourceAttempt ?? 0) + 1; attempt <= lastAttempt; attempt++) {
       if (signal.aborted) return { taskId: task.id, status: "aborted", summary: "Parent run cancelled before retry." };
       // P0: Generate task execution identity for this attempt
       const attemptId = newTaskAttemptId();
@@ -879,7 +948,7 @@ async function runChildTask(
 
       // P3: Use compiled envelope prompt for first attempt, continuation for retries
       const attemptPrompt = attempt > 1
-        ? buildContinuationPrompt(renderTaskContextPrompt(envelope), attempt, maxAttempts, finalEvaluation.error ?? "unknown")
+        ? buildContinuationPrompt(renderTaskContextPrompt(envelope), attempt, lastAttempt, previousError ?? "unknown")
         : renderTaskContextPrompt(envelope);
 
       const attemptMsg: Message = {
@@ -951,11 +1020,18 @@ async function runChildTask(
 
       // P1: Mark attempt as running now that we have the childRunId
       startTaskAttempt(attemptId, attemptRunId, Date.now());
+      if (handoff) bindHandoffAttempt(handoff.id, attemptId, attemptRunId);
 
       try {
         await promise;
       } catch {
         // Run failed — continue to evaluation
+      }
+
+      if (acceptedHandoffForAttempt(attemptId)) {
+        finishTaskAttempt(attemptId, "aborted", Date.now());
+        updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ reason: "Human accepted task handoff; old results are ineligible." }), Date.now());
+        return { taskId: task.id, status: "aborted", summary: "Task is being handed to another Agent.", childRunId: attemptRunId, verificationStatus: "rejected" };
       }
 
       // The delegation gate refuses BEFORE a run row exists, so the reason
@@ -1131,6 +1207,9 @@ async function runChildTask(
     }
 
     const report = finalReport;
+    if (finalAttemptId && acceptedHandoffForAttempt(finalAttemptId)) {
+      return { taskId: task.id, status: "aborted", summary: "Task is being handed to another Agent.", childRunId: finalRunId, verificationStatus: "rejected" };
+    }
 
     // P0: Check for missing required outputs — fail before binding anything
     const verifiedOutputKeys = new Set(finalVerifiedBindings.map((binding) => binding.outputKey));
@@ -2006,7 +2085,9 @@ async function runConductorAssess(
     systemPrompt: assessSystemPrompt,
     ...input.piConfiguration,
     workspacePath,
-    apiKey
+    apiKey,
+    onTaskAccepted: input.onTaskAccepted,
+    onContextCaptured: input.onContextCaptured,
   };
 
   // Pi owns model deadlines; approval waits must not inherit a one-minute HTTP timeout.
