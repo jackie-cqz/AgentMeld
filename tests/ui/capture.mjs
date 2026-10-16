@@ -15,7 +15,7 @@ await page.getByRole('button', { name: 'Agents', exact: true }).click();
 await page.getByTitle('新建 Agent', { exact: true }).click();
 await page.getByRole('button', { name: /详细配置/ }).click();
 await page.screenshot({ path: `${dir}/agent-basic.png` });
-await page.getByRole(phase === 'before' ? 'button' : 'tab', { name: phase === 'before' ? '工具与提示词' : '工具记录' }).click();
+await page.getByRole(phase === 'before' ? 'button' : 'tab', { name: phase === 'before' ? '工具与提示词' : '运行时工具' }).click();
 await page.screenshot({ path: `${dir}/agent-tools.png` });
 if (phase !== 'before') {
   await page.getByRole('tab', { name: '系统提示词', exact: true }).click();

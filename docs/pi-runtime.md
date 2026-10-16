@@ -56,8 +56,9 @@ stays with the Conductor's PLAN stage rather than joining the open capability
 set. Opening capability was not a decision to disclose one conversation's roster
 to every member, so the tool is provisioned only there, is not advertised in
 other Agents' prompts, and its handler still refuses any non-Conductor caller.
-The Agent editor's tool list is a stored record: it labels itself as record-only
-and shows the server-provided runtime toolset instead of implying a grant.
+The Agent editor has no per-Agent tool picker at all. Its "运行时工具"
+tab shows the server-provided runtime toolset read-only, so the UI cannot
+present a selection as a grant or imply that editing an Agent changes capability.
 
 | Platform tool | Pi native tool |
 | --- | --- |
@@ -95,10 +96,11 @@ before Pi can submit the final task report.
 
 The legacy `job_start`/`job_read`/`job_wait`/`job_cancel` command kernel is not
 exposed to Pi. Long verification uses native `bash` and waits for completion.
-Historical per-Agent permission rows stay readable for history, but they no
-longer decide which tools an Agent may call, and editing an Agent neither adds
-nor removes capability. Historical job display and platform cleanup helpers
-remain, but this is not a second production Agent command engine.
+Existing per-Agent tool rows stay in the database untouched for history, but they
+are no longer shown or editable anywhere in the UI, decide which tools an Agent
+may call, or change capability when an Agent is saved. Historical job display and
+platform cleanup helpers remain, but this is not a second production Agent
+command engine.
 
 Native commands use **Bash**, including on Windows. Commands are unrestricted
 apart from the resource limits above; shell commands may create or change source

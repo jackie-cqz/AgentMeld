@@ -211,13 +211,6 @@ button:disabled {
 .ui-agent-form > :is(.agent-tools-panel, .ui-prompt-panel) { max-width: none; }
 .ui-agent-form > .hidden { display: none; }
 .ui-form .ui-prompt-panel textarea { height: clamp(280px, calc(100dvh - 360px), 560px); min-height: 240px; resize: vertical; font-size: 13px; line-height: 1.8; font-family: ui-monospace, monospace; }
-.ui-tool-group { padding: 16px 0; border-bottom: 1px solid var(--ui-line); }
-.ui-tool-group > header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 10px; }
-.ui-tool-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
-.ui-tool-option { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; font-size: 12px; }
-.ui-tool-option input { margin-top: 3px; flex-shrink: 0; }
-.ui-tool-option strong { display: block; font-size: 12px; font-weight: 500; }
-.ui-tool-option small { display: block; font-size: 11px; color: var(--ui-muted); margin-top: 2px; }
 .ui-list-row { display: flex; align-items: center; gap: 12px; padding: 14px 8px; border-bottom: 1px solid var(--ui-line); }
 .ui-panel { background: var(--ui-surface); color: var(--foreground); border-color: var(--ui-line); }
 .ui-decision { border: 1px solid var(--ui-line); border-radius: 8px; background: var(--ui-surface); color: var(--foreground); }
@@ -252,7 +245,6 @@ button:disabled {
   .ui-settings-layout { grid-template-columns: 1fr; gap: 20px; min-height: 0; }
   .ui-settings-rail { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--ui-line); padding: 0 0 12px; }
   .ui-settings-rail button { padding: 7px 10px; }
-  .ui-tool-options { grid-template-columns: 1fr; }
   .agent-editor-dialog .ui-tabs { gap: 12px; justify-content: space-between; }
   .agent-editor-dialog .ui-tabs > button { padding: 0; font-size: 12px; }
   .agent-editor-dialog .ui-tabs > button > svg { display: none; }

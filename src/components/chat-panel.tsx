@@ -107,7 +107,7 @@ export function ChatPanel() {
   const handleUpdateAgent = async (payload: {
     name: string; avatar?: string; description: string; capabilities?: string[]; adapterName: AdapterName; modelProvider?: ModelProvider | null;
     modelId?: string | null; apiKey?: string | null; apiBaseUrl?: string | null;
-    systemPrompt?: string; toolNames?: string[];
+    systemPrompt?: string;
   }) => {
     if (!editingAgent) return;
     await requestJson(`/api/agents/${editingAgent.id}`, {
@@ -322,8 +322,7 @@ export function ChatPanel() {
           modelId: editingAgent.modelId,
           apiKey: editingAgent.apiKey,
           apiBaseUrl: editingAgent.apiBaseUrl,
-          systemPrompt: editingAgent.systemPrompt,
-          toolNames: editingAgent.toolNames
+          systemPrompt: editingAgent.systemPrompt
         } : undefined}
       />
       {showFiles ? <FileLibraryDialog conversationId={conversation.id} open onClose={() => setShowFiles(false)} /> : null}
