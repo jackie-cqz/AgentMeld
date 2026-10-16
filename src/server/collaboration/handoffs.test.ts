@@ -26,7 +26,7 @@ vi.mock("@/server/pi/runtime", () => ({ runPiInvocation: async function* (input:
   yield { type: "part.start" as const, conversationId: input.conversationId, timestamp: Date.now(), messageId: "", partIndex: 0, part: { type: "text" as const, content: "Scoped handoff fixture" } };
 } }));
 
-import { createConversation } from "@/server/conversation-service";
+import { createConversation, getBootstrapPayload } from "@/server/conversation-service";
 import { updateAgent } from "@/server/agent-service";
 import { createMessage, createRun, getRun, getWorkspaceForConversation, persistConductorPlan } from "@/server/repositories";
 import { createTaskAttempt, getContextSnapshot, getTaskAttempt, insertContextSnapshot, listTaskAttempts } from "@/server/repositories/evidence-repository";
@@ -38,6 +38,7 @@ import { decideHandoff, getHandoff, getHandoffPackage, listHandoffs, proposeHand
 import { getDatabase } from "@/db/client";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { AuthPrincipal } from "@/server/auth";
+import { recoverOrphanedRuns } from "@/server/run-recovery";
 
 const owner: AuthPrincipal = { kind: "owner-session", sessionId: "fixture-owner", createdAt: 1 };
 beforeEach(() => { fixture.inputs.length = 0; fixture.stopped.length = 0; fixture.report = true; fixture.plan = null; fixture.holdSource = false; });
@@ -116,6 +117,8 @@ describe("formal Pi task handoff", () => {
     expect(replay.coordinatorRunId).toBe(accepted.coordinatorRunId);
     await vi.waitFor(() => expect(getHandoff(proposed.id)?.executionStatus).toBe("complete"), { timeout: 5000 });
     expect(fixture.inputs).toHaveLength(1);
+    await expect(proposeHandoff(state.attemptId, "ag_designer", owner)).rejects.toThrow("superseded");
+    expect(fixture.inputs).toHaveLength(1);
     const invocation = fixture.inputs[0];
     expect(invocation.agent.id).toBe("ag_designer");
     expect(invocation.taskExecution?.taskId).toBe(state.task.id);
@@ -130,6 +133,13 @@ describe("formal Pi task handoff", () => {
     expect(envelope.failureContext.previousAttemptId).toBe(state.attemptId);
     expect(getTaskAttempt(state.attemptId)?.agentId).toBe("ag_mock_builder");
     expect(getRun(state.parent.id)?.status).toBe("failed");
+    const restored = getBootstrapPayload();
+    expect(restored.handoffsByConversation[state.conversation.id]).toEqual(expect.arrayContaining([expect.objectContaining({ id: proposed.id, executionStatus: "complete" })]));
+    expect(restored.dispatchesByRunId[accepted.coordinatorRunId!]).toMatchObject({
+      activeAttemptByTask: { t1: attempt.id }, taskStatus: { t1: "complete" },
+      childRunIds: { t1: invocation.runId }, plan: [expect.objectContaining({ id: "t1", agentId: "ag_designer" })],
+    });
+    expect(fixture.inputs).toHaveLength(1);
   });
 
   it("does not turn a target's oral success into a verified completion", async () => {
@@ -164,5 +174,31 @@ describe("formal Pi task handoff", () => {
     getDatabase().prepare("UPDATE task_handoffs SET expires_at=0 WHERE id=?").run(next.id);
     await expect(decideHandoff(next.id, "accept", owner)).rejects.toThrow("settled");
     expect(fixture.inputs).toHaveLength(0);
+  });
+
+  it("snapshots a bounded directory and notices newly added source files without reading dependencies or secrets", async () => {
+    const state = world({ targetPaths: ["src"] });
+    const workspace = getWorkspaceForConversation(state.conversation.id)!;
+    const directory = path.join(workspace.rootPath, "src");
+    fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(directory, "app.ts"), "export const ready = true;");
+    fs.writeFileSync(path.join(directory, ".env"), "SECRET=fixture-not-for-transfer");
+    fs.mkdirSync(path.join(directory, "node_modules"));
+    fs.writeFileSync(path.join(directory, "node_modules", "dependency.js"), "dependency");
+    const handoff = await proposeHandoff(state.attemptId, "ag_designer", owner);
+    expect(getHandoffPackage(handoff.id).files.map(file => file.path)).toEqual(["src/app.ts"]);
+    fs.writeFileSync(path.join(directory, "new.ts"), "export const added = true;");
+    expect(() => validateHandoffPackage(handoff.id)).toThrow("Workspace files changed");
+  });
+
+  it("recovers an interrupted handoff record without automatically dispatching its accepted decision again", async () => {
+    const state = world();
+    const proposal = await proposeHandoff(state.attemptId, "ag_designer", owner);
+    getDatabase().prepare("UPDATE task_handoffs SET status='accepted',execution_status='stopping',coordinator_run_id='reserved-before-crash',decided_by='owner-session:fixture-owner' WHERE id=?").run(proposal.id);
+    recoverOrphanedRuns();
+    const replay = await decideHandoff(proposal.id, "accept", owner);
+    expect(replay).toMatchObject({ id: proposal.id, status: "accepted", executionStatus: "interrupted", coordinatorRunId: "reserved-before-crash", targetRunId: null });
+    expect(fixture.inputs).toHaveLength(0);
+    expect(getBootstrapPayload().handoffsByConversation[state.conversation.id]).toEqual(expect.arrayContaining([expect.objectContaining({ id: proposal.id, executionStatus: "interrupted" })]));
   });
 });

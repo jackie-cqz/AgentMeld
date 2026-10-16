@@ -34,6 +34,7 @@ import { listHandoffs } from "@/server/collaboration/handoffs";
 import { publicCollaborationTurns } from "@/server/collaboration/turn-admission";
 import { claimMessageSubmission, finishMessageSubmission } from "@/server/collaboration/message-submissions";
 import type { CollaborationAction } from "@/shared/collaboration-types";
+import { persistedDispatches } from "@/server/collaboration/dispatch-projection";
 
 interface BootstrapPayload {
   agents: Agent[];
@@ -48,6 +49,7 @@ interface BootstrapPayload {
   consultationsByConversation: Record<string, ReturnType<typeof listConsultations>>;
   collaborationTurnsByConversation: Record<string, ReturnType<typeof publicCollaborationTurns>>;
   handoffsByConversation: Record<string, ReturnType<typeof listHandoffs>>;
+  dispatchesByRunId: ReturnType<typeof persistedDispatches>;
 }
 
 interface CreateConversationInput {
@@ -94,6 +96,7 @@ export function getBootstrapPayload(): BootstrapPayload {
     consultationsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, listConsultations(conversation.id)])),
     collaborationTurnsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, publicCollaborationTurns(conversation.id)])),
     handoffsByConversation: Object.fromEntries(conversations.map(conversation => [conversation.id, listHandoffs(conversation.id)])),
+    dispatchesByRunId: Object.assign({}, ...conversations.map(conversation => persistedDispatches(conversation.id))),
     messagesByConversation: Object.fromEntries(
       conversations.map((conversation) => [conversation.id, listMessages(conversation.id)])
     ),
@@ -254,7 +257,7 @@ export async function sendMessage(input: SendMessageInput) {
 
   // Check for deploy command before starting agent runs. Only a human may
   // issue one: a bot echo of a deploy-looking string must not deploy.
-  const deployIntent = origin === "human" ? detectDeployCommand(content) : null;
+  const deployIntent = origin === "human" && (!input.action || input.action === "new_task") ? detectDeployCommand(content) : null;
   if (deployIntent) {
     try {
       const deploy = await handleDeployCommand(input.conversationId, deployIntent);

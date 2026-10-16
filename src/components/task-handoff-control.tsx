@@ -32,7 +32,7 @@ export function TaskHandoffControl({ runId, taskId, attemptId, sourceAgentId, ve
   };
   return <div className="mt-2 border-t border-[var(--ui-border)] pt-2 text-xs">
     {handoffs.map(handoff => <HandoffRow key={handoff.id} handoff={handoff} />)}
-    {attemptId && !verified && candidates.length > 0 && !handoffs.some(item => item.sourceAttemptId === attemptId && (item.status === "proposed" || item.status === "accepted" && ["stopping", "running"].includes(item.executionStatus))) ? <>
+    {attemptId && !verified && candidates.length > 0 && !handoffs.some(item => item.sourceAttemptId === attemptId && (item.status === "proposed" || item.status === "accepted" && (item.targetAttemptId !== null || ["stopping", "running", "complete"].includes(item.executionStatus)))) ? <>
       <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-[var(--ui-muted)] hover:text-[var(--ui-text)]"><ArrowRightLeft size={12} />交给同事</button>
       {open ? <div className="mt-2 flex flex-wrap items-center gap-2">
         <select aria-label="接手 Agent" value={selected} onChange={event => setTarget(event.target.value)} className="max-w-full rounded border border-[var(--ui-border)] bg-[var(--ui-surface)] px-2 py-1">

@@ -98,6 +98,15 @@ describe("human turn admission", () => {
     expect(fixture.inputs.at(-1)?.accessMode).toBe("conversation");
   });
 
+  it("does not let a deploy-looking string bypass an explicit discussion action", async () => {
+    const { send, wait } = world();
+    const result = await send("/deploy", { action: "discussion" });
+    expect(result.runIds).toHaveLength(1);
+    await wait(result.runIds[0]);
+    expect(fixture.inputs.at(-1)?.accessMode).toBe("conversation");
+    expect(fixture.inputs.at(-1)?.toolNames).not.toContain("deploy_workspace");
+  });
+
   it("handles an explicit progress query without restarting or interrupting its target", async () => {
     const { send, wait, conversation } = world();
     fixture.holds.set("Build the original task", "hold");

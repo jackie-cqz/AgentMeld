@@ -212,7 +212,7 @@ describe("app-store normalized message events", () => {
 
   it("reuses a lost HTTP request identity after SSE acceptance without duplicating or moving the user message", async () => {
     let rejectRequest!: (error: Error) => void;
-    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>((_resolve, reject) => { rejectRequest = reject; }));
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(() => new Promise<Response>((_resolve, reject) => { rejectRequest = reject; }));
     vi.stubGlobal("fetch", fetchMock);
     const first = useAppStore.getState().sendMessage(conversationId, "Discuss the layout");
     const originalBody = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
@@ -222,7 +222,7 @@ describe("app-store normalized message events", () => {
     rejectRequest(new Error("Network response lost"));
     await expect(first).rejects.toThrow("Network response lost");
     expect(useAppStore.getState().messageIdsByConversation[conversationId]).toEqual([real.id, "msg_reply_after_accept"]);
-    const replayFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ message: real }), { status: 202 }));
+    const replayFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => new Response(JSON.stringify({ message: real }), { status: 202 }));
     vi.stubGlobal("fetch", replayFetch);
     const retry = useAppStore.getState().sendMessage(conversationId, "Discuss the layout");
     expect(useAppStore.getState().messageIdsByConversation[conversationId]).toEqual([real.id, "msg_reply_after_accept"]);

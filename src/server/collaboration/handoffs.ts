@@ -130,6 +130,9 @@ export async function proposeHandoff(sourceAttemptId: string, targetAgentId: str
     if (existing.target_agent_id !== targetAgentId) throw new Error("This attempt already has a different handoff decision.");
     return map(existing);
   }
+  if (getDatabase().prepare("SELECT id FROM task_handoffs WHERE source_attempt_id=? AND status='accepted' AND (target_attempt_id IS NOT NULL OR execution_status='complete') LIMIT 1").get(source.id)) {
+    throw new Error("This source attempt has been superseded by a handoff; select the latest receiving attempt instead.");
+  }
   const latest = getDatabase().prepare("SELECT id FROM task_attempts WHERE conductor_run_id=? AND task_id=? ORDER BY attempt DESC LIMIT 1").get(source.conductorRunId, source.taskId) as { id: string } | undefined;
   if (latest?.id !== source.id || source.verificationStatus === "verified") throw new Error("Only the latest unfinished or failed attempt can be handed off.");
   const plan = getDatabase().prepare("SELECT plan_json FROM conductor_plans WHERE id=? AND conductor_run_id=? AND conversation_id=?").get(source.planId, source.conductorRunId, source.conversationId) as { plan_json: string } | undefined;
@@ -212,7 +215,7 @@ export async function decideHandoff(id: string, decision: "accept" | "decline" |
   if (live) { abortRun(handoff.sourceRunId); return getHandoff(id)!; }
   const original = parent.triggerMessageId ? getMessage(parent.triggerMessageId) : null;
   const message = createMessage({ id: newMessageId(), conversationId: handoff.conversationId, origin: "human", role: "user", agentId: null, runId: null,
-    parentMessageId: original?.id ?? null, parts: [{ type: "text", content: `将任务“${handoff.title}”交给 ${getAgent(handoff.targetAgentId)?.name ?? handoff.targetAgentId} 接手，保留原验收标准。` }], status: "complete", now: Date.now() });
+    parentMessageId: original?.id ?? null, parts: [{ type: "text", content: "确认交接卡片中的任务，交由指定 Agent 接手。保留原任务范围与验收标准，不新增其他目标。" }], status: "complete", now: Date.now() });
   eventBus.publish({ type: "message.added", conversationId: handoff.conversationId, timestamp: Date.now(), message });
   const handle = startAgentRun({ runId: coordinatorRunId, conversationId: handoff.conversationId, agentId: coordinator!.id, triggerMessage: message, acceptedHandoffId: id });
   void handle.promise.then(() => {

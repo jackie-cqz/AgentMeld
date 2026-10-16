@@ -16,6 +16,8 @@ import type {
   StreamEvent
 } from "@/shared/types";
 import type { AgentConsultation, CollaborationTurn, CollaborationAction, TaskHandoff } from "@/shared/collaboration-types";
+import type { DispatchState } from "@/shared/dispatch-state";
+export type { DispatchState } from "@/shared/dispatch-state";
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "error";
 export type SidebarTab = "conversations" | "artifacts" | "agents" | "analytics";
@@ -33,6 +35,7 @@ export interface BootstrapPayload {
   consultationsByConversation?: Record<string, AgentConsultation[]>;
   collaborationTurnsByConversation?: Record<string, CollaborationTurn[]>;
   handoffsByConversation?: Record<string, TaskHandoff[]>;
+  dispatchesByRunId?: Record<string, DispatchState>;
 }
 
 export interface CreateConversationPayload {
@@ -40,26 +43,6 @@ export interface CreateConversationPayload {
   mode?: "single" | "group";
   agentIds?: string[];
   fsWriteApprovalMode?: "auto" | "review";
-}
-
-export interface DispatchState {
-  runId: string;
-  conversationId: string;
-  messageId: string | null;
-  plan: PendingDispatchPlan["plan"];
-  taskStatus: Record<string, "pending" | "running" | "complete" | "failed" | "aborted" | "skipped" | "blocked">;
-  childRunIds: Record<string, string>;
-  attempts: Record<string, number>;
-  errors: Record<string, string>;
-  reviewStatus?: "pending" | "approved" | "rejected";
-  pendingPlanId?: string;
-  // ── P7: Evidence-aware context observability ───────────────────────────
-  attemptIdsByTask: Record<string, string[]>;
-  activeAttemptByTask: Record<string, string>;
-  verificationStatusByTask: Record<string, "checking" | "verified" | "rejected" | "needs_review">;
-  contextSummaryByAttempt: Record<string, { tokenEstimate: number; includedCount: number; omittedCount: number }>;
-  evidenceCountByAttempt: Record<string, number>;
-  verdictSummaryByAttempt: Record<string, { passed: number; failed: number; missing: number; needsReview: number }>;
 }
 
 export interface CompactionState {

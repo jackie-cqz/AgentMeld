@@ -7,6 +7,8 @@ import { getFeishuChannelForAgent } from "@/server/channels/feishu/registry";
 import type { SendResult } from "@larksuite/channel";
 import type { AgentRun, Message, MessagePart } from "@/shared/types";
 import { deliverSend } from "@/server/channels/feishu/delivery";
+import { escapeLarkMd } from "@/server/channels/feishu/card-text";
+import type { TaskHandoff } from "@/shared/collaboration-types";
 
 /**
  * Outbound projection: what an agent produced in a conversation also appears in
@@ -292,11 +294,27 @@ export async function projectMessage(message: Message, now = Date.now()): Promis
  * Start projecting. Subscribes once per process — a second subscription would
  * post everything twice, and the room would notice.
  */
+export function handoffProjectionMessage(handoff: TaskHandoff): Message | null {
+  const status = handoff.status === "accepted"
+    ? ({ complete: "接手完成", failed: "接手失败", interrupted: "接手中断" } as Record<string, string>)[handoff.executionStatus]
+    : ({ proposed: "待确认交接，请在 AgentMeld 网页处理", declined: "交接已拒绝", cancelled: "交接已取消", expired: "交接已过期" })[handoff.status];
+  if (!status) return null;
+  return { id: `${handoff.id}:${handoff.status}:${handoff.executionStatus}`, conversationId: handoff.conversationId, role: "agent", origin: "internal",
+    agentId: handoff.sourceAgentId, runId: handoff.sourceRunId, mentionedAgentIds: [], parentMessageId: getRun(handoff.sourceRunId)?.triggerMessageId ?? null,
+    parts: [{ type: "text", content: `${status}\n任务：${escapeLarkMd(handoff.title)}\n交接编号：${escapeLarkMd(handoff.id)}` }],
+    status: "complete", createdAt: handoff.updatedAt, updatedAt: handoff.updatedAt };
+}
+
 export function startChannelProjection(): () => void {
   if (globalThis.__agentMeldChannelProjectionStop) return globalThis.__agentMeldChannelProjectionStop;
 
   const stop = eventBus.subscribe((entry: EventBusEntry) => {
     const event = entry.event;
+    if (event.type === "collaboration.handoff") {
+      const message = handoffProjectionMessage(event.handoff);
+      if (message) void projectMessage(message).catch((error: unknown) => console.error("[feishu] failed to project task handoff:", error));
+      return;
+    }
     // `message.end`, not `message.added`. An agent's answer is created with
     // `message.start` while streaming and finished with `message.end`; it is
     // never published as `message.added` at all (the one `message.added` the

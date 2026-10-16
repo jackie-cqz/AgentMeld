@@ -19,8 +19,8 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 | Bounded peer consultation | Core implemented; policy and final audit pending | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
 | Adaptive plans and explicit dependency contracts | Discussion admission is enforced by a closed read-only tool profile; contract audit pending | Discussion without writes, simple task promotion, DAG regression tests |
 | Handoff integration | Pi task-boundary and failed-task takeover implemented; final integration audit pending | Stable task identity, new attempt/context, confirmed old-run teardown |
-| UI and channel state projections | Turn/consultation/handoff SSE and bootstrap implemented; rendered UI and channel validation pending | Reload recovery, recipient and status inspection, shared semantic IDs |
-| Verification and review | Pending | Full checks, real Pi consultation smoke, independent review findings addressed |
+| UI and channel state projections | Browser smoke passed; deterministic Feishu projection passed; live Feishu unverified | Reload recovery, recipient and status inspection, shared semantic IDs |
+| Verification and review | Production webpack build and native Pi checks passed; final review/full CI audit pending | Full checks, real Pi consultation smoke, review findings addressed |
 | PR and merge | Pending | Required checks and verified merged PR |
 
 ## Architecture Decisions
@@ -125,3 +125,62 @@ unavailable, must be reported separately from deterministic projection tests.
   symlinks. The other was an old provider-only fixture feeding application prose
   to the new classifier; it now specifies explicit execution and its 9-test suite
   passes. A fresh full run and Linux CI remain required; security tests are intact.
+
+## Runtime And Browser Verification
+
+- Real pinned Pi handoff passed with a deterministic local model endpoint. The
+  test starts a native source invocation, accepts a handoff during that call,
+  confirms the original execution's native exit receipt precedes the receiver's
+  start, verifies a new attempt/context with the same task ID, and checks lease
+  release. No public model endpoint or production credentials were used.
+- Full Pi/dispatch-concurrency selection: 89 passed, 1 skipped. A Windows native
+  verification test exposed missing ProgramFiles variables in the isolated Pi
+  environment: shell discovery could fall back to the legacy WSL launcher. Only
+  non-secret Windows installation paths were added; host secrets and host profile
+  data remain excluded, with config regressions.
+- An isolated source copy and database were used for a production webpack build
+  and Playwright browser smoke. The actual service at port 3018 and its database
+  were not reset or used as fixtures. The temporary preview at port 3029 was stopped
+  after verification. Build passed with the existing Pi dynamic-import warning.
+- Desktop (1440px), mobile (390px), expanded details and open workspace sidebar
+  screenshots were inspected. No browser runtime errors or document horizontal
+  overflow were observed. Narrow progress headers now wrap deliberately.
+- Actual browser actions confirmed discussion, then accepted a task takeover using
+  a local deterministic model endpoint. The discussion invocation had no write,
+  shell or planning tools. The receiver called the real report tool; the verified
+  handoff and new attempt remained visible after page reload.
+- That smoke caught a missing bootstrap projection: progress previously existed
+  only in SSE memory, hiding persisted handoff cards after reload. Bootstrap now
+  reconstructs the display from durable plan/attempt/result records, never by
+  re-running a task. Public projections expose counts and IDs, not compiled prompts.
+- Review also closed a cross-coordinator replay path: after a receiving attempt
+  exists, the obsolete source attempt cannot create another independent takeover.
+  A restart marks accepted in-flight handoffs interrupted, and replay does not
+  automatically launch them again. Control-route authentication/spoofing tests pass.
+- Handoff write provenance is retained across attempts for wave conflict checks.
+  The latest real writer wins within a task; another task touching a source-only
+  file is still detected. Old calls' temporary report/evidence maps are cleared,
+  while durable historical records remain inspectable.
+- Discussion actions now also suppress the human /deploy text shortcut: a literal
+  command string cannot bypass an explicitly selected read-only discussion action.
+- Latest complete regression run: 1,894 passed, 7 failed, 3 skipped (1,904 total).
+  All seven failures are EPERM while creating Windows symlinks, before the security
+  assertions execute; running outside the restricted token did not grant that OS
+  privilege. Those tests remain unchanged and must pass in the Linux CI job.
+  The native Pi cancellation/shell-discovery regression now passes in the full run.
+- TypeScript passes; focused ESLint over all newly added collaboration modules,
+  projections, controls and changed Pi tests reports no errors or warnings.
+- Deterministic Feishu projections carry the same handoffId, preserve source bot
+  identity, deduplicate notices and add no execution-authorizing mentions. Live
+  Feishu validation is still not performed and must not be represented as passed.
+
+## Final Gates Still Open
+
+1. Finish the issue checklist audit, including a scoped single-task implementation
+   versus the existing delivery contracts, late-result/teardown cases and budget
+   boundaries. Do not assume that a successful discussion proves delivery behavior.
+2. Complete the shipped production build after the final fixes. The latest full
+   run has 1,894 passing tests and seven Windows symlink EPERM failures. Required Linux CI
+   must exercise the symlink security tests without weakening or skipping them.
+3. Finish the complete diff review, commit final fixes, open/attach the PR, inspect
+   all required checks and review feedback, and merge only after those gates pass.

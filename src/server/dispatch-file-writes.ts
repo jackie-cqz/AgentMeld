@@ -49,6 +49,24 @@ export interface FileWriteConflict {
   contributors: Array<{ taskId: string; agentId: string; runId: string }>;
 }
 
+/** Attempts are ordered oldest-first. Preserve the last real writer of each
+ * file within a logical task, including files untouched by its final attempt. */
+export function collapseTaskAttemptWrites(attempts: RunFileWrites[]): RunFileWrites[] {
+  const owners = new Map<string, Map<string, { owner: RunFileWrites; hash: string }>>();
+  for (const attempt of attempts) {
+    const files = owners.get(attempt.taskId) ?? new Map();
+    for (const [file, hash] of attempt.writes) files.set(file, { owner: attempt, hash });
+    owners.set(attempt.taskId, files);
+  }
+  const grouped = new Map<string, RunFileWrites>();
+  for (const files of owners.values()) for (const [file, { owner, hash }] of files) {
+    const key = JSON.stringify([owner.taskId, owner.runId]);
+    const group = grouped.get(key) ?? { taskId: owner.taskId, agentId: owner.agentId, runId: owner.runId, writes: new Map() };
+    group.writes.set(file, hash); grouped.set(key, group);
+  }
+  return [...grouped.values()];
+}
+
 export function detectWaveConflicts(runs: RunFileWrites[]): FileWriteConflict[] {
   const byPath = new Map<string, Array<{ taskId: string; agentId: string; runId: string; hash: string }>>();
 

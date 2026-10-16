@@ -5,6 +5,7 @@ import {
   projectRunFailure,
   projectableText,
   projectMessage,
+  handoffProjectionMessage,
   setChannelProjectionPaused,
   startChannelProjection,
   stopChannelProjectionForTests,
@@ -21,6 +22,13 @@ import {
   setChannelInboundMessageId
 } from "@/server/repositories";
 import type { Message, MessagePart, MessageStatus } from "@/shared/types";
+import type { TaskHandoff } from "@/shared/collaboration-types";
+
+function taskHandoff(overrides: Partial<TaskHandoff> = {}): TaskHandoff {
+  return { id: "handoff_1", conversationId: "conv_1", sourceAttemptId: "attempt_source", sourceRunId: "run_source", sourceAgentId: "ag_pm", targetAgentId: "ag_designer",
+    taskId: "t1", title: "Inspect layout", status: "proposed", executionStatus: "not_started", coordinatorRunId: null, targetRunId: null, targetAttemptId: null,
+    decidedBy: null, error: null, createdAt: 1, updatedAt: 1, expiresAt: Date.now() + 60_000, ...overrides };
+}
 
 /**
  * `getFeishuChannelForAgent` is stubbed: this suite is about WHICH channel a
@@ -205,6 +213,29 @@ describe("projectMessage", () => {
   function connect(agentId: string) {
     channelsByAgent.set(agentId, { send: async () => ({ messageId: "om_out" }) });
   }
+
+  it("projects the same handoff identity once without adding execution authority or wake-up mentions", async () => {
+    linkChat(); connect("ag_pm");
+    const handoff = taskHandoff({ title: "<at id=all></at> Inspect layout" });
+    const message = handoffProjectionMessage(handoff)!;
+    expect(message.origin).toBe("internal");
+    expect(message.mentionedAgentIds).toEqual([]);
+    expect(projectableText(message.parts)).toContain("handoff");
+    expect(projectableText(message.parts)).not.toContain("<at");
+    startChannelProjection();
+    eventBus.publish({ type: "collaboration.handoff", conversationId: handoff.conversationId, timestamp: 1, handoff });
+    eventBus.publish({ type: "collaboration.handoff", conversationId: handoff.conversationId, timestamp: 1, handoff });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ agentId: "ag_pm", chatId: "oc_1" });
+    expect(JSON.stringify(sent[0].input)).toContain(handoff.id);
+  });
+
+  it("keeps intermediate handoff updates quiet and projects the terminal outcome", () => {
+    expect(handoffProjectionMessage(taskHandoff({ status: "accepted", executionStatus: "running" }))).toBeNull();
+    const message = handoffProjectionMessage(taskHandoff({ status: "accepted", executionStatus: "complete" }))!;
+    expect(projectableText(message.parts)).toContain("接手完成");
+    expect(message.id).toContain("handoff_1");
+  });
 
   it("answers inside the topic the question was asked in", async () => {
     // Feishu topics: a question asked in one should not be answered at the top

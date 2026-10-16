@@ -15,6 +15,8 @@ import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { startAgentRun, abortRun, isRunActive } from "@/server/agent-runner";
 import { listCollaborationTurns } from "@/server/collaboration/turns";
+import { decideHandoff, getHandoff, proposeHandoff } from "@/server/collaboration/handoffs";
+import { listTaskAttempts } from "@/server/repositories/evidence-repository";
 import { approvePlan } from "@/server/dispatch-plan-manager";
 import { SYSTEM_RESOLVED_BY } from "@/server/repositories";
 import type { PiInvocationInput } from "./types";
@@ -64,6 +66,58 @@ function invocation(baseUrl: string, toolNames: string[] = []): PiInvocationInpu
 }
 
 describe("pinned real Pi process with deterministic model fixtures", () => {
+  it("hands off an active task between real Pi processes only after the original writer has exited", async () => {
+    let sourceRequested = false;
+    let sourceId = "", targetId = "";
+    let targetTurns = 0;
+    const taskId = "handoff-inspection";
+    const url = await modelServer((request, response) => {
+      if (request.model === "fixture-handoff-source") { sourceRequested = true; return; }
+      if (request.model === "fixture-handoff-target") {
+        if (++targetTurns === 1) complete(response, { tool_calls: [{ index: 0, id: "handoff-report", type: "function", function: { name: "report_task_result",
+          arguments: JSON.stringify({ status: "complete", summary: "Completed the bounded inspection after takeover.", acceptanceResults: [], blockers: [], artifacts: {} }) } }] }, "tool_calls");
+        else complete(response, { content: "The bounded inspection is complete." });
+        return;
+      }
+      const tools = request.tools as Array<{ function: { name: string } }>;
+      if (tools.some(tool => tool.function.name === "plan_tasks")) complete(response, { tool_calls: [{ index: 0, id: "handoff-plan", type: "function", function: { name: "plan_tasks",
+        arguments: JSON.stringify({ reasoning: "One explicitly scoped diagnostic task.", tasks: [{ id: taskId, agentId: sourceId, title: "Bounded inspection", prompt: "Inspect the assigned question and report the result.", taskIntent: "diagnosis", contractProfile: "minimal", dependsOn: [], expectedOutputs: [], acceptanceCriteria: [], maxAttempts: 1 }] }) } }] }, "tool_calls");
+      else complete(response, { content: "The teammate completed the handed-off task." });
+    });
+    const source = createAgent({ name: "Handoff source", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-handoff-source", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    const target = createAgent({ name: "Handoff target", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-handoff-target", apiKey: "fixture-key", apiBaseUrl: url, toolNames: [] });
+    sourceId = source.id; targetId = target.id;
+    updateAgent("ag_mock_conductor", { modelProvider: "openai-compatible", modelId: "fixture-handoff-coordinator", apiKey: "fixture-key", apiBaseUrl: url, toolNames: ["plan_tasks", "read_artifact"] });
+    const conversation = createConversation({ mode: "group", agentIds: ["ag_mock_conductor", sourceId, targetId] });
+    const unsubscribe = eventBus.subscribe(({ event }) => { if (event.type === "dispatch.plan.pending" && event.conversationId === conversation.id) approvePlan(event.pendingPlan.id, undefined, "owner-session:pi-handoff-fixture"); });
+    const sent = await sendMessage({ origin: "human", conversationId: conversation.id, content: "Perform one scoped diagnostic task.", action: "new_task" });
+    try {
+      await vi.waitFor(() => expect(sourceRequested).toBe(true), { timeout: 40000 });
+      const original = listTaskAttempts(sent.runIds[0], taskId)[0];
+      const owner = { kind: "owner-session" as const, sessionId: "pi-handoff-fixture", createdAt: Date.now() };
+      const proposal = await proposeHandoff(original.id, targetId, owner);
+      await decideHandoff(proposal.id, "accept", owner);
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 60000 });
+      expect(getHandoff(proposal.id)?.executionStatus).toBe("complete");
+      const attempts = listTaskAttempts(sent.runIds[0], taskId);
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]).toMatchObject({ taskId, attempt: 2, agentId: targetId, verificationStatus: "verified" });
+      expect(attempts[0].contextSnapshotId).not.toBe(attempts[1].contextSnapshotId);
+      const receipts = getDatabase().prepare("SELECT run_id,started_at,finished_at,status FROM harness_executions WHERE run_id IN (?,?) ORDER BY started_at").all(original.childRunId, attempts[1].childRunId) as Array<{ run_id: string; started_at: number; finished_at: number | null; status: string }>;
+      const old = receipts.find(receipt => receipt.run_id === original.childRunId)!;
+      const replacement = receipts.find(receipt => receipt.run_id === attempts[1].childRunId)!;
+      expect(old.finished_at).not.toBeNull();
+      expect(replacement.started_at).toBeGreaterThanOrEqual(old.finished_at!);
+      expect(replacement.status).toBe("complete");
+      const physical = fs.realpathSync.native(getWorkspaceForConversation(conversation.id)!.rootPath);
+      const key = process.platform === "win32" ? path.normalize(physical).toLowerCase() : physical;
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases WHERE workspace_key=?").get(key)).toEqual({ n: 0 });
+    } finally {
+      unsubscribe(); abortRun(sent.runIds[0]);
+      await vi.waitFor(() => expect(isRunActive(sent.runIds[0])).toBe(false), { timeout: 30000 });
+    }
+  }, process.platform === "win32" ? 150000 : 90000);
+
   it("admits a human group discussion, consults a real Pi peer, and creates no plan or artifact", async () => {
     let peerId = "";
     let sourceTurns = 0;

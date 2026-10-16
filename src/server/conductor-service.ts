@@ -20,7 +20,7 @@ import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { issueDelegation } from "@/server/delegation";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
-import { getFileWrites, clearFileWrites, detectWaveConflicts, type RunFileWrites } from "@/server/dispatch-file-writes";
+import { getFileWrites, clearFileWrites, detectWaveConflicts, collapseTaskAttemptWrites, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { clearRunToolEvidence, getRunToolEvidence, getTaskToolEvidence } from "@/server/dispatch-tool-evidence";
 import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
@@ -44,7 +44,7 @@ import {
 import { workspaceInfoBlock } from "@/server/tools/capabilities";
 import { buildCollaborationHistory } from "@/server/collaboration/conversation-context";
 import { acceptedHandoffForAttempt, bindHandoffAttempt, claimHandoff, finishHandoff, getHandoff, validateHandoffPackage } from "@/server/collaboration/handoffs";
-import { getTaskAttemptByChildRun } from "@/server/repositories/evidence-repository";
+import { getTaskAttemptByChildRun, listTaskAttempts } from "@/server/repositories/evidence-repository";
 
 // ---------------------------------------------------------------------------
 // Public entry — called from agent-runner or API
@@ -414,12 +414,9 @@ export async function executeConductorPlan(
     const waveRunWrites: RunFileWrites[] = [];
     for (const task of wave) {
       const r = results.get(task.id);
-      if (r?.childRunId) {
-        const writes = getFileWrites(r.childRunId);
-        if (writes.size > 0) {
-          waveRunWrites.push({ taskId: task.id, agentId: task.agentId, runId: r.childRunId, writes });
-        }
-      }
+      const runIds = [...new Set([...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId].filter((id): id is string => !!id))];
+      const attempts = runIds.map(runId => ({ taskId: task.id, agentId: getRun(runId)?.agentId ?? task.agentId, runId, writes: getFileWrites(runId) }));
+      waveRunWrites.push(...collapseTaskAttemptWrites(attempts));
     }
 
     const waveConflicts = detectWaveConflicts(waveRunWrites);
@@ -470,7 +467,8 @@ export async function executeConductorPlan(
     // Clean up file writes for this wave's tasks
     for (const task of wave) {
       const r = results.get(task.id);
-      if (r?.childRunId) clearFileWrites(r.childRunId);
+      const runIds = [...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId];
+      for (const runId of runIds) if (runId) clearFileWrites(runId);
     }
   }
 
@@ -1031,6 +1029,8 @@ async function executeChildTaskAttempts(
       if (acceptedHandoffForAttempt(attemptId)) {
         finishTaskAttempt(attemptId, "aborted", Date.now());
         updateTaskAttemptVerification(attemptId, "rejected", JSON.stringify({ reason: "Human accepted task handoff; old results are ineligible." }), Date.now());
+        clearRunToolEvidence(attemptRunId);
+        clearTaskResultsForRun(attemptRunId);
         return { taskId: task.id, status: "aborted", summary: "Task is being handed to another Agent.", childRunId: attemptRunId, verificationStatus: "rejected" };
       }
 

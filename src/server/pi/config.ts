@@ -83,7 +83,9 @@ export function preparePiInvocation(input: PiInvocationInput) {
     compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2, baseDelayMs: 1000 },
   }), { mode: 0o600 });
   const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV ?? "production" };
-  for (const key of ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "ComSpec", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"]) {
+  // Pi discovers Git Bash through the Windows installation directories before
+  // considering PATH, which may otherwise select the legacy WSL launcher.
+  for (const key of ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "SystemDrive", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "COMSPEC", "ComSpec", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
   Object.assign(env, { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home,

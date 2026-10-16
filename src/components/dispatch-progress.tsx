@@ -127,19 +127,19 @@ export function DispatchProgress({ messageId }: { messageId: string }) {
 
   return (
     <>
-      <section className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
-        <header className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-blue-950">
+      <section className="mt-3 border-y border-[var(--ui-border)] py-3">
+        <header className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex shrink-0 items-center gap-2 text-sm font-medium text-[var(--ui-text)]">
             <GitBranch className="h-4 w-4 text-blue-600" />
             调度进度
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             <span className={`flex items-center gap-1 text-xs font-medium ${aggStatus.color}`}>
               {aggStatus.icon}{aggStatus.label}
             </span>
             <span className="text-xs text-slate-500">
-              {complete}/{total} · ❌{failed} · ⏭{skipped}
-              {running > 0 ? ` · ⏳${running}` : ""}
+              完成 {complete}/{total} · 失败 {failed} · 跳过 {skipped}
+              {running > 0 ? ` · 运行中 ${running}` : ""}
             </span>
           </div>
         </header>
