@@ -78,6 +78,17 @@ export function createDeepSeekMockServer(options: MockOptions = {}) {
       try { parsed = JSON.parse(body); } catch { /* ignore */ }
       const messages = (parsed.messages as Array<Record<string, unknown>>) ?? [];
       const hasTools = Array.isArray(parsed.tools) && (parsed.tools as Array<unknown>).length > 0;
+      // Script a tool the caller actually advertised. Under the Pi runtime the
+      // filesystem family is offered under Pi's NATIVE names (`ls` maps to the
+      // platform's fs_list), so a hard-coded platform name would script a call
+      // no model could ever make — and the runtime answers "Tool fs_list not
+      // found". Prefer `ls`, which this suite's workspace can answer.
+      const offeredNames = Array.isArray(parsed.tools)
+        ? (parsed.tools as Array<{ function?: { name?: string } }>)
+          .map((tool) => tool?.function?.name)
+          .filter((name): name is string => typeof name === "string")
+        : [];
+      const scriptedTool = offeredNames.includes("ls") ? "ls" : (offeredNames[0] ?? "fs_list");
       const isRetry = messages.some((m) => m.role === "tool");
 
       if (scenarioHeader === "tool-call" || (hasTools && !isRetry)) {
@@ -87,7 +98,7 @@ export function createDeepSeekMockServer(options: MockOptions = {}) {
         // Emit tool call
         res.write(sse({
           id: "chatcmpl-1", object: "chat.completion.chunk", created: Date.now(), model: "deepseek-chat",
-          choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_mock_1", type: "function", function: { name: "fs_list", arguments: JSON.stringify({ path: "." }) } }] }, finish_reason: "tool_calls" }]
+          choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_mock_1", type: "function", function: { name: scriptedTool, arguments: JSON.stringify({ path: "." }) } }] }, finish_reason: "tool_calls" }]
         }));
         res.end("data: [DONE]\n\n");
         return;

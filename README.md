@@ -169,7 +169,7 @@ Agent-level settings can override the default provider, model, base URL, and API
 
 ## Common Commands
 
-See [Workspace Toolkit](docs/workspace-toolkit.md) for file search, paged reads, background verification, public web research, read-only Git inspection, and isolated browser acceptance checks. New permissions must be enabled for existing Agents; web search and browser checks have optional server setup requirements.
+See [Workspace Toolkit](docs/workspace-toolkit.md) for file search, reads, public web research, read-only Git inspection, and isolated browser acceptance checks. Tools are no longer gated per Agent; web search and browser checks have optional server setup requirements.
 
 ```bash
 pnpm dev        # Start the development server
@@ -211,13 +211,13 @@ All production Agents, including Conductor, execute through the project-pinned P
 
 The custom Agent Loop, production Adapter registry and Claude Code/Codex placeholder engines have been retired. Existing Custom/Mock Agent records migrate to Pi without changing their identities, history or channel bindings. Other retired configurations require explicit editing before execution; they do not silently fall back to a different engine.
 
-See [Pi Runtime](docs/pi-runtime.md) for permissions, configuration snapshots, cancellation, session ownership, diagnostics and recovery. Pi's native filesystem tools reuse existing `fs_*` grants; platform tools such as `ask_user`, `plan_tasks`, artifact and deployment operations remain structured platform capabilities. This private extension bridge is not an external MCP server.
+See [Pi Runtime](docs/pi-runtime.md) for the full-access tool model, configuration snapshots, cancellation, session ownership, diagnostics and recovery. Every Agent gets the full native toolset with no per-Agent whitelist: file and command tools are Pi-native, and platform tools such as `ask_user`, `plan_tasks`, artifact and deployment operations are Pi extension tools reached over a private loopback bridge. That bridge is a transport boundary, not an external MCP server.
 
 ## Known Limitations
 
 - AgentMeld targets a local, single-owner workflow with device pairing, not multi-tenant organization access control.
 - Each invocation gets a fresh Pi session. Platform history and task context are transferred, but old Custom histories are not converted into native Pi sessions. Interrupted commands are not automatically resumed.
-- Host commands are not OS-sandboxed. Native filesystem admission, write approvals and command policy do not make arbitrary workspace scripts safe to run.
+- Host commands are not OS-sandboxed and Agent tools are not confined to the workspace. Full native access means an Agent can read, change or execute anything the AgentMeld server user can, so arbitrary workspace scripts and dependencies remain unsafe to run untrusted.
 - Run one AgentMeld control server per data directory. Startup recovery assumes no other control server owns live runs. Unconfirmed Pi teardown keeps a durable workspace lease rather than admitting another writer.
 - Pi is pinned to 0.84.2; arbitrary global versions, user-installed Pi extensions, OAuth/native session import, other Harnesses and standalone server packaging are not supported by this integration.
 - Local deployment previews are static and local; AgentMeld does not publish generated apps to a hosted cloud platform.

@@ -4,7 +4,7 @@
   "title": "Expense Tracker",
   "description": "Form-based expense tracker testing requirements, design, implementation, local persistence, and deployment handoffs.",
   "category": "collaboration",
-  "prompt": "帮我做一个记账本 Web App。React，可以添加收入/支出记录（金额、分类、日期、备注），展示记录列表，简单的月度统计。数据存 localStorage。蓝色主题。",
+  "prompt": "帮我做一个记账本 Web App。React，可以添加收入/支出记录（金额、分类、日期、备注），展示记录列表，简单的月度统计。数据存 localStorage。蓝色主题。页面必须有一个文本为「添加记录」的按钮，点击后打开或展开新增记录表单；分类字段必须是原生 <select name=\"category\">（至少 2 个可选项）；金额用数字输入框，备注用文本框或 textarea；表单提供 button[type=submit] 提交按钮。保存后记录出现在列表中、备注文本可见并写入 localStorage，刷新页面后记录仍然存在。",
   "expectedRoles": ["pm", "ui", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },
@@ -49,6 +49,6 @@
     "rubricVersion": "collaboration-rubric-v1",
     "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "cross_artifact_consistency", "implementation_fidelity", "final_summary_accuracy"]
   },
-  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 200, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "local-storage", "context-handoff"]
 }

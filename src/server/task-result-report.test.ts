@@ -221,6 +221,53 @@ describe("evaluateChildTaskResult evidence gates", () => {
     expect(result.status).toBe("complete");
   });
 
+  it("accepts a glob target path satisfied by concrete file evidence", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["src/content/posts/*.md"] }),
+      report(),
+      evidence({
+        fileWrites: [
+          { path: "src/content/posts/markdown-first.md", action: "created" },
+          { path: "src/content/posts/about.md", action: "created" }
+        ]
+      })
+    );
+
+    expect(result.status).toBe("complete");
+  });
+
+  it("still fails a glob target when no concrete path matches it", () => {
+    const result = evaluateChildTaskResult(
+      task({ targetPaths: ["src/content/posts/*.md"] }),
+      report(),
+      evidence({
+        fileWrites: [{ path: "src/content/about.md", action: "created" }]
+      })
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("src/content/posts/*.md");
+  });
+
+  it("matches a recursive glob across directories but not outside the pattern", () => {
+    const target = task({ targetPaths: ["src/**/*.jsx"] });
+    expect(evaluateChildTaskResult(
+      target,
+      report(),
+      evidence({ fileWrites: [{ path: "src/App.jsx", action: "created" }] })
+    ).status).toBe("complete");
+    expect(evaluateChildTaskResult(
+      target,
+      report(),
+      evidence({ fileWrites: [{ path: "src/pages/Home.jsx", action: "created" }] })
+    ).status).toBe("complete");
+    expect(evaluateChildTaskResult(
+      target,
+      report(),
+      evidence({ fileWrites: [{ path: "other/App.jsx", action: "created" }] })
+    ).status).toBe("failed");
+  });
+
   it("accepts a concrete workspace path as evidence for the root target", () => {
     expect(evaluateChildTaskResult(
       task({ targetPaths: ["."] }),

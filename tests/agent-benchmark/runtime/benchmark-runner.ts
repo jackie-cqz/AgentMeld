@@ -145,6 +145,7 @@ export async function runBenchmarkCase(
       const collectedValidation = await collectRuntimeValidation(benchmarkCase, archive.contextTrace, {
         reportDir: environment.reportDir,
         injectedFaults: faultInjector.getRecords(),
+        ownerSession: environmentManager.ownerSession(),
       });
       runtimeValidation = { ...collectedValidation, ...hiddenValidation };
       result = evaluateBenchmarkTrace(benchmarkCase, archive.contextTrace, {

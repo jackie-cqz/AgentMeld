@@ -27,8 +27,11 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const ctx: ToolContext = { conversationId: input.conversationId, agentId: input.agent.id,
     runId: input.runId, parentRunId: input.parentRunId, workspacePath: input.workspacePath,
-    taskExecution: input.taskExecution, taskContract: input.taskContract, abortSignal: signal,
-    allowedToolNames: input.toolNames };
+    taskExecution: input.taskExecution, taskContract: input.taskContract, abortSignal: signal };
+  // `input.toolNames` is what this invocation is PROVISIONED with, not a
+  // permission decision: an Agent run is provisioned with the full Pi toolset
+  // (see tool-surface.ts), while platform-internal phases such as the
+  // Conductor's PLAN stage still scope their own surface deliberately.
   const native = nativeToolNames(input.toolNames);
   const businessNames = input.toolNames.filter(name => !Object.values(PI_NATIVE_TO_PLATFORM).includes(name));
   const definitions = toolRegistry.resolve(businessNames).map(tool => ({ name: tool.name, description: tool.description, parameters: structuredClone(tool.parameters) }));

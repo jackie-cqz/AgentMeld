@@ -74,15 +74,16 @@ export default async function agentMeldExtension(pi) {
   }
   pi.on("before_agent_start", () => ({ systemPrompt: `${manifest.systemPrompt}\n\n${
     manifest.needsReport ? "When the assigned task is finished or cannot proceed, call report_task_result with actual evidence. Never claim completion without submitting that result." : ""
-  }\nUse Pi native read/write/edit/ls/grep/find for filesystem operations and bash for approved verification. Native schemas override legacy filesystem examples: edit uses {path,edits:[{oldText,newText}]}, read uses offset/limit, grep uses pattern; replaceAll and nextStartColumn are not native arguments. Legacy job_start/job_read/job_wait/job_cancel instructions are obsolete: use native bash and wait for verification to finish. The runtime owns history and compaction. Commands execute in Bash, including on Windows. Do not modify source with shell commands.` }));
+  }\nUse Pi native read/write/edit/ls/grep/find for filesystem operations and bash for any shell command, including creating directories or writing files. Native schemas override legacy filesystem examples: edit uses {path,edits:[{oldText,newText}]}, read uses offset/limit, grep uses pattern; replaceAll and nextStartColumn are not native arguments. Legacy job_start/job_read/job_wait/job_cancel instructions are obsolete: use native bash and wait for verification to finish. The runtime owns history and compaction. Commands execute in Bash, including on Windows.` }));
   pi.on("turn_start", async (_event, ctx) => {
     try { await call("/turn", {}); }
     catch (error) { ctx.abort(); throw error; }
   });
-  pi.on("tool_call", event => {
-    if (![...manifest.native, ...manifest.definitions.map(tool => tool.name)].includes(event.toolName)) {
-      return { block: true, reason: "Tool is not authorized by AgentMeld." };
-    }
-  });
+  // No tool_call veto: issue #79 gives every Agent the full Pi toolset, so
+  // rejecting a call merely because it is absent from this extension's manifest
+  // is no longer a permission decision. The protections that are still real live
+  // where they belong — the bridge deduplicates call IDs (a replayed ID is
+  // refused), the runtime rejects a reused ID as a protocol error, and the
+  // platform-side handlers keep evidence, approvals and workspace guards.
   await call("/ready", {});
 }

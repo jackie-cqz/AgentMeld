@@ -2,7 +2,7 @@ import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
-import { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT, PI_RETIRED_TOOLS } from "@/shared/agent-constants";
+import { TOOL_PRESETS, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
@@ -62,7 +62,7 @@ export function createAgent(input: CreateAgentInput): Agent {
   const adapterName = "pi";
   const toolNames = input.toolNames ?? TOOL_PRESETS["all-purpose"].tools;
   const modelProvider = input.modelProvider ?? "deepseek";
-  validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl, toolNames, false);
+  validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl);
 
   db.prepare(`
     INSERT INTO agents (
@@ -123,9 +123,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
     modelProvider,
     modelId,
     apiKey,
-    apiBaseUrl,
-    toolNames,
-    existing.isBuiltin
+    apiBaseUrl
   );
 
   db.prepare(`
@@ -148,12 +146,12 @@ function validateCustomAgentConfig(
   modelProvider: ModelProvider | null,
   modelId: string | null | undefined,
   apiKey: string | null | undefined,
-  apiBaseUrl: string | null | undefined,
-  toolNames: readonly string[],
-  allowInternalTools: boolean
+  apiBaseUrl: string | null | undefined
 ) {
   if (adapterName !== "pi") throw new Error("The selected execution engine has been retired.");
-  if (toolNames.some(name => PI_RETIRED_TOOLS.includes(name))) throw new Error("Pi uses native bash for verification. Remove retired job_* tool grants.");
+  // No tool-name validation: `toolNames` no longer authorizes anything (see
+  // pi/tool-surface.ts). Rejecting retired or unknown names here would only
+  // prevent an Agent whose stored record is stale from being edited at all.
   if (!modelProvider) {
     throw new Error("Pi Agents must specify a model provider.");
   }
@@ -169,13 +167,6 @@ function validateCustomAgentConfig(
     }
   }
   if (modelProvider.startsWith("profile:")) requireModelProviderProfile(modelProvider);
-  const allowedTools = allowInternalTools
-    ? new Set([...ALL_TOOL_NAMES, "plan_tasks", "report_task_result", "update_context_facts"])
-    : new Set<string>(ALL_TOOL_NAMES);
-  const unknownTools = toolNames.filter((toolName) => !allowedTools.has(toolName));
-  if (unknownTools.length > 0) {
-    throw new Error(`Unknown Agent tools: ${unknownTools.join(", ")}.`);
-  }
 }
 
 export function deleteAgent(agentId: string): boolean {

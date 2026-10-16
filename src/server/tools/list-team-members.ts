@@ -1,4 +1,5 @@
 import { getAgent, getConversation, listAgents } from "@/server/repositories";
+import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { TOOL_CAPABILITIES } from "./capabilities";
 import type { ToolDef } from "./types";
 
@@ -11,9 +12,14 @@ export const listTeamMembersTool: ToolDef = {
     const conversation = getConversation(ctx.conversationId);
     const caller = getAgent(ctx.agentId);
     if (!conversation || !caller?.isConductor || !conversation.agentIds.includes(caller.id)) return { ok: false, error: "Only this conversation's Conductor may query its execution roster.", category: "security_policy" };
+    // Issue #79: every Agent is provisioned with the whole Pi toolset, so the
+    // roster reports that, not the stored grants (which no longer restrict or
+    // authorize anything). A planner told "this member has no bash" would skip a
+    // member that can in fact do the work.
+    const tools = provisionedPlatformToolNames();
     return { ok: true, value: { members: listAgents().filter(agent => conversation.agentIds.includes(agent.id)).map(agent => ({
       id: agent.id, name: agent.name, description: agent.description, capabilities: agent.capabilities,
-      toolNames: agent.toolNames, isConductor: agent.isConductor, executionEngine: agent.adapterName,
+      toolNames: tools, isConductor: agent.isConductor, executionEngine: agent.adapterName,
       retired: agent.adapterName !== "pi", modelProvider: agent.modelProvider, modelId: agent.modelId,
     })) } };
   },

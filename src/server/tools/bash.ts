@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { currentPlatform, type Platform } from "@/server/platform";
@@ -9,8 +8,7 @@ import { findBannedPattern } from "@/server/security";
 import {
   assertPathWithinWorkspace,
   BASH_OUTPUT_CHARS,
-  BASH_TIMEOUT_MS,
-  isPathWithin
+  BASH_TIMEOUT_MS
 } from "@/server/workspace-utils";
 import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 import type { ToolContext, ToolDef, ToolResult } from "@/server/tools/types";
@@ -24,17 +22,16 @@ const ArgsSchema = z.object({
 // Commands that require user approval but are not banned
 const APPROVAL_PATTERNS: RegExp[] = [
   /\b(npm|pnpm|yarn|bun)\s+(install|add|remove|update|ci)\b/,
-  // `npx <verification tool>` is already declared a legitimate verification
-  // command by VERIFICATION_PATTERNS. Demanding approval for it as well made
-  // unattended runs hang forever on a command the policy itself blesses — an
-  // agent that only wants to run `npx eslint` would sit in the approval queue
-  // until a human clicked, and then fail its task for lack of a report.
+  // `npx <verification tool>` is exempt from approval because it is a
+  // read-only check the platform already blesses, and gating it made unattended
+  // runs hang forever on a command nothing dangerous happens in — an agent that
+  // only wants to run `npx eslint` would sit in the approval queue until a human
+  // clicked, and then fail its task for lack of a report.
   //
   // The exemption must match the tool name as a WHOLE token: with a trailing `\b`
   // the lookahead also excused `npx eslint-foo` / `npx eslint.exe`, which npx
   // happily fetches from the registry — an approval-free RCE path. `(?![\w.-])`
-  // rejects those. The pattern is case-insensitive because VERIFICATION_PATTERNS
-  // is, and a case mismatch would recreate the very hang this fixes.
+  // rejects those. The pattern is case-insensitive so `npx ESLINT` is exempt too.
   /\bnpx\b(?!\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-]))/i,
   /\bpnpm\s+dlx\b/,
   /\bpip\s+install\b/,
@@ -53,52 +50,8 @@ const DEPENDENCY_COMMAND_PATTERNS: RegExp[] = [
   /\buv\s+sync\b/i
 ];
 
-const SOURCE_MUTATION_PATTERNS: RegExp[] = [
-  /\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item)\b/i,
-  /\b(del|erase|copy|move|ren|rename)\b/i,
-  /\bsed\b[^|;]*(?:-i|--in-place)\b/i,
-  /\bperl\b[^|;]*-(?:p?i|i)/i,
-  /\bpython(?:3)?\b[^|;]*\b(open|write_text|shutil|Path\()/i,
-  /(^|[^2])>{1,2}(?!&1)/
-];
-
-/**
- * An `npm/pnpm/yarn/bun run <script>` invocation whose script name starts with a
- * verification family word.
- *
- * The name is captured as a WHOLE shell token — the family word plus everything
- * up to the next whitespace. A `\b` is not enough: it also ends at `.` and `/`,
- * so `bun run build.evil` was classified as `build` while bun resolves the rest
- * to a FILE, and the declaration check then asked about a script the shell never
- * ran. Classification and extraction share this one pattern, so the name that is
- * classified is by construction the name that gets looked up.
- */
-const RUN_SCRIPT_PATTERN = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?((?:build|test|lint|typecheck|check)\b\S*)/i;
-
-const VERIFICATION_PATTERNS: RegExp[] = [
-  RUN_SCRIPT_PATTERN,
-  /\b(?:npm|pnpm|yarn|bun)\s+(?:ls|list)\b/i,
-  // Tool names are matched as whole tokens (`(?![\w.-])`, not `\b`): otherwise
-  // `npx eslint-foo` / `pnpm exec eslint-foo` count as verification and reach the
-  // registry / a differently-named binary while bypassing the approval gate.
-  /\bnpx\s+(?:--yes\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
-  /\bpnpm\s+exec\s+(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
-  /\byarn\s+(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
-  /\bbun\s+(?:x\s+)?(?:tsc|vite|vitest|eslint|oxlint)(?![\w.-])/i,
-  /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+-m\s+(?:unittest|pytest)\b/i,
-  /^pytest(?:\.exe)?\b/i,
-  /^(?:python(?:3(?:\.\d+)*)?|py(?:\s+-\d+(?:\.\d+)?)?)\s+(?:--version|-V)\b/i
-];
-
 export function needsApproval(command: string): boolean {
   return APPROVAL_PATTERNS.some((pattern) => pattern.test(command));
-}
-
-function findSourceMutationPattern(command: string): RegExp | null {
-  for (const pattern of SOURCE_MUTATION_PATTERNS) {
-    if (pattern.test(command)) return pattern;
-  }
-  return null;
 }
 
 // Splits a shell command into the segments that actually execute. Pipeline
@@ -127,27 +80,9 @@ function isDirectoryChange(segment: string): boolean {
   return /^(?:cd|Set-Location|Push-Location)\b/i.test(segment.trim());
 }
 
-function isVerificationSegment(segment: string): boolean {
-  const command = stripOutputFilter(segment);
-  return VERIFICATION_PATTERNS.some((pattern) => pattern.test(command));
-}
-
 function isDependencyCommandSegment(segment: string): boolean {
   const command = stripOutputFilter(segment);
   return DEPENDENCY_COMMAND_PATTERNS.some((pattern) => pattern.test(command));
-}
-
-export function isVerificationOnlyCommand(command: string): boolean {
-  const segments = splitCommandSegments(command);
-  if (segments.length === 0) return false;
-
-  let sawVerification = false;
-  for (const segment of segments) {
-    if (isDirectoryChange(segment)) continue;
-    if (!isVerificationSegment(segment)) return false;
-    sawVerification = true;
-  }
-  return sawVerification;
 }
 
 export function isDependencyOnlyCommand(command: string): boolean {
@@ -161,178 +96,6 @@ export function isDependencyOnlyCommand(command: string): boolean {
     sawDependencyCommand = true;
   }
   return sawDependencyCommand;
-}
-
-const DIRECTORY_CHANGE = /^(?:cd|Set-Location|Push-Location)\s+(.+)$/i;
-
-/** `npm --prefix <dir> run …`, `pnpm -C <dir>`, `yarn --cwd <dir>` … */
-const PROJECT_DIRECTORY_FLAG = /(?:^|\s)(?:-w|--workspace|--prefix|-C|--cwd)(?:[=\s]+)(\S+)/i;
-
-export interface VerificationScriptRun {
-  name: string;
-  /** Directory the script runs in, or null when it cannot be determined. */
-  cwd: string | null;
-}
-
-/**
- * The verification-family scripts a command asks to run, each with the directory
- * it will run in. `cd` segments are tracked in order, and an explicit project
- * directory flag redirects the lookup the way it redirects npm.
- *
- * `cwd` is null when the directory cannot be resolved statically — a shell
- * variable, `~`, or a glob. The caller must refuse those instead of assuming a
- * directory: the shell would run somewhere this code never looked.
- */
-export function findVerificationScriptRuns(
-  command: string,
-  baseCwd: string
-): VerificationScriptRun[] {
-  const runs: VerificationScriptRun[] = [];
-  let cwd: string | null = baseCwd;
-
-  for (const segment of splitCommandSegments(command)) {
-    const cleaned = stripOutputFilter(segment);
-
-    if (isDirectoryChange(cleaned)) {
-      cwd = resolveDirectoryChange(cleaned, cwd);
-      continue;
-    }
-
-    const script = cleaned.match(RUN_SCRIPT_PATTERN);
-    if (!script) continue;
-    runs.push({ name: script[1], cwd: applyProjectDirectoryFlag(cleaned, cwd) });
-  }
-
-  return runs;
-}
-
-/** `cd [-flags] <dir>` resolved against the current directory; null when unknown. */
-function resolveDirectoryChange(segment: string, current: string | null): string | null {
-  const match = segment.match(DIRECTORY_CHANGE);
-  if (!match || current === null) return current;
-
-  const target = match[1]
-    .trim()
-    // Drop leading options — `-P`, `-L`, and the `--` separator — before the path.
-    .replace(/^(?:(?:--?[A-Za-z][A-Za-z0-9-]*|--)(?:\s+|$))+/, "")
-    .replace(/^["']|["']$/g, "")
-    .trim();
-  return target && !isDynamicShellWord(target) ? path.resolve(current, target) : null;
-}
-
-function applyProjectDirectoryFlag(segment: string, current: string | null): string | null {
-  const flag = segment.match(PROJECT_DIRECTORY_FLAG);
-  if (!flag || current === null) return current;
-
-  const target = flag[1].replace(/^["']|["']$/g, "");
-  return target && !isDynamicShellWord(target) ? path.resolve(current, target) : null;
-}
-
-/** Shell words this code cannot turn into a path. */
-function isDynamicShellWord(word: string): boolean {
-  return word.includes("$") || word.startsWith("~") || /[*?[\]]/.test(word);
-}
-
-/**
- * Decide whether a verification script may run.
- *
- * npm resolves a script by walking up from the working directory to the nearest
- * package.json, so that manifest is the one that decides — and it has to sit
- * inside the workspace, otherwise the command would run the host project's
- * script. Reusing `isPathWithin` on a realpath keeps symlinks from pointing out
- * of the sandbox.
- */
-function checkDeclaredScript(
-  run: VerificationScriptRun,
-  workspaceRoot: string
-): { ok: true } | { ok: false; code: string; error: string } {
-  if (run.cwd === null) {
-    return {
-      ok: false,
-      code: "BASH_SCRIPT_DIRECTORY_UNKNOWN",
-      error:
-        `Cannot tell which directory "${run.name}" would run in (a shell variable, ~, or a glob is involved), ` +
-        `so it cannot be checked against a package.json. Use a literal path.`,
-    };
-  }
-
-  const directory = realPathOrNull(run.cwd);
-  if (!directory || !isPathWithin(directory, workspaceRoot)) {
-    return {
-      ok: false,
-      code: "BASH_SCRIPT_OUTSIDE_WORKSPACE",
-      error:
-        `"${run.name}" would run outside the workspace (${run.cwd}). ` +
-        `bash only verifies scripts declared inside it.`,
-    };
-  }
-
-  const manifest = findApplicableManifest(directory);
-  if (!manifest) {
-    // No package.json anywhere above: npm cannot run a script either, so let its
-    // own error be the feedback.
-    return { ok: true };
-  }
-
-  if (!isPathWithin(manifest.directory, workspaceRoot)) {
-    return {
-      ok: false,
-      code: "BASH_SCRIPT_MANIFEST_OUTSIDE_WORKSPACE",
-      error:
-        `"${run.name}" would resolve to ${path.join(manifest.directory, "package.json")}, which is outside ` +
-        `the workspace. bash only verifies scripts declared inside it.`,
-    };
-  }
-
-  if (!manifest.scripts.has(run.name)) {
-    return {
-      ok: false,
-      code: "BASH_UNDECLARED_SCRIPT",
-      error:
-        `Script "${run.name}" is not declared in ${path.join(manifest.directory, "package.json")}. ` +
-        `bash only runs build/test/lint/typecheck/check scripts the workspace declares.`,
-    };
-  }
-
-  return { ok: true };
-}
-
-function realPathOrNull(target: string): string | null {
-  try {
-    return fs.realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-/** The package.json npm would use for a directory: the nearest one at or above it. */
-function findApplicableManifest(
-  directory: string
-): { directory: string; scripts: Set<string> } | null {
-  let current = directory;
-
-  for (;;) {
-    const manifestPath = path.join(current, "package.json");
-    if (fs.existsSync(manifestPath)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
-          scripts?: Record<string, unknown>;
-        };
-        const scripts =
-          parsed && typeof parsed === "object" && parsed.scripts && typeof parsed.scripts === "object"
-            ? new Set(Object.keys(parsed.scripts))
-            : new Set<string>();
-        return { directory: current, scripts };
-      } catch {
-        // A manifest npm cannot parse is one it cannot run a script from either.
-        return { directory: current, scripts: new Set<string>() };
-      }
-    }
-
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
 }
 
 function containsPnpmDependencyMutation(command: string): boolean {
@@ -369,15 +132,17 @@ function getShell(platform: Platform): { cmd: string; args: string[] } {
 
 const PLATFORM_DESCRIPTIONS: Record<Platform, string> = {
   posix:
-    "Run a verification shell command inside workspace. Dependency installation commands are allowed only after user approval. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
-    "Use bash for build/test/lint/typecheck/dependency-list verification, including Python unittest/pytest, and approved dependency installation only. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Run a shell command inside workspace. Uses the user login shell (zsh/bash) when available, otherwise sh. " +
+    "Any development command is allowed, including creating directories and writing files; use fs_list/fs_read/fs_patch/fs_write when you want path-guarded file access instead. " +
+    "Dependency installation and other mutating package-manager commands ask the user for approval first. " +
     `Output: stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
-    "Blocked: source mutation, recursive deletion, sudo, fork bombs, curl | sh.",
+    "Still blocked by security policy: recursive deletion of the filesystem, sudo, fork bombs, curl | sh.",
   windows:
-    "Run a verification PowerShell 5.1 command inside workspace. " +
-    "Use PowerShell only for build/test/lint/typecheck/dependency-list verification, including Python unittest/pytest, and approved dependency installation. Use fs_list/fs_read/fs_patch/fs_write for file inspection or source changes. " +
+    "Run a PowerShell 5.1 command inside workspace. " +
+    "Any development command is allowed, including creating directories and writing files; use fs_list/fs_read/fs_patch/fs_write when you want path-guarded file access instead. " +
+    "Dependency installation and other mutating package-manager commands ask the user for approval first. " +
     `Output is UTF-8, stdout+stderr merged, ${BASH_OUTPUT_CHARS} char limit, ${BASH_TIMEOUT_MS / 1000}s timeout. ` +
-    "Blocked: source mutation, Remove-Item/rmdir deletion, format, shutdown, iex(iwr ...), reg delete."
+    "Still blocked by security policy: format, shutdown, iex(iwr ...), reg delete."
 };
 
 export const bashTool: ToolDef = {
@@ -390,7 +155,7 @@ export const bashTool: ToolDef = {
     properties: {
       command: {
         type: "string",
-        description: `The build/test/lint/typecheck/dependency-list verification command, or dependency installation command that requires user approval, to execute inside the workspace. ${
+        description: `The shell command to execute inside the workspace. ${
           currentPlatform() === "windows"
             ? "Uses PowerShell 5.1 syntax."
             : "Uses POSIX shell syntax."
@@ -410,7 +175,12 @@ export async function authorizeBashExecution(args: unknown, ctx: ToolContext): P
     const command = parsed.data.command;
     const platform = currentPlatform();
 
-    // 1. Check banned patterns
+    // 1. Check banned patterns. This is the only remaining content gate: it
+    // names genuinely destructive host commands (recursive root deletion, sudo,
+    // fork bombs, curl | sh, …), not "commands a build agent should not need".
+    // The old verification-only and source-mutation gates are gone (issue #79):
+    // bash is a general development tool now, so mkdir/cat >/sed -i and any
+    // `npm run <script>` are ordinary commands, not policy violations.
     const banned = findBannedPattern(command, platform);
     if (banned) {
       return {
@@ -421,33 +191,7 @@ export async function authorizeBashExecution(args: unknown, ctx: ToolContext): P
       };
     }
 
-    const mutationPattern = findSourceMutationPattern(command);
-    if (mutationPattern) {
-      return {
-        ok: false,
-        code: "BASH_SOURCE_MUTATION_BLOCKED",
-        category: "security_policy",
-        error:
-          "Command blocked by bash verification-only policy. " +
-          "Do not retry this with PowerShell/Bash. Use fs_mkdir for directories, fs_patch for existing source edits, fs_write for new/full files, and fs_list/fs_read for directory or file inspection. " +
-          "bash may still be used for npm/pnpm install after user approval, and for build/test/lint/typecheck verification commands " +
-          `(pattern: ${mutationPattern.source}).`
-      };
-    }
-
     const isDependencyInstall = isDependencyOnlyCommand(command);
-    if (!isVerificationOnlyCommand(command) && !isDependencyInstall) {
-      return {
-        ok: false,
-        code: "BASH_VERIFICATION_ONLY",
-        category: "security_policy",
-        error:
-          "Command blocked by bash verification-only policy. " +
-          "bash is only for build/test/lint/typecheck/dependency-list commands, including Python unittest/pytest, or approved dependency installation. " +
-          "For directories call fs_mkdir, for inspection call fs_list/fs_read now, and for source changes call fs_patch for existing files or fs_write for new/full files. " +
-          "Do not use Get-ChildItem, mkdir, cat, Set-Content, echo redirection, sed, arbitrary python scripts, or shell copy commands for source inspection or edits."
-      };
-    }
 
     if (
       isDependencyInstall &&
@@ -464,7 +208,8 @@ export async function authorizeBashExecution(args: unknown, ctx: ToolContext): P
       };
     }
 
-    // 2. Verify cwd is within workspace
+    // 2. Verify cwd is within workspace. The lease fixes the starting directory;
+    // the command itself runs with the process user's reach, as the prompt says.
     let cwd: string;
     try {
       cwd = assertPathWithinWorkspace(ctx.workspacePath, ".");
@@ -477,25 +222,9 @@ export async function authorizeBashExecution(args: unknown, ctx: ToolContext): P
       };
     }
 
-    // 3. `npm run <script>` executes whatever the project declares, so run only
-    // scripts the workspace actually declares. The verification patterns match by
-    // name family, which on its own also accepted names no project declares
-    // (`npm run build-evil`) — and a script nobody declared is arbitrary code
-    // execution wearing a build step's name.
-    //
-    // A script that cannot be located inside the workspace is refused rather than
-    // waved through: `cd` moves the shell (the sandbox only fixes the initial
-    // directory), and npm walks up to the nearest package.json, so "I could not
-    // find it" must not mean "allow it".
-    const workspaceRoot = realPathOrNull(cwd) ?? cwd;
-    for (const scriptRun of findVerificationScriptRuns(command, cwd)) {
-      const check = checkDeclaredScript(scriptRun, workspaceRoot);
-      if (!check.ok) {
-        return { ok: false, code: check.code, category: "security_policy", error: check.error };
-      }
-    }
-
-    // 4. Approval check for dangerous-but-not-banned commands
+    // 3. Approval check for dangerous-but-not-banned commands. This is a RECORD,
+    // not a capability gate: the request and its decision stay auditable, and a
+    // normal development command never reaches it.
     if (needsApproval(command)) {
       const approved = await registerPendingBash(
         ctx.conversationId, ctx.agentId, ctx.runId, command, cwd,

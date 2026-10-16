@@ -5,6 +5,7 @@ import { consumeStream } from "@/server/consume-stream";
 import { runPiInvocation } from "@/server/pi/runtime";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
+import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PiRuntimeError } from "@/server/pi/process";
 import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
@@ -1716,7 +1717,10 @@ function describeAgentForPlanning(agent: Agent) {
     name: agent.name,
     description: agent.description,
     capabilities: agent.capabilities,
-    tools: agent.toolNames,
+    // Every member is provisioned with the whole Pi toolset (issue #79); the
+    // stored grants are a record only, so reporting them would tell the planner
+    // a capable member cannot do the work.
+    tools: provisionedPlatformToolNames(),
     bestFor: profile.bestFor,
     avoidFor: profile.avoidFor
   };

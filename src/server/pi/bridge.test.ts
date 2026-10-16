@@ -7,13 +7,15 @@ import { getWorkspaceForConversation, SYSTEM_RESOLVED_BY } from "@/server/reposi
 import { getDatabase } from "@/db/client";
 import { newRunId } from "@/shared/ids";
 import { getAllPendingWrites, approvePendingWrite } from "@/server/pending-writes";
+import { getFileWrites } from "@/server/dispatch-file-writes";
 import { setTimeout as delay } from "node:timers/promises";
 import { createPiBridge } from "./bridge";
+import { provisionedPlatformToolNames } from "./tool-surface";
 
 const bridges: Array<Awaited<ReturnType<typeof createPiBridge>>> = [];
 afterEach(async () => { await Promise.all(bridges.splice(0).map(bridge => bridge.close())); });
-async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}) {
-  const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: toolNames.filter(name => name !== "report_task_result") });
+async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}, agentGrants: string[] = toolNames) {
+  const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: agentGrants.filter(name => name !== "report_task_result") });
   const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   const runId = newRunId();
@@ -24,25 +26,69 @@ async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = ()
 }
 
 describe("private Pi bridge admission", () => {
-  it("rejects missing credentials, unknown capabilities and call ID replay", async () => {
+  it("rejects missing credentials, unmapped native names and call ID replay", async () => {
     const { post } = await fixture();
     expect((await post("/native/authorize", { callId: "missing", name: "write", args: {} }, "wrong")).status).toBe(403);
-    expect((await post("/tool", { callId: "unknown", name: "deploy_workspace", args: {} })).status).toBe(403);
-    expect((await post("/native/authorize", { callId: "unknown", name: "write", args: { path: "a" } })).status).toBe(400);
+    // There is no native mapping for this name, so there is nothing to run.
+    expect((await post("/native/authorize", { callId: "no_mapping", name: "not_a_native_tool", args: {} })).status).toBe(400);
+    // Replay/dedup protection stays: a consumed call ID cannot be admitted twice.
+    expect((await post("/native/authorize", { callId: "replay", name: "write", args: { path: "a.txt" } })).status).toBe(200);
+    expect((await post("/native/authorize", { callId: "replay", name: "write", args: { path: "a.txt" } })).status).toBe(400);
   });
-  it("rejects path traversal and ungranted native tools", async () => {
-    const { post, bridge } = await fixture();
-    expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(400);
-    expect(bridge.result("escape")?.ok).toBe(false);
-    expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "npm test" } })).status).toBe(400);
+
+  it("still scopes platform-internal business tools to what was provisioned", async () => {
+    // The bridge is a faithful provisioner: it executes only the business tools
+    // this invocation listed. An Agent run lists everything (see the tests
+    // below); the Conductor's PLAN stage deliberately lists a narrow set.
+    const { post } = await fixture();
+    expect((await post("/tool", { callId: "unprovisioned", name: "deploy_workspace", args: {} })).status).toBe(403);
   });
-  it("rejects writes through a directory link outside the workspace", async () => {
-    const { post, workspace } = await fixture();
+
+  it("provisions an Agent with no stored grants with the whole Pi toolset", async () => {
+    // Issue #79: agent-runner provisions every Agent run with
+    // provisionedPlatformToolNames(), whatever the Agent record says. Here the
+    // Agent has NO grants at all, yet native and business tools are admitted.
+    const provisioned = provisionedPlatformToolNames();
+    expect(provisioned).toEqual(expect.arrayContaining(["fs_read", "fs_write", "fs_patch", "bash", "read_artifact", "write_artifact", "deploy_workspace", "web_fetch", "browser_check"]));
+    // The retired job_* kernel and the Conductor's PLAN protocol tool are not
+    // Agent capabilities; the PLAN stage provisions plan_tasks for itself.
+    expect(provisioned).not.toContain("job_start");
+    expect(provisioned).not.toContain("plan_tasks");
+    const { post } = await fixture(provisioned, () => {}, []);
+    expect((await post("/native/authorize", { callId: "write", name: "write", args: { path: "granted.txt" } })).status).toBe(200);
+    expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "mkdir -p src && cat > src/App.css" } })).status).toBe(200);
+    expect((await post("/tool", { callId: "artifact", name: "read_artifact", args: { artifactId: "art_missing" } })).status).toBe(200);
+  });
+
+  it("admits a native write that resolves outside the workspace and records it", async () => {
+    // Issue #79: native file tools are full-access, so `../` is not a refusal.
+    // The path is still resolved (against the workspace root for a relative
+    // path) and the resulting change is still recorded as evidence.
+    const { post, bridge, runId, workspace } = await fixture();
+    const outside = path.resolve(workspace.rootPath, "..", "escape.txt");
+    expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(200);
+    expect((await post("/native/change", { callId: "escape", path: outside, content: "no" })).status).toBe(200);
+    // Pi performs the bytes; the bridge only authorizes and then observes.
+    fs.writeFileSync(outside, "no");
+    expect((await post("/native/result", { callId: "escape", result: { content: [{ type: "text", text: "wrote ../escape.txt" }] }, isError: false })).status).toBe(200);
+    expect(bridge.result("escape")?.ok).toBe(true);
+    expect(getFileWrites(runId).has(outside)).toBe(true);
+    expect(fs.readFileSync(outside, "utf8")).toBe("no");
+    fs.rmSync(outside, { force: true });
+  });
+  it("admits and records writes through a directory link outside the workspace", async () => {
+    const { post, bridge, runId, workspace } = await fixture();
     const outside = path.join(workspace.rootPath, "..", "outside-pi-bridge-fixture");
     fs.mkdirSync(outside, { recursive: true });
     fs.symlinkSync(outside, path.join(workspace.rootPath, "linked"), "junction");
-    expect((await post("/native/authorize", { callId: "linked", name: "write", args: { path: "linked/escape.txt", content: "no" } })).status).toBe(400);
-    expect(fs.existsSync(path.join(outside, "escape.txt"))).toBe(false);
+    const linked = path.join(workspace.rootPath, "linked", "escape.txt");
+    expect((await post("/native/authorize", { callId: "linked", name: "write", args: { path: "linked/escape.txt", content: "no" } })).status).toBe(200);
+    expect((await post("/native/change", { callId: "linked", path: linked, content: "no" })).status).toBe(200);
+    fs.writeFileSync(linked, "no");
+    expect((await post("/native/result", { callId: "linked", result: { content: [{ type: "text", text: "wrote linked/escape.txt" }] }, isError: false })).status).toBe(200);
+    expect(bridge.result("linked")?.ok).toBe(true);
+    expect(getFileWrites(runId).has(linked)).toBe(true);
+    expect(fs.readFileSync(path.join(outside, "escape.txt"), "utf8")).toBe("no");
   });
   it("rejects turns past the runtime budget instead of declaring completion", async () => {
     let exceeded = false;

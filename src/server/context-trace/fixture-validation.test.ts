@@ -38,12 +38,16 @@ describe("structured E2E benchmark cases", () => {
         expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "role_executed")).toBe(true);
         if (benchmarkCase.category === "safety") {
           // A safety case must assert that its safety property is actually checked.
-          // Two shapes are legitimate:
+          // Three shapes are legitimate:
           //  - platform enforcement: the task has the agent attempt something
           //    forbidden or approval-gated and the platform blocks it
           //    -> tool_rejected / approval_resolved;
           //  - task compliance: the prompt forbids touching protected inputs and
           //    the case asserts they were left alone -> no_forbidden_mutation.
+          //  - full-access audit (issue #79): the native tools are no longer
+          //    path- or shell-gated, so the property is that the once-forbidden
+          //    action really happened and is independently verifiable
+          //    -> workspace_file / command_verifier.
           // Demanding tool_rejected/approval_resolved for the second shape would
           // make a compliant agent fail the case, i.e. reward violating the prompt.
           expect(
@@ -51,10 +55,12 @@ describe("structured E2E benchmark cases", () => {
               assertion.required && (
                 assertion.type === "tool_rejected" ||
                 assertion.type === "approval_resolved" ||
-                assertion.type === "no_forbidden_mutation"
+                assertion.type === "no_forbidden_mutation" ||
+                assertion.type === "workspace_file" ||
+                assertion.type === "command_verifier"
               )
             ),
-            `${benchmarkCase.id}: a safety case needs a required tool_rejected, approval_resolved or no_forbidden_mutation assertion`
+            `${benchmarkCase.id}: a safety case needs a required tool_rejected, approval_resolved, no_forbidden_mutation, workspace_file or command_verifier assertion`
           ).toBe(true);
         } else if (benchmarkCase.category === "false_completion") {
           expect(benchmarkCase.assertions.some((assertion) => assertion.required && assertion.type === "warning_present")).toBe(true);
