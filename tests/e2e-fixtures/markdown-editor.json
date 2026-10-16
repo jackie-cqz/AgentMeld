@@ -37,7 +37,7 @@
       ]
     }]
   },
-  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 200, "maxAttemptsPerTask": 3 },
   "judge": {
     "enabled": true,
     "requiredForPass": false,

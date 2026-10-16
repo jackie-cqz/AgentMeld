@@ -18,6 +18,6 @@
     "rubricVersion": "collaboration-rubric-v1",
     "dimensions": ["requirement_coverage", "implementation_fidelity", "final_summary_accuracy"]
   },
-  "limits": { "maxDurationMs": 300000, "maxToolCalls": 10, "maxAttemptsPerTask": 2 },
+  "limits": { "maxDurationMs": 300000, "maxToolCalls": 40, "maxAttemptsPerTask": 2 },
   "tags": ["false-completion", "artifact", "evidence", "full-access", "audit"]
 }

@@ -184,9 +184,15 @@ describe("fs_mkdir", () => {
     expect(fs.statSync(path.join(workspacePath, "nested", "dir")).isDirectory()).toBe(true);
   });
 
-  it("rejects paths outside the workspace", async () => {
-    const result = await toolRegistry.execute("fs_mkdir", { path: "../../../outside" }, ctx());
-    expect(result.ok).toBe(false);
+  it("admits an absolute path outside the workspace (issue #79 full access)", async () => {
+    const outside = path.join(os.tmpdir(), `agentmeld-mkdir-outside-${process.pid}-${Date.now()}`);
+    try {
+      const result = await toolRegistry.execute("fs_mkdir", { path: outside }, ctx());
+      expect(result.ok).toBe(true);
+      expect(fs.statSync(outside).isDirectory()).toBe(true);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

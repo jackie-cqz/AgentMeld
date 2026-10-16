@@ -50,6 +50,6 @@
     "rubricVersion": "collaboration-rubric-v1",
     "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "implementation_fidelity", "final_summary_accuracy"]
   },
-  "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 200, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "debugging", "recovery"]
 }

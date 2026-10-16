@@ -49,6 +49,6 @@
     "rubricVersion": "collaboration-rubric-v1",
     "dimensions": ["requirement_coverage", "role_specialization", "handoff_quality", "cross_artifact_consistency", "implementation_fidelity", "final_summary_accuracy"]
   },
-  "limits": { "maxDurationMs": 900000, "maxToolCalls": 70, "maxAttemptsPerTask": 3 },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 200, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "local-storage", "context-handoff"]
 }
