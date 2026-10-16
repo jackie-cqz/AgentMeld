@@ -94,17 +94,16 @@ try {
   await page.getByLabel('搜索 Agent', { exact: true }).fill('no-such-agent-fixture'); await page.getByRole('button', { name: '清除筛选', exact: true }).click();
   assert.equal(await page.locator('.workspace-agent-row').count(), bootstrap.agents.length);
   await page.getByTitle('新建 Agent', { exact: true }).click(); await page.getByRole('button', { name: /详细配置/ }).click();
-  await page.getByRole('tab', { name: '工具记录', exact: true }).click();
-  await page.getByLabel('搜索工具', { exact: true }).fill('fs_patch'); assert.equal(await page.getByRole('checkbox').count(), 2);
-  await page.getByLabel('搜索工具', { exact: true }).fill('');
-  await page.getByRole('checkbox', { name: '仅看已记录', exact: true }).check();
-  for (const checkbox of await page.locator('.ui-tool-option input').all()) assert(await checkbox.isChecked());
-  await capture('tool-filter');
+  await page.getByRole('tab', { name: '运行时工具', exact: true }).click();
+  assert(await page.getByText('运行时可用的工具', { exact: true }).isVisible());
+  assert.equal(await page.getByRole('checkbox').count(), 0, 'Agent editor offers no tool choice');
+  assert.equal(await page.getByLabel('工具记录预设', { exact: true }).count(), 0, 'No tool record picker remains');
+  await capture('runtime-toolset');
   await page.getByRole('tab', { name: '模型与适配器', exact: true }).click(); await page.getByRole('button', { name: '供应商 *', exact: true }).click();
   assert.equal(await page.locator('dialog[open]').count(), 1, 'Selection stays inside the Agent dialog');
   await page.getByLabel('搜索已配置供应商', { exact: true }).fill('no-such-provider'); await page.getByText('未找到匹配的供应商', { exact: true }).waitFor();
   await capture('inline-provider'); await page.keyboard.press('Escape'); assert.equal(await page.locator('dialog[open]').count(), 1);
   await page.keyboard.press('Escape');
-  assert.deepEqual(errors, []); console.log(JSON.stringify({ passed: true, screenshots, checks: ['decision-draft-retention', 'bounded-queue', 'tool-status-consistency', 'artifact-document', 'trace-summary', 'agent-filters', 'permission-filter', 'single-dialog-model-picker'], errors }));
+  assert.deepEqual(errors, []); console.log(JSON.stringify({ passed: true, screenshots, checks: ['decision-draft-retention', 'bounded-queue', 'tool-status-consistency', 'artifact-document', 'trace-summary', 'agent-filters', 'runtime-toolset-readonly', 'single-dialog-model-picker'], errors }));
 } catch (error) { await page.screenshot({ path: `${output}/failure.png` }); throw error; }
 finally { await page.close(); await browser.close(); }

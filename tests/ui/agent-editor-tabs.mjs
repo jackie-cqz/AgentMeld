@@ -21,7 +21,7 @@ await page.route('**/api/**', async route => {
 const output = '.tmp-ui-artifacts/agent-editor-tabs'; await fs.mkdir(output, { recursive: true });
 const suffix = Date.now(); const name = `UI Separate Tabs ${suffix}`; const supplier = `UI Tabs Supplier ${suffix}`;
 let providerId; let agentId; let screenshots = 0;
-const tabs = ['基本信息', '模型与适配器', '工具记录', '系统提示词'];
+const tabs = ['基本信息', '模型与适配器', '运行时工具', '系统提示词'];
 const prompt = 'You are a focused reviewer. Read evidence, preserve user changes, and report remaining risks.';
 async function json(response) { assert(response.ok(), `${response.status()}: ${await response.text()}`); return response.json(); }
 async function tab(label) {
@@ -42,9 +42,9 @@ async function capture(file) {
 async function layoutChecks(mode) {
   for (const [width, height, theme] of [[1440, 900, 'light'], [1440, 900, 'dark'], [390, 844, 'light'], [390, 844, 'dark'], [320, 640, 'light'], [1280, 420, 'light']]) {
     await page.setViewportSize({ width, height }); await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
-    await tab('工具记录'); assert.equal(await page.getByRole('textbox', { name: '系统提示词', exact: true }).count(), 0);
+    await tab('运行时工具'); assert.equal(await page.getByRole('textbox', { name: '系统提示词', exact: true }).count(), 0);
     await capture(`${mode}-${width}-${height}-${theme}-tools`);
-    await page.getByRole('checkbox', { name: /^询问用户/ }).scrollIntoViewIfNeeded();
+    await page.getByText('运行时可用的工具', { exact: true }).scrollIntoViewIfNeeded();
     await tab('系统提示词'); assert.equal(await page.getByRole('checkbox').count(), 0);
     assert.equal(await page.getByRole('textbox', { name: '系统提示词', exact: true }).inputValue(), prompt);
     assert.equal(await page.locator('dialog[open] [data-ui-scroll]').evaluate(node => node.scrollTop), 0);
@@ -58,33 +58,35 @@ try {
   assert.equal(await page.getByRole('tab').count(), 4);
   await page.getByLabel('名称', { exact: true }).fill(name); await page.getByLabel('Agent 描述', { exact: true }).fill('Separate permissions and prompt fixture');
   await tab('模型与适配器'); await page.getByRole('button', { name: '供应商 *', exact: true }).click(); await page.getByRole('button', { name: `选择供应商 ${supplier}`, exact: true }).click();
-  await tab('工具记录'); await page.getByLabel('工具记录预设', { exact: true }).selectOption('review');
-  await page.getByRole('checkbox', { name: /^联网搜索/ }).check();
+  await tab('运行时工具');
+  assert(await page.getByText('运行时可用的工具', { exact: true }).isVisible());
+  assert.equal(await page.getByRole('checkbox').count(), 0, 'Agent editor offers no tool choice');
+  assert.equal(await page.getByLabel('工具记录预设', { exact: true }).count(), 0, 'No tool record picker remains');
   await tab('系统提示词'); await page.getByRole('textbox', { name: '系统提示词', exact: true }).fill(prompt);
   await tab('基本信息'); await page.getByRole('tab', { name: '基本信息', exact: true }).focus(); await page.keyboard.press('End');
   assert(await page.getByRole('tab', { name: '系统提示词', exact: true }).evaluate(node => node === document.activeElement && node.getAttribute('aria-selected') === 'true'));
-  await page.keyboard.press('ArrowLeft'); assert(await page.getByRole('tab', { name: '工具记录', exact: true }).evaluate(node => node === document.activeElement));
-  assert(await page.getByRole('checkbox', { name: /^联网搜索/ }).isChecked());
+  await page.keyboard.press('ArrowLeft'); assert(await page.getByRole('tab', { name: '运行时工具', exact: true }).evaluate(node => node === document.activeElement));
   await layoutChecks('create');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click(); await page.locator('dialog[open]').waitFor({ state: 'hidden' });
   let bootstrap = await json(await context.request.get(`${api}/api/bootstrap`)); const created = bootstrap.agents.find(item => item.name === name); assert(created); agentId = created.id;
-  assert.equal(created.systemPrompt, prompt); assert(created.toolNames.includes('web_search')); assert(!created.toolNames.includes('bash'));
+  assert.equal(created.systemPrompt, prompt); assert(created.toolNames.length > 0, 'Server default record is seeded on create');
   await page.setViewportSize({ width: 1440, height: 900 });
   const row = page.locator('.workspace-agent-row').filter({ has: page.getByText(name, { exact: true }) }); await row.getByTitle('编辑', { exact: true }).click();
   await layoutChecks('edit');
-  await tab('工具记录'); await page.getByRole('checkbox', { name: /^联网搜索/ }).uncheck();
+  await tab('运行时工具'); assert.equal(await page.getByRole('checkbox').count(), 0, 'Editing offers no tool choice');
   await tab('系统提示词'); await page.getByRole('textbox', { name: '系统提示词', exact: true }).fill(`${prompt}\nUse the current task context only.`);
-  await tab('工具记录'); assert(!(await page.getByRole('checkbox', { name: /^联网搜索/ }).isChecked())); await tab('系统提示词');
+  await tab('运行时工具'); assert(await page.getByText('运行时可用的工具', { exact: true }).isVisible()); await tab('系统提示词');
   await page.getByRole('button', { name: '保存修改', exact: true }).click(); await page.locator('dialog[open]').waitFor({ state: 'hidden' });
   bootstrap = await json(await context.request.get(`${api}/api/bootstrap`)); const edited = bootstrap.agents.find(item => item.id === agentId);
-  assert.equal(edited.systemPrompt, `${prompt}\nUse the current task context only.`); assert(!edited.toolNames.includes('web_search'));
+  assert.equal(edited.systemPrompt, `${prompt}\nUse the current task context only.`);
+  assert.deepEqual(edited.toolNames, created.toolNames, 'Saving the editor leaves the stored record untouched');
   await row.getByTitle('编辑', { exact: true }).click(); await tab('系统提示词'); await page.getByRole('textbox', { name: '系统提示词', exact: true }).fill('Unsaved draft');
   await page.keyboard.press('Escape'); await page.getByRole('button', { name: '继续编辑', exact: true }).click(); assert.equal(await page.getByRole('textbox', { name: '系统提示词', exact: true }).inputValue(), 'Unsaved draft');
   await page.keyboard.press('Escape'); await page.getByRole('button', { name: '放弃修改', exact: true }).click();
   await page.getByTitle('新建 Agent', { exact: true }).click(); await page.getByRole('button', { name: /快速创建/ }).click();
   await page.getByLabel('Agent 职责描述', { exact: true }).fill('研究资料和验收记录'); await page.getByRole('button', { name: '生成草稿并预览', exact: true }).click();
   await tab('系统提示词'); assert((await page.getByRole('textbox', { name: '系统提示词', exact: true }).inputValue()).includes('研究资料和验收记录'));
-  await tab('工具记录'); assert(await page.getByRole('checkbox', { name: /^联网搜索/ }).isChecked());
+  await tab('运行时工具'); assert.equal(await page.getByRole('checkbox').count(), 0, 'Quick draft offers no tool choice');
   await page.keyboard.press('Escape'); await page.getByRole('button', { name: '放弃修改', exact: true }).click();
   assert.deepEqual(errors, []); console.log(JSON.stringify({ passed: true, modes: ['create', 'edit', 'quick-draft'], screenshots, checks: ['independent-panels', 'draft-retention', 'persistence', 'keyboard', 'unsaved-confirmation', 'responsive-footer'], errors }));
 } finally {

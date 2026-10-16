@@ -11,8 +11,6 @@ const page = await context.newPage(); const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 const output = '.tmp-ui-artifacts/workspace-toolkit'; await fs.mkdir(output, { recursive: true });
 const name = `UI Toolkit ${Date.now()}`; let agentId;
-const tools = ['fs_glob', 'fs_search', 'job_start', 'job_read', 'job_wait', 'job_cancel', 'web_fetch', 'web_search', 'git_inspect', 'browser_check'];
-const labels = ['查找文件', '搜索内容', '启动后台命令', '查看命令输出', '等待命令完成', '取消后台命令', '读取网页', '联网搜索', '检查代码变更', '网页验收'];
 async function json(response) { assert(response.ok(), `${response.status()}: ${await response.text()}`); return response.json(); }
 async function capture(file) {
   const dialog = page.locator('dialog[open]').last();
@@ -23,30 +21,25 @@ async function capture(file) {
 }
 try {
   const { agent } = await json(await context.request.post(`${base}/api/agents`, { data: {
-    name, description: 'Tool permissions fixture', adapterName: 'custom', modelProvider: 'deepseek', modelId: 'deepseek-chat', toolNames: ['fs_read'], systemPrompt: 'Fixture; never execute a model request.'
+    name, description: 'Runtime toolset fixture', adapterName: 'pi', modelProvider: 'deepseek', modelId: 'deepseek-chat', toolNames: ['fs_read'], systemPrompt: 'Fixture; never execute a model request.'
   } })); agentId = agent.id;
   await page.goto(base, { waitUntil: 'domcontentloaded' }); await page.locator('.ui-shell').waitFor();
   await page.getByTitle('Agents', { exact: true }).click();
   await page.locator('.workspace-agent-row').filter({ has: page.getByText(name, { exact: true }) }).getByTitle('编辑', { exact: true }).click();
-  await page.getByRole('tab', { name: '工具记录', exact: true }).click();
-  for (const label of labels) assert.equal(await page.getByRole('checkbox', { name: new RegExp(`^${label}`) }).count(), 1);
-  await page.getByLabel('工具记录预设', { exact: true }).selectOption('review');
-  await page.getByRole('checkbox', { name: /^启动后台命令/ }).check();
-  for (const label of ['查看命令输出', '等待命令完成', '取消后台命令']) assert(await page.getByRole('checkbox', { name: new RegExp(`^${label}`) }).isChecked());
-  await page.getByRole('checkbox', { name: /^等待命令完成/ }).uncheck();
-  assert(!(await page.getByRole('checkbox', { name: /^启动后台命令/ }).isChecked()));
-  await page.getByLabel('工具记录预设', { exact: true }).selectOption('all-purpose');
+  await page.getByRole('tab', { name: '运行时工具', exact: true }).click();
+  assert(await page.getByText('运行时可用的工具', { exact: true }).isVisible());
+  assert.equal(await page.getByRole('checkbox').count(), 0, 'Agent editor offers no tool choice');
+  assert.equal(await page.getByLabel('工具记录预设', { exact: true }).count(), 0, 'No tool record picker remains');
   for (const [width, height, theme] of [[1440, 900, 'light'], [1440, 900, 'dark'], [390, 844, 'light'], [390, 844, 'dark'], [320, 640, 'light']]) {
     await page.setViewportSize({ width, height }); await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
-    await page.getByRole('checkbox', { name: /^网页验收/ }).scrollIntoViewIfNeeded();
-    await capture(`${width}-${theme}-permissions`);
+    await page.getByText('运行时可用的工具', { exact: true }).scrollIntoViewIfNeeded();
+    await capture(`${width}-${theme}-runtime-tools`);
   }
   await page.getByRole('button', { name: '保存修改', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'hidden' });
   const saved = await json(await context.request.get(`${base}/api/bootstrap`));
   const savedAgent = saved.agents.find(item => item.id === agentId);
-  assert(savedAgent.toolNames.length > 20, 'Expanded tool sets survive API validation');
-  for (const tool of tools) assert(savedAgent.toolNames.includes(tool), `Persisted ${tool}`);
+  assert.deepEqual(savedAgent.toolNames, ['fs_read'], 'Saving the editor preserves the stored record untouched');
   const conversation = saved.conversations[0]; assert(conversation, 'Fixture needs a conversation');
   const now = Date.now();
   const calls = [
@@ -79,7 +72,7 @@ try {
     assert(await page.locator('.workspace-transcript').evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'No transcript horizontal overflow');
     await page.screenshot({ path: `${output}/${width}-${theme}-results.png` });
   }
-  assert.deepEqual(errors, []); console.log(JSON.stringify({ passed: true, savedTools: savedAgent.toolNames.length, screenshots: 9, errors }));
+  assert.deepEqual(errors, []); console.log(JSON.stringify({ passed: true, storedRecord: savedAgent.toolNames.length, runtimeTools: (saved.provisionedToolNames ?? []).length, screenshots: 9, errors }));
 } finally {
   if (agentId) await context.request.delete(`${base}/api/agents/${agentId}`);
   await page.close(); await browser.close();

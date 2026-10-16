@@ -20,9 +20,9 @@ The visual direction is a compact work surface: neutral semantic colors, restrai
 | Diagnostics | Context statistics, context trace, evidence drawer | Shared popover/drawer surfaces with accessible close and tab controls |
 
 > Note (issue #79): the "Tool permissions" row above records the issue #31
-> surface. Per-Agent tool entries are now a record only and authorize nothing.
-> The Agent editor labels them "工具记录 (record only)" and shows the real
-> runtime toolset served by `/api/bootstrap`; see `docs/pi-runtime.md`.
+> surface. The per-Agent tool picker has since been removed entirely: the Agent
+> editor offers no tool choice and only shows the runtime toolset served by
+> `/api/bootstrap` read-only under "运行时工具"; see `docs/pi-runtime.md`.
 
 ## Reproducible Browser Checks
 

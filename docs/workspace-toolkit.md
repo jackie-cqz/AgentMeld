@@ -1,6 +1,6 @@
 # Workspace Toolkit
 
-AgentMeld exposes these tools to every Pi-backed Agent. They are not gated by a per-Agent tool permission or a tool preset: Agents run with the full native toolset, and tools Pi does not provide are registered as Pi extension tools. **System Prompt** is a separate tab. SDK adapters keep their own native tools; this is not an external MCP client.
+AgentMeld exposes these tools to every Pi-backed Agent. They are not gated by a per-Agent tool permission or a tool preset: Agents run with the full native toolset, and tools Pi does not provide are registered as Pi extension tools. The Agent editor only displays this provisioned set read-only under **运行时工具** and offers no tool choice; **System Prompt** is a separate tab. SDK adapters keep their own native tools; this is not an external MCP client.
 
 Two platform tools are not part of an Agent run: the Conductor PLAN stage's `plan_tasks` protocol tool, and `list_team_members`, which returns the conversation roster. The roster is conversation-scoped, so it is provisioned only for the Conductor's PLAN stage and its handler refuses other callers; the editor lists it nowhere in the Agent toolset.
 
@@ -45,7 +45,7 @@ observations did not count as command-success evidence.
 
 - Ownership: exact conversation, Agent, run and workspace; no cross-run log/control access.
 - Limits: 2 concurrent jobs per run, 8 total; default 5-minute / maximum 10-minute lifetime; 200,000 retained output characters, 10,000 per read; up to 64 retained jobs.
-- The job tools no longer form a permission family; they are retired under Pi, so there is nothing for the UI to select together.
+- The job tools no longer form a permission family; they are retired under Pi, and the UI no longer offers any tool selection at all.
 - Cancellation killed the process tree. Ending a run cleaned up remaining jobs and failed incomplete verification instead of claiming success.
 - Jobs were process-local, not durable workers. Normal process exit attempted to terminate active children. A server restart lost job IDs; it did not resume work. An OS-level hard kill/crash could not guarantee child cleanup; production isolation still needs a managed Worker/container. Output was bounded, not a persistent complete log archive.
 
