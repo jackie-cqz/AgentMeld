@@ -29,6 +29,13 @@ export interface BootstrapPayload {
   pendingBashCommands: PendingBashCommand[];
   pendingDispatchPlans: PendingDispatchPlan[];
   pendingQuestions?: PendingQuestion[];
+  /**
+   * The platform tools every Agent run is actually provisioned with, served by
+   * `/api/bootstrap` from `provisionedPlatformToolNames()`. The stored
+   * `agent.toolNames` list is a record only, so the UI reads capability from
+   * here instead of reconstructing it per Agent.
+   */
+  provisionedToolNames?: string[];
 }
 
 export interface CreateConversationPayload {
@@ -90,6 +97,8 @@ export interface AppState {
   agentIds: string[];
   conversations: Record<string, Conversation>;
   conversationOrder: string[];
+  /** Real per-run toolset from the server; identical for every Agent (issue #79). */
+  provisionedToolNames: string[];
 
   messages: Record<string, Message>;
   messageIdsByConversation: Record<string, string[]>;

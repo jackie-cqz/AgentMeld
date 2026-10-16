@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { correctAgentIds, validatePlan, topologicalWaves, parsePlanArgs } from "@/server/tools/conductor-tools";
+import { correctAgentIds, validatePlan, topologicalWaves, parsePlanArgs, REPORT_SUMMARY_MAX_LENGTH } from "@/server/tools/conductor-tools";
 import { toolRegistry } from "@/server/tools/registry";
 import { clearTaskResultsForRun, getTaskReport, recordTaskArtifact } from "@/server/dispatch-task-results";
 
@@ -323,6 +323,30 @@ describe("report_task_result tool", () => {
     }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId: "r", abortSignal: new AbortController().signal });
 
     expect(result.ok).toBe(false);
+  });
+
+  it("accepts a verbose summary well past the old 2000-character ceiling", async () => {
+    // Issue #79 full-access Agents report multi-file change lists plus command
+    // and test output; one such report was rejected at 2000 characters. The new
+    // ceiling must not reject it, and must still reject genuinely overlong text.
+    expect(REPORT_SUMMARY_MAX_LENGTH).toBeGreaterThan(2000);
+    const runId = "run_verbose_summary";
+    clearTaskResultsForRun(runId);
+    const result = await toolRegistry.execute("report_task_result", {
+      status: "complete",
+      summary: "x".repeat(6000)
+    }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId, abortSignal: new AbortController().signal });
+
+    expect(result.ok).toBe(true);
+    expect(getTaskReport(runId)?.summary).toHaveLength(6000);
+    clearTaskResultsForRun(runId);
+
+    const tooLong = await toolRegistry.execute("report_task_result", {
+      status: "complete",
+      summary: "x".repeat(REPORT_SUMMARY_MAX_LENGTH + 1)
+    }, { conversationId: "c", workspacePath: "/tmp", agentId: "a", runId: "run_overlong_summary", abortSignal: new AbortController().signal });
+
+    expect(tooLong.ok).toBe(false);
   });
 
   it("merges artifacts recorded from write_artifact outputKey into the final report", async () => {

@@ -50,14 +50,36 @@ describe("private Pi bridge admission", () => {
     // Agent has NO grants at all, yet native and business tools are admitted.
     const provisioned = provisionedPlatformToolNames();
     expect(provisioned).toEqual(expect.arrayContaining(["fs_read", "fs_write", "fs_patch", "bash", "read_artifact", "write_artifact", "deploy_workspace", "web_fetch", "browser_check"]));
-    // The retired job_* kernel and the Conductor's PLAN protocol tool are not
-    // Agent capabilities; the PLAN stage provisions plan_tasks for itself.
+    // The retired job_* kernel, the Conductor's PLAN protocol tool and the
+    // conversation-scoped roster tool are not Agent capabilities; the PLAN stage
+    // provisions plan_tasks and list_team_members for itself.
     expect(provisioned).not.toContain("job_start");
     expect(provisioned).not.toContain("plan_tasks");
+    expect(provisioned).not.toContain("list_team_members");
     const { post } = await fixture(provisioned, () => {}, []);
     expect((await post("/native/authorize", { callId: "write", name: "write", args: { path: "granted.txt" } })).status).toBe(200);
     expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "mkdir -p src && cat > src/App.css" } })).status).toBe(200);
     expect((await post("/tool", { callId: "artifact", name: "read_artifact", args: { artifactId: "art_missing" } })).status).toBe(200);
+    // A worker run is not provisioned with the roster tool, so even a direct
+    // call is refused at the bridge before the handler's role check.
+    expect((await post("/tool", { callId: "roster", name: "list_team_members", args: {} })).status).toBe(403);
+  });
+
+  it("advertises the roster line only to a run provisioned with the roster tool", async () => {
+    const manifest = (bridge: Awaited<ReturnType<typeof createPiBridge>>) =>
+      fetch(`${bridge.url}/manifest`, { headers: { Authorization: `Bearer ${bridge.token}` } }).then(response => response.json());
+
+    // A normal Agent run gets the whole workspace toolset but not the roster.
+    const worker = await fixture(provisionedPlatformToolNames(), () => {}, []);
+    const workerManifest = await manifest(worker.bridge) as { systemPrompt: string; definitions: Array<{ name: string }> };
+    expect(workerManifest.definitions.map(definition => definition.name)).not.toContain("list_team_members");
+    expect(workerManifest.systemPrompt).not.toContain("list_team_members");
+
+    // The Conductor PLAN stage is the one run that may query the roster.
+    const planner = await fixture(["list_team_members", "plan_tasks"], () => {}, []);
+    const plannerManifest = await manifest(planner.bridge) as { systemPrompt: string; definitions: Array<{ name: string }> };
+    expect(plannerManifest.definitions.map(definition => definition.name)).toContain("list_team_members");
+    expect(plannerManifest.systemPrompt).toContain("use list_team_members for the current roster");
   });
 
   it("admits a native write that resolves outside the workspace and records it", async () => {

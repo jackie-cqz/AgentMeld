@@ -28,14 +28,14 @@ try {
   await page.goto(base, { waitUntil: 'domcontentloaded' }); await page.locator('.ui-shell').waitFor();
   await page.getByTitle('Agents', { exact: true }).click();
   await page.locator('.workspace-agent-row').filter({ has: page.getByText(name, { exact: true }) }).getByTitle('编辑', { exact: true }).click();
-  await page.getByRole('tab', { name: '工具权限', exact: true }).click();
+  await page.getByRole('tab', { name: '工具记录', exact: true }).click();
   for (const label of labels) assert.equal(await page.getByRole('checkbox', { name: new RegExp(`^${label}`) }).count(), 1);
-  await page.getByLabel('工具权限预设', { exact: true }).selectOption('review');
+  await page.getByLabel('工具记录预设', { exact: true }).selectOption('review');
   await page.getByRole('checkbox', { name: /^启动后台命令/ }).check();
   for (const label of ['查看命令输出', '等待命令完成', '取消后台命令']) assert(await page.getByRole('checkbox', { name: new RegExp(`^${label}`) }).isChecked());
   await page.getByRole('checkbox', { name: /^等待命令完成/ }).uncheck();
   assert(!(await page.getByRole('checkbox', { name: /^启动后台命令/ }).isChecked()));
-  await page.getByLabel('工具权限预设', { exact: true }).selectOption('all-purpose');
+  await page.getByLabel('工具记录预设', { exact: true }).selectOption('all-purpose');
   for (const [width, height, theme] of [[1440, 900, 'light'], [1440, 900, 'dark'], [390, 844, 'light'], [390, 844, 'dark'], [320, 640, 'light']]) {
     await page.setViewportSize({ width, height }); await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
     await page.getByRole('checkbox', { name: /^网页验收/ }).scrollIntoViewIfNeeded();

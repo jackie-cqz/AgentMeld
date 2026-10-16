@@ -13,6 +13,28 @@ import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
 const CONDUCTOR_PROTOCOL_TOOLS: readonly string[] = ["plan_tasks"];
 
 /**
+ * The one conversation-scoped tool name, shared by the PLAN stage (which is
+ * allowed to call it), the bridge (which advertises the roster line only where
+ * the tool is provisioned) and this exclusion list. Keeping it in one place is
+ * what stops "advertised" and "permitted" from drifting apart again.
+ */
+export const CONVERSATION_ROSTER_TOOL = "list_team_members";
+
+/**
+ * Platform tools whose subject is the conversation, not the workspace.
+ *
+ * `list_team_members` returns this conversation's Agent roster. Issue #79 opened
+ * *capability* — an Agent may run any workspace tool — but it was never a
+ * disclosure decision: the roster is conversation-scoped information, so the
+ * tool stays with the Conductor's PLAN stage instead of joining the open run
+ * toolset. A worker has no legitimate use for it, and advertising a tool a run
+ * cannot use teaches the model a call that only burns a turn (this happened in
+ * benchmark runs). The handler's role check in list-team-members.ts remains the
+ * authoritative rule; this exclusion is why a worker never reaches it.
+ */
+const CONVERSATION_SCOPED_TOOLS: readonly string[] = [CONVERSATION_ROSTER_TOOL];
+
+/**
  * Every platform tool an Agent run is provisioned with (issue #79).
  *
  * AgentMeld no longer keeps a per-Agent capability whitelist: a Pi Agent is a
@@ -24,15 +46,15 @@ const CONDUCTOR_PROTOCOL_TOOLS: readonly string[] = ["plan_tasks"];
  * The retired job_* command kernel stays out. PR #75 removed it from the Pi
  * runtime on purpose, and that is a property of the runtime, not a per-Agent
  * grant: re-admitting it as "full permission" would quietly restore the old
- * command kernel this core replaced. Conductor stage protocol tools stay out
- * for the same reason (see CONDUCTOR_PROTOCOL_TOOLS).
+ * command kernel this core replaced. Conductor stage protocol tools and
+ * conversation-scoped tools stay out for the reasons above.
  *
  * Names are PLATFORM names (fs_read, …). The bridge maps the filesystem family
  * to the Pi native names and registers every other entry as an extension tool.
  */
 export function provisionedPlatformToolNames(): string[] {
   const native = Object.values(PI_NATIVE_TO_PLATFORM);
-  const excluded = [...PI_RETIRED_TOOLS, ...CONDUCTOR_PROTOCOL_TOOLS];
+  const excluded = [...PI_RETIRED_TOOLS, ...CONDUCTOR_PROTOCOL_TOOLS, ...CONVERSATION_SCOPED_TOOLS];
   return [
     ...native,
     ...toolRegistry.listNames().filter((name) => !native.includes(name) && !excluded.includes(name))

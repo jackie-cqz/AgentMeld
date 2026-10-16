@@ -15,6 +15,9 @@ import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 export function AgentsPanel() {
   const agentList = useAppStore(useShallow(selectAgentList));
   const loadBootstrap = useAppStore((s) => s.loadBootstrap);
+  // Runtime truth (provisionedPlatformToolNames, served by /api/bootstrap):
+  // identical for every Agent since issue #79. `agent.toolNames` is a record.
+  const provisionedToolNames = useAppStore((s) => s.provisionedToolNames);
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [viewingAgent, setViewingAgent] = useState<Agent | null>(null);
@@ -116,7 +119,7 @@ export function AgentsPanel() {
                 ) : null}
               </div>
               <p className="workspace-agent-description">{agent.description || "未填写职责描述"}</p>
-              <div className="agent-library-config"><span title={`执行引擎 ${agent.adapterName}`}>{agent.adapterName === "pi" ? "Pi" : "待迁移"}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span>{agent.toolNames.length} 工具</span></div>
+              <div className="agent-library-config"><span title={`执行引擎 ${agent.adapterName}`}>{agent.adapterName === "pi" ? "Pi" : "待迁移"}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span title="运行时工具集：所有 Agent 相同">全部 {provisionedToolNames.length} 个工具</span></div>
             </div>
             <button
               type="button"
@@ -153,7 +156,14 @@ export function AgentsPanel() {
         <p className="text-sm leading-6">{viewingAgent.description || "未填写 Agent 描述"}</p>
         <div className="my-4 flex flex-wrap gap-2">{viewingAgent.capabilities.map(tag => <span key={tag} className="rounded bg-[var(--ui-subtle)] px-2 py-1 text-xs">{tag}</span>)}</div>
         <p className="ui-muted">{viewingAgent.adapterName} · {viewingAgent.modelId || "未配置模型"}</p>
-        <p className="ui-muted">已授权 {viewingAgent.toolNames.length} 个工具</p>
+        <p className="ui-muted">运行时工具集：全部 {provisionedToolNames.length} 个（所有 Agent 相同，不受配置记录限制）</p>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs text-stone-500">查看运行时工具集</summary>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {provisionedToolNames.map(tool => <span key={tool} className="rounded bg-[var(--ui-subtle)] px-1.5 py-0.5 font-mono text-[11px]">{tool}</span>)}
+          </div>
+        </details>
+        <p className="ui-muted mt-2">配置记录 {viewingAgent.toolNames.length} 条（仅记录，不再限制能力）</p>
       </Modal> : null}
       {deletingAgent ? <Modal open onClose={() => setDeletingAgent(null)} title="删除 Agent？" size="small" busy={deleting}
         footer={<>{error ? <Feedback>{error}</Feedback> : null}<button className="ui-button" disabled={deleting} onClick={() => setDeletingAgent(null)}>取消</button>

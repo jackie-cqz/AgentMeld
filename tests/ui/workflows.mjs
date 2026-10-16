@@ -26,8 +26,8 @@ try {
   await page.getByRole('tab', { name: '模型与适配器', exact: true }).click();
   await page.getByRole('button', { name: '供应商 *', exact: true }).click();
   await page.getByRole('button', { name: '选择供应商 DeepSeek', exact: true }).click();
-  await page.getByRole('tab', { name: '工具权限', exact: true }).click();
-  await page.getByLabel('工具权限预设').selectOption('review');
+  await page.getByRole('tab', { name: '工具记录', exact: true }).click();
+  await page.getByLabel('工具记录预设').selectOption('review');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'detached' });
   await page.getByTitle('新建 Agent', { exact: true }).click();

@@ -5,7 +5,7 @@ import { consumeStream } from "@/server/consume-stream";
 import { runPiInvocation } from "@/server/pi/runtime";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
-import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
+import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PiRuntimeError } from "@/server/pi/process";
 import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
@@ -1529,7 +1529,9 @@ function rebuildFtsForConversation(conversationId: string): void {
 
 /** Tools available to the Conductor during the PLAN (assess) stage only */
 export const CONDUCTOR_PLAN_TOOLS = [
-  "list_team_members",
+  // The roster tool is permitted here and nowhere else: a planner needs the
+  // member list, and the roster is conversation-scoped (see tool-surface.ts).
+  CONVERSATION_ROSTER_TOOL,
   "update_context_facts",
   "plan_tasks",
   "ask_user",

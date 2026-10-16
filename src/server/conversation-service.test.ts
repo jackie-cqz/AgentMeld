@@ -15,6 +15,7 @@ import {
   patchConversation,
   sendMessage
 } from "@/server/conversation-service";
+import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import type { StreamEvent } from "@/shared/types";
 
 let tempDir: string;
@@ -387,6 +388,16 @@ describe("conversation-service", () => {
         expect(Array.isArray(payload.runsByConversation[conv.id])).toBe(true);
         expect(Array.isArray(payload.artifactsByConversation[conv.id])).toBe(true);
       }
+    });
+
+    it("serves the real runtime toolset so the editor never reconstructs it", () => {
+      // The Agent editor shows capability from this field instead of the stored
+      // `agent.toolNames` record (issue #79); it must be the one runtime source.
+      const payload = getBootstrapPayload();
+
+      expect(payload.provisionedToolNames).toEqual(provisionedPlatformToolNames());
+      expect(payload.provisionedToolNames).not.toContain("list_team_members");
+      expect(payload.provisionedToolNames).toContain("bash");
     });
   });
 

@@ -301,7 +301,7 @@ command_exit(build)
   => minimal role contract
 
 负向 verifier Case
-  => 只保留身份、工具权限和禁止伪造规则，不补标准交付物
+  => 只保留身份、工具记录和禁止伪造规则，不补标准交付物
 ```
 
 Task Intent 最终由系统裁定。LLM 可以提出 intent，但不能通过伪造 intent 绕过原计划中的 required output。

@@ -21,6 +21,8 @@ import { PiRuntimeStatus } from "@/components/pi-runtime-status";
 import { AGENT_AVATAR_AUTO } from "@/shared/agent-avatar-presets";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
+import { useAppStore } from "@/stores/app-store";
+import { getToolDisplayName } from "@/shared/tool-display";
 import {
   DEFAULT_CUSTOM_PROMPT,
   TOOL_PRESETS,
@@ -54,9 +56,9 @@ const TOOL_META: Record<string, { label: string; description: string }> = {
   update_context_facts: { label: "更新上下文事实", description: "提交会话关键信息候选，供系统裁定" },
   fs_read: { label: "读取文件", description: "读取工作区文本内容" },
   fs_mkdir: { label: "创建目录", description: "在当前工作区创建目录" },
-  fs_write: { label: "写入文件", description: "创建或完整覆盖工作区文件，需要谨慎授权" },
-  fs_patch: { label: "文件修改", description: "精确替换已有文件中的局部内容，需要谨慎授权" },
-  bash: { label: "执行命令", description: "可运行构建与测试命令，属于高风险权限" },
+  fs_write: { label: "写入文件", description: "创建或完整覆盖工作区文件；是否需确认取决于会话审批模式" },
+  fs_patch: { label: "文件修改", description: "精确替换已有文件中的局部内容；是否需确认取决于会话审批模式" },
+  bash: { label: "执行命令", description: "运行构建与测试等 shell 命令；高风险，破坏性命令会被拦截，敏感命令按会话审批模式确认" },
   read_artifact: { label: "读取产物", description: "读取上游 Agent 产物" },
   write_artifact: { label: "创建产物", description: "生成可检查的文档或 Web App" },
   deploy_artifact: { label: "部署产物", description: "发布 Web App 产物" },
@@ -103,6 +105,10 @@ interface CreateAgentDialogProps {
 
 export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAgentDialogProps) {
   const isEdit = !!initial;
+  // The real per-run toolset comes from the server (provisionedPlatformToolNames).
+  // `agent.toolNames` below is a stored record only: issue #79 made capability
+  // open, so the editor shows the truth instead of presenting the record as a grant.
+  const provisionedToolNames = useAppStore((state) => state.provisionedToolNames);
   const [createStage, setCreateStage] = useState<CreateStage>(isEdit ? "detailed" : "choice");
   const [quickDesc, setQuickDesc] = useState("");
   const [name, setName] = useState(initial?.name ?? "");
@@ -202,7 +208,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     setDescription(quickDesc.trim());
     setToolNames(draft.tools);
     setSystemPrompt(draft.prompt);
-    setDraftBasis(`根据“${quickDesc.trim().slice(0, 80)}”生成普通协作 Agent，请确认模型与工具权限后保存。`);
+    setDraftBasis(`根据“${quickDesc.trim().slice(0, 80)}”生成普通协作 Agent，请确认模型与工具记录后保存。`);
     setEditTab("basic");
     setCreateStage("detailed");
   };
@@ -381,7 +387,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               <span className="font-mono text-slate-800">{modelId || "未指定"}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span>已授权工具</span>
+              <span>工具记录</span>
               <span className="font-medium text-slate-800">{toolNames.length} 个</span>
             </div>
           </div>
@@ -393,10 +399,10 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
           </div>
         ) : initial?.adapterName !== "pi" ? (
           <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            原执行引擎已退役。确认模型和工具权限后保存，将迁移到 Pi；已有历史与身份不变。
+            原执行引擎已退役。确认模型与工具记录后保存，将迁移到 Pi；已有历史与身份不变。
           </div>
         ) : null}
-        {toolNames.some(tool => PI_RETIRED_TOOLS.includes(tool)) ? <Feedback tone="info">旧 job_* 后台工具不再用于 Pi。保存时会移除这些权限，验证命令请使用 Pi 原生 bash；历史记录保留。</Feedback> : null}
+        {toolNames.some(tool => PI_RETIRED_TOOLS.includes(tool)) ? <Feedback tone="info">旧 job_* 后台工具不再用于 Pi。保存时会移除这些记录，验证命令请使用 Pi 原生 bash；历史记录保留。</Feedback> : null}
 
         {draftBasis ? (
           <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
@@ -414,26 +420,46 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {isDetailed ? (
-        <section role="tabpanel" aria-label="工具权限" className={editTab === "tools" ? "agent-tools-panel" : "hidden"}>
+        <section role="tabpanel" aria-label="工具记录" className={editTab === "tools" ? "agent-tools-panel" : "hidden"}>
         {(
           <>
-            <div>
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+              Pi 运行时为每个 Agent 提供完整工具集。下面「运行时可用的工具」才是 Agent 实际获得的工具，所有 Agent 相同；本页的勾选仅作为配置记录，<strong>不再授权或限制任何能力</strong>。
+            </div>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-stone-800">运行时可用的工具</div>
+                <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                  {provisionedToolNames.length} 个 · 所有 Agent 相同
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {provisionedToolNames.map((tool) => (
+                  <span key={tool} title={getToolDisplayName(tool)} className="rounded-md bg-[var(--ui-subtle)] px-2 py-1 font-mono text-[11px] text-[var(--ui-muted)]">{tool}</span>
+                ))}
+                {provisionedToolNames.length === 0 ? <span className="ui-muted text-xs">运行时工具集暂不可用（未能从服务端读取）。</span> : null}
+              </div>
+              <p className="mt-1 text-xs text-slate-400">由 Pi 运行时实际注入，不随本页记录变化；Conductor 的规划阶段另有自己的阶段性工具集（见 docs/pi-runtime.md）。</p>
+            </div>
+
+            <div className="mt-5 border-t border-[var(--ui-border)] pt-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-medium text-stone-800">工具权限</div>
+                  <div className="text-sm font-medium text-stone-800">工具记录（仅记录，不再限制能力）</div>
                 </div>
                 <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  {toolNames.length} 已选
+                  {toolNames.length} 条记录
                 </span>
               </div>
 
-              <select aria-label="工具权限预设" className="mt-3" value="" onChange={event => handlePreset(event.target.value as ToolPresetName)}>
-                <option value="" disabled>选择权限预设</option>
+              <select aria-label="工具记录预设" className="mt-3" value="" onChange={event => handlePreset(event.target.value as ToolPresetName)}>
+                <option value="" disabled>选择记录预设</option>
                 {Object.entries(TOOL_PRESETS).map(([key, preset]) => <option key={key} value={key}>{preset.label} · {preset.tools.length} 个工具</option>)}
               </select>
-              <div className="tool-permission-filters">
+              <div className="tool-record-filters">
                 <label className="ui-search-field"><Search size={15} /><input aria-label="搜索工具" placeholder="搜索工具" value={toolSearch} onChange={event => setToolSearch(event.target.value)} /></label>
-                <label className="tool-selected-filter"><input type="checkbox" checked={selectedOnly} onChange={event => setSelectedOnly(event.target.checked)} />仅看已授权</label>
+                <label className="tool-record-filter"><input type="checkbox" checked={selectedOnly} onChange={event => setSelectedOnly(event.target.checked)} />仅看已记录</label>
               </div>
             </div>
 
@@ -441,7 +467,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
               {visibleGroups.map((group) => (
                 <div key={group.label} className="ui-tool-group">
                   <button type="button" className="tool-group-heading" aria-expanded={!!toolSearch || selectedOnly || !collapsedGroups[group.label]} onClick={() => setCollapsedGroups(current => ({ ...current, [group.label]: !current[group.label] }))}>
-                    <ChevronDown size={14} /><strong>{group.label}</strong><span>{group.tools.filter(tool => toolNames.includes(tool)).length}/{group.tools.length}</span>{group.tone === "danger" ? <small>需授权</small> : null}
+                    <ChevronDown size={14} /><strong>{group.label}</strong><span>{group.tools.filter(tool => toolNames.includes(tool)).length}/{group.tools.length}</span>{group.tone === "danger" ? <small>高风险</small> : null}
                   </button>
                   <div className="ui-tool-options" hidden={!toolSearch && !selectedOnly && !!collapsedGroups[group.label]}>
                     {group.visible.map((tool) => (
@@ -494,7 +520,7 @@ function EditTabBar({ activeTab, onChange }: { activeTab: AgentEditTab; onChange
   const tabs = [
     { id: "basic" as const, label: "基本信息", icon: <User className="h-4 w-4" /> },
     { id: "model" as const, label: "模型与执行引擎", icon: <Cpu className="h-4 w-4" /> },
-    { id: "tools" as const, label: "工具权限", icon: <Wrench className="h-4 w-4" /> },
+    { id: "tools" as const, label: "工具记录", icon: <Wrench className="h-4 w-4" /> },
     { id: "prompt" as const, label: "系统提示词", icon: <FileText className="h-4 w-4" /> }
   ];
 

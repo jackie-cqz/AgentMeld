@@ -25,6 +25,7 @@ import {
 } from "@/server/repositories";
 import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
+import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
 
 interface BootstrapPayload {
@@ -37,6 +38,9 @@ interface BootstrapPayload {
   pendingBashCommands: ReturnType<typeof getAllPendingBashCommands>;
   pendingDispatchPlans: ReturnType<typeof getAllPendingPlans>;
   pendingQuestions: ReturnType<typeof getAllPendingQuestions>;
+  /** The real per-run toolset (provisionedPlatformToolNames), served so the UI
+   *  never has to reconstruct capability from the stored `agent.toolNames`. */
+  provisionedToolNames: string[];
 }
 
 interface CreateConversationInput {
@@ -87,7 +91,8 @@ export function getBootstrapPayload(): BootstrapPayload {
     pendingWrites: getAllPendingWrites(),
     pendingBashCommands: getAllPendingBashCommands(),
     pendingDispatchPlans: getAllPendingPlans(),
-    pendingQuestions: getAllPendingQuestions()
+    pendingQuestions: getAllPendingQuestions(),
+    provisionedToolNames: provisionedPlatformToolNames()
   };
 }
 

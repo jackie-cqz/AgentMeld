@@ -49,6 +49,16 @@ agent does. There is no per-Agent tool whitelist, no tool preset that narrows
 capability, and no platform grant that decides whether a tool may run. The
 extension registers Pi's real tool implementations and lets Pi call all of them.
 
+Two platform tools are deliberately not part of an Agent run. `plan_tasks` is
+the Conductor PLAN stage's protocol tool, and `list_team_members` returns this
+conversation's roster: the roster is conversation-scoped information, so it
+stays with the Conductor's PLAN stage rather than joining the open capability
+set. Opening capability was not a decision to disclose one conversation's roster
+to every member, so the tool is provisioned only there, is not advertised in
+other Agents' prompts, and its handler still refuses any non-Conductor caller.
+The Agent editor's tool list is a stored record: it labels itself as record-only
+and shows the server-provided runtime toolset instead of implying a grant.
+
 | Platform tool | Pi native tool |
 | --- | --- |
 | `fs_read` | `read` |
