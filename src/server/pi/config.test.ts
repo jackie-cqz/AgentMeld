@@ -53,9 +53,13 @@ describe("immutable Pi execution configuration", () => {
     expect(() => updateAgent(input.agent.id, { modelId: "other-model" })).toThrow("active runs");
     expect(updateAgent(input.agent.id, { name: "Same identity", avatar: "AB" })?.id).toBe(input.agent.id);
   });
-  it("refuses the old control-process command kernel instead of silently retaining a fallback", () => {
+  it("keeps an old record naming a retired tool from breaking the run", () => {
+    // Issue #79: grants no longer select or authorize the toolset, so a stale
+    // record that names the retired job_* kernel must not fail the invocation.
     const value = fixture();
     value.toolNames.push("job_start");
-    expect(() => capturePiConfiguration(value)).toThrow("Legacy background tools");
+    value.agent.toolNames.push("job_start");
+    const captured = capturePiConfiguration(value);
+    expect(captured.toolNames).toContain("job_start");
   });
 });

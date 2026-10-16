@@ -9,9 +9,9 @@ are not part of this integration.
 
 Pi owns provider requests, argument parsing, tool iteration, retries, internal
 history and native compaction. AgentMeld owns stable Agent identities, routing,
-task DAGs, cross-task context and facts, authorization, approvals, artifacts,
-evidence and run lifecycle. The connection layer does not contain another LLM
-loop or a JSON-repair fallback.
+task DAGs, cross-task context and facts, bridge authentication, approvals,
+artifacts, evidence and run lifecycle. The connection layer does not contain
+another LLM loop or a JSON-repair fallback.
 
 Invocations sharing one workspace are serialized, including read-only roles.
 The DAG may admit multiple tasks, but they wait for exclusive workspace ownership.
@@ -23,7 +23,7 @@ This initial integration favors deterministic ownership over same-directory para
 2. Select them in the Agent editor. Pi installation status checks the pinned CLI
    package and Node version, not network reachability or provider authentication.
 3. The server freezes provider resolution before waiting for workspace ownership.
-   An invocation stores an immutable binding version with model, endpoint, grants,
+   An invocation stores an immutable binding version with model, endpoint,
    Pi version and a credential reference. Keys are not stored in that binding.
 4. Pi receives a private per-invocation home, model configuration and credential
    environment. Global Pi credentials, context files, skills and extensions are
@@ -44,7 +44,23 @@ marked interrupted at startup; they are not silently resumed in a new engine.
 
 ## Tools And Permissions
 
-| Existing grant | Pi native capability |
+Every Agent now runs with the full native toolset, the same way a standalone Pi
+agent does. There is no per-Agent tool whitelist, no tool preset that narrows
+capability, and no platform grant that decides whether a tool may run. The
+extension registers Pi's real tool implementations and lets Pi call all of them.
+
+Two platform tools are deliberately not part of an Agent run. `plan_tasks` is
+the Conductor PLAN stage's protocol tool, and `list_team_members` returns this
+conversation's roster: the roster is conversation-scoped information, so it
+stays with the Conductor's PLAN stage rather than joining the open capability
+set. Opening capability was not a decision to disclose one conversation's roster
+to every member, so the tool is provisioned only there, is not advertised in
+other Agents' prompts, and its handler still refuses any non-Conductor caller.
+The Agent editor has no per-Agent tool picker at all. Its "运行时工具"
+tab shows the server-provided runtime toolset read-only, so the UI cannot
+present a selection as a grant or imply that editing an Agent changes capability.
+
+| Platform tool | Pi native tool |
 | --- | --- |
 | `fs_read` | `read` |
 | `fs_write` | `write` |
@@ -54,37 +70,43 @@ marked interrupted at startup; they are not silently resumed in a new engine.
 | `fs_glob` | `find` |
 | `bash` | `bash` |
 
-The extension uses Pi's real tool implementations. It checks grants and real
-workspace paths before execution. Pi computes batch edits itself; its pluggable
-write operation requests approval for the actual proposed bytes before writing.
-File limits, quota, stale approvals, and post-write hashes are checked by the
-platform. A rejected write does not create parent directories. Search/read
-semantics are Pi's native semantics, not a promise of the retired tools' exact
-formatting or filtering behavior.
+File and command tools are Pi-native. Pi parses the arguments, computes batch
+edits, runs the shell and owns the loop; the platform no longer wraps them in its
+own admission or workspace-path policy. The extension observes the call and
+records its outcome as evidence. Native `grep`/`find` require `rg`/`fd` on PATH.
+Offline execution does not silently download missing binaries. Installation
+status does not validate those optional helpers or claim that every model
+supports images. Search and read behavior is Pi's native behavior, not a promise
+of the retired tools' exact formatting or filtering.
+
+What the platform still applies are resource and integrity limits, not
+capability gates: command timeouts, bounded output capture, file-size and
+workspace-quota checks, and the exclusive workspace lease that serializes
+writers. Write approvals, post-write hashes and tool outcomes are recorded for
+evidence and audit; they no longer grant or deny the ability to call a tool.
 
 `ask_user`, `plan_tasks`, `report_task_result`, facts, artifact, deployment and
-other platform business tools use a per-invocation authenticated loopback bridge.
-This is **not MCP**. The token is revoked at teardown and is removed from native
-Bash command environments. Unlisted tools and replayed call IDs are rejected.
-An accepted plan or task report ends the invocation's business-tool activity.
-Artifact bindings are committed before Pi can submit the final task report.
+other platform business tools live in the AgentMeld server process, so Pi reaches
+them through a per-invocation authenticated loopback bridge. This is **not MCP**,
+and it is not a permission boundary: the bridge exists only because that platform
+state sits in a different process. The token is revoked at teardown and is
+removed from native Bash command environments. An accepted plan or task report
+ends the invocation's business-tool activity. Artifact bindings are committed
+before Pi can submit the final task report.
 
 The legacy `job_start`/`job_read`/`job_wait`/`job_cancel` command kernel is not
 exposed to Pi. Long verification uses native `bash` and waits for completion.
-Existing grants are retained in storage for history but fail with an explicit
-migration error; the Agent editor explains that saving removes them. New presets
-do not grant them. Historical job display and platform cleanup helpers remain,
-but this is not a second production Agent command engine.
+Existing per-Agent tool rows stay in the database untouched for history, but they
+are no longer shown or editable anywhere in the UI, decide which tools an Agent
+may call, or change capability when an Agent is saved. Historical job display and
+platform cleanup helpers remain, but this is not a second production Agent
+command engine.
 
-Native `grep`/`find` require `rg`/`fd` on PATH. Offline execution does not silently
-download missing binaries. Installation status does not validate those optional
-helpers or claim that every model supports images.
-
-Native commands use **Bash**, including on Windows. The existing command policy
-admits verification commands and approved dependency operations; source edits
-must use `write`/`edit`, not shell mutation. Existing web and authenticated Feishu
-approval routes resolve the same pending IDs. Cancellation releases pending
-questions, plans, writes and commands without approving them.
+Native commands use **Bash**, including on Windows. Commands are unrestricted
+apart from the resource limits above; shell commands may create or change source
+files, and there is no verification-only policy. Existing web and authenticated
+Feishu approval routes resolve the same pending IDs. Cancellation releases
+pending questions, plans, writes and commands without approving them.
 
 Windows process ownership also requires Windows PowerShell with `Add-Type` and
 permission to run the repository's local Job Object host script. The launcher
@@ -92,12 +114,18 @@ does not bypass execution policy. Host diagnostics report only fixed stage names
 and numeric error codes, never provider credentials or raw subprocess stderr.
 The initial Windows RPC handshake allows up to 60 seconds for cold PowerShell
 and .NET initialization; subsequent RPC commands retain the 15-second bound.
-Prefer workspace-relative native file paths; the runtime uses the physical root
-to avoid Windows short-name aliases disagreeing with native file callbacks.
+Prefer workspace-relative native file paths where possible; the runtime uses the
+physical root to avoid Windows short-name aliases disagreeing with native file
+callbacks.
 
-These controls are **not an OS sandbox**. Approved project scripts execute host
-code and can reach host resources. Only run trusted workspaces and dependencies.
-Native tools do not supply an organizational secret vault or kernel isolation.
+Full native access is not isolation. Native file and command tools run with the
+AgentMeld server user's OS permissions and are not confined to the workspace:
+they can read, change and execute anything that user can reach on the host. The
+platform's evidence ledger, approval records and workspace lease document who
+did what and keep writers from overlapping, but none of them is a path sandbox
+or a privilege boundary. There is no organizational secret vault, no kernel
+isolation and no OS sandbox. Only run trusted workspaces, dependencies and
+provider endpoints, and keep secrets away from anything the server user can read.
 
 ## Context And Evidence
 

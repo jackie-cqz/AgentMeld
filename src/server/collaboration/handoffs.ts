@@ -8,7 +8,7 @@ import { eventBus } from "@/server/event-bus";
 import { createMessage, getAgent, getArtifact, getConversation, getMessage, getRun, getWorkspaceForConversation, listOutputBindings } from "@/server/repositories";
 import { getContextSnapshot, getTaskAttempt, listEvidenceForAttempt } from "@/server/repositories/evidence-repository";
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
-import { safeWorkspacePath } from "@/server/tools/workspace-access";
+import { resolveToolPath } from "@/server/tools/workspace-access";
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { TaskHandoff } from "@/shared/collaboration-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
@@ -91,7 +91,10 @@ function fileHashes(conversationId: string, paths: string[]): HandoffPackage["fi
     if (++visited > 1000 || files.size > 100) throw new Error("Handoff file manifest exceeds its bounded scope.");
     if (/[?*]/.test(relative)) throw new Error("Handoff requires explicit file or directory paths, not wildcard scopes.");
     try {
-      const resolved = safeWorkspacePath(root, relative);
+      const resolved = resolveToolPath(root, relative);
+      if (resolved.split(/[\\/]/).some(part => /^\.env(?!\.example$)|\.(?:pem|key)$|^\.(?:ssh|aws|npmrc|netrc|pypirc|git-credentials|git)$/i.test(part))) {
+        throw new Error("Private files are not included in a handoff manifest.");
+      }
       const stat = fs.statSync(resolved);
       if (stat.isDirectory()) {
         for (const entry of fs.readdirSync(resolved, { withFileTypes: true })) {

@@ -14,7 +14,7 @@ vi.mock("@/server/pi/runtime", () => ({ runPiInvocation: async function* (input:
   if (fixture.mode !== "missing") {
     const { proposeConsultationResponse } = await import("./consultations");
     proposeConsultationResponse({ conversationId: input.conversationId, runId: input.runId, agentId: input.agent.id,
-      workspacePath: input.workspacePath, abortSignal: signal, allowedToolNames: input.toolNames },
+      workspacePath: input.workspacePath, abortSignal: signal },
       fixture.mode === "declined" ? "declined" : "replied", "Prefer the compact sidebar; this is a peer opinion.");
   }
   if (fixture.mode === "cleanup_failure") {
@@ -42,20 +42,21 @@ function world(origin: "human" | "bot" = "human") {
   const source = createRun({ id: newRunId(), conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessageId: trigger.id, status: "running", now: Date.now() });
   const controller = new AbortController();
   const ctx: ToolContext = { conversationId: conversation.id, runId: source.id, agentId: source.agentId,
-    workspacePath: getWorkspaceForConversation(conversation.id)!.rootPath, abortSignal: controller.signal, allowedToolNames: ["consult_agent"] };
+    workspacePath: getWorkspaceForConversation(conversation.id)!.rootPath, abortSignal: controller.signal };
   const request = { requestKey: "layout-opinion", targetAgentId: "ag_designer", question: "Is the compact sidebar preferable?", artifactIds: [] };
   return { conversation, source, trigger, ctx, request, controller };
 }
 
 describe("bounded authenticated peer consultations", () => {
-  it("records a peer reply without delegation, writer tools or nested consultation", async () => {
+  it("records a peer reply with the full toolset, without delegation or nested consultation", async () => {
     const { ctx, request, source, conversation } = world();
     const result = await requestConsultation(request, ctx);
     expect(result.status).toBe("replied");
     expect(result.answer).toContain("peer opinion");
     expect(result.sourceRunId).toBe(source.id);
     expect(getRun(result.targetRunId!)?.status).toBe("complete");
-    expect(fixture.inputs[0]).toMatchObject({ accessMode: "conversation", toolNames: ["respond_to_consultation"], maxTurns: 4 });
+    expect(fixture.inputs[0]).toMatchObject({ accessMode: "workspace", maxTurns: 4 });
+    expect(fixture.inputs[0].toolNames).toEqual(expect.arrayContaining(["respond_to_consultation", "fs_read", "fs_write", "fs_patch", "bash", "deploy_workspace"]));
     expect(fixture.inputs[0].parentRunId).toBeUndefined();
     expect(listConsultations(conversation.id)).toHaveLength(1);
   });
@@ -83,11 +84,10 @@ describe("bounded authenticated peer consultations", () => {
     expect(getRun(result.targetRunId!)?.status).toBe("failed");
   });
 
-  it("refuses bot lineage, absent grants, self-targets and targets outside the team", async () => {
+  it("refuses bot lineage, self-targets and targets outside the team, not empty stored grants", async () => {
     const bot = world("bot");
     await expect(requestConsultation(bot.request, bot.ctx)).rejects.toThrow("authenticated human");
     const human = world();
-    await expect(requestConsultation(human.request, { ...human.ctx, allowedToolNames: [] })).rejects.toThrow("authorized source");
     await expect(requestConsultation({ ...human.request, targetAgentId: human.ctx.agentId }, human.ctx)).rejects.toThrow("another current");
     await expect(requestConsultation({ ...human.request, targetAgentId: "ag_pm" }, human.ctx)).rejects.toThrow("another current");
     expect(listConsultations(human.conversation.id)).toEqual([]);
@@ -184,9 +184,9 @@ describe("bounded authenticated peer consultations", () => {
   it("refuses late, forged and duplicate structured replies", async () => {
     const { ctx, request } = world();
     const result = await requestConsultation(request, ctx);
-    const targetCtx = { ...ctx, runId: result.targetRunId!, agentId: result.targetAgentId, allowedToolNames: ["respond_to_consultation"] };
+    const targetCtx = { ...ctx, runId: result.targetRunId!, agentId: result.targetAgentId };
     expect(() => proposeConsultationResponse(targetCtx, "replied", "Duplicate")).toThrow("live peer run");
-    expect(() => proposeConsultationResponse({ ...ctx, allowedToolNames: ["respond_to_consultation"] }, "replied", "Forged")).toThrow("not authorized");
+    expect(() => proposeConsultationResponse(ctx, "replied", "Forged")).toThrow("not authorized");
     const row = getDatabase().prepare("SELECT answer FROM agent_consultations WHERE id=?").get(result.id) as { answer: string };
     expect(row.answer).not.toBe("Forged");
   });

@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createConversation } from "@/server/conversation-service";
 import { getDatabase } from "@/db/client";
 import { createArtifact, getWorkspaceForConversation, listArtifacts, listConversations } from "@/server/repositories";
+import { gateRequest } from "@/server/api-gate";
+import { hasPairedOwner } from "@/server/auth";
 
 import { BenchmarkEnvironmentManager } from "./environment-manager";
 
@@ -93,5 +95,25 @@ describe("BenchmarkEnvironmentManager", () => {
     const environment = manager.create("report-case", { baseDir });
     expect(fs.existsSync(environment.dataDir)).toBe(true);
     expect(fs.existsSync(environment.reportDir)).toBe(true);
+  });
+
+  it("pairs a sandbox owner so owner-gated deployment routes admit the benchmark", async () => {
+    manager = new BenchmarkEnvironmentManager();
+    manager.activate(manager.create("pairing-case", { baseDir }));
+
+    const owner = manager.ownerSession();
+    expect(owner).not.toBeNull();
+    expect(hasPairedOwner()).toBe(true);
+
+    // The same credential a real browser carries: the gate admits the owner.
+    const previewUrl = "http://127.0.0.1/deployments/dep_fixture";
+    const allowed = await gateRequest(new Request(previewUrl, { headers: { cookie: owner!.cookieHeader } }));
+    expect(allowed.allowed).toBe(true);
+    expect(allowed.principal.kind).toBe("owner-session");
+
+    // Without it the route is still gated — this is not a bypass.
+    const anonymous = await gateRequest(new Request(previewUrl));
+    expect(anonymous.allowed).toBe(false);
+    expect(anonymous.allowed === false ? anonymous.response.status : 0).toBe(401);
   });
 });

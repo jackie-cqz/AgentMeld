@@ -78,14 +78,18 @@ function world() {
 }
 
 describe("human turn admission", () => {
-  it("enforces discussion-only tool restrictions even when the role has write grants", async () => {
+  it("keeps the full toolset for every discussion participant without forcing a delivery plan", async () => {
     const { conversation, send, wait } = world();
     const result = await send("前端看一下布局，先别改。", { mentionedAgentIds: ["ag_mock_builder", "ag_designer"] });
     await Promise.all(result.runIds.map(wait));
     const tasks = fixture.inputs.filter(input => !input.systemPrompt.startsWith("AGENTMELD_TURN_CLASSIFIER_V1"));
     expect(tasks).toHaveLength(2);
-    expect(tasks.every(input => input.accessMode === "conversation")).toBe(true);
-    expect(tasks.every(input => !input.toolNames.some(name => ["fs_read", "fs_write", "plan_tasks", "write_artifact", "deploy_workspace", "bash"].includes(name)))).toBe(true);
+    expect(tasks.every(input => input.accessMode === "workspace")).toBe(true);
+    for (const task of tasks) {
+      expect(task.toolNames).toEqual(expect.arrayContaining(["fs_read", "fs_write", "fs_patch", "write_artifact", "deploy_workspace", "bash", "consult_agent"]));
+      expect(task.systemPrompt).toContain("All normal tools remain available");
+      expect(task.systemPrompt).toContain("do not modify, build or deploy anything");
+    }
     expect(listCollaborationTurns(conversation.id).map(turn => turn.status)).toEqual(["applied", "applied"]);
     expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM conductor_plans WHERE conversation_id=?").get(conversation.id)).toEqual({ n: 0 });
   });
@@ -95,7 +99,8 @@ describe("human turn admission", () => {
     const { send, wait } = world();
     const result = await send("比较一下，先别改。");
     await wait(result.runIds[0]);
-    expect(fixture.inputs.at(-1)?.accessMode).toBe("conversation");
+    expect(fixture.inputs.at(-1)?.accessMode).toBe("workspace");
+    expect(fixture.inputs.at(-1)?.systemPrompt).toContain("PLATFORM DISCUSSION:");
   });
 
   it("does not let a deploy-looking string bypass an explicit discussion action", async () => {
@@ -103,8 +108,9 @@ describe("human turn admission", () => {
     const result = await send("/deploy", { action: "discussion" });
     expect(result.runIds).toHaveLength(1);
     await wait(result.runIds[0]);
-    expect(fixture.inputs.at(-1)?.accessMode).toBe("conversation");
-    expect(fixture.inputs.at(-1)?.toolNames).not.toContain("deploy_workspace");
+    expect(fixture.inputs.at(-1)?.accessMode).toBe("workspace");
+    expect(fixture.inputs.at(-1)?.systemPrompt).toContain("PLATFORM DISCUSSION:");
+    expect(fixture.inputs.at(-1)?.toolNames).toContain("deploy_workspace");
   });
 
   it("handles an explicit progress query without restarting or interrupting its target", async () => {
@@ -170,7 +176,7 @@ describe("human turn admission", () => {
     const next = await send("先别改，先讨论方案。", { targetRunId: original.runIds[0], action: "correction" });
     await wait(next.runIds[0]);
     expect(fixture.stopped).toContain(original.runIds[0]);
-    expect(fixture.inputs.find(input => input.runId === next.runIds[0])?.accessMode).toBe("conversation");
+    expect(fixture.inputs.find(input => input.runId === next.runIds[0])?.systemPrompt).toContain("PLATFORM DISCUSSION:");
   });
 
   it("appends immutable context snapshots without regressing an applied receipt", async () => {
@@ -225,19 +231,19 @@ describe("human turn admission", () => {
     expect(getRun(next.runIds[0])?.status).toBe("complete");
   });
 
-  it("keeps a discussion supplement queued until its exact native consumption receipt", async () => {
+  it("stops a full-tool discussion before applying a supplement in a fresh invocation", async () => {
     const { send, wait, conversation } = world();
     fixture.holds.set("Discuss the layout", "hold");
     const original = await send("Discuss the layout", { action: "discussion" });
     await vi.waitFor(() => expect(fixture.inputs).toHaveLength(1));
     const supplement = await send("Focus on the compact option", { action: "supplement", targetRunId: original.runIds[0] });
-    await vi.waitFor(() => expect(fixture.followupConsumers).toHaveLength(1));
-    expect(listCollaborationTurns(conversation.id).find(turn => turn.runId === supplement.runIds[0])?.status).toBe("queued");
-    fixture.followupConsumers[0]();
     await wait(supplement.runIds[0]);
     expect(listCollaborationTurns(conversation.id).find(turn => turn.runId === supplement.runIds[0])?.status).toBe("applied");
-    expect(fixture.inputs).toHaveLength(1);
-    expect(isRunActive(original.runIds[0])).toBe(true);
+    expect(fixture.inputs).toHaveLength(2);
+    expect(fixture.followupConsumers).toHaveLength(0);
+    expect(fixture.stopped).toContain(original.runIds[0]);
+    expect(isRunActive(original.runIds[0])).toBe(false);
+    expect(fixture.inputs[1].contextXml).toContain("Focus on the compact option");
   });
 
   it("does not duplicate an accepted send when the client retries its request identity", async () => {

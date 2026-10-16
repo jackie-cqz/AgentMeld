@@ -5,12 +5,14 @@ import { toolRegistry } from "@/server/tools/registry";
 import type { ToolContext, ToolResult } from "@/server/tools/types";
 import type { PiInvocationInput } from "./types";
 import { authorizeNativeTool, authorizeNativeChange, captureNativeResult, nativeToolNames, PI_NATIVE_TO_PLATFORM, type NativeAdmission } from "./native-tools";
+import { CONVERSATION_ROSTER_TOOL } from "./tool-surface";
 import { cancelPendingBashForRun } from "@/server/pending-bash";
 import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { recordTaskArtifact } from "@/server/dispatch-task-results";
 import { assertPiAccessProfile } from "./access-profile";
+import type { PiWorkspaceLease } from "./workspace-lease";
 
 const callSchema = z.object({ callId: z.string().min(1).max(200), name: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()) });
 const outcomeSchema = z.object({ callId: z.string().min(1).max(200), result: z.unknown(), isError: z.boolean() });
@@ -23,7 +25,7 @@ export function cancelPiApprovals(runId: string): void {
 }
 
 /** A private, invocation-scoped tool bridge. Nothing is registered in the public Next API. */
-export async function createPiBridge(input: PiInvocationInput, signal: AbortSignal, onBudgetExceeded: () => void) {
+export async function createPiBridge(input: PiInvocationInput, signal: AbortSignal, onBudgetExceeded: () => void, lease: PiWorkspaceLease | null = null) {
   assertPiAccessProfile(input.accessMode, input.toolNames);
   const maxTurns = input.maxTurns ?? 64;
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 64) throw new Error("Invalid Pi turn limit.");
@@ -31,8 +33,11 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const ctx: ToolContext = { conversationId: input.conversationId, agentId: input.agent.id,
     runId: input.runId, parentRunId: input.parentRunId, workspacePath: input.workspacePath,
-    taskExecution: input.taskExecution, taskContract: input.taskContract, abortSignal: signal,
-    allowedToolNames: input.toolNames };
+    taskExecution: input.taskExecution, taskContract: input.taskContract, abortSignal: signal };
+  // `input.toolNames` is what this invocation is PROVISIONED with, not a
+  // permission decision: an Agent run is provisioned with the full Pi toolset
+  // (see tool-surface.ts), while platform-internal phases such as the
+  // Conductor's PLAN stage still scope their own surface deliberately.
   const native = nativeToolNames(input.toolNames);
   const businessNames = input.toolNames.filter(name => !Object.values(PI_NATIVE_TO_PLATFORM).includes(name));
   const definitions = toolRegistry.resolve(businessNames).map(tool => ({ name: tool.name, description: tool.description, parameters: structuredClone(tool.parameters) }));
@@ -44,6 +49,9 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
   let turns = 0;
   let ready = false;
   let terminalToolAccepted = false;
+  let consultationActive = false;
+  let activeBusinessCalls = 0;
+  let activeNativeAdmissions = 0;
 
   const serve = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const authorization = Buffer.from(request.headers.authorization ?? "");
@@ -57,7 +65,10 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
       if (request.method === "GET" && request.url === "/manifest") {
         const systemPrompt = Object.entries(PI_NATIVE_TO_PLATFORM).reduce((prompt, [native, platform]) =>
           native === platform ? prompt : prompt.replace(new RegExp(`\\b${platform}\\b`, "g"), native), input.systemPrompt);
-        send({ definitions, native, systemPrompt: `${systemPrompt}${businessNames.includes("list_team_members") ? "\nBefore planning, use list_team_members for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements." : ""}`,
+        const rosterGuidance = businessNames.includes(CONVERSATION_ROSTER_TOOL)
+          ? `\nBefore consulting or planning, use ${CONVERSATION_ROSTER_TOOL} for the current roster. Use exact member IDs and preserve platform DAG and acceptance requirements.`
+          : "";
+        send({ definitions, native, systemPrompt: `${systemPrompt}${rosterGuidance}`,
           needsReport: Boolean(input.parentRunId), maxTurns });
         return;
       }
@@ -97,23 +108,42 @@ export async function createPiBridge(input: PiInvocationInput, signal: AbortSign
         return;
       }
       const call = callSchema.parse(body);
+      if (consultationActive) throw new Error("This invocation is waiting for its peer; tools resume after the peer has stopped.");
+      lease?.assertActive();
       if (terminalToolAccepted) throw new Error("This invocation already submitted its terminal platform result.");
       if (admittedCalls.size >= 512) throw new Error("Pi tool call budget exhausted.");
       if (admittedCalls.has(call.callId)) throw new Error("Tool call ID has already been consumed.");
       admittedCalls.add(call.callId);
       if (request.url === "/native/authorize") {
-        try { admissions.set(call.callId, await authorizeNativeTool(call.name, call.args, ctx)); }
+        activeNativeAdmissions++;
+        try {
+          if (!native.includes(call.name)) throw new Error("Native tool is not provisioned for this internal invocation.");
+          admissions.set(call.callId, await authorizeNativeTool(call.name, call.args, ctx));
+        }
         catch (error) {
           const result = await toolRegistry.recordPreflightFailure(PI_NATIVE_TO_PLATFORM[call.name] ?? call.name, call.args,
             error instanceof Error ? error.message : "Native tool admission failed.", ctx,
             { callId: call.callId, source: "system" }, { code: "PI_NATIVE_TOOL_REJECTED", category: "security_policy" });
           results.set(call.callId, result);
           throw error;
-        }
+        } finally { activeNativeAdmissions--; }
         signal.throwIfAborted();
         send({ ok: true });
       } else if (request.url === "/tool" && businessNames.includes(call.name)) {
-        const result = await toolRegistry.execute(call.name, call.args, ctx, { callId: call.callId, source: "pi" });
+        let result: ToolResult;
+        if (call.name === "consult_agent") {
+          if (admissions.size || activeNativeAdmissions || activeBusinessCalls) throw new Error("Finish other tool calls before handing the workspace to a peer.");
+          consultationActive = true;
+          try {
+            const execute = (consultationLease?: PiWorkspaceLease) => toolRegistry.execute(call.name, call.args,
+              { ...ctx, consultationLease }, { callId: call.callId, source: "pi" });
+            result = lease ? await lease.lend(execute) : await execute();
+          } finally { consultationActive = false; }
+        } else {
+          activeBusinessCalls++;
+          try { result = await toolRegistry.execute(call.name, call.args, ctx, { callId: call.callId, source: "pi" }); }
+          finally { activeBusinessCalls--; }
+        }
         if (result.ok && result.value && typeof result.value === "object") {
           const value = result.value as Record<string, unknown>;
           if (typeof value.artifactId === "string" && typeof value.outputKey === "string") {

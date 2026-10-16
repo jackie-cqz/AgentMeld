@@ -22,6 +22,7 @@ export interface NormalizedBootstrapState {
   agentIds: string[];
   conversations: Record<string, Conversation>;
   conversationOrder: string[];
+  provisionedToolNames: string[];
   messages: Record<string, Message>;
   messageIdsByConversation: Record<string, string[]>;
   runs: Record<string, AgentRun>;
@@ -51,6 +52,7 @@ export function normalizeBootstrap(payload: BootstrapPayload): NormalizedBootstr
     agentIds: payload.agents.map((agent) => agent.id),
     conversations: keyById(conversations),
     conversationOrder: conversations.map((conversation) => conversation.id),
+    provisionedToolNames: [...(payload.provisionedToolNames ?? [])],
     messages: {},
     messageIdsByConversation: {},
     runs: {},

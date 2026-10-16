@@ -2,6 +2,7 @@ import type { Agent, Conversation, Message, StreamEvent, Workspace } from "@/sha
 import type { ChatMessage } from "@/server/conversation-context";
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { PiAccessMode } from "./access-profile";
+import type { PiWorkspaceLease } from "./workspace-lease";
 
 /** One platform-owned invocation; Pi owns the internal messages and tool loop. */
 export interface PiInvocationInput {
@@ -22,8 +23,10 @@ export interface PiInvocationInput {
   apiBaseUrl?: string | null;
   history?: ChatMessage[];
   contextXml?: string;
-  /** Conversation-only calls never access live workspace files or acquire its writer lease. */
+  /** Internal context-only phases; ordinary discussions use the full workspace toolset. */
   accessMode?: PiAccessMode;
+  /** Private, temporary ownership lent by a source blocked on consult_agent. */
+  workspaceLease?: PiWorkspaceLease;
   maxTurns?: number;
   timeoutMs?: number;
   /** Receipt for the initial task entering Pi's committed user-message context. */

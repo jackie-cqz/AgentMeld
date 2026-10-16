@@ -17,7 +17,7 @@ const testSchema = z.object({
 
 const PROVIDER_DEFAULTS = {
   deepseek: {
-    modelId: "deepseek-chat",
+    modelId: "deepseek-v4-flash",
     baseUrl: "https://api.deepseek.com/v1"
   },
   openai: {

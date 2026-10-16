@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { safeWorkspacePath, toolProcessEnv } from "@/server/tools/workspace-access";
+import { resolveToolPath, toolProcessEnv } from "@/server/tools/workspace-access";
 import { isPathWithin } from "@/server/workspace-utils";
 import type { ToolDef } from "@/server/tools/types";
 import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
@@ -29,11 +29,18 @@ export const gitInspectTool: ToolDef = {
     const parsed = z.object({ action: z.enum(["status", "diff", "log"]), path: z.string().default("."), staged: z.boolean().default(false), limit: z.number().int().min(1).max(20).default(10) }).safeParse(args);
     if (!parsed.success) return { ok: false, error: "Invalid Git inspection arguments." };
     try {
-      const root = fs.realpathSync(ctx.workspacePath); const cwd = safeWorkspacePath(root, parsed.data.path);
+      // Issue #79: the path is resolved as given and is not refused for leaving
+      // the workspace. The repository that this tool may inspect is still the
+      // workspace-owned one — that is the tool's definition (bounded read-only
+      // inspection of the workspace's own repository, reported relative to it),
+      // not a per-Agent grant: native bash already runs any git command. The
+      // upward search is clamped to the workspace root so a path above it cannot
+      // walk to the filesystem root.
+      const root = fs.realpathSync(ctx.workspacePath); const cwd = resolveToolPath(root, parsed.data.path);
       if (!fs.statSync(cwd).isDirectory()) throw new Error("path must be a repository directory.");
       // Require a physical .git directory within the workspace; linked host worktrees are not admitted.
       let repo = cwd;
-      while (!fs.existsSync(path.join(repo, ".git")) && repo !== root) repo = path.dirname(repo);
+      while (!fs.existsSync(path.join(repo, ".git")) && repo !== root && isPathWithin(repo, root)) repo = path.dirname(repo);
       const marker = path.join(repo, ".git");
       if (!isPathWithin(repo, root) || !fs.lstatSync(marker).isDirectory() || fs.lstatSync(marker).isSymbolicLink() || !isPathWithin(fs.realpathSync(marker), root)) throw new Error("No workspace-owned Git repository. Linked or external repositories are not allowed.");
       if (fs.existsSync(path.join(marker, "commondir")) || fs.existsSync(path.join(marker, "objects", "info", "alternates"))) throw new Error("Git common directories and alternate object stores are not allowed.");

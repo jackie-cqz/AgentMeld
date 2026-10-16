@@ -19,6 +19,11 @@ The visual direction is a compact work surface: neutral semantic colors, restrai
 | Pending actions | Questions, dispatch plans, command/file approvals | Requests remain structured; long commands wrap; resolution events update UI |
 | Diagnostics | Context statistics, context trace, evidence drawer | Shared popover/drawer surfaces with accessible close and tab controls |
 
+> Note (issue #79): the "Tool permissions" row above records the issue #31
+> surface. The per-Agent tool picker has since been removed entirely: the Agent
+> editor offers no tool choice and only shows the runtime toolset served by
+> `/api/bootstrap` read-only under "运行时工具"; see `docs/pi-runtime.md`.
+
 ## Reproducible Browser Checks
 
 These scripts attach to Chrome through CDP using Playwright. Use an isolated data directory; `workflows.mjs` creates test Agents, conversations, attachments and artifacts. Do not point it at your production data directory.

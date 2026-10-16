@@ -189,10 +189,49 @@ function evidencePathMatches(targetPath: string, candidatePath: string): boolean
   // path is already sandbox-relative, so any concrete path is valid evidence
   // that the task inspected or changed that target.
   if (target === "." || target === "") return candidate.length > 0;
+  // Plans legitimately declare a pattern — the personal-blog plan names
+  // `src/content/posts/*.md`. The literal rules below can never satisfy one, so
+  // a task could write every matching file and still fail gate ⑥; glob targets
+  // are matched against the concrete evidence path instead.
+  if (/[*?]/.test(target)) return globPathMatches(target, candidate);
   return candidate === target ||
     candidate.startsWith(`${target}/`) ||
     candidate.endsWith(`/${target}`) ||
     candidate.includes(`/${target}/`);
+}
+
+/**
+ * Minimal, dependency-free glob for evidence paths: a single star matches
+ * within one path segment, a double star crosses segments (and a double star
+ * followed by a slash also matches zero directories, so a recursive pattern
+ * accepts a file sitting directly under its root), and a question mark matches
+ * one non-separator character. Anything else is literal. Brace and
+ * character-class syntax is deliberately unsupported: an unrecognised
+ * metacharacter stays literal, which can only fail closed.
+ */
+function globPathMatches(pattern: string, candidate: string): boolean {
+  let regex = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === "*") {
+      if (pattern[index + 1] === "*") {
+        if (pattern[index + 2] === "/") {
+          regex += "(?:.*/)?";
+          index += 2;
+        } else {
+          regex += ".*";
+          index += 1;
+        }
+      } else {
+        regex += "[^/]*";
+      }
+    } else if (char === "?") {
+      regex += "[^/]";
+    } else {
+      regex += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${regex}$`).test(candidate);
 }
 
 function normalizeCommand(command: string): string {

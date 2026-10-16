@@ -5,6 +5,7 @@ import { consumeStream } from "@/server/consume-stream";
 import { runPiInvocation } from "@/server/pi/runtime";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
+import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PiRuntimeError } from "@/server/pi/process";
 import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
@@ -20,7 +21,7 @@ import { acquireConcurrencySlot } from "@/server/dispatch-concurrency";
 import { issueDelegation } from "@/server/delegation";
 import { recordTaskReport, getTaskReport, clearTaskResultsForRun } from "@/server/dispatch-task-results";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
-import { getFileWrites, clearFileWrites, detectWaveConflicts, collapseTaskAttemptWrites, type RunFileWrites } from "@/server/dispatch-file-writes";
+import { getFileWrites, getFileWriteOrder, clearFileWrites, detectWaveConflicts, collapseTaskAttemptWrites, type RunFileWrites } from "@/server/dispatch-file-writes";
 import { clearRunToolEvidence, getRunToolEvidence, getTaskToolEvidence } from "@/server/dispatch-tool-evidence";
 import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
@@ -69,6 +70,12 @@ function setConductorStage(conversationId: string, runId: string, stage: string)
   const now = Date.now();
   updateRunStage(runId, stage, now);
   eventBus.publish({ type: "run.stage", conversationId, timestamp: now, runId, stage });
+}
+
+function taskWriterRunIds(runIds: string[]): string[] {
+  return [...new Set(runIds.flatMap(runId => [runId, ...(getDatabase().prepare(
+    "SELECT target_run_id FROM agent_consultations WHERE source_run_id=? AND target_run_id IS NOT NULL ORDER BY created_at,id"
+  ).all(runId) as Array<{ target_run_id: string }>).map(row => row.target_run_id)]))];
 }
 
 export async function executeConductor(input: ConductorInput): Promise<void> {
@@ -415,7 +422,8 @@ export async function executeConductorPlan(
     for (const task of wave) {
       const r = results.get(task.id);
       const runIds = [...new Set([...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId].filter((id): id is string => !!id))];
-      const attempts = runIds.map(runId => ({ taskId: task.id, agentId: getRun(runId)?.agentId ?? task.agentId, runId, writes: getFileWrites(runId) }));
+      const attempts = taskWriterRunIds(runIds).map(runId => ({ taskId: task.id, agentId: getRun(runId)?.agentId ?? task.agentId, runId,
+        writes: getFileWrites(runId), writeOrder: getFileWriteOrder(runId) }));
       waveRunWrites.push(...collapseTaskAttemptWrites(attempts));
     }
 
@@ -468,7 +476,11 @@ export async function executeConductorPlan(
     for (const task of wave) {
       const r = results.get(task.id);
       const runIds = [...listTaskAttempts(conductorRunId, task.id).map(attempt => attempt.childRunId), r?.childRunId];
-      for (const runId of runIds) if (runId) clearFileWrites(runId);
+      for (const runId of taskWriterRunIds(runIds.filter((id): id is string => !!id))) {
+        clearFileWrites(runId);
+        clearRunToolEvidence(runId);
+        clearTaskResultsForRun(runId);
+      }
     }
   }
 
@@ -1491,7 +1503,7 @@ async function runAggregateStage(
   const aggregateSystemPrompt = `${baseSystem}\n\n## 执行结果\n整体状态：${statusLabel}${completionStatus === "has_failures" ? "\n请明确说明整体未完成，不要把局部成功说成全部完成。" : ""}`;
 
   // Tools: remove plan_tasks and ask_user
-  const aggregateTools = agent.toolNames.filter((t) => t !== "plan_tasks" && t !== "ask_user");
+  const aggregateTools = provisionedPlatformToolNames().filter((t) => t !== "ask_user");
 
   const invocationInput: PiInvocationInput = {
     conversationId,
@@ -1608,7 +1620,9 @@ function rebuildFtsForConversation(conversationId: string): void {
 
 /** Tools available to the Conductor during the PLAN (assess) stage only */
 export const CONDUCTOR_PLAN_TOOLS = [
-  "list_team_members",
+  // The roster tool is permitted here and nowhere else: a planner needs the
+  // member list, and the roster is conversation-scoped (see tool-surface.ts).
+  CONVERSATION_ROSTER_TOOL,
   "update_context_facts",
   "plan_tasks",
   "ask_user",
@@ -1695,7 +1709,7 @@ export function buildConductorPlanPrompt(
   // agent record's list: a conductor configured with bash still cannot run a
   // command while planning, and telling it it can would contradict the stage
   // instructions two blocks down.
-  blocks.push(workspaceInfoBlock(agent.toolNames.includes("consult_agent") ? [...CONDUCTOR_PLAN_TOOLS, "consult_agent"] : CONDUCTOR_PLAN_TOOLS, workspacePath));
+  blocks.push(workspaceInfoBlock([...CONDUCTOR_PLAN_TOOLS, "consult_agent"], workspacePath));
 
   // Block 2: Conductor persona
   blocks.push(agent.systemPrompt);
@@ -1798,7 +1812,10 @@ function describeAgentForPlanning(agent: Agent) {
     name: agent.name,
     description: agent.description,
     capabilities: agent.capabilities,
-    tools: agent.toolNames,
+    // Every member is provisioned with the whole Pi toolset (issue #79); the
+    // stored grants are a record only, so reporting them would tell the planner
+    // a capable member cannot do the work.
+    tools: provisionedPlatformToolNames(),
     bestFor: profile.bestFor,
     avoidFor: profile.avoidFor
   };
@@ -2068,7 +2085,7 @@ async function runConductorAssess(
   // Build the PLAN stage system prompt from the extracted pure function
   const assessSystemPrompt = buildConductorPlanPrompt(agent, otherAgents, workspacePath);
   const assessToolNames: string[] = [...CONDUCTOR_PLAN_TOOLS];
-  if (agent.toolNames.includes("consult_agent")) assessToolNames.push("consult_agent");
+  assessToolNames.push("consult_agent");
   const { history, recentMessages } = await buildCollaborationHistory({
     agent, triggerMessage: input.triggerMessage, systemPrompt: assessSystemPrompt, currentText: userText,
   });

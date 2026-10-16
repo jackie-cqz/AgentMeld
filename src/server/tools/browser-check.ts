@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { chromium, type Browser } from "playwright";
 import { z } from "zod";
 import { getDataDir } from "@/db/client";
-import { safeWorkspacePath } from "@/server/tools/workspace-access";
+import { resolveToolPath, safeWorkspacePath } from "@/server/tools/workspace-access";
 import type { ToolDef } from "@/server/tools/types";
 import { TOOL_CAPABILITIES } from "@/server/tools/capabilities";
 
@@ -43,7 +43,7 @@ export const browserCheckTool: ToolDef = {
   parameters: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Static build directory inside this workspace, default dist." },
+      path: { type: "string", description: "Static build directory, default dist. A relative path resolves against the workspace root." },
       viewport: { type: "string", enum: ["desktop", "mobile"] },
       steps: { type: "array", maxItems: 20, items: { type: "object", required: ["action"], properties: {
         action: { type: "string", enum: ["click", "fill", "assert_visible", "assert_text", "reload"] }, selector: { type: "string" }, value: { type: "string" }
@@ -59,7 +59,12 @@ export const browserCheckTool: ToolDef = {
     const cancel = () => { void browser?.close().catch(() => {}); server?.closeAllConnections(); };
     try {
       ctx.abortSignal.throwIfAborted();
-      const root = safeWorkspacePath(ctx.workspacePath, parsed.data.path);
+      // Issue #79: the directory to serve is resolved as given, not refused for
+      // leaving the workspace — the same full-access decision as Pi-native tools.
+      // The two inner resolutions stay root-relative: they are this temporary
+      // server's own file boundary (a request may not read outside the app
+      // directory it was asked to serve), not the Agent's capability.
+      const root = resolveToolPath(ctx.workspacePath, parsed.data.path);
       if (!fs.statSync(root).isDirectory()) throw new Error("path must be a static app directory.");
       safeWorkspacePath(root, "index.html");
       server = http.createServer((req, res) => {

@@ -128,8 +128,9 @@ try {
       await page.getByTitle('Agents', { exact: true }).click();
       await page.getByTitle('新建 Agent', { exact: true }).click();
       await page.getByRole('button', { name: '详细配置', exact: false }).click();
-      await page.getByRole('tab', { name: '工具权限', exact: true }).click();
+      await page.getByRole('tab', { name: '运行时工具', exact: true }).click();
       await modalCheck(page, `${width}-${theme}-tools`);
+      assert.equal(await page.getByRole('checkbox').count(), 0, 'Agent editor offers no tool choice');
       await screenshot(page, `${width}-${theme}-tools`);
       await page.getByRole('tab', { name: '系统提示词', exact: true }).click();
       await modalCheck(page, `${width}-${theme}-prompt`);

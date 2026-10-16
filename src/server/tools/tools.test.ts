@@ -8,7 +8,6 @@ import { eventBus } from "@/server/event-bus";
 import { createConversation } from "@/server/conversation-service";
 import { getArtifact } from "@/server/repositories";
 import { toolRegistry } from "@/server/tools/registry";
-import { isVerificationOnlyCommand } from "@/server/tools/bash";
 import type { ToolContext } from "@/server/tools/types";
 import { clearPendingWritesForTests } from "@/server/pending-writes";
 import { clearPendingBashForTests } from "@/server/pending-bash";
@@ -185,9 +184,15 @@ describe("fs_mkdir", () => {
     expect(fs.statSync(path.join(workspacePath, "nested", "dir")).isDirectory()).toBe(true);
   });
 
-  it("rejects paths outside the workspace", async () => {
-    const result = await toolRegistry.execute("fs_mkdir", { path: "../../../outside" }, ctx());
-    expect(result.ok).toBe(false);
+  it("admits an absolute path outside the workspace (issue #79 full access)", async () => {
+    const outside = path.join(os.tmpdir(), `agentmeld-mkdir-outside-${process.pid}-${Date.now()}`);
+    try {
+      const result = await toolRegistry.execute("fs_mkdir", { path: outside }, ctx());
+      expect(result.ok).toBe(true);
+      expect(fs.statSync(outside).isDirectory()).toBe(true);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
@@ -432,18 +437,14 @@ describe("fs_patch", () => {
 });
 
 describe("bash", () => {
-  it("allows Python test runners and version checks without allowing arbitrary scripts", () => {
-    expect(isVerificationOnlyCommand("python -m unittest -v test_public.py")).toBe(true);
-    expect(isVerificationOnlyCommand("python3.11 -m pytest -q tests")).toBe(true);
-    expect(isVerificationOnlyCommand("py -3.11 -m unittest discover -s tests -v")).toBe(true);
-    expect(isVerificationOnlyCommand("pytest -q")).toBe(true);
-    expect(isVerificationOnlyCommand("python --version")).toBe(true);
-    expect(isVerificationOnlyCommand("cd project; python -m unittest -v test_public.py 2>&1")).toBe(true);
-
-    expect(isVerificationOnlyCommand("python repair.py")).toBe(false);
-    expect(isVerificationOnlyCommand("python -c \"open('source.py', 'w').write('x')\"")).toBe(false);
-    expect(isVerificationOnlyCommand("node arbitrary-script.js")).toBe(false);
-  });
+  it("runs arbitrary scripts instead of classifying them as non-verification", async () => {
+    // Issue #79: bash is a general development tool. A script that is not a
+    // build/test/lint command used to be rejected by the verification-only gate;
+    // it now runs and reports its own exit code.
+    const result = await toolRegistry.execute("bash", { command: "node -e \"console.log('arbitrary-ok')\"" }, ctx());
+    expect(result.ok).toBe(true);
+    if (result.ok) expect((result.value as { output: string }).output).toContain("arbitrary-ok");
+  }, 10000);
 
   it("rejects banned commands", async () => {
     const result = await toolRegistry.execute("bash", {
@@ -507,10 +508,10 @@ describe("bash", () => {
     expect(getAllPendingBashCommands()).toHaveLength(0);
   }, 10000);
 
-  it("rejects a run-script the workspace does not declare", async () => {
-    // Regression: the allowlist matched script names by prefix, so every
-    // `npm run build-…` counted as verification. A name no project declares is
-    // not a verification command, and running it is arbitrary code execution.
+  it("runs a script the workspace does not declare and lets npm report it", async () => {
+    // Issue #79: `npm run <script>` is no longer checked against the nearest
+    // package.json. It is an ordinary command now; npm's own error is the
+    // feedback, not a platform policy error.
     fs.writeFileSync(
       path.join(workspacePath, "package.json"),
       JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
@@ -518,11 +519,8 @@ describe("bash", () => {
 
     const result = await toolRegistry.execute("bash", { command: "npm run build-evil" }, ctx());
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("is not declared");
-      expect(result.error).toContain("build-evil");
-    }
+    expect(result.ok).toBe(true);
+    if (result.ok) expect((result.value as { exitCode: number }).exitCode).not.toBe(0);
     expect(getAllPendingBashCommands()).toHaveLength(0);
   }, 10000);
 
@@ -540,7 +538,7 @@ describe("bash", () => {
     }
   }, 10000);
 
-  it("resolves the declared scripts of the directory the command changes into", async () => {
+  it("runs a project script after changing into its directory", async () => {
     fs.mkdirSync(path.join(workspacePath, "app"), { recursive: true });
     fs.writeFileSync(
       path.join(workspacePath, "app", "package.json"),
@@ -549,12 +547,7 @@ describe("bash", () => {
 
     const declared = await toolRegistry.execute("bash", { command: "cd app && npm run test" }, ctx());
     expect(declared.ok).toBe(true);
-
-    // The root declares nothing, so an undeclared name reached through `cd` is
-    // still rejected instead of silently allowed.
-    const undeclared = await toolRegistry.execute("bash", { command: "cd app && npm run build-evil" }, ctx());
-    expect(undeclared.ok).toBe(false);
-    if (!undeclared.ok) expect(undeclared.error).toContain("is not declared");
+    if (declared.ok) expect((declared.value as { output: string }).output).toContain("app-test-ok");
   }, 20000);
 
   it("does not claim a script is undeclared when there is no package.json", async () => {
@@ -569,65 +562,9 @@ describe("bash", () => {
     }
   }, 20000);
 
-  it("rejects a look-alike file name even when the prefix is a declared script", async () => {
-    // `bun run build.evil` resolves to a FILE, not to the declared `build` script.
-    // The name class used to stop at the dot, so the declared `build` satisfied the
-    // check while bun ran the file.
-    fs.writeFileSync(
-      path.join(workspacePath, "package.json"),
-      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
-    );
-
-    const result = await toolRegistry.execute("bash", { command: "bun run build.evil" }, ctx());
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("build.evil");
-      expect(result.error).toContain("is not declared");
-    }
-  }, 10000);
-
-  it("refuses a run-script that would execute outside the workspace", async () => {
-    // `cd` moves the shell; the sandbox only fixes the initial directory. Skipping
-    // the check in that case made the whole rule trivially bypassable.
-    fs.writeFileSync(
-      path.join(workspacePath, "package.json"),
-      JSON.stringify({ scripts: { build: "node -e \"console.log('ok')\"" } })
-    );
-
-    const result = await toolRegistry.execute("bash", { command: "cd .. && npm run build" }, ctx());
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("outside the workspace");
-  }, 10000);
-
-  it("refuses a run-script whose directory cannot be determined", async () => {
-    // `~` and `$VAR` cannot be resolved statically, so there is no directory to
-    // check — guessing one would check a manifest the shell never reads.
-    const result = await toolRegistry.execute("bash", { command: "cd ~ && npm run build" }, ctx());
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("Cannot tell which directory");
-  }, 10000);
-
-  it("refuses when npm would resolve to a package.json outside the workspace", async () => {
-    // npm walks up to the nearest package.json, and the default data directory
-    // lives inside the user's own project — so "no manifest here" must not mean
-    // "run the host project's script".
-    fs.writeFileSync(
-      path.join(path.dirname(workspacePath), "package.json"),
-      JSON.stringify({ scripts: { build: "node -e \"console.log('ANCESTOR-BUILD-RAN')\"" } })
-    );
-
-    const result = await toolRegistry.execute("bash", { command: "npm run build" }, ctx());
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("outside the workspace");
-  }, 10000);
-
-  it("follows an explicit workspace flag when checking declarations", async () => {
-    // `npm run build -w web` runs web's script; checking the root manifest instead
-    // rejected a command that used to work.
+  it("runs `npm run -w <dir>` without consulting a manifest", async () => {
+    // Issue #79 removed the declared-script lookup, so whether npm finds a
+    // configured workspace is npm's business, not the sandbox's.
     fs.writeFileSync(
       path.join(workspacePath, "package.json"),
       JSON.stringify({ scripts: { dev: "node -e \"console.log('dev')\"" } })
@@ -640,16 +577,13 @@ describe("bash", () => {
 
     const result = await toolRegistry.execute("bash", { command: "npm run build -w web" }, ctx());
 
-    // The policy must not reject it; whether npm finds a configured workspace is
-    // npm's business, not the sandbox's.
     expect(result.ok).toBe(true);
   }, 20000);
 
-  it("rejects shell inspection commands because fs_list/fs_read must be used", async () => {
+  it("allows shell inspection commands instead of requiring fs_list/fs_read", async () => {
     const cmd = process.platform === "win32" ? "Get-ChildItem" : "ls";
     const result = await toolRegistry.execute("bash", { command: cmd }, ctx());
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("verification-only");
+    expect(result.ok).toBe(true);
   });
 
   it("rejects empty command", async () => {
@@ -686,35 +620,28 @@ describe("bash", () => {
     expect(getAllPendingBashCommands()).toHaveLength(0);
   });
 
-  it("rejects source mutation commands and redirects", async () => {
-    const sourcePath = path.join(workspacePath, "src", "App.tsx");
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(sourcePath, "const original = true;\n", "utf-8");
-    const writeCommand = process.platform === "win32"
-      ? "Set-Content src/App.tsx 'x'"
-      : "sed -i 's/a/b/' src/App.tsx";
-    const redirectCommand = process.platform === "win32"
-      ? "npm run build > build.log"
-      : "npm run build > build.log";
+  it("allows source creation, in-place edits and redirects that the old policy rejected", async () => {
+    // Benchmark regression (issue #79): a builder agent ran `mkdir` / `cat >` /
+    // `sed -i` 18 times, every call was refused, and no source was written.
+    // These are ordinary development commands now.
+    const createCommand = process.platform === "win32"
+      ? "New-Item -ItemType Directory -Force src | Out-Null; Set-Content -Path src/App.css -Value 'body { color: red; }'"
+      : "mkdir -p src && cat > src/App.css <<'EOF'\nbody { color: red; }\nEOF";
+    const createResult = await toolRegistry.execute("bash", { command: createCommand }, ctx());
+    expect(createResult.ok, !createResult.ok ? createResult.error : "").toBe(true);
+    expect(fs.readFileSync(path.join(workspacePath, "src", "App.css"), "utf-8")).toContain("color: red");
 
-    const writeResult = await toolRegistry.execute("bash", { command: writeCommand }, ctx());
-    const redirectResult = await toolRegistry.execute("bash", { command: redirectCommand }, ctx());
+    const inPlaceCommand = process.platform === "win32"
+      ? "(Get-Content src/App.css) -replace 'red', 'blue' | Set-Content src/App.css"
+      : `sed -i${process.platform === "darwin" ? " ''" : ""} 's/red/blue/' src/App.css`;
+    const editResult = await toolRegistry.execute("bash", { command: inPlaceCommand }, ctx());
+    expect(editResult.ok, !editResult.ok ? editResult.error : "").toBe(true);
+    expect(fs.readFileSync(path.join(workspacePath, "src", "App.css"), "utf-8")).toContain("blue");
 
-    expect(writeResult.ok).toBe(false);
-    expect(redirectResult.ok).toBe(false);
-    if (!writeResult.ok) {
-      expect(writeResult.error).toContain("fs_write");
-      expect(writeResult.code).toBe("BASH_SOURCE_MUTATION_BLOCKED");
-      expect(writeResult.category).toBe("security_policy");
-    }
-    if (!redirectResult.ok) {
-      expect(redirectResult.error).toContain("fs_write");
-      expect(redirectResult.code).toBe("BASH_SOURCE_MUTATION_BLOCKED");
-      expect(redirectResult.category).toBe("security_policy");
-    }
-    expect(fs.readFileSync(sourcePath, "utf-8")).toBe("const original = true;\n");
-    expect(fs.existsSync(path.join(workspacePath, "build.log"))).toBe(false);
-  });
+    const redirectResult = await toolRegistry.execute("bash", { command: "node -e \"console.log('redirected')\" > build.log" }, ctx());
+    expect(redirectResult.ok, !redirectResult.ok ? redirectResult.error : "").toBe(true);
+    expect(fs.readFileSync(path.join(workspacePath, "build.log"), "utf-8")).toContain("redirected");
+  }, 20000);
 });
 
 describe("read_artifact", () => {

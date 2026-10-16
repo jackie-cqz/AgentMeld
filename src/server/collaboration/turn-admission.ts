@@ -173,11 +173,8 @@ export async function admitHumanTurn(input: PiInvocationInput, run: AgentRun, si
       const result = await consumed;
       signal.throwIfAborted();
       if (result.state === "applied") return { handled: true, turnId: turn.id };
-      // Settlement/transport races do not silently lose or duplicate input.
-      // Stop the old read-only call before continuing in a fresh invocation.
-      controls.stop(target.id);
-      await controls.waitForStop(target.id, signal);
-      return ready("discussion");
+      // Full-tool discussions cannot be assumed read-only. A rejected or
+      // unconsumed steer must use the same stop-and-recompile path as a writer.
     } finally { signal.removeEventListener("abort", stopOnAbort); }
   }
 

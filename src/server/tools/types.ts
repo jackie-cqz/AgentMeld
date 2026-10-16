@@ -1,5 +1,6 @@
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { ToolCapability } from "@/server/tools/capabilities";
+import type { PiWorkspaceLease } from "@/server/pi/workspace-lease";
 
 export interface ToolContext {
   conversationId: string;
@@ -10,7 +11,8 @@ export interface ToolContext {
   taskExecution?: TaskExecutionIdentity | null;
   taskContract?: TaskExecutionContract | null;
   abortSignal: AbortSignal;
-  allowedToolNames?: readonly string[];
+  /** Private runtime handoff while a source is blocked awaiting its peer. */
+  consultationLease?: PiWorkspaceLease;
 }
 
 export type ToolFailureCategory =

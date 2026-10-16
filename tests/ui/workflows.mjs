@@ -26,8 +26,9 @@ try {
   await page.getByRole('tab', { name: '模型与适配器', exact: true }).click();
   await page.getByRole('button', { name: '供应商 *', exact: true }).click();
   await page.getByRole('button', { name: '选择供应商 DeepSeek', exact: true }).click();
-  await page.getByRole('tab', { name: '工具权限', exact: true }).click();
-  await page.getByLabel('工具权限预设').selectOption('review');
+  await page.getByRole('tab', { name: '运行时工具', exact: true }).click();
+  assert(await page.getByText('运行时可用的工具', { exact: true }).isVisible());
+  assert.equal(await page.getByRole('checkbox').count(), 0, 'Agent editor offers no tool choice');
   await page.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.locator('dialog[open]').waitFor({ state: 'detached' });
   await page.getByTitle('新建 Agent', { exact: true }).click();
@@ -48,8 +49,7 @@ try {
   const payload = await (await page.request.get(`${baseUrl}/api/bootstrap`)).json();
   const createdAgent = payload.agents.find(agent => agent.name === name);
   assert.equal(createdAgent.description, '更新后的职责描述');
-  assert(createdAgent.toolNames.includes('fs_read'));
-  assert(!createdAgent.toolNames.includes('bash'));
+  assert(createdAgent.toolNames.length > 0, 'The server seeds the stored record; the editor never chooses tools');
 
   await page.getByTitle('对话', { exact: true }).click();
   await page.getByRole('button', { name: /新建对话/ }).click();

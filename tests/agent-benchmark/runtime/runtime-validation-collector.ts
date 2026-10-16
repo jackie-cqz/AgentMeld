@@ -25,6 +25,7 @@ import type {
 import type { ContextTraceRunResponse } from "@/server/context-trace/context-trace-types";
 import { getArtifact } from "@/server/repositories";
 import type { Artifact } from "@/shared/types";
+import type { BenchmarkOwnerSession } from "./environment-manager";
 
 export interface RuntimeEvidenceRow {
   id: string;
@@ -67,6 +68,13 @@ export interface RuntimeValidationCollectorOptions {
   reportDir: string;
   apiBase?: string;
   injectedFaults?: BenchmarkFaultRecord[];
+  /**
+   * The sandbox's paired owner. `/deployments/*` is behind `gateRequest`, so a
+   * preview probe or browser context without this credential gets 503 before
+   * it ever reaches the deployment file. Passing the owner session is how the
+   * harness acts as the same principal a real browser would.
+   */
+  ownerSession?: BenchmarkOwnerSession | null;
 }
 
 export async function collectRuntimeValidation(
@@ -80,15 +88,16 @@ export async function collectRuntimeValidation(
   const toolCalls = collectToolCalls(trace, evidence);
   const toolRejections = collectToolRejections(trace, evidence);
   const approvals = collectApprovals(trace);
-  const deploymentServer = options.apiBase ? null : await startDeploymentRouteServer();
+  const deploymentServer = options.apiBase ? null : await startDeploymentRouteServer(options.ownerSession ?? null);
   const apiBase = options.apiBase ?? deploymentServer!.baseUrl;
   try {
     const deployments = collectDeployments(trace, artifacts, evidence, apiBase);
-    const previews = await probePreviews(deployments);
+    const previews = await probePreviews(deployments, options.ownerSession ?? null);
     const browsers = await runBrowserScripts(
       benchmarkCase.runtime?.browserScripts ?? [],
       deployments,
       options.reportDir,
+      options.ownerSession ?? null,
     );
     return {
       collectedAt: Date.now(),
@@ -508,7 +517,10 @@ function collectDeployments(
   }));
 }
 
-async function probePreviews(deployments: BenchmarkDeploymentValidation[]): Promise<BenchmarkPreviewValidation[]> {
+async function probePreviews(
+  deployments: BenchmarkDeploymentValidation[],
+  ownerSession: BenchmarkOwnerSession | null,
+): Promise<BenchmarkPreviewValidation[]> {
   return Promise.all(deployments.map(async (deployment) => {
     if (!deployment.ready || !deployment.previewUrl) {
       return {
@@ -522,7 +534,10 @@ async function probePreviews(deployments: BenchmarkDeploymentValidation[]): Prom
       };
     }
     try {
-      const response = await fetch(deployment.previewUrl, { signal: AbortSignal.timeout(15_000) });
+      const response = await fetch(deployment.previewUrl, {
+        signal: AbortSignal.timeout(15_000),
+        headers: ownerSession ? { cookie: ownerSession.cookieHeader } : undefined,
+      });
       const body = await response.arrayBuffer();
       return {
         outputKey: deployment.outputKey,
@@ -582,6 +597,7 @@ async function runBrowserScripts(
   scripts: BenchmarkBrowserScript[],
   deployments: BenchmarkDeploymentValidation[],
   reportDir: string,
+  ownerSession: BenchmarkOwnerSession | null,
 ): Promise<BenchmarkBrowserValidation[]> {
   if (scripts.length === 0) return [];
 
@@ -605,7 +621,7 @@ async function runBrowserScripts(
         results.push(blockedBrowserResult(script, "No ready deployment matched the browser script."));
         continue;
       }
-      results.push(await runBrowserScript(browser, script, deployment, reportDir));
+      results.push(await runBrowserScript(browser, script, deployment, reportDir, ownerSession));
     }
     return results;
   } finally {
@@ -618,8 +634,18 @@ async function runBrowserScript(
   script: BenchmarkBrowserScript,
   deployment: BenchmarkDeploymentValidation,
   reportDir: string,
+  ownerSession: BenchmarkOwnerSession | null,
 ): Promise<BenchmarkBrowserValidation> {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  if (ownerSession) {
+    // The deployment route is owner-gated; a browser without the session would
+    // park on the 503 JSON body and every selector would time out.
+    await page.context().addCookies([{
+      name: ownerSession.name,
+      value: ownerSession.value,
+      url: new URL(deployment.previewUrl).origin,
+    }]);
+  }
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -868,7 +894,9 @@ function describeStep(step: BenchmarkBrowserStep): string {
   return step.action;
 }
 
-async function startDeploymentRouteServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function startDeploymentRouteServer(
+  ownerSession: BenchmarkOwnerSession | null,
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -879,9 +907,10 @@ async function startDeploymentRouteServer(): Promise<{ baseUrl: string; close: (
       }
       const deploymentId = decodeURIComponent(match[1]);
       const parts = match[2] ? match[2].split("/").filter(Boolean).map(decodeURIComponent) : undefined;
-      const routeResponse = await getDeploymentFile(new Request(url), {
-        params: Promise.resolve({ id: deploymentId, path: parts }),
-      });
+      const routeResponse = await getDeploymentFile(
+        new Request(url, ownerSession ? { headers: { cookie: ownerSession.cookieHeader } } : undefined),
+        { params: Promise.resolve({ id: deploymentId, path: parts }) },
+      );
       response.writeHead(routeResponse.status, Object.fromEntries(routeResponse.headers.entries()));
       response.end(Buffer.from(await routeResponse.arrayBuffer()));
     } catch (error) {

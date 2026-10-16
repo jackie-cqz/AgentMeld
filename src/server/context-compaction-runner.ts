@@ -69,7 +69,7 @@ export function startConversationCompaction(
       .find((agent) => agent?.adapterName === "pi");
 
   const provider = compactionAgent?.modelProvider ?? "deepseek";
-  const model = compactionAgent?.modelId ?? "deepseek-chat";
+  const model = compactionAgent?.modelId ?? "deepseek-v4-flash";
   const now = Date.now();
   const latestSummary = getLatestSummary(conversationId);
   const jobId = `ccj_${newMessageId()}`;

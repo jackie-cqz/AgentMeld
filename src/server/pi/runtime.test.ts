@@ -193,7 +193,8 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
       } else {
         const tools = ((request.tools ?? []) as Array<{ function: { name: string } }>).map(tool => tool.function.name);
         expect(tools).toEqual(expect.arrayContaining(["consult_agent", "read_artifact"]));
-        expect(tools).not.toContain("write"); expect(tools).not.toContain("plan_tasks");
+        expect(tools).toEqual(expect.arrayContaining(["read", "write", "edit", "bash", "deploy_workspace"]));
+        expect(tools).not.toContain("plan_tasks");
         if (++sourceTurns === 1) complete(response, { tool_calls: [{ index: 0, id: "group-consult", type: "function", function: { name: "consult_agent",
           arguments: JSON.stringify({ requestKey: "group-layout", targetAgentId: peerId, question: "Give a read-only design opinion; do not modify files." }) } }] }, "tool_calls");
         else complete(response, { content: "The team recommends the compact sidebar. No files were modified." });
@@ -217,7 +218,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     } finally { abortRun(result.runIds[0]); }
   }, process.platform === "win32" ? 120000 : 60000);
 
-  it("persists a human supplement and applies it to the same real Pi discussion without another task invocation", async () => {
+  it("stops a full-tool real Pi discussion before applying a human supplement", async () => {
     let heldResponse: http.ServerResponse | undefined;
     let requests = 0;
     let nextTurnReceivedSupplement = false;
@@ -236,13 +237,12 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
       await vi.waitFor(() => expect(heldResponse).toBeDefined(), { timeout: 30000 });
       const followup = await sendMessage({ origin: "human", conversationId: conversation.id, content: supplementText,
         action: "supplement", targetRunId: original.runIds[0], clientRequestId: "live-supplement" });
-      await vi.waitFor(() => expect(listCollaborationTurns(conversation.id).find(turn => turn.runId === followup.runIds[0])?.status).toBe("queued"));
-      complete(heldResponse!, { content: "I have compared both layouts." });
       await vi.waitFor(() => expect(isRunActive(original.runIds[0]) || isRunActive(followup.runIds[0])).toBe(false), { timeout: 30000 });
       expect(nextTurnReceivedSupplement).toBe(true);
       expect(requests).toBe(2);
       expect(listCollaborationTurns(conversation.id).map(turn => turn.status)).toEqual(["applied", "applied"]);
-      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_executions WHERE run_id IN (?,?)").get(original.runIds[0], followup.runIds[0])).toEqual({ n: 1 });
+      expect(getRun(original.runIds[0])?.status).toBe("aborted");
+      expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_executions WHERE run_id IN (?,?)").get(original.runIds[0], followup.runIds[0])).toEqual({ n: 2 });
     } finally { abortRun(original.runIds[0]); }
   }, process.platform === "win32" ? 90000 : 45000);
 
@@ -278,7 +278,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     } finally { controller.abort(); await pending.catch(() => {}); }
   }, process.platform === "win32" ? 75000 : 30000);
 
-  it("runs a real Pi peer consultation while the source holds the workspace writer lease", async () => {
+  it("lends the source workspace to a full-tool real Pi peer and restores it after teardown", async () => {
     let peerId = "";
     let sourceTurns = 0;
     let peerTurns = 0;
@@ -287,8 +287,15 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
       if (request.model === "fixture-peer") {
         peerTurns++;
         const tools = request.tools as Array<{ function: { name: string } }>;
-        expect(tools.map(tool => tool.function.name)).toEqual(["respond_to_consultation"]);
+        expect(tools.map(tool => tool.function.name)).toEqual(expect.arrayContaining(["respond_to_consultation", "read", "write", "edit", "bash", "deploy_workspace"]));
         peerSawWriterLease = Number((getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get() as { n: number }).n) === 1;
+        if (peerTurns === 1) {
+          complete(response, { tool_calls: [{ index: 0, id: "peer-read", type: "function", function: {
+            name: "read", arguments: JSON.stringify({ path: "layout.txt" }),
+          } }] }, "tool_calls");
+          return;
+        }
+        expect(JSON.stringify(request.messages)).toContain("COMPACT_LAYOUT_REFERENCE");
         complete(response, { tool_calls: [{ index: 0, id: "peer-opinion", type: "function", function: {
           name: "respond_to_consultation", arguments: JSON.stringify({ status: "replied", answer: "Choose the compact sidebar; no files were modified." }),
         } }] }, "tool_calls");
@@ -299,6 +306,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
       } else complete(response, { content: "The peer recommends the compact sidebar. Awaiting your decision." });
     });
     const input = invocation(url, ["consult_agent"]);
+    fs.writeFileSync(path.join(input.workspacePath, "layout.txt"), "COMPACT_LAYOUT_REFERENCE");
     const peer = createAgent({ name: "Pi consultation peer", adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-peer",
       apiKey: "fixture-not-a-real-credential", apiBaseUrl: url, toolNames: [], description: "Read-only design consultation" });
     peerId = peer.id;
@@ -308,11 +316,19 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
     const events: StreamEvent[] = [];
     for await (const event of runPiInvocation(input, new AbortController().signal)) events.push(event);
     expect(sourceTurns).toBe(2);
-    expect(peerTurns).toBe(1);
+    expect(peerTurns).toBe(2);
     expect(peerSawWriterLease).toBe(true);
     expect(listConsultations(input.conversationId)).toMatchObject([{ status: "replied", sourceRunId: input.runId, targetAgentId: peer.id }]);
     expect(events.some(event => event.type === "tool.result" && !event.isError)).toBe(true);
     expect(getDatabase().prepare("SELECT COUNT(*) AS n FROM harness_workspace_leases").get()).toEqual({ n: 0 });
+    expect(fs.readFileSync(path.join(input.workspacePath, "layout.txt"), "utf8")).toBe("COMPACT_LAYOUT_REFERENCE");
+    const peerRunId = listConsultations(input.conversationId)[0].targetRunId!;
+    const executions = getDatabase().prepare("SELECT run_id,started_at,finished_at,status FROM harness_executions WHERE run_id IN (?,?) ORDER BY started_at").all(input.runId, peerRunId) as Array<{ run_id: string; started_at: number; finished_at: number | null; status: string }>;
+    expect(executions).toHaveLength(2);
+    const sourceReceipt = executions.find(execution => execution.run_id === input.runId)!;
+    const peerReceipt = executions.find(execution => execution.run_id !== input.runId)!;
+    expect(peerReceipt.status).toBe("complete");
+    expect(sourceReceipt.finished_at!).toBeGreaterThanOrEqual(peerReceipt.finished_at!);
     updateRunStatus(input.runId, "complete", null, Date.now());
   }, process.platform === "win32" ? 120000 : 60000);
 
@@ -482,7 +498,7 @@ describe("pinned real Pi process with deterministic model fixtures", () => {
           { id: "produce", agentId: producerId, title: "Fixture document", prompt: "Write the requested document.", expectedOutputs: [{ id: "fixture_doc", type: "document", required: true }] },
           { id: "audit", agentId: reviewerId, title: "Fixture audit", prompt: "Read the upstream document and write an audit.", dependsOn: ["produce"], inputs: [{ fromTaskId: "produce", outputId: "fixture_doc", required: true }], expectedOutputs: [{ id: "fixture_audit", type: "document", required: true }] },
         ] }, "fixture-plan");
-      } else if (tools.includes("report_task_result")) {
+      } else if (messages.includes("PI_FIXTURE_PRODUCER") || messages.includes("PI_FIXTURE_AUDITOR")) {
         const review = messages.includes("PI_FIXTURE_AUDITOR");
         const stage = review ? "audit" : "produce";
         const count = (turns.get(stage) ?? 0) + 1;

@@ -17,7 +17,7 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 | Conductor bounded history and active facts | Implemented; final audit pending | Captured invocation and context budget tests |
 | In-flight follow-up, correction, cancellation and idempotency | Persistent admission, authenticated resolution, native consumption and safe replacement implemented; final audit pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
 | Bounded peer consultation | Core implemented; policy and final audit pending | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
-| Adaptive plans and explicit dependency contracts | Discussion admission is enforced by a closed read-only tool profile; contract audit pending | Discussion without writes, simple task promotion, DAG regression tests |
+| Adaptive plans and explicit dependency contracts | Discussion intent changes instructions, not the Agent tool surface; contract audit pending | Full-tool discussion without unwanted implementation, simple task promotion, DAG regression tests |
 | Handoff integration | Pi task-boundary and failed-task takeover implemented; final integration audit pending | Stable task identity, new attempt/context, confirmed old-run teardown |
 | UI and channel state projections | Browser smoke passed; deterministic Feishu projection passed; live Feishu unverified | Reload recovery, recipient and status inspection, shared semantic IDs |
 | Verification and review | Production webpack build and native Pi checks passed; final review/full CI audit pending | Full checks, real Pi consultation smoke, review findings addressed |
@@ -31,9 +31,14 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 - Historical conversation is reference material. Current task contracts and
   active facts take precedence. Histories are bounded, and mandatory context
   overflow is an error rather than silent loss of constraints.
-- Discussion/consultation must not need an exclusive mutable workspace. Any
-  access to files during concurrent execution needs stable, versioned inputs;
-  do not simply exempt native filesystem tools from lease ownership.
+- All Agents receive the full workspace tool surface, including during discussion
+  and consultation. Historical tool selections do not authorize or limit runs.
+  Discussion intent is an instruction, not a security guarantee that writes are
+  impossible. Existing command/file/plan approvals remain separate controls.
+- Full-tool calls acquire the workspace lease. A source synchronously awaiting
+  consultation pauses its bridge and temporarily lends that lease to the peer.
+  It resumes only after the peer confirms native teardown. Nested borrowing,
+  outstanding source tools, stale receipts and uncertain cleanup fail closed.
 - New communications are recorded independently of Pi's native session. Record
   recovery is not a promise of lossless process/session recovery.
 
@@ -43,7 +48,7 @@ The issue checklist remains authoritative. Do not close #76 or merge a PR on
 the strength of only the first two continuity fixes. Live Feishu validation, if
 unavailable, must be reported separately from deterministic projection tests.
 
-## Verification Log
+## Historical Verification Log (Before Full-Access Integration)
 
 - Initial continuity/access/consultation/store selection: 133 tests passed.
 - Real pinned Pi subprocess source-to-peer consultation: passed with a
@@ -76,7 +81,7 @@ unavailable, must be reported separately from deterministic projection tests.
 3. Run fresh full checks and production build, review the entire change, address
    findings, then open the PR and require passing CI before merge.
 
-## Native Follow-Up Contract Checkpoint
+## Native Follow-Up Contract Checkpoint (Historical)
 
 - Pi 0.84.2's installed RPC source and real subprocess tests confirm both steer
   and follow_up enqueue successfully before consumption. The control registry
@@ -99,7 +104,7 @@ unavailable, must be reported separately from deterministic projection tests.
   message order and avoids a duplicate optimistic bubble after acceptance.
 - A bounded, tool-free Pi classification chooses discussion, execution, progress,
   supplement, correction, cancellation or clarification. Explicit human controls
-  bypass classification, but discussion-only corrections still remove write access.
+  bypass classification. Discussion changes the workflow instructions, not tool availability.
 - Input delivery is separate from task outcome: queued input becomes applied only
   on native consumption, and a later task failure does not rewrite that receipt.
 - Mutable corrections await actual owner promises and native teardown receipts,
@@ -195,3 +200,39 @@ unavailable, must be reported separately from deterministic projection tests.
    must exercise the symlink security tests without weakening or skipping them.
 3. Finish the complete diff review, commit final fixes, open/attach the PR, inspect
    all required checks and review feedback, and merge only after those gates pass.
+
+## Full-Access Integration Update
+
+The latest human direction supersedes the earlier closed discussion profile.
+Ordinary discussion and peer invocations retain all workspace tools regardless
+of the Agent's stored toolNames. The readonly Agent-editor runtime-tool display
+from current master is preserved; no tool picker is restored. Internal classifier
+and Conductor protocol phases still have purpose-specific manifests, not per-Agent
+capability grants. Every current member may query the same-conversation roster;
+this does not disclose credentials or members outside that conversation.
+Consultation replies remain bound to their admitted peer run.
+
+All full-tool discussions are potential writers. Supplements that cannot be
+consumed safely stop the previous invocation, await actual teardown and compile
+the previous goal plus the latest human update into a fresh invocation. They
+must not silently lose the previous goal on a rejected steering receipt.
+
+Synchronous peer calls use a private lease loan instead of bypassing writer
+ownership or waiting on their blocked source. The source bridge refuses new
+tools during the loan; existing native admissions and in-flight business tools
+prevent lending. A peer keeps the normal full-access path and approval policy.
+Its exit receipt returns ownership; missing cleanup poisons the durable lease.
+Peer file mutations also participate in the task's wave-conflict checks with
+their actual Agent/run provenance. A monotonic write order preserves the real
+last writer if the source resumes after its peer. Peer opinions are not promoted
+to task completion or attributed to the source's verification evidence.
+
+Earlier read-only-profile test and browser results above are historical, not
+evidence for this final policy. Updated native, browser and full-suite checks
+remain required before opening and merging the PR.
+
+Focused checks after the full-access integration: 101 tests passed, including
+real pinned-Pi discussion/consultation, adaptive single-task implementation and
+active task handoff. Lease/bridge tests additionally cover source admission
+while a peer runs, refusal to lend with unfinished native calls, unconfirmed
+peer teardown and restored ownership. Final full-suite and build gates remain.

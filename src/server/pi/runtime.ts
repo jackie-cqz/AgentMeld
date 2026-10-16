@@ -43,11 +43,13 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
     effective.throwIfAborted();
     if (input.accessMode !== "conversation") {
       input.onStage?.("queued");
-      lease = await acquirePiWorkspace(input.workspacePath, effective);
+      lease = input.workspaceLease ?? await acquirePiWorkspace(input.workspacePath, effective);
+      if (fs.realpathSync.native(lease.workspacePath) !== input.workspacePath) throw new PiRuntimeError("Peer handoff belongs to a different workspace.", "workspace_ownership");
+      lease.assertActive();
     }
     input.onStage?.("running");
     execution = preparePiInvocation(input);
-    bridge = await createPiBridge(input, effective, () => budget.abort());
+    bridge = await createPiBridge(input, effective, () => budget.abort(), lease);
     Object.assign(execution.env, { AGENTMELD_PI_BRIDGE_URL: bridge.url, AGENTMELD_PI_BRIDGE_TOKEN: bridge.token });
     const tools = [...bridge.native, ...bridge.businessNames];
     child = new PiProcess({ cliPath: execution.cliPath, cwd: input.workspacePath, env: execution.env, args: [
@@ -119,6 +121,7 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
           }
         }
       } else if (record.type === "agent_settled") {
+        lease?.assertActive();
         if (calls.size) throw new PiRuntimeError("Pi settled with unfinished tool calls.", "protocol");
         if (!projection.committedAssistantMessages) throw new PiRuntimeError("Pi settled without a committed assistant turn.", "empty_response");
         if (input.parentRunId && !getTaskReport(input.runId)) throw new PiRuntimeError("Pi ended without submitting report_task_result for the delegated task.", "missing_task_report");

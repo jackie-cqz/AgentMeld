@@ -7,6 +7,20 @@ import { findMissingCriteria, humanReviewedCriteria } from "@/server/acceptance-
 import type { DispatchTaskIntent } from "@/shared/types";
 import { hasRunningJobs } from "@/server/tools/command-jobs";
 
+/**
+ * Ceiling for `report_task_result.summary`.
+ *
+ * Issue #79 gave every Agent the full Pi toolset, so a verbose full-access Agent
+ * can legitimately report a multi-file change list plus the commands and test
+ * output it verified. The previous 2000-character ceiling (roughly 500 tokens)
+ * rejected one such report outright in a benchmark run and cost the attempt.
+ * 8000 characters is 4x the old ceiling and about 2000 tokens: enough for a
+ * detailed summary, still small enough that the Conductor's aggregate prompt
+ * (which embeds one summary per task) stays well inside the model window for a
+ * realistic DAG. `min(1)` and the rest of the report contract are unchanged.
+ */
+export const REPORT_SUMMARY_MAX_LENGTH = 8000;
+
 // ---------------------------------------------------------------------------
 // plan_tasks
 // ---------------------------------------------------------------------------
@@ -188,7 +202,8 @@ export const reportTaskResultTool: ToolDef = {
       },
       summary: {
         type: "string",
-        description: "Concise summary of what was accomplished or why it failed."
+        maxLength: REPORT_SUMMARY_MAX_LENGTH,
+        description: `Summary of what was accomplished or why it failed. Up to ${REPORT_SUMMARY_MAX_LENGTH} characters.`
       },
       acceptanceResults: {
         type: "array",
@@ -396,7 +411,7 @@ export const planArgsSchema = z.object({
 
 export const reportSchema = z.object({
   status: z.enum(["complete", "failed", "blocked"]),
-  summary: z.string().min(1).max(2000),
+  summary: z.string().min(1).max(REPORT_SUMMARY_MAX_LENGTH),
   acceptanceResults: z
     .array(z.object({ criterion: z.string(), passed: z.boolean(), evidence: z.string() }))
     .optional(),

@@ -27,6 +27,7 @@ import {
 } from "@/server/repositories";
 import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
+import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
 import { resolveMessageRecipients } from "@/shared/collaboration-routing";
 import { listConsultations } from "@/server/collaboration/consultations";
@@ -50,6 +51,9 @@ interface BootstrapPayload {
   collaborationTurnsByConversation: Record<string, ReturnType<typeof publicCollaborationTurns>>;
   handoffsByConversation: Record<string, ReturnType<typeof listHandoffs>>;
   dispatchesByRunId: ReturnType<typeof persistedDispatches>;
+  /** The real per-run toolset (provisionedPlatformToolNames), served so the UI
+   *  never has to reconstruct capability from the stored `agent.toolNames`. */
+  provisionedToolNames: string[];
 }
 
 interface CreateConversationInput {
@@ -107,7 +111,8 @@ export function getBootstrapPayload(): BootstrapPayload {
     pendingWrites: getAllPendingWrites(),
     pendingBashCommands: getAllPendingBashCommands(),
     pendingDispatchPlans: getAllPendingPlans(),
-    pendingQuestions: getAllPendingQuestions()
+    pendingQuestions: getAllPendingQuestions(),
+    provisionedToolNames: provisionedPlatformToolNames()
   };
 }
 
