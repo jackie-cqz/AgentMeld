@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
-import { createConversation, sendMessage } from "@/server/conversation-service";
+import { createConversation } from "@/server/conversation-service";
 import {
   buildCompactionPrompt,
   buildHistoryFor,
@@ -66,11 +66,12 @@ describe("conversation-context — buildHistoryFor", () => {
       now: now - 1000
     });
 
-    // Send a new trigger message (excluded)
-    const result = await sendMessage({ origin: "human", conversationId: conv.id, content: "trigger" });
+    // History selection does not need to start an unrelated model invocation.
+    const trigger = createMessage({ id: newMessageId(), conversationId: conv.id, role: "user", origin: "human",
+      parts: [{ type: "text", content: "trigger" }], status: "complete", now });
 
     const history = await buildHistoryFor("ag_mock_builder", conv.id, {
-      excludeMessageId: result.message.id
+      excludeMessageId: trigger.id
     });
 
     expect(history.length).toBe(2);

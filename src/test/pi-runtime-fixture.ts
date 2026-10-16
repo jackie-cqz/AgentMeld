@@ -14,3 +14,13 @@ export async function* fixturePiInvocation(input: PiInvocationInput, signal: Abo
   yield { ...base, type: "part.end" };
   yield { type: "run.usage", conversationId: input.conversationId, timestamp: Date.now(), runId: input.runId, usage: { modelId: "fixture", inputTokens: 1, outputTokens: 1 } };
 }
+
+/** Drain fixture-owned runs before their test closes or replaces the database. */
+export async function stopFixtureRuns(): Promise<void> {
+  const { getDatabase } = await import("@/db/client");
+  const { abortRun, isRunActive, waitForRunTreeStop } = await import("@/server/agent-runner");
+  const runs = (getDatabase().prepare("SELECT id FROM agent_runs").all() as Array<{ id: string }>).filter(run => isRunActive(run.id));
+  for (const run of runs) abortRun(run.id);
+  const signal = AbortSignal.timeout(5000);
+  for (const run of runs) await waitForRunTreeStop(run.id, signal);
+}

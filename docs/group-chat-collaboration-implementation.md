@@ -13,14 +13,14 @@ real Pi integration verification, UI inspection, review, and a merged PR.
 
 | Area | Status | Required Evidence |
 | --- | --- | --- |
-| Recipient precedence and reply membership | Implemented; final audit pending | Shared resolver, ingress and composer integration, rejection tests |
-| Conductor bounded history and active facts | Implemented; final audit pending | Captured invocation and context budget tests |
-| In-flight follow-up, correction, cancellation and idempotency | Persistent admission, authenticated resolution, native consumption and safe replacement implemented; final audit pending | Persisted state machine, Pi contract tests, no duplicate writer tests |
-| Bounded peer consultation | Core implemented; policy and final audit pending | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
-| Adaptive plans and explicit dependency contracts | Discussion intent changes instructions, not the Agent tool surface; contract audit pending | Full-tool discussion without unwanted implementation, simple task promotion, DAG regression tests |
-| Handoff integration | Pi task-boundary and failed-task takeover implemented; final integration audit pending | Stable task identity, new attempt/context, confirmed old-run teardown |
+| Recipient precedence and reply membership | Locally verified | Shared resolver, ingress and composer integration, rejection tests |
+| Conductor bounded history and active facts | Locally verified | Captured invocation and context budget tests |
+| In-flight follow-up, correction, cancellation and idempotency | Locally verified | Persisted state machine, Pi contract tests, no duplicate writer tests |
+| Bounded peer consultation | Locally verified with the full toolset | Authorization, limits, lifecycle, no echo loops, real Pi lease test |
+| Adaptive plans and explicit dependency contracts | Locally verified; discussion changes instructions, not the tool surface | Full-tool discussion without unwanted implementation, simple task promotion, DAG regression tests |
+| Handoff integration | Locally verified for Pi task-boundary and failed-task takeover | Stable task identity, new attempt/context, confirmed old-run teardown |
 | UI and channel state projections | Browser smoke passed; deterministic Feishu projection passed; live Feishu unverified | Reload recovery, recipient and status inspection, shared semantic IDs |
-| Verification and review | Production webpack build and native Pi checks passed; final review/full CI audit pending | Full checks, real Pi consultation smoke, review findings addressed |
+| Verification and review | Local review and verification complete; normal-checkout CI pending | Full checks, real Pi consultation smoke, review findings addressed |
 | PR and merge | Pending | Required checks and verified merged PR |
 
 ## Architecture Decisions
@@ -191,15 +191,12 @@ unavailable, must be reported separately from deterministic projection tests.
 
 ## Final Gates Still Open
 
-1. Finish the issue checklist audit, including a scoped single-task implementation
-   versus the existing delivery contracts, late-result/teardown cases and budget
-   boundaries. Do not assume that a successful discussion proves delivery behavior.
-2. Run the final revision's full suite and production build in a normal checkout.
-   Local full run has 1,894 passing tests and seven Windows symlink EPERM failures;
-   isolated webpack and Turbopack builds pass with the caveats above. Required Linux CI
-   must exercise the symlink security tests without weakening or skipping them.
-3. Finish the complete diff review, commit final fixes, open/attach the PR, inspect
-   all required checks and review feedback, and merge only after those gates pass.
+1. Run the final revision's full suite and production build in a normal CI checkout.
+   The latest local full run has 1,901 passing tests and seven Windows symlink
+   EPERM failures. Linux CI must exercise those unchanged security assertions.
+2. Open and attach the PR, inspect every check and review thread at the exact head
+   revision, and merge only after those gates pass. Local review is complete;
+   external CI is not implied by the local result.
 
 ## Full-Access Integration Update
 
@@ -252,3 +249,40 @@ peer teardown and restored ownership. Final full-suite and build gates remain.
 - Consultation context carries the authenticated human request directly; the
   source Agent's question cannot silently replace the human's "do not modify"
   instruction. Final full-suite rerun and Linux CI remain required.
+
+## Final Local Acceptance Audit
+
+| Requirement | Evidence Inspected |
+| --- | --- |
+| Explicit mentions, reply continuity, multi-recipient semantics and cross-conversation rejection | collaboration-routing.test.ts; conversation-service.test.ts; composer recipient projection |
+| Bounded preceding history, summaries, pins and active facts in the actual Conductor call | conversation-context.test.ts; conductor-context.test.ts; packet.test.ts; mandatory-overflow and future-summary tests |
+| Human intent, progress without duplicate execution, confirmation, correction and cancellation | turn-admission.test.ts; authenticated collaboration-routes.test.ts; native runtime supplement/replacement test |
+| Persistent identities, idempotent submission and applied-versus-queued receipts | message-submissions.ts; turn and store regressions; controls.test.ts and both real native RPC consumption tests |
+| Bounded peer exchange, refusal, expiry, cancellation, replay, trusted lineage and no recursion | consultations.test.ts; bridge.test.ts; workspace-lease.test.ts; full-tool real Pi peer reading the workspace |
+| No automatic implementation from a discussion request | Real Pi group-discussion fixture emits no plan/artifact/write; full-tool manifests are asserted rather than restricted |
+| Simple implementation versus real multi-stage DAG delivery | Real Pi selected-option test uses one task; dependent two-Agent pipeline verifies artifacts, bindings and aggregation |
+| Stable task identity, fresh attempts, stop receipts, stale-package rejection and failed takeover | handoffs.test.ts; real Pi takeover checks source finish before receiver start; immutable context IDs and no oral-success bypass |
+| Refresh and restart projection without silently resuming old processes | handoff recovery tests; SSE/bootstrap stores; persistedDispatches; actual browser reload after verified takeover |
+| UI recipients, delivery state, waiting/approval/consultation/handoff progress and expandable details | Inspected desktop/mobile/sidebar screenshots and actual browser discussion/accept/reload actions |
+| File Auto/Review separate from plan and command approval | Existing native-write pending approval tests, approval routes and explicit Auto tooltip; no global approval bypass added |
+| Shared channel semantics without bot echo escalation | Feishu projection, isolation and loop-bound tests; live Feishu remains explicitly unverified |
+
+The final local full run on c5d4f44 completed with 1,901 passed, seven failed
+(all OS symlink EPERM prerequisites), and three skipped. Subsequent test-only
+cleanup removes unintended model runs from history/API/mutation unit tests and
+awaits owned fixture teardown before closing their database; all 49 tests in
+those four suites pass. Real native integration remains in runtime.test.ts and
+is not replaced by the lifecycle substitute. TypeScript passes and the last
+full ESLint run has zero errors and 45 pre-existing warnings.
+
+Review findings addressed include stale source-attempt replay, latest-plan
+ordering, monotonic handoff versions, restoration of progress after refresh,
+lost prior goals after rejected steering, full-tool lease loans, actual peer
+write provenance and direct human constraints in the consultation packet.
+No remaining blocking issue was found in the changed paths during local review.
+
+This full-access runtime is not an OS sandbox. Lease and bridge controls govern
+platform-managed execution; arbitrary shell code and external processes are not
+claimed to be isolated from the host. Discussion-only intent is instruction-
+following, not an authorization boundary. Cross-harness transfer, native-session
+lossless recovery and live Feishu certification are not claimed by this change.

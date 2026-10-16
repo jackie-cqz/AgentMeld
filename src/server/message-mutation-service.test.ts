@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/server/pi/runtime", async () => ({ runPiInvocation: (await import("@/test/pi-runtime-fixture")).fixturePiInvocation }));
+import { stopFixtureRuns } from "@/test/pi-runtime-fixture";
 import { setupTestDatabase } from "@/test/test-database";
 import { createConversation, sendMessage } from "@/server/conversation-service";
 import { eventBus } from "@/server/event-bus";
@@ -20,7 +22,8 @@ beforeEach(() => {
   eventBus.clearForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await stopFixtureRuns();
   clearPendingBashForTests();
   eventBus.clearForTests();
 });
