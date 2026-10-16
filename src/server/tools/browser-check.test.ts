@@ -15,9 +15,21 @@ afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 const browserAvailable = fs.existsSync(process.env.AGENTMELD_BROWSER_EXECUTABLE_PATH || chromium.executablePath()) || (process.platform === "win32" && fs.existsSync("C:/Program Files/Google/Chrome/Application/chrome.exe"));
 
 describe("isolated browser verification", () => {
-  it("rejects arbitrary URLs, escaped roots and malformed interactions", async () => {
-    for (const args of [{ path: "http://127.0.0.1:3018" }, { path: ".." }, { steps: [{ action: "evaluate", value: "alert(1)" }] }]) expect((await browserCheckTool.handler(args, ctx)).ok).toBe(false);
+  it("rejects arbitrary URLs and malformed interactions", async () => {
+    for (const args of [{ path: "http://127.0.0.1:3018" }, { steps: [{ action: "evaluate", value: "alert(1)" }] }]) expect((await browserCheckTool.handler(args, ctx)).ok).toBe(false);
     expect(() => browserScreenshotPath("../../.env")).toThrow();
+  });
+  it("admits a static app directory that resolves outside the workspace (issue #79 full access)", async () => {
+    // `..`/an absolute path is resolved and served, not refused as containment.
+    // Whether Chromium is installed here is irrelevant: the call must at least
+    // get past path resolution, so a failure may not be a containment error.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "agentmeld-browser-outside-"));
+    try {
+      fs.writeFileSync(path.join(outside, "index.html"), "<h1>outside</h1>");
+      const result = await browserCheckTool.handler({ path: outside }, ctx);
+      if (result.ok) expect((result.value as { sourcePath: string }).sourcePath).toBe(outside);
+      else expect(result.error).not.toMatch(/escapes the workspace|outside the workspace/i);
+    } finally { fs.rmSync(outside, { recursive: true, force: true }); }
   });
   it.runIf(browserAvailable)("verifies add/reload persistence on desktop and mobile with screenshots", async () => {
     fs.writeFileSync(path.join(root, "index.html"), `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Checklist</title></head><body><h1>Checklist</h1><input id="task" aria-label="Task"><button id="add">Add</button><ul id="items"></ul><script>

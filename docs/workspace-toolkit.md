@@ -14,6 +14,8 @@ AgentMeld exposes these tools to every Pi-backed Agent. They are not gated by a 
 
 The read and search tools are Pi-native (`read`, `grep`, `find`), so their filtering and ignore behavior is Pi's behavior, not the retired platform tools'. They do not deny credential files or `.git` internals, and they are not confined to the workspace: `read` can open a real `.env`. The native `write` and `edit` tools behave the same way: a relative path resolves against the workspace root, but a path that leaves the workspace (`..`, an absolute path, or a symlinked-out directory) is resolved rather than refused. What still applies to a change is the file-size limit, workspace-quota accounting, the review/approval mode and evidence recording. Credential handling is therefore an operator responsibility rather than a tool guarantee. This is a capability description, not an OS-level sandbox for arbitrary project code.
 
+`fs_mkdir` is the one platform filesystem handler an Agent can still reach: Pi has no native `mkdir`, so it stays a registered extension tool (unlike `fs_read` / `fs_write` / `fs_patch` / `fs_list`, which the bridge serves with Pi-native tools and never routes to their platform handlers). It resolves its path the same way the native tools do and is not confined to the workspace either.
+
 Arguments are Pi's native arguments, not the retired platform schemas: `read` uses `offset` and `limit`, `grep` takes a `pattern`, and `edit` takes a `path` plus `oldText`/`newText` pairs. `startLine`, `includeLineNumbers`, `hasMore`, `nextStartLine`, `nextStartColumn`, `contentHash` and `replaceAll` are not native arguments. Pi computes the edit itself, and the platform records the resulting file change as evidence. Re-read after another writer changes a file.
 
 ```json
@@ -59,11 +61,11 @@ Proxy fake-IP DNS (often `198.18.0.0/15`) is intentionally rejected as reserved 
 
 `git_inspect` accepts `action: status | diff | log`, a repository-directory `path`, optional `staged` for diff and `limit` for log. It uses fixed argv, bounded output/time, and disables hooks, fsmonitor, external diff, textconv, signatures, prompts and global/system Git config. It never stages, commits, resets, checks out or pushes.
 
-The repository must have a physical `.git` directory inside the workspace. Host repositories above a generated workspace, symlinked repositories and linked external worktrees are rejected. Repository config includes are not supported, and external attributes/ignore files are disabled. Linked-worktree support would need explicit repository ownership authorization; it is not implied by a path string.
+The repository must have a physical `.git` directory inside the workspace. Host repositories above a generated workspace, symlinked repositories and linked external worktrees are rejected. The inspected directory `path` is resolved as given and is not refused for leaving the workspace; the workspace-owned-repository rule is the tool's definition (its search is clamped to the workspace root and its report is workspace-relative), not a per-Agent capability grant. Repository config includes are not supported, and external attributes/ignore files are disabled. Linked-worktree support would need explicit repository ownership authorization; it is not implied by a path string.
 
 ## Static Web App Acceptance
 
-`browser_check` serves a workspace directory containing `index.html` temporarily, launches a fresh headless Chromium context, runs explicit interactions, and returns a screenshot plus console/page/network errors. No arbitrary target URL, shell command, JavaScript evaluation or existing browser profile is accepted.
+`browser_check` serves a directory containing `index.html` temporarily, launches a fresh headless Chromium context, runs explicit interactions, and returns a screenshot plus console/page/network errors. The directory is resolved as given and is not confined to the workspace; the temporary server itself still serves only that directory. No arbitrary target URL, shell command, JavaScript evaluation or existing browser profile is accepted.
 
 Install a browser with `pnpm exec playwright install chromium`, or configure `AGENTMELD_BROWSER_EXECUTABLE_PATH` to an installed Chrome/Chromium executable. Windows detects standard Chrome automatically. Browser binaries are not downloaded during a tool call.
 

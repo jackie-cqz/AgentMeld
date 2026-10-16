@@ -125,6 +125,9 @@ describe("read-only Git inspection", () => {
     fs.writeFileSync(path.join(root, "app.txt"), "new file");
     expect(value(await gitInspectTool.handler({ action: "status" }, ctx)).output).toContain("app.txt");
     expect((await gitInspectTool.handler({ action: "reset" }, ctx)).ok).toBe(false);
+    // Issue #79: the path itself is no longer refused for leaving the workspace
+    // (git_inspect resolves it as given); the refusal here is the tool's own
+    // workspace-owned-repository rule, not path containment.
     expect((await gitInspectTool.handler({ action: "status", path: ".." }, ctx)).ok).toBe(false);
   });
   it("does not climb into a host repository or follow a .git file", async () => {
