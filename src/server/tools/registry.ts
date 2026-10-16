@@ -50,10 +50,9 @@ export class ToolRegistry {
     if (!tool) {
       return { ok: false, error: `Unknown tool: ${name}` };
     }
-    if (ctx.allowedToolNames && !ctx.allowedToolNames.includes(name)) {
-      return this.recordPreflightFailure(name, args, "Tool not authorized for this Agent run.", ctx,
-        meta ?? { callId: `denied_${ctx.runId}_${Date.now()}` }, { code: "TOOL_PERMISSION_DENIED", category: "security_policy" });
-    }
+    // No per-Agent authorization gate here (issue #79): capability is open, so
+    // every registered tool is callable by every Agent. Evidence, approvals and
+    // workspace guards are unaffected and still run inside the handlers.
 
     const startedAt = Date.now();
     let result: ToolResult;

@@ -30,8 +30,11 @@ export interface NativeAdmission {
 
 /** Authorize immediately before the native tool runs, without executing the tool ourselves. */
 export async function authorizeNativeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<NativeAdmission> {
+  // Capability is open (issue #79): the only name this rejects is one the
+  // platform has no native mapping for, which means the bridge received a call
+  // it never provisioned. There is deliberately no per-Agent tool whitelist.
   const platformName = PI_NATIVE_TO_PLATFORM[name];
-  if (!platformName || !ctx.allowedToolNames?.includes(platformName)) throw new Error("Native tool is not authorized for this Agent.");
+  if (!platformName) throw new Error(`Unknown Pi native tool: ${name}.`);
   ctx.abortSignal.throwIfAborted();
   const admission: NativeAdmission = { name, args, startedAt: Date.now() };
   if (name === "bash") {

@@ -9,11 +9,12 @@ import { newRunId } from "@/shared/ids";
 import { getAllPendingWrites, approvePendingWrite } from "@/server/pending-writes";
 import { setTimeout as delay } from "node:timers/promises";
 import { createPiBridge } from "./bridge";
+import { provisionedPlatformToolNames } from "./tool-surface";
 
 const bridges: Array<Awaited<ReturnType<typeof createPiBridge>>> = [];
 afterEach(async () => { await Promise.all(bridges.splice(0).map(bridge => bridge.close())); });
-async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}) {
-  const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: toolNames.filter(name => name !== "report_task_result") });
+async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = () => {}, agentGrants: string[] = toolNames) {
+  const agent = createAgent({ name: "Bridge test", adapterName: "pi", modelId: "fixture", toolNames: agentGrants.filter(name => name !== "report_task_result") });
   const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   const runId = newRunId();
@@ -24,17 +25,44 @@ async function fixture(toolNames: string[] = ["fs_write"], onBudgetExceeded = ()
 }
 
 describe("private Pi bridge admission", () => {
-  it("rejects missing credentials, unknown capabilities and call ID replay", async () => {
+  it("rejects missing credentials, unmapped native names and call ID replay", async () => {
     const { post } = await fixture();
     expect((await post("/native/authorize", { callId: "missing", name: "write", args: {} }, "wrong")).status).toBe(403);
-    expect((await post("/tool", { callId: "unknown", name: "deploy_workspace", args: {} })).status).toBe(403);
-    expect((await post("/native/authorize", { callId: "unknown", name: "write", args: { path: "a" } })).status).toBe(400);
+    // There is no native mapping for this name, so there is nothing to run.
+    expect((await post("/native/authorize", { callId: "no_mapping", name: "not_a_native_tool", args: {} })).status).toBe(400);
+    // Replay/dedup protection stays: a consumed call ID cannot be admitted twice.
+    expect((await post("/native/authorize", { callId: "replay", name: "write", args: { path: "a.txt" } })).status).toBe(200);
+    expect((await post("/native/authorize", { callId: "replay", name: "write", args: { path: "a.txt" } })).status).toBe(400);
   });
-  it("rejects path traversal and ungranted native tools", async () => {
+
+  it("still scopes platform-internal business tools to what was provisioned", async () => {
+    // The bridge is a faithful provisioner: it executes only the business tools
+    // this invocation listed. An Agent run lists everything (see the tests
+    // below); the Conductor's PLAN stage deliberately lists a narrow set.
+    const { post } = await fixture();
+    expect((await post("/tool", { callId: "unprovisioned", name: "deploy_workspace", args: {} })).status).toBe(403);
+  });
+
+  it("provisions an Agent with no stored grants with the whole Pi toolset", async () => {
+    // Issue #79: agent-runner provisions every Agent run with
+    // provisionedPlatformToolNames(), whatever the Agent record says. Here the
+    // Agent has NO grants at all, yet native and business tools are admitted.
+    const provisioned = provisionedPlatformToolNames();
+    expect(provisioned).toEqual(expect.arrayContaining(["fs_read", "fs_write", "fs_patch", "bash", "read_artifact", "write_artifact", "deploy_workspace", "web_fetch", "browser_check"]));
+    // The retired job_* kernel and the Conductor's PLAN protocol tool are not
+    // Agent capabilities; the PLAN stage provisions plan_tasks for itself.
+    expect(provisioned).not.toContain("job_start");
+    expect(provisioned).not.toContain("plan_tasks");
+    const { post } = await fixture(provisioned, () => {}, []);
+    expect((await post("/native/authorize", { callId: "write", name: "write", args: { path: "granted.txt" } })).status).toBe(200);
+    expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "mkdir -p src && cat > src/App.css" } })).status).toBe(200);
+    expect((await post("/tool", { callId: "artifact", name: "read_artifact", args: { artifactId: "art_missing" } })).status).toBe(200);
+  });
+
+  it("rejects path traversal through a native tool", async () => {
     const { post, bridge } = await fixture();
     expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(400);
     expect(bridge.result("escape")?.ok).toBe(false);
-    expect((await post("/native/authorize", { callId: "shell", name: "bash", args: { command: "npm test" } })).status).toBe(400);
   });
   it("rejects writes through a directory link outside the workspace", async () => {
     const { post, workspace } = await fixture();

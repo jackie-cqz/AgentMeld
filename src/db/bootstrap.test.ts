@@ -268,10 +268,12 @@ describe("database bootstrap", () => {
     expect(row.system_prompt).toContain("如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace");
     expect(row.system_prompt).toContain("精确覆盖目标文件");
     expect(row.system_prompt).toContain("不要用 Remove-Item / rm -rf / rmdir / find -delete");
-    expect(row.system_prompt).toContain("已有源码文件的局部修改必须使用 fs_patch");
-    expect(row.system_prompt).toContain("只有新建文件或用户明确要求完整覆盖时才使用 fs_write");
-    expect(row.system_prompt).toContain("局部修改优先使用 fs_patch");
-    expect(row.system_prompt).toContain("bash 只用于");
+    // W1/W2 (issue #79): the shell prohibition was rewritten out of stored
+    // prompts. Assert the new permission AND the absence of the old rule — the
+    // absence is the regression that mattered (18 blocked attempts).
+    expect(row.system_prompt).toContain("修改已有源码优先用 fs_patch，也可以直接用 fs_write 或 bash");
+    expect(row.system_prompt).not.toContain("不要用 bash / PowerShell / sed");
+    expect(row.system_prompt).not.toContain("bash 只用于两类命令");
     expect(row.system_prompt).toContain("不得声称“部署成功 / 已重新部署成功”");
     expect(row.system_prompt).not.toContain("当 workspace_info mode=local");
   });
@@ -303,7 +305,7 @@ describe("database bootstrap", () => {
     expect(JSON.parse(row.tool_names)).toContain("write_artifact");
   });
 
-  it("adds bash verification-only policy to already hardened frontend prompts", () => {
+  it("inserts the full-access shell policy into already hardened frontend prompts", () => {
     ensureDatabase();
     const partiallyHardenedPrompt = [
       "你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。",
@@ -326,9 +328,51 @@ describe("database bootstrap", () => {
       .get("ag_mock_builder") as { system_prompt: string };
 
     expect(row.system_prompt).toContain("精确覆盖目标文件");
-    expect(row.system_prompt).toContain("已有源码文件的局部修改必须使用 fs_patch");
-    expect(row.system_prompt).toContain("目录查看用 fs_list，文件读取用 fs_read");
+    expect(row.system_prompt).toContain("修改已有源码优先用 fs_patch，也可以直接用 fs_write 或 bash");
+    expect(row.system_prompt).not.toContain("不要用 bash / PowerShell / sed");
     expect(row.system_prompt).toContain("创建项目时禁止使用 pnpm install");
+  });
+
+  it("rewrites the verification-only shell sentences already stored by a migrated database", () => {
+    ensureDatabase();
+    // issue #79 (W2): this is what an ALREADY-MIGRATED database holds — the
+    // migrations are additive and idempotent, so the fs_patch/fs_write
+    // prohibition, the fs_mkdir-only directory rule and the real built-in
+    // sentence "bash 只用于验证命令和经过审批的依赖安装。" survive every boot.
+    // They are the documented cause of the benchmark's 18 blocked
+    // mkdir/cat >/sed calls, so the migration must rewrite them in place.
+    const storedPrompt = [
+      "你是前端工程师，可以直接修改本地 workspace 项目，也可以创建可预览网页产物。",
+      "",
+      "工作方式：",
+      "- 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 workspace-confined 还是 host-access，都优先使用 fs_list / fs_mkdir / fs_read / fs_write / fs_patch / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。",
+      "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。",
+      "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。",
+      "- bash 只用于验证命令和经过审批的依赖安装。AgentMeld 管理的 workspace 位于宿主项目目录内，创建项目时禁止使用 pnpm install/add/remove/update/ci。",
+      "- bash 命令必须遵循 <runtime_platform> 中注入的当前系统与 shell 规则。"
+    ].join("\n");
+
+    getDatabase()
+      .prepare("UPDATE agents SET system_prompt = ? WHERE id = ?")
+      .run(storedPrompt, "ag_mock_builder");
+
+    resetBootstrapForTests();
+    ensureDatabase();
+
+    const row = getDatabase()
+      .prepare("SELECT system_prompt FROM agents WHERE id = ?")
+      .get("ag_mock_builder") as { system_prompt: string };
+
+    expect(row.system_prompt).toContain("修改已有源码优先用 fs_patch，也可以直接用 fs_write 或 bash");
+    expect(row.system_prompt).toContain("目录创建可用 bash mkdir");
+    expect(row.system_prompt).toContain("AgentMeld 管理的 workspace 位于宿主项目目录内");
+    expect(row.system_prompt).not.toContain("不要用 bash / PowerShell / sed");
+    expect(row.system_prompt).not.toContain("bash 只用于验证命令");
+    expect(row.system_prompt).not.toContain("bash 只用于两类命令");
+    expect(row.system_prompt).not.toContain("目录创建用 fs_mkdir");
+    // Two distinct stored restriction sentences must converge on ONE policy,
+    // not append a second copy next to the rewritten one.
+    expect(row.system_prompt.split("修改已有源码优先用 fs_patch").length - 1).toBe(1);
   });
 
   it("supports inserting an agent run through the repository layer", () => {

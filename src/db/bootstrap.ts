@@ -951,8 +951,13 @@ function hardenLegacyArtifactPromptExamples(prompt: string) {
       "无论 workspace_info mode 是 workspace-confined 还是 host-access"
     );
 
-  return upgradeReviewerArtifactPolicy(
-    upgradeFrontendPatchPolicy(hardenFrontendWorkspaceUpdatePolicy(hardened))
+  // issue #79 (W2): applyFullAccessShellPolicy runs LAST so it rewrites the
+  // stored prohibitions after upgradeFrontendPatchPolicy has normalized the
+  // older variants into the sentence that a real database stores.
+  return applyFullAccessShellPolicy(
+    upgradeReviewerArtifactPolicy(
+      upgradeFrontendPatchPolicy(hardenFrontendWorkspaceUpdatePolicy(hardened))
+    )
   );
 }
 
@@ -974,6 +979,93 @@ function upgradeReviewerArtifactPolicy(prompt: string) {
   );
 }
 
+// issue #79 (W2): the shell is a full development shell. One canonical policy is
+// inserted into prompts that never carried a restriction and rewritten over every
+// historical restriction sentence, so a fresh install and an already-migrated
+// database converge on the same text. Constants keep the rewrite targets and the
+// inserted text from drifting apart again (the previous attempt rewrote a
+// sentence no stored prompt actually contained).
+const FULL_ACCESS_SOURCE_EDIT_POLICY =
+  "- 修改已有源码优先用 fs_patch，也可以直接用 fs_write 或 bash（sed / 重定向 / cat 等）；无论用哪种方式，改动都会被记录，改完请自行验证；bash 不再限定为验证命令，只受资源上限与危险命令拦截约束。";
+const FULL_ACCESS_DIRECTORY_POLICY =
+  "- 目录创建可用 bash mkdir，也可用 fs_mkdir 或直接 fs_write 写目标文件；查看目录用 fs_list 或用 bash ls，读取文件用 fs_read 或 bash cat；依赖安装仍会进入用户审批，审批通过后执行。";
+const FULL_ACCESS_SHELL_POLICY = `${FULL_ACCESS_SOURCE_EDIT_POLICY}\n${FULL_ACCESS_DIRECTORY_POLICY}`;
+
+const LEGACY_SOURCE_EDIT_PROHIBITIONS = [
+  "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。",
+  "源码修改必须使用 fs_write；不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。",
+  "源码修改必须使用 fs_patch 或 fs_write；不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。"
+];
+const LEGACY_DIRECTORY_POLICIES = [
+  "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。",
+  "- 目录查看用 fs_list，文件读取用 fs_read。"
+];
+// Longest first: the plain two-command variant is a prefix of the one that also
+// pins 目录查看/文件读取, so rewriting the short one first would leave a dangling
+// trailing clause.
+const LEGACY_BASH_SCOPE_POLICIES = [
+  "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。目录查看用 fs_list，文件读取用 fs_read。",
+  "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。",
+  "- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。"
+];
+// This is the sentence the BUILT-IN builder prompt actually stores (glued to the
+// managed-workspace package rule), which is why the old migration targeting
+// "bash 只用于两类命令" never matched a real database.
+const LEGACY_BASH_SCOPE_FRAGMENT = "- bash 只用于验证命令和经过审批的依赖安装。";
+
+/**
+ * issue #79 (W2): bash is a full development shell, not a verification-only
+ * escape hatch. The migrations above only ADD text and are idempotent, so an
+ * already-migrated database keeps a stored builder prompt that forbids shell
+ * source edits — the documented cause of the benchmark's 18 blocked
+ * `mkdir`/`cat >`/`sed` calls. This runs LAST in the pipeline so it also rewrites
+ * the prohibition that upgradeFrontendPatchPolicy normalizes first, and it
+ * converges fresh and stored prompts on one canonical policy.
+ */
+function applyFullAccessShellPolicy(prompt: string) {
+  if (!prompt.includes("你是前端工程师")) return prompt;
+
+  let updated = prompt;
+  for (const legacy of LEGACY_SOURCE_EDIT_PROHIBITIONS) {
+    updated = updated.replaceAll(legacy, FULL_ACCESS_SOURCE_EDIT_POLICY);
+  }
+  for (const legacy of LEGACY_BASH_SCOPE_POLICIES) {
+    updated = updated.replaceAll(legacy, FULL_ACCESS_SHELL_POLICY);
+  }
+  for (const legacy of LEGACY_DIRECTORY_POLICIES) {
+    updated = updated.replaceAll(legacy, FULL_ACCESS_DIRECTORY_POLICY);
+  }
+
+  if (!updated.includes("bash 不再限定为验证命令")) {
+    updated = insertPolicyAfterWorkAnchor(updated, FULL_ACCESS_SOURCE_EDIT_POLICY);
+  }
+  if (!updated.includes("目录创建可用 bash mkdir")) {
+    updated = insertPolicyAfterWorkAnchor(updated, FULL_ACCESS_DIRECTORY_POLICY);
+  }
+  // The built-in prompt glues the prohibition to the managed-workspace package
+  // rule in one bullet. The permission is guaranteed present by now, so DROP the
+  // restriction instead of rewriting it — rewriting would duplicate the policy
+  // in a database that stores both the standalone prohibition and this fragment.
+  updated = updated.replaceAll(
+    `${LEGACY_BASH_SCOPE_FRAGMENT}AgentMeld 管理的 workspace`,
+    "- AgentMeld 管理的 workspace"
+  );
+  updated = updated.replaceAll(LEGACY_BASH_SCOPE_FRAGMENT, "");
+  return updated;
+}
+
+function insertPolicyAfterWorkAnchor(prompt: string, text: string) {
+  const anchors = [
+    "都优先使用 fs_list / fs_mkdir / fs_read / fs_write / fs_patch / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。",
+    "都优先使用 fs_list / fs_read / fs_write / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。"
+  ];
+  for (const anchor of anchors) {
+    if (prompt.includes(anchor)) return prompt.replace(anchor, `${anchor}\n${text}`);
+  }
+  if (prompt.includes("工作方式：")) return prompt.replace("工作方式：", `工作方式：\n${text}`);
+  return `${prompt}\n${text}`;
+}
+
 function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   if (!prompt.includes("你是前端工程师")) {
     return prompt;
@@ -984,13 +1076,13 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
     "- 如果旧文件不再使用，默认保留；确实需要替换时直接用 fs_write 覆盖同一路径，或创建新文件并在最终回复里说明遗留文件。";
   const projectChoicePolicy =
     "- 简单单页工具、小游戏、计时器、表单、Dashboard 原型等默认优先使用纯 HTML/CSS/JS 静态实现（index.html + style.css + app.js），除非用户明确要求 React/Next/Vite 或任务复杂到必须组件化。\n" +
-    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。";
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化；可以用 bash mkdir 或 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。";
   const frameworkCompliancePolicy =
     "- 用户、PRD 或当前任务一旦明确指定 React / Vue / Next / Vite 等框架，就必须创建对应的 package.json 和源码结构，安装所需依赖并运行 build。不得用 CDN UMD、浏览器内 Babel 或纯静态脚本冒充框架项目；安装或构建失败时应继续修复，确实无法完成则如实 report_task_result 为 failed/blocked，不能擅自降级技术栈。";
-  const bashVerificationPolicy =
-    "- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。\n" +
-    "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。\n" +
-    "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。";
+  // issue #79 (W2): the shell policy is not inserted here any more — the
+  // canonical full-access text is applied LAST by applyFullAccessShellPolicy so
+  // that stored restrictions get rewritten instead of a second policy being
+  // appended next to them.
   const managedWorkspacePackagePolicy =
     "- AgentMeld 管理的 workspace 位于宿主项目目录内，创建项目时禁止使用 pnpm install/add/remove/update/ci，以免 pnpm 识别宿主 workspace 并修改 AgentMeld 根目录 node_modules；必须使用 npm install / npm ci，验证使用 npm run build/test/lint/typecheck/check。只有绑定到宿主目录之外的独立本地项目时，才可沿用该项目自己的 pnpm/yarn/bun。";
   const runtimeShellPolicy =
@@ -1019,17 +1111,8 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   if (!hardened.includes("精确覆盖目标文件")) {
     hardened = insertAfterAnchor(hardened, safeUpdatePolicy);
   }
-  if (!hardened.includes("bash 只用于")) {
-    hardened = insertAfterAnchor(hardened, bashVerificationPolicy);
-  }
   if (!hardened.includes("创建项目时禁止使用 pnpm install")) {
     hardened = insertAfterAnchor(hardened, managedWorkspacePackagePolicy);
-  }
-  if (!hardened.includes("目录创建用 fs_mkdir")) {
-    hardened = insertAfterAnchor(
-      hardened,
-      "- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。"
-    );
   }
   if (!hardened.includes("<runtime_platform>")) {
     hardened = insertAfterAnchor(hardened, runtimeShellPolicy);
@@ -1037,10 +1120,9 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   if (!hardened.includes("不要再调用 write_artifact 把源码")) {
     hardened = insertAfterAnchor(hardened, workspaceDeployPolicy);
   }
-  hardened = hardened.replaceAll(
-    "- bash 只用于 npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令；目录查看用 fs_list，文件读取用 fs_read。",
-    "- bash 只用于两类命令：npm/pnpm/yarn/bun build/test/lint/typecheck/check 等验证命令，以及 npm/pnpm/yarn/bun/pip/uv 依赖安装或更新命令；依赖安装会进入用户审批，审批通过后才执行。目录查看用 fs_list，文件读取用 fs_read。"
-  );
+  // issue #79 (W2): shell restrictions are rewritten to the full-access policy
+  // by applyFullAccessShellPolicy, which runs LAST so it also catches the
+  // prohibition that upgradeFrontendPatchPolicy normalizes afterwards.
   hardened = hardened.replaceAll(
     "- 只有用户明确要求网页产物、可预览原型、artifact 或独立 demo 时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。",
     "- 只有用户明确要求“单文件网页产物 / artifact / 独立 demo”，且不是当前 workspace 项目的源码实现时，才用 write_artifact 输出，然后调用 deploy_artifact 生成本地预览路径。"
@@ -1059,7 +1141,11 @@ function hardenFrontendWorkspaceUpdatePolicy(prompt: string) {
   );
   hardened = hardened.replaceAll(
     "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init / 依赖安装失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录。改用 fs_mkdir / fs_write 创建必要文件，或降级为纯 HTML/CSS/JS 静态实现。",
-    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。"
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化；可以用 bash mkdir 或 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。"
+  );
+  hardened = hardened.replaceAll(
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。",
+    "- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化；可以用 bash mkdir 或 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。"
   );
 
   return hardened;

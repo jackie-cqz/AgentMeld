@@ -59,8 +59,12 @@ describe("file discovery and paged reads", () => {
     try { fs.writeFileSync(path.join(outside, "secret.txt"), "secret"); fs.symlinkSync(outside, path.join(root, "escape"), process.platform === "win32" ? "junction" : "dir"); expect(() => safeWorkspacePath(root, "escape/secret.txt")).toThrow(/escapes the workspace/); }
     finally { fs.rmSync(path.join(root, "escape"), { force: true, recursive: true }); fs.rmSync(outside, { force: true, recursive: true }); }
   });
-  it("enforces admitted run permissions at registry execution, not just model schema", async () => {
-    expect(await toolRegistry.execute("fs_glob", {}, { ...ctx, allowedToolNames: ["fs_read"] })).toMatchObject({ ok: false, code: "TOOL_PERMISSION_DENIED" });
+  it("allows registry execution without any per-agent grant record", async () => {
+    // Issue #79: the registry no longer consults a tool whitelist, so a run with
+    // no (or partial) stored grants still reaches the tool handler.
+    fs.writeFileSync(path.join(root, "granted.txt"), "no whitelist");
+    const result = await toolRegistry.execute("fs_read", { path: "granted.txt" }, ctx);
+    expect(result.ok, !result.ok ? result.error : "").toBe(true);
   });
 });
 
@@ -91,9 +95,10 @@ describe("run-owned background jobs", () => {
     expect(() => start("process.exit(0)")).toThrow(/limit/); controller.abort();
     expect((await controlCommandJob("wait", one.jobId, 0, 5000, ctx)).status).toBe("cancelled");
   });
-  it("shares the bash source-mutation policy and requires controls", async () => {
-    expect(await jobStartTool.handler({ command: 'Set-Content app.ts "bad"' }, ctx)).toMatchObject({ ok: false, category: "security_policy" });
-    expect(await jobStartTool.handler({ command: "npm run build" }, { ...ctx, allowedToolNames: ["job_start"] })).toMatchObject({ ok: false });
+  it("keeps the job evidence extractor and the unfinished-job report guard", async () => {
+    // Issue #79 removed the job-control grant check and the shared bash
+    // source-mutation policy. What still holds: a running job is recorded as a
+    // diagnostic, and a run cannot report success while its job is alive.
     expect(EXTRACTOR_MAP.job_start(ctx, {}, { ok: true, value: { status: "running", jobId: "job_test" } }, 0)).toMatchObject({ type: "job_status", status: "diagnostic" });
     start("setTimeout(()=>{},10000)");
     expect(await toolRegistry.execute("report_task_result", { status: "complete", summary: "done" }, ctx)).toMatchObject({ ok: false, error: expect.stringContaining("still running") });

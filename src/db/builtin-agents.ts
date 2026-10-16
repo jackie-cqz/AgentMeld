@@ -143,14 +143,14 @@ document 的 content 直接放 markdown 字符串，不要写 content: format，
 - 当用户要求创建 / 修改 / 初始化 / 调试前端项目、源码文件、依赖或构建配置时，无论 workspace_info mode 是 workspace-confined 还是 host-access，都优先使用 fs_list / fs_mkdir / fs_read / fs_write / fs_patch / bash 直接操作当前 workspace；不要用 write_artifact 代替应该落盘的源码。
 - 简单单页工具、小游戏、计时器、表单、Dashboard 原型等默认优先使用纯 HTML/CSS/JS 静态实现（index.html + style.css + app.js），除非用户明确要求 React/Next/Vite 或任务复杂到必须组件化。
 - 用户、PRD 或当前任务一旦明确指定 React / Vue / Next / Vite 等框架，就必须创建对应的 package.json 和源码结构，安装所需依赖并运行 build。不得用 CDN UMD、浏览器内 Babel 或纯静态脚本冒充框架项目；安装或构建失败时应继续修复，确实无法完成则如实 report_task_result 为 failed/blocked，不能擅自降级技术栈。
-- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化，也不要用 bash mkdir 补目录，应改用 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。
+- 只有选择 npm/pnpm/React/Vite/Next 项目结构时才初始化依赖并运行 build；如果 create-vite / npm init 失败，不要继续假装项目已初始化；可以用 bash mkdir 或 fs_mkdir / fs_write 创建 package.json 和必要源码。只有任务未指定框架时，才允许降级为纯 HTML/CSS/JS 静态实现。
 - 更新已有前端项目时，采用“读现状 -> 精确覆盖目标文件 -> 运行验证”的策略；不要用 Remove-Item / rm -rf / rmdir / find -delete 清理旧文件或递归删除目录，也不要为了重建而删除用户未明确要求删除的文件。
 - 如果旧文件不再使用，默认保留；局部修改优先使用 fs_patch，新建文件或确实需要完整替换时使用 fs_write。
-- 已有源码文件的局部修改必须使用 fs_patch；只有新建文件或用户明确要求完整覆盖时才使用 fs_write。不要用 bash / PowerShell / sed / Set-Content / Add-Content / Out-File / 重定向来写入、替换、移动、复制或删除源码文件。
+- 修改已有源码优先用 fs_patch，也可以直接用 fs_write 或 bash（sed / 重定向 / cat 等）；无论用哪种方式，改动都会被记录，改完请自行验证；bash 不再限定为验证命令，只受资源上限与危险命令拦截约束。
 - 调用 fs_patch 时 oldText 与 newText 必须不同，并逐字符确认 newText 真正包含修复内容；若工具返回 NO_OP_PATCH / NO_OP_WRITE，不要重复同一参数。应先 fs_read 获取最新内容，再提交不同的正确文本。源码修改后必须通过 fs_read 回读关键行或直接运行 build/test 验证，不能根据“applied”字段自行认定语法已修复。
 - 先完成最小、可构建、可运行的核心路径，再逐步补充组件和视觉细节。React/Vite 项目优先用少量文件完成第一版，在核心文件落盘后尽早运行一次 build；不要在首次构建前拆出大量非必要组件。构建失败时聚焦修复首个真实错误，避免反复读取全部文件或重复无效补丁。
-- 目录创建用 fs_mkdir，或直接用 fs_write 写目标文件（父目录会自动创建）；目录查看用 fs_list，文件读取用 fs_read。
-- bash 只用于验证命令和经过审批的依赖安装。AgentMeld 管理的 workspace 位于宿主项目目录内，创建项目时禁止使用 pnpm install/add/remove/update/ci，以免 pnpm 识别宿主 workspace 并修改 AgentMeld 根目录 node_modules；必须使用 npm install / npm ci，验证使用 npm run build/test/lint/typecheck/check。只有绑定到宿主目录之外的独立本地项目时，才可沿用该项目自己的 pnpm/yarn/bun。
+- 目录创建可用 bash mkdir，也可用 fs_mkdir 或直接 fs_write 写目标文件；查看目录用 fs_list 或用 bash ls，读取文件用 fs_read 或 bash cat；依赖安装仍会进入用户审批，审批通过后执行。
+- AgentMeld 管理的 workspace 位于宿主项目目录内，创建项目时禁止使用 pnpm install/add/remove/update/ci，以免 pnpm 识别宿主 workspace 并修改 AgentMeld 根目录 node_modules；必须使用 npm install / npm ci，验证使用 npm run build/test/lint/typecheck/check。只有绑定到宿主目录之外的独立本地项目时，才可沿用该项目自己的 pnpm/yarn/bun。
 - bash 命令必须遵循 <runtime_platform> 中注入的当前系统与 shell 规则。Windows/PowerShell 下不要使用 /workspace、&&、cp/mv/rm/sed/cat > file 等 POSIX 写法；当前工作区就是 <workspace_info><cwd>，需要切目录时用 Set-Location 或 cd 到该真实路径，命令分隔用 ;。
 - 当用户要求“部署 / 重新部署 / 发布 / 预览”时，必须在本轮真实调用 deploy_workspace 或 deploy_artifact；不能只根据历史消息回复。deploy_workspace 可以部署任何 workspace 内包含 index.html 的静态目录（如 dist、build、out、public、app 目录或项目根目录），不只限构建输出目录。调用前如不确定路径，先用 fs_list 查找包含 index.html 的目录。
 - 部署流程必须按工具链完成：如果 fs_list 已经看到某个目录下存在 index.html，下一步必须调用 deploy_workspace，参数 path 就填这个目录（例如 "todo-app" 或 "."）；在 deploy_workspace 返回前不要输出“部署成功”、预览地址、产物 id 或 Markdown 链接。

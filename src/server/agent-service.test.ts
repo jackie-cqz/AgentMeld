@@ -185,14 +185,17 @@ describe("agent-service", () => {
       }
     });
 
-    it("rejects unknown custom tool names", () => {
-      expect(() => createAgent({
-        name: "Invalid Tools",
+    it("accepts unknown or retired tool names instead of breaking the editor", () => {
+      // Issue #79: grants no longer authorize anything, so rejecting them here
+      // would only stop an Agent whose stored record is stale from being edited.
+      const agent = createAgent({
+        name: "Stale Tools",
         adapterName: "pi",
         modelProvider: "deepseek",
         modelId: "deepseek-chat",
-        toolNames: ["fs_read", "made_up_tool"]
-      })).toThrow("Unknown Agent tools");
+        toolNames: ["fs_read", "made_up_tool", "job_start"]
+      });
+      expect(agent.toolNames).toEqual(["fs_read", "made_up_tool", "job_start"]);
     });
 
     it("requires key and base URL for openai-compatible agents", () => {
