@@ -236,3 +236,19 @@ real pinned-Pi discussion/consultation, adaptive single-task implementation and
 active task handoff. Lease/bridge tests additionally cover source admission
 while a peer runs, refusal to lend with unfinished native calls, unconfirmed
 peer teardown and restored ownership. Final full-suite and build gates remain.
+
+- Full regression run on the integration revision: 1,898 passed, 10 failed,
+  3 skipped. Seven are the unchanged Windows symlink EPERM prerequisites.
+  One assertion still expected a Conductor-only roster and now matches the
+  shared roster. Two upstream shell fixtures used POSIX `&&` on PowerShell 5.1
+  or decoded its UTF-16LE redirect as UTF-8; both fixtures are corrected without
+  narrowing the shell. All three corrected cases pass in focused reruns.
+- The production webpack build passed in the isolated preview using the shipped
+  next.config.ts, with the existing createRequire/dynamic Pi configuration warning.
+- Refreshed Playwright smoke passed at desktop and 390px mobile, with sidebar,
+  expanded package, discussion, accepted takeover and reload. No page errors or
+  horizontal overflow. The captured discussion request had the full workspace
+  toolset. Screenshots were inspected, and the isolated port-3029 server stopped.
+- Consultation context carries the authenticated human request directly; the
+  source Agent's question cannot silently replace the human's "do not modify"
+  instruction. Final full-suite rerun and Linux CI remain required.

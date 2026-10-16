@@ -430,7 +430,7 @@ describe("conversation-service", () => {
       const payload = getBootstrapPayload();
 
       expect(payload.provisionedToolNames).toEqual(provisionedPlatformToolNames());
-      expect(payload.provisionedToolNames).not.toContain("list_team_members");
+      expect(payload.provisionedToolNames).toContain("list_team_members");
       expect(payload.provisionedToolNames).toContain("bash");
     });
   });
