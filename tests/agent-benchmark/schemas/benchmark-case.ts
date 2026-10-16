@@ -94,6 +94,7 @@ const benchmarkRuntimeSchema = z.object({
       }).strict(),
       z.object({ action: z.literal("assert_text"), text: z.string().min(1) }).strict(),
       z.object({ action: z.literal("assert_visible"), selector: z.string().min(1) }).strict(),
+      z.object({ action: z.literal("assert_hidden"), selector: z.string().min(1) }).strict(),
       z.object({ action: z.literal("assert_dom_changed") }).strict(),
     ])).min(1),
   }).strict()).optional(),
@@ -268,6 +269,9 @@ function referencedRoles(assertion: BenchmarkAssertion): BenchmarkRole[] {
     case "no_forbidden_mutation":
       return [];
     case "artifact_valid":
+      return [assertion.role];
+    case "consultation_reflected":
+    case "consultation_lifecycle":
       return [assertion.role];
     case "browser_interaction":
     case "fault_injected":

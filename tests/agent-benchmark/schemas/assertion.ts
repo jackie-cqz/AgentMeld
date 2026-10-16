@@ -172,6 +172,24 @@ export const benchmarkAssertionSchema = z
       type: z.literal("no_forbidden_mutation"),
       paths: z.array(benchmarkWorkspacePathSchema).min(1),
     }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("consultation_reflected"),
+      role: benchmarkRoleSchema,
+      outputKey: z.string().trim().min(1),
+      artifactType: benchmarkArtifactTypeSchema,
+      answerPattern: z.string().trim().min(1),
+    }).strict(),
+    z.object({
+      ...assertionBase,
+      type: z.literal("consultation_lifecycle"),
+      role: benchmarkRoleSchema,
+      requireReplied: z.boolean().optional(),
+      requirePeerTornDown: z.boolean().optional(),
+      requireLeaseRestored: z.boolean().optional(),
+      requireReplayBounded: z.boolean().optional(),
+      requireNoExpired: z.boolean().optional(),
+    }).strict(),
   ])
   .superRefine((assertion, ctx) => {
     if (assertion.type === "retry_bound") {
@@ -196,6 +214,13 @@ export const benchmarkAssertionSchema = z
         assertion.minCalls > assertion.maxCalls
       ) {
         ctx.addIssue({ code: "custom", message: "minCalls cannot exceed maxCalls." });
+      }
+    }
+    if (assertion.type === "consultation_reflected") {
+      try {
+        new RegExp(assertion.answerPattern, "i");
+      } catch {
+        ctx.addIssue({ code: "custom", path: ["answerPattern"], message: "answerPattern must be a valid regular expression." });
       }
     }
   });

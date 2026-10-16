@@ -4,7 +4,7 @@
   "title": "Markdown Editor",
   "description": "Split-pane Markdown editor testing PM, UI, and Frontend context handoffs.",
   "category": "collaboration",
-  "prompt": "帮我做一个 Markdown 编辑器。React，左边编辑区，右边实时预览。支持标题、列表、代码块、链接、图片语法。暗色主题，可以本地保存草稿。必须保证首次无 localStorage 数据时，默认草稿 id 与 activeId 在同一次初始化中一致，编辑 textarea 后预览立即更新并在刷新后恢复。",
+  "prompt": "帮我做一个 Markdown 编辑器。React，左边编辑区，右边实时预览。支持标题、列表、代码块、链接、图片语法。暗色主题，可以本地保存草稿。必须保证首次无 localStorage 数据时，默认草稿 id 与 activeId 在同一次初始化中一致，编辑 textarea 后预览立即更新并在刷新后恢复。验收脚本会向编辑区写入 Markdown 标题「Benchmark heading」，断言预览区出现该标题文本，并要求 localStorage 至少有 1 条草稿记录；刷新页面后预览仍显示该标题。因此编辑区必须是 <textarea>，预览必须与编辑内容同步渲染，草稿必须写入 localStorage 并在初始化时恢复。",
   "expectedRoles": ["pm", "ui", "frontend"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },

@@ -4,7 +4,7 @@
   "title": "Pomodoro Timer",
   "description": "Pomodoro timer exercising requirements, visual design, implementation, deployment, and review handoffs.",
   "category": "collaboration",
-  "prompt": "帮我做一个番茄时钟 Web App。React + TypeScript，经典 Pomodoro 模式：25分钟专注 + 5分钟短休息，每4个番茄后15分钟长休息。番茄红色调，环形进度条，开始/暂停/重置按钮。",
+  "prompt": "帮我做一个番茄时钟 Web App。React + TypeScript，经典 Pomodoro 模式：25分钟专注 + 5分钟短休息，每4个番茄后15分钟长休息。番茄红色调，环形进度条，开始/暂停/重置按钮。验收脚本会点击开始按钮（button[data-testid='timer-start'] 或文本「开始」），用虚拟时钟推进约 1.2 秒，然后要求页面 DOM 发生变化。因此倒计时必须运行在真实计时器上（setInterval/requestAnimationFrame，而不是渲染时读一次 Date.now 就不再更新），并且剩余时间文本必须显示在页面可见位置（建议 [data-testid='timer-display']，格式 mm:ss），点击开始后 1 秒内该文本必须变化。",
   "expectedRoles": ["pm", "ui", "frontend", "reviewer"],
   "assertions": [
     { "id": "role-pm-complete", "type": "role_executed", "role": "pm", "mustComplete": true, "required": true },

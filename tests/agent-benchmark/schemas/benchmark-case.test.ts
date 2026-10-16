@@ -8,7 +8,7 @@ const CASES_DIR = path.join(__dirname, "..", "..", "e2e-fixtures");
 describe("benchmark case schema", () => {
   it("loads all migrated fixtures", () => {
     const cases = loadBenchmarkCases(CASES_DIR);
-    expect(cases).toHaveLength(24);
+    expect(cases).toHaveLength(25);
     expect(cases.every((benchmarkCase) => benchmarkCase.schemaVersion === 1)).toBe(true);
   });
 
@@ -228,5 +228,57 @@ describe("benchmark case schema", () => {
       runtime: { userScript: { approvals: [{ type: "bash", decision: "maybe" }] } },
       tags: [],
     })).toThrow(/runtime\.userScript\.approvals/);
+  });
+
+  it("accepts peer consultation assertions and the hidden-element browser step", () => {
+    const parsed = parseBenchmarkCase({
+      schemaVersion: 1,
+      id: "consultation-case",
+      title: "Consultation case",
+      description: "Requires a peer opinion and verifies the workspace was returned.",
+      category: "context_handoff",
+      prompt: "Consult the peer, then ship the page.",
+      expectedRoles: ["ui", "frontend"],
+      assertions: [
+        { id: "frontend-ran", type: "role_executed", role: "frontend", required: true },
+        { id: "output", type: "output_binding", role: "frontend", outputKey: "web_app", artifactType: "web_app", required: true },
+        { id: "consulted", type: "tool_succeeded", toolName: "consult_agent", role: "frontend", required: true },
+        { id: "reflected", type: "consultation_reflected", role: "frontend", outputKey: "web_app", artifactType: "web_app", answerPattern: "MELLOW-[0-9]{4}", required: true },
+        { id: "lifecycle", type: "consultation_lifecycle", role: "frontend", requirePeerTornDown: true, requireLeaseRestored: true, required: true },
+      ],
+      limits: { maxDurationMs: 1000 },
+      runtime: {
+        browserScripts: [{
+          id: "title",
+          steps: [{ action: "assert_hidden", selector: "[data-testid='todo-item']" }],
+        }],
+      },
+      tags: [],
+    });
+
+    expect(parsed.assertions.map((assertion) => assertion.type)).toEqual([
+      "role_executed", "output_binding", "tool_succeeded", "consultation_reflected", "consultation_lifecycle",
+    ]);
+    expect(parsed.runtime?.browserScripts?.[0].steps).toEqual([
+      { action: "assert_hidden", selector: "[data-testid='todo-item']" },
+    ]);
+  });
+
+  it("rejects a consultation assertion with an invalid answer pattern", () => {
+    expect(() => parseBenchmarkCase({
+      schemaVersion: 1,
+      id: "bad-pattern",
+      title: "Bad pattern",
+      description: "answerPattern must compile.",
+      category: "context_handoff",
+      prompt: "Consult.",
+      expectedRoles: ["frontend"],
+      assertions: [
+        { id: "frontend-ran", type: "role_executed", role: "frontend", required: true },
+        { id: "reflected", type: "consultation_reflected", role: "frontend", outputKey: "web_app", artifactType: "web_app", answerPattern: "MELLOW-[0-9", required: true },
+      ],
+      limits: { maxDurationMs: 1000 },
+      tags: [],
+    })).toThrow(/valid regular expression/);
   });
 });

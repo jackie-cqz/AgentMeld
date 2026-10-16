@@ -169,6 +169,29 @@ export interface NoForbiddenMutationAssertion extends BenchmarkAssertionBase {
   paths: string[];
 }
 
+export interface ConsultationReflectedAssertion extends BenchmarkAssertionBase {
+  type: "consultation_reflected";
+  role: BenchmarkRole;
+  outputKey: string;
+  artifactType: BenchmarkArtifactType;
+  /**
+   * Regex used to pull the distinctive token out of the peer's recorded answer.
+   * The produced artifact must contain at least one token captured from the
+   * actual reply, which the producing role could not have known in advance.
+   */
+  answerPattern: string;
+}
+
+export interface ConsultationLifecycleAssertion extends BenchmarkAssertionBase {
+  type: "consultation_lifecycle";
+  role: BenchmarkRole;
+  requireReplied?: boolean;
+  requirePeerTornDown?: boolean;
+  requireLeaseRestored?: boolean;
+  requireReplayBounded?: boolean;
+  requireNoExpired?: boolean;
+}
+
 export type BenchmarkAssertion =
   | RoleExecutedAssertion
   | DagEdgeAssertion
@@ -190,7 +213,9 @@ export type BenchmarkAssertion =
   | CommandVerifierAssertion
   | WorkspaceFileAssertion
   | StructuredOutputAssertion
-  | NoForbiddenMutationAssertion;
+  | NoForbiddenMutationAssertion
+  | ConsultationReflectedAssertion
+  | ConsultationLifecycleAssertion;
 
 export interface BenchmarkCaseLimits {
   maxDurationMs: number;
@@ -307,6 +332,7 @@ export type BenchmarkBrowserStep =
   | { action: "assert_storage"; key?: string; valuePattern?: string; minEntries?: number; timeoutMs?: number }
   | { action: "assert_text"; text: string }
   | { action: "assert_visible"; selector: string }
+  | { action: "assert_hidden"; selector: string }
   | { action: "assert_dom_changed" };
 
 export interface BenchmarkBrowserScript {
@@ -418,6 +444,30 @@ export interface BenchmarkApprovalValidation {
   payload: string;
 }
 
+export interface BenchmarkConsultationValidation {
+  id: string;
+  sourceRunId: string;
+  sourceAgentId: string;
+  /** Inferred from the dispatched task that owns the source run. */
+  sourceRole: BenchmarkRole | null;
+  targetAgentId: string;
+  targetRunId: string | null;
+  requestKey: string;
+  status: string;
+  answer: string | null;
+  peerRunStatus: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface BenchmarkWorkspaceLeaseValidation {
+  workspaceKey: string;
+  held: boolean;
+  poisoned: boolean;
+  childPid: number | null;
+}
+
 export interface BenchmarkRuntimeValidation {
   collectedAt: number;
   artifacts: BenchmarkArtifactValidation[];
@@ -429,6 +479,8 @@ export interface BenchmarkRuntimeValidation {
   toolCalls?: BenchmarkToolCallValidation[];
   injectedFaults: BenchmarkFaultRecord[];
   approvals: BenchmarkApprovalValidation[];
+  consultations?: BenchmarkConsultationValidation[];
+  workspaceLease?: BenchmarkWorkspaceLeaseValidation | null;
   verifiers?: BenchmarkVerifierValidation[];
   workspaceFiles?: BenchmarkWorkspaceFileValidation[];
   structuredOutputs?: BenchmarkStructuredOutputValidation[];

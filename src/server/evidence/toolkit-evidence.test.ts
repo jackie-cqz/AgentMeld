@@ -24,4 +24,10 @@ describe("toolkit evidence semantics", () => {
     await captureEvidence({ toolName: "browser_check", args: {}, result: { ok: true, value: { passed: false, errors: ["broken"] } }, context, durationMs: 20 });
     expect(mocks.insert.mock.calls[1][0]).toMatchObject({ type: "browser_checked", status: "invalid" });
   });
+  it("only counts a replied peer consultation as valid agent_consulted evidence", async () => {
+    await captureEvidence({ toolName: "consult_agent", args: { requestKey: "codename", targetAgentId: "ag_designer" }, result: { ok: true, value: { id: "consult_1", status: "replied", answer: "MELLOW-7741" } }, context, durationMs: 20, callId: "call_consult" });
+    expect(mocks.insert.mock.calls[0][0]).toMatchObject({ type: "agent_consulted", status: "valid", sourceId: "call_consult" });
+    await captureEvidence({ toolName: "consult_agent", args: { requestKey: "codename", targetAgentId: "ag_designer" }, result: { ok: true, value: { id: "consult_2", status: "declined", answer: null } }, context, durationMs: 20 });
+    expect(mocks.insert.mock.calls[1][0]).toMatchObject({ type: "agent_consulted", status: "invalid" });
+  });
 });
