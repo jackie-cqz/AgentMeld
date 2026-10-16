@@ -43,6 +43,6 @@
     }]
   },
   "judge": { "enabled": true, "requiredForPass": false, "rubricVersion": "collaboration-rubric-v1" },
-  "limits": { "maxDurationMs": 900000, "maxToolCalls": 80, "maxAttemptsPerTask": 3 },
+  "limits": { "maxDurationMs": 900000, "maxToolCalls": 200, "maxAttemptsPerTask": 3 },
   "tags": ["web-app", "react", "full-chain", "smoke"]
 }

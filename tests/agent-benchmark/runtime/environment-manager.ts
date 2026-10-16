@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests } from "@/db/client";
+import { createPairingCode, redeemPairingCode } from "@/server/auth";
 import { clearAllFileWritesForTests } from "@/server/dispatch-file-writes";
 import { clearPendingPlansForTests } from "@/server/dispatch-plan-manager";
 import { clearAllTaskResultsForTests } from "@/server/dispatch-task-results";
@@ -29,9 +30,38 @@ export interface CreateBenchmarkEnvironmentOptions {
   trialIndex?: number;
 }
 
+/** Credentials for the owner the sandbox was paired with. */
+export interface BenchmarkOwnerSession {
+  /** `name=value`, suitable for a Cookie request header. */
+  cookieHeader: string;
+  name: string;
+  value: string;
+}
+
+/**
+ * Pair the fresh sandbox with an owner through the SAME path a first-run
+ * install uses: mint a bootstrap pairing code, then redeem it into a session
+ * row. This is required because `/deployments/*` sits behind `gateRequest`,
+ * which answers 503 until an owner session exists. The benchmark's preview
+ * probe and its Playwright checks reach that route as the owner would; there
+ * is no test-only auth bypass here.
+ */
+export function pairBenchmarkOwner(): BenchmarkOwnerSession {
+  const { code } = createPairingCode();
+  const result = redeemPairingCode(code);
+  if (!result.ok || !result.setCookie) {
+    throw new Error(result.error ?? "Benchmark owner session could not be created.");
+  }
+  const cookie = result.setCookie.split(";")[0].trim();
+  const separator = cookie.indexOf("=");
+  if (separator <= 0) throw new Error("Benchmark owner session cookie was malformed.");
+  return { cookieHeader: cookie, name: cookie.slice(0, separator), value: cookie.slice(separator + 1) };
+}
+
 export class BenchmarkEnvironmentManager {
   private activeEnvironment: BenchmarkEnvironment | null = null;
   private previousDataDir: string | undefined;
+  private benchmarkOwnerSession: BenchmarkOwnerSession | null = null;
 
   create(caseId: string, options: CreateBenchmarkEnvironmentOptions = {}): BenchmarkEnvironment {
     const baseDir = path.resolve(
@@ -65,6 +95,9 @@ export class BenchmarkEnvironmentManager {
     this.previousDataDir = process.env[DATA_DIR_ENV];
     process.env[DATA_DIR_ENV] = environment.dataDir;
     ensureDatabase();
+    // A fresh sandbox has zero owner_sessions rows, so every gated route would
+    // answer 503. Pair it here, at bootstrap, exactly as the app does.
+    this.benchmarkOwnerSession = pairBenchmarkOwner();
     this.activeEnvironment = environment;
   }
 
@@ -79,10 +112,16 @@ export class BenchmarkEnvironmentManager {
     }
     this.previousDataDir = undefined;
     this.activeEnvironment = null;
+    this.benchmarkOwnerSession = null;
   }
 
   current(): BenchmarkEnvironment | null {
     return this.activeEnvironment;
+  }
+
+  /** The paired owner the active sandbox was provisioned with, if any. */
+  ownerSession(): BenchmarkOwnerSession | null {
+    return this.benchmarkOwnerSession;
   }
 }
 

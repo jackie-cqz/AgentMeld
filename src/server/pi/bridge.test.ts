@@ -7,6 +7,7 @@ import { getWorkspaceForConversation, SYSTEM_RESOLVED_BY } from "@/server/reposi
 import { getDatabase } from "@/db/client";
 import { newRunId } from "@/shared/ids";
 import { getAllPendingWrites, approvePendingWrite } from "@/server/pending-writes";
+import { getFileWrites } from "@/server/dispatch-file-writes";
 import { setTimeout as delay } from "node:timers/promises";
 import { createPiBridge } from "./bridge";
 import { provisionedPlatformToolNames } from "./tool-surface";
@@ -59,18 +60,35 @@ describe("private Pi bridge admission", () => {
     expect((await post("/tool", { callId: "artifact", name: "read_artifact", args: { artifactId: "art_missing" } })).status).toBe(200);
   });
 
-  it("rejects path traversal through a native tool", async () => {
-    const { post, bridge } = await fixture();
-    expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(400);
-    expect(bridge.result("escape")?.ok).toBe(false);
+  it("admits a native write that resolves outside the workspace and records it", async () => {
+    // Issue #79: native file tools are full-access, so `../` is not a refusal.
+    // The path is still resolved (against the workspace root for a relative
+    // path) and the resulting change is still recorded as evidence.
+    const { post, bridge, runId, workspace } = await fixture();
+    const outside = path.resolve(workspace.rootPath, "..", "escape.txt");
+    expect((await post("/native/authorize", { callId: "escape", name: "write", args: { path: "../escape.txt", content: "no" } })).status).toBe(200);
+    expect((await post("/native/change", { callId: "escape", path: outside, content: "no" })).status).toBe(200);
+    // Pi performs the bytes; the bridge only authorizes and then observes.
+    fs.writeFileSync(outside, "no");
+    expect((await post("/native/result", { callId: "escape", result: { content: [{ type: "text", text: "wrote ../escape.txt" }] }, isError: false })).status).toBe(200);
+    expect(bridge.result("escape")?.ok).toBe(true);
+    expect(getFileWrites(runId).has(outside)).toBe(true);
+    expect(fs.readFileSync(outside, "utf8")).toBe("no");
+    fs.rmSync(outside, { force: true });
   });
-  it("rejects writes through a directory link outside the workspace", async () => {
-    const { post, workspace } = await fixture();
+  it("admits and records writes through a directory link outside the workspace", async () => {
+    const { post, bridge, runId, workspace } = await fixture();
     const outside = path.join(workspace.rootPath, "..", "outside-pi-bridge-fixture");
     fs.mkdirSync(outside, { recursive: true });
     fs.symlinkSync(outside, path.join(workspace.rootPath, "linked"), "junction");
-    expect((await post("/native/authorize", { callId: "linked", name: "write", args: { path: "linked/escape.txt", content: "no" } })).status).toBe(400);
-    expect(fs.existsSync(path.join(outside, "escape.txt"))).toBe(false);
+    const linked = path.join(workspace.rootPath, "linked", "escape.txt");
+    expect((await post("/native/authorize", { callId: "linked", name: "write", args: { path: "linked/escape.txt", content: "no" } })).status).toBe(200);
+    expect((await post("/native/change", { callId: "linked", path: linked, content: "no" })).status).toBe(200);
+    fs.writeFileSync(linked, "no");
+    expect((await post("/native/result", { callId: "linked", result: { content: [{ type: "text", text: "wrote linked/escape.txt" }] }, isError: false })).status).toBe(200);
+    expect(bridge.result("linked")?.ok).toBe(true);
+    expect(getFileWrites(runId).has(linked)).toBe(true);
+    expect(fs.readFileSync(path.join(outside, "escape.txt"), "utf8")).toBe("no");
   });
   it("rejects turns past the runtime budget instead of declaring completion", async () => {
     let exceeded = false;
