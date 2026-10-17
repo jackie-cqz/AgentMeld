@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
 import { requestJson } from "@/lib/request-json";
+import { Select } from "@/components/ui/select";
 import type { TaskHandoff } from "@/shared/collaboration-types";
 
 export function TaskHandoffControl({ runId, taskId, attemptId, sourceAgentId, verified }: {
@@ -35,9 +36,8 @@ export function TaskHandoffControl({ runId, taskId, attemptId, sourceAgentId, ve
     {attemptId && !verified && candidates.length > 0 && !handoffs.some(item => item.sourceAttemptId === attemptId && (item.status === "proposed" || item.status === "accepted" && (item.targetAttemptId !== null || ["stopping", "running", "complete"].includes(item.executionStatus)))) ? <>
       <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-[var(--ui-muted)] hover:text-[var(--ui-text)]"><ArrowRightLeft size={12} />交给同事</button>
       {open ? <div className="mt-2 flex flex-wrap items-center gap-2">
-        <select aria-label="接手 Agent" value={selected} onChange={event => setTarget(event.target.value)} className="max-w-full rounded border border-[var(--ui-border)] bg-[var(--ui-surface)] px-2 py-1">
-          {candidates.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-        </select>
+        <Select aria-label="接手 Agent" size="sm" value={selected} onChange={setTarget}
+          options={candidates.map(agent => ({ value: agent.id, label: agent.name }))} />
         <button type="button" disabled={!selected || busy} onClick={() => void create()} className="inline-flex items-center gap-1 rounded border border-[var(--ui-border)] px-2 py-1">{busy ? <Loader2 size={12} className="animate-spin" /> : <ArrowRightLeft size={12} />}生成交接卡片</button>
       </div> : null}
     </> : null}

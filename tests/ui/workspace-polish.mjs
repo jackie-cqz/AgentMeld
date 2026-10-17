@@ -54,7 +54,10 @@ async function capture(name) {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `${name}: viewport overflow`);
   await page.screenshot({ path: `${output}/${name}.png` }); screenshots++;
 }
-async function decision(key) { await page.getByLabel('选择待处理事项', { exact: true }).selectOption(key); }
+async function decision(key) {
+  await page.getByLabel('选择待处理事项', { exact: true }).click();
+  await page.locator(`.ui-select-menu [data-value="${key}"]`).click();
+}
 try {
   for (const [width, height, theme] of [[1440, 900, 'light'], [1024, 768, 'dark'], [390, 844, 'light'], [390, 844, 'dark'], [320, 640, 'light'], [1280, 420, 'light']]) {
     await page.setViewportSize({ width, height }); await page.goto(base, { waitUntil: 'domcontentloaded' }); await page.locator('.ui-shell').waitFor();

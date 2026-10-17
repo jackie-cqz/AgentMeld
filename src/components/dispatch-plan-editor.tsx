@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
+import { Select } from "@/components/ui/select";
 import type { Agent, Conversation, DispatchPlanItem } from "@/shared/types";
 
 export function DispatchPlanEditor({
@@ -31,13 +32,10 @@ export function DispatchPlanEditor({
             <Field label="标题">
               <input value={task.title ?? ""} onChange={(event) => patchTask(index, { title: event.target.value })} className="h-8 w-full rounded border border-slate-200 bg-white px-2 text-xs" />
             </Field>
-            <Field label="Agent">
-              <select value={task.agentId} onChange={(event) => patchTask(index, { agentId: event.target.value })} className="h-8 w-full rounded border border-slate-200 bg-white px-2 text-xs">
-                {conversation.agentIds.filter((id) => !agents[id]?.isConductor).map((id) => (
-                  <option key={id} value={id}>{agents[id]?.name ?? id}</option>
-                ))}
-              </select>
-            </Field>
+            <div className="min-w-0">
+              <Select label="Agent" size="sm" value={task.agentId} onChange={(value) => patchTask(index, { agentId: value })}
+                options={conversation.agentIds.filter((id) => !agents[id]?.isConductor).map((id) => ({ value: id, label: agents[id]?.name ?? id }))} />
+            </div>
             <Field label="尝试">
               <input type="number" min={1} max={5} value={task.maxAttempts ?? 1} onChange={(event) => patchTask(index, { maxAttempts: Number(event.target.value) || 1 })} className="h-8 w-full rounded border border-slate-200 bg-white px-2 text-xs" />
             </Field>

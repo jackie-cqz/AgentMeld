@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
+import { Code2, ExternalLink, Eye, FileText, History, Image as ImageIcon, Loader2, Pencil, Save, X } from "lucide-react";
 import {
   useMemo,
   useLayoutEffect,
@@ -19,6 +19,7 @@ import { selectConversationArtifacts, selectSelectedArtifact } from "@/stores/se
 import type { Artifact, ArtifactContent } from "@/shared/types";
 import { Modal } from "@/components/ui/modal";
 import { Tabs, Feedback } from "@/components/ui/controls";
+import { Select } from "@/components/ui/select";
 import { registerWorkspaceGuard, requestWorkspaceNavigation } from "@/lib/workspace-navigation";
 import { constrainPanelWidth } from "@/lib/workspace-panel-layout";
 import { usePanelSize } from "@/components/ui/use-panel-size";
@@ -114,22 +115,11 @@ export function ArtifactPanel() {
       {selectedArtifact ? (
         <div className="artifact-panel-selection">
           <div className="relative w-full">
-            {artifacts.length > 1 ? <>
-            <select
-              aria-label="选择产物"
-              className="h-8 w-full cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-8 text-xs font-medium text-slate-700 outline-none hover:border-slate-300"
+            {artifacts.length > 1 ? <Select aria-label="选择产物" size="sm" className="ui-select--block" placeholder="选择产物"
               value={selectedArtifact?.id ?? ""}
-              onChange={(e) => setActiveArtifact(e.target.value)}
-            >
-              <option value="" disabled>选择产物</option>
-              {artifacts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.title} · v{a.version}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            </> : <strong title={selectedArtifact.title}>{selectedArtifact.title}</strong>}
+              onChange={setActiveArtifact}
+              options={artifacts.map((a) => ({ value: a.id, label: `${a.title} · v${a.version}` }))} />
+              : <strong title={selectedArtifact.title}>{selectedArtifact.title}</strong>}
           </div>
           <span className="artifact-panel-version">{formatArtifactType(selectedArtifact.type)} · v{selectedArtifact.version}</span>
         </div>

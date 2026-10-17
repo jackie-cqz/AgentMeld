@@ -7,6 +7,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Popover } from "@/components/ui/popover";
 import { Feedback, Tabs } from "@/components/ui/controls";
+import { Select } from "@/components/ui/select";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation";
 import { requestJson } from "@/lib/request-json";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -222,15 +223,14 @@ function CreateConversationDialog({ agents, onClose, onCreate }: {
             <span className="mt-1 block text-xs text-[var(--ui-muted)]">{agent.description || agent.systemPrompt.split(/\n{2,}/)[0]}</span></span>
         </label>)}
       </div>
-      <label className="ui-field"><span className="ui-field-label">文件写入审批</span>
-        <select aria-label="文件写入审批" value={approvalMode} disabled={saving} onChange={event => setApprovalMode(event.target.value as "auto" | "review")}>
-          <option value="review">Review · 手动审批</option><option value="auto">Auto · 自动审批</option>
-        </select></label>
-      <label className="ui-field"><span className="ui-field-label">上下文模式（创建后不可更改）</span>
-        <select aria-label="上下文模式" value={contextMode} disabled={saving} onChange={event => setContextMode(event.target.value as "raw" | "evidence")}>
-          <option value="raw">原文 · 原始消息（默认）</option>
-          <option value="evidence">证据 · 已核实事实 + 近期原文</option>
-        </select></label>
+      <div className="ui-field">
+        <Select label="文件写入审批" value={approvalMode} disabled={saving} onChange={value => setApprovalMode(value as "auto" | "review")}
+          options={[{ value: "review", label: "Review · 手动审批" }, { value: "auto", label: "Auto · 自动审批" }]} />
+      </div>
+      <div className="ui-field">
+        <Select label="上下文模式（创建后不可更改）" value={contextMode} disabled={saving} onChange={value => setContextMode(value as "raw" | "evidence")}
+          options={[{ value: "raw", label: "原文 · 原始消息（默认）" }, { value: "evidence", label: "证据 · 已核实事实 + 近期原文" }]} />
+      </div>
       <p className="ui-muted -mt-2 text-xs leading-relaxed">两种模式都会在历史达到模型窗口 80% 时自动压缩旧消息；压缩后仍放不下时会裁剪最旧的消息，并在会话中告知被裁剪的条数（置顶消息始终保留）。证据模式额外注入当前已核实的事实。</p>
       {!valid ? <Feedback tone="info">{mode === "single" ? "请选择 1 位 Agent" : "请至少选择 2 位 Agent"}</Feedback> : null}
     </Modal>

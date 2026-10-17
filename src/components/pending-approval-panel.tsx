@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { DispatchPlanEditor, validatePlan } from "@/components/dispatch-plan-editor";
 import { PendingQuestionCard } from "@/components/pending-question-card";
+import { Select } from "@/components/ui/select";
 import { requestJson } from "@/lib/request-json";
 import { useAppStore } from "@/stores/app-store";
 import {
@@ -41,9 +42,8 @@ export function PendingApprovalPanel() {
     <section className="ui-pending decision-queue" aria-label="待处理事项">
       <header className="decision-queue-header">
         <span>待处理 <strong>{items.length}</strong></span>
-        <select aria-label="选择待处理事项" value={activeKey} onChange={event => { setSelected(event.target.value); setExpanded(true); }}>
-          {items.map(item => <option key={item.key} value={item.key}>{item.label} · {agents[item.agentId]?.name ?? item.agentId}</option>)}
-        </select>
+        <Select aria-label="选择待处理事项" size="sm" value={activeKey ?? ""} onChange={value => { setSelected(value); setExpanded(true); }}
+          options={items.map(item => ({ value: item.key, label: `${item.label} · ${agents[item.agentId]?.name ?? item.agentId}` }))} />
         <button type="button" className="ui-icon-button" title={expanded ? "收起待处理事项" : "展开待处理事项"} aria-label={expanded ? "收起待处理事项" : "展开待处理事项"} aria-expanded={expanded} aria-controls="decision-queue-content" onClick={() => setExpanded(value => !value)}>{expanded ? <ChevronDown size={16} /> : <ChevronUp size={16} />}</button>
       </header>
       <div ref={scrollerRef} id="decision-queue-content" className="decision-queue-content" hidden={!expanded}>

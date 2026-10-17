@@ -3,6 +3,7 @@
 import { ArrowLeftRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { FileDiffView } from "@/components/file-diff-view";
+import { Select } from "@/components/ui/select";
 import type { Artifact } from "@/shared/types";
 
 export function ArtifactVersionCompare({
@@ -108,17 +109,9 @@ function VersionSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="text-xs text-slate-500">
-      {label}
-      <select
-        className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {versions.map((version) => (
-          <option key={version.id} value={version.id}>v{version.version} · {version.title}</option>
-        ))}
-      </select>
-    </label>
+    <div className="min-w-0">
+      <Select label={label} value={value} onChange={onChange}
+        options={versions.map((version) => ({ value: version.id, label: `v${version.version} · ${version.title}` }))} />
+    </div>
   );
 }
