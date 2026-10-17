@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isNoticeMessage, transcriptMessages } from "@/components/chat-panel";
+import { transcriptMessages } from "@/components/chat-panel";
 import type { Message } from "@/shared/types";
 
 /**
@@ -28,27 +28,15 @@ function message(overrides: Partial<Message> = {}): Message {
 }
 
 describe("what the transcript shows", () => {
-  it("keeps system notices", () => {
+  it("hides system notices", () => {
     const notice = message({ id: "msg_notice", role: "system", agentId: null });
 
-    const shown = transcriptMessages([message(), notice]);
-
-    expect(shown.map((m) => m.id)).toEqual(["msg_1", "msg_notice"]);
+    expect(transcriptMessages([message(), notice]).map((m) => m.id)).toEqual(["msg_1"]);
   });
 
-  it("keeps every message, in order", () => {
-    const messages = [
-      message({ id: "a", role: "user" }),
-      message({ id: "b", role: "agent" }),
-      message({ id: "c", role: "system", agentId: null })
-    ];
+  it("keeps user and agent messages in order", () => {
+    const messages = [message({ id: "a", role: "user" }), message({ id: "b", role: "agent" })];
 
-    expect(transcriptMessages(messages).map((m) => m.id)).toEqual(["a", "b", "c"]);
-  });
-
-  it("recognises only system messages as notices", () => {
-    expect(isNoticeMessage(message({ role: "system" }))).toBe(true);
-    expect(isNoticeMessage(message({ role: "agent" }))).toBe(false);
-    expect(isNoticeMessage(message({ role: "user" }))).toBe(false);
+    expect(transcriptMessages(messages).map((m) => m.id)).toEqual(["a", "b"]);
   });
 });

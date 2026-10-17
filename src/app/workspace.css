@@ -68,19 +68,6 @@
 .workspace-chat-scroller { padding: 20px 52px 12px 30px; scrollbar-width: thin; scrollbar-color: var(--ui-line) transparent; }
 .workspace-transcript { width: 100%; max-width: 1160px; margin: 0 auto; }
 .workspace-message + .workspace-message { margin-top: 24px; }
-/* A system notice (a failure, a recovery, an approved plan): part of the
-   record, so it is shown — but it is not an agent talking, so it is set apart
-   from the answers rather than dressed up as one. */
-.workspace-message.is-notice .workspace-message-content {
-  border-left: 2px solid var(--ui-border-strong, var(--ui-border));
-  padding-left: 12px;
-  opacity: .92;
-}
-.workspace-message.is-notice .workspace-message-meta > span:first-child {
-  font-weight: 500;
-  color: var(--ui-muted);
-}
-.workspace-message.is-notice .workspace-message-body { font-size: 13px; }
 .workspace-message { gap: 12px; }
 .workspace-message-meta { min-height: 23px; margin-bottom: 6px; }
 .workspace-message-meta > span:last-child { font-size: 10px; }
