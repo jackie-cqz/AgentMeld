@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createConversation, sendMessage } from "@/server/conversation-service";
-import { getWorkspaceForConversation, listAgents } from "@/server/repositories";
+import { getConversation, getWorkspaceForConversation, listAgents } from "@/server/repositories";
 import type { AgentBenchmarkCase } from "@/server/context-metrics/benchmark-types";
 import type { Message } from "@/shared/types";
 import { setupTestDatabase } from "@/test/test-database";
@@ -58,6 +58,31 @@ describe("ConversationDriver", () => {
     ]));
     expect(started.workspacePath).toContain(started.conversationId);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: "Build the benchmark app." }));
+  });
+
+  it("creates the fixture's context mode and window so both modes stay comparable", async () => {
+    const send = vi.fn(async (input: Parameters<typeof sendMessage>[0]) => ({
+      message: fakeMessage(input.conversationId, input.content),
+      runIds: ["run_conductor_benchmark"],
+    })) as unknown as typeof sendMessage;
+    const driver = new ConversationDriver({
+      listAgents,
+      createConversation,
+      sendMessage: send,
+      getWorkspaceForConversation,
+    });
+    const benchmarkCase = {
+      ...createCase(),
+      id: "driver-context-case",
+      runtime: { contextMode: "evidence" as const, contextWindow: 10_000 },
+    };
+
+    const started = await driver.startCase(benchmarkCase);
+
+    expect(getConversation(started.conversationId)?.contextMode).toBe("evidence");
+    for (const agentId of started.agentIds) {
+      expect(listAgents().find((agent) => agent.id === agentId)?.contextWindow).toBe(10_000);
+    }
   });
 
   it("seeds fixture files inside the conversation workspace", () => {

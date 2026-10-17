@@ -90,7 +90,9 @@ describe("bounded collaboration history", () => {
   it("fails explicitly rather than dropping mandatory context on overflow", async () => {
     const { agent, message } = world();
     const triggerMessage = message("Continue");
-    await expect(buildCollaborationHistory({ agent, triggerMessage, systemPrompt: "x".repeat(300_000) })).rejects.toMatchObject({ category: "context_overflow" });
+    // A configured window, not the provider default, is the budget here.
+    const smallWindowAgent = { ...agent, contextWindow: 10_000 };
+    await expect(buildCollaborationHistory({ agent: smallWindowAgent, triggerMessage, systemPrompt: "x".repeat(300_000) })).rejects.toMatchObject({ category: "context_overflow" });
   });
 
   it("rejects a context boundary from another conversation", async () => {

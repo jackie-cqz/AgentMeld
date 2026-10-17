@@ -21,12 +21,15 @@ interface ContextBudgetPreview {
   recentMessageCount: number;
   omittedMessageCount: number;
   totalCompleteMessages: number;
+  contextWindow: number;
+  autoCompactThreshold: number;
 }
 
 export function ContextStatsPanel({ conversationId, onClose }: Props) {
   const messages = useAppStore(useShallow((s) => selectConversationMessages(s, conversationId)));
   const runs = useAppStore(useShallow((s) => selectConversationRuns(s, conversationId)));
   const compactionState = useAppStore((s) => selectCompactionState(s, conversationId));
+  const conversation = useAppStore((s) => s.conversations[conversationId]);
   const [compacting, setCompacting] = useState(false);
   const [compactResult, setCompactResult] = useState<string | null>(null);
   const [budgetPreview, setBudgetPreview] = useState<ContextBudgetPreview | null>(null);
@@ -137,27 +140,31 @@ export function ContextStatsPanel({ conversationId, onClose }: Props) {
           </div>
         ) : null}
 
-        {/* Model context window gauge */}
-        <div className="rounded-lg bg-slate-50 p-3">
-          <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="text-slate-600">DeepSeek 上下文窗口 (64K)</span>
-            <span className="font-mono font-medium text-slate-800">
-              {Math.round((contextTokenEstimate / 65536) * 100)}%
-            </span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-            <div
-              className={`h-full rounded-full transition-all ${
-                contextTokenEstimate > 55000
-                  ? "bg-red-500"
-                  : contextTokenEstimate > 40000
-                    ? "bg-amber-500"
-                    : "bg-emerald-500"
-              }`}
-              style={{ width: `${Math.min(100, (contextTokenEstimate / 65536) * 100)}%` }}
-            />
-          </div>
-        </div>
+        {/* Model context window gauge — the configured window is the truth. */}
+        {(() => {
+          const contextWindow = budgetPreview?.contextWindow ?? 1_000_000;
+          const threshold = budgetPreview?.autoCompactThreshold ?? Math.floor(contextWindow * 0.8);
+          const percent = contextWindow > 0 ? (contextTokenEstimate / contextWindow) * 100 : 0;
+          return (
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="mb-1.5 flex items-center justify-between text-xs">
+                <span className="text-slate-600">模型窗口 {formatNumber(contextWindow)} · {conversation?.contextMode === "evidence" ? "证据模式" : "原文模式"}</span>
+                <span className="font-mono font-medium text-slate-800">{percent.toFixed(1)}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-amber-500" : "bg-emerald-500"
+                  }`}
+                  style={{ width: `${Math.min(100, percent)}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                达到 {formatNumber(threshold)}（80%）时自动压缩旧历史；压缩后仍超出会裁剪最旧消息并提示条数。
+              </p>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Compact action */}

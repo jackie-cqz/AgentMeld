@@ -8,7 +8,10 @@ const createConversationSchema = z.object({
   title: z.string().trim().min(1).max(80).optional(),
   mode: z.enum(["single", "group"]).optional(),
   agentIds: z.array(z.string().min(1)).max(8).optional(),
-  fsWriteApprovalMode: z.enum(["auto", "review"]).optional()
+  fsWriteApprovalMode: z.enum(["auto", "review"]).optional(),
+  // Fixed at creation. The default is stated here as well as in the service so
+  // a client that omits it can never land on anything but today's behaviour.
+  contextMode: z.enum(["raw", "evidence"]).optional()
 });
 
 export async function GET(request: Request) {

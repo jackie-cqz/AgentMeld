@@ -3,7 +3,7 @@ import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
 import { TOOL_PRESETS, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
-import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
+import type { AdapterName, Agent, ModelProvider, ReasoningEffort } from "@/shared/types";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
 export { TOOL_PRESETS, ALL_TOOL_NAMES, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
@@ -23,6 +23,10 @@ export interface CreateAgentInput {
   modelId?: string | null;
   apiKey?: string | null;
   apiBaseUrl?: string | null;
+  /** Null means "use the provider default" (DeepSeek: 1,000,000). */
+  contextWindow?: number | null;
+  /** Null keeps today's behaviour: Pi runs without thinking. */
+  reasoningEffort?: ReasoningEffort | null;
   systemPrompt?: string;
   toolNames?: string[];
 }
@@ -37,6 +41,8 @@ export interface UpdateAgentInput {
   modelId?: string | null;
   apiKey?: string | null;
   apiBaseUrl?: string | null;
+  contextWindow?: number | null;
+  reasoningEffort?: ReasoningEffort | null;
   systemPrompt?: string;
   toolNames?: string[];
 }
@@ -63,13 +69,16 @@ export function createAgent(input: CreateAgentInput): Agent {
   const toolNames = input.toolNames ?? TOOL_PRESETS["all-purpose"].tools;
   const modelProvider = input.modelProvider ?? "deepseek";
   validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl);
+  const contextWindow = validateContextWindow(input.contextWindow);
+  const reasoningEffort = validateReasoningEffort(input.reasoningEffort);
 
   db.prepare(`
     INSERT INTO agents (
       id, name, avatar, description, capabilities, system_prompt,
       adapter_name, model_provider, model_id, api_key, api_base_url,
+      context_window, reasoning_effort,
       tool_names, is_builtin, is_conductor, supports_vision, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     input.name.trim(),
@@ -82,6 +91,8 @@ export function createAgent(input: CreateAgentInput): Agent {
     input.modelId?.trim() || null,
     input.apiKey?.trim() || null,
     input.apiBaseUrl?.trim() || null,
+    contextWindow,
+    reasoningEffort,
     JSON.stringify(toolNames),
     0, // is_builtin
     0, // is_conductor
@@ -110,12 +121,14 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   const modelId = input.modelId !== undefined ? (input.modelId?.trim() || null) : existing.modelId;
   const apiKey = input.apiKey !== undefined ? (input.apiKey?.trim() || null) : existing.apiKey;
   const apiBaseUrl = input.apiBaseUrl !== undefined ? (input.apiBaseUrl?.trim() || null) : existing.apiBaseUrl;
+  const contextWindow = input.contextWindow !== undefined ? validateContextWindow(input.contextWindow) : existing.contextWindow;
+  const reasoningEffort = input.reasoningEffort !== undefined ? validateReasoningEffort(input.reasoningEffort) : existing.reasoningEffort;
 
   const adapterName = input.adapterName ?? existing.adapterName;
   if (adapterName !== "pi") throw new Error("Choose Pi and configure a provider to migrate this retired Agent.");
   const toolNames = input.toolNames ?? existing.toolNames;
-  const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt, toolNames]) !==
-    JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.systemPrompt, existing.toolNames]);
+  const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt, toolNames]) !==
+    JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.contextWindow, existing.reasoningEffort, existing.systemPrompt, existing.toolNames]);
   const active = db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE agent_id=? AND status IN ('queued','running')").get(agentId) as { count: number };
   if (executionChanged && active.count > 0) throw new Error("Stop the Agent's active runs before changing its execution configuration.");
   validateCustomAgentConfig(
@@ -130,11 +143,13 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
     UPDATE agents SET
       name = ?, avatar = ?, description = ?, capabilities = ?, system_prompt = ?,
       adapter_name = ?, model_provider = ?, model_id = ?, api_key = ?, api_base_url = ?,
+      context_window = ?, reasoning_effort = ?,
       tool_names = ?, updated_at = ?
     WHERE id = ?
   `).run(
     name, avatar, description, JSON.stringify(capabilities),
     systemPrompt, adapterName, modelProvider, modelId, apiKey, apiBaseUrl,
+    contextWindow, reasoningEffort,
     JSON.stringify(toolNames), now, agentId
   );
 
@@ -167,6 +182,23 @@ function validateCustomAgentConfig(
     }
   }
   if (modelProvider.startsWith("profile:")) requireModelProviderProfile(modelProvider);
+}
+
+/** A window is a positive integer; null means "provider default". */
+function validateContextWindow(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isInteger(value) || value < 1_000 || value > 10_000_000) {
+    throw new Error("Context window must be an integer between 1,000 and 10,000,000 tokens, or left empty for the provider default.");
+  }
+  return value;
+}
+
+function validateReasoningEffort(value: ReasoningEffort | null | undefined): ReasoningEffort | null {
+  if (value === null || value === undefined) return null;
+  if (value !== "low" && value !== "medium" && value !== "high") {
+    throw new Error("Reasoning effort must be low, medium or high, or left empty.");
+  }
+  return value;
 }
 
 export function deleteAgent(agentId: string): boolean {

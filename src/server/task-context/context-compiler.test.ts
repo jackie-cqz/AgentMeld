@@ -374,6 +374,8 @@ describe("context-compiler", () => {
         modelId: "deepseek-chat",
         apiBaseUrl: null,
         apiKey: null,
+        contextWindow: null,
+        reasoningEffort: null,
         systemPrompt: "",
         toolNames: [],
         isBuiltin: true,

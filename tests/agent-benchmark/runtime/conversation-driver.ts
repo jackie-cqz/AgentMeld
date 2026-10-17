@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { createConversation, sendMessage } from "@/server/conversation-service";
+import { updateAgent } from "@/server/agent-service";
 import { getWorkspaceForConversation, listAgents } from "@/server/repositories";
 import type {
   AgentBenchmarkCase,
@@ -62,11 +63,19 @@ export class ConversationDriver {
       throw new Error(`Benchmark case ${benchmarkCase.id} requires at least one worker role in addition to Conductor.`);
     }
 
+    // Fixture-owned window: both context modes must be measured against the
+    // same configured window or their results are not comparable.
+    const contextWindow = benchmarkCase.runtime?.contextWindow;
+    if (contextWindow !== undefined) {
+      for (const agentId of agentIds) updateAgent(agentId, { contextWindow });
+    }
+
     const conversation: Conversation = this.dependencies.createConversation({
       title: `[Benchmark] ${benchmarkCase.title}`,
       mode: "group",
       agentIds,
       fsWriteApprovalMode: benchmarkCase.runtime?.fsWriteApprovalMode ?? "auto",
+      contextMode: benchmarkCase.runtime?.contextMode,
     });
     const workspace: Workspace | null = this.dependencies.getWorkspaceForConversation(conversation.id);
     if (!workspace) throw new Error(`Workspace was not created for conversation ${conversation.id}.`);

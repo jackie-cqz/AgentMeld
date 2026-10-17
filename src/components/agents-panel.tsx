@@ -40,6 +40,8 @@ export function AgentsPanel() {
     modelId?: string | null;
     apiKey?: string | null;
     apiBaseUrl?: string | null;
+    contextWindow?: number | null;
+    reasoningEffort?: "low" | "medium" | "high" | null;
     systemPrompt?: string;
   }) => {
     setError(null);
@@ -186,6 +188,8 @@ export function AgentsPanel() {
             modelId: editingAgent.modelId,
             apiKey: editingAgent.apiKey,
             apiBaseUrl: editingAgent.apiBaseUrl,
+            contextWindow: editingAgent.contextWindow,
+            reasoningEffort: editingAgent.reasoningEffort,
             systemPrompt: editingAgent.systemPrompt
           }}
         />

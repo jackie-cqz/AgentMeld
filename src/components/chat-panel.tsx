@@ -109,6 +109,7 @@ export function ChatPanel() {
   const handleUpdateAgent = async (payload: {
     name: string; avatar?: string; description: string; capabilities?: string[]; adapterName: AdapterName; modelProvider?: ModelProvider | null;
     modelId?: string | null; apiKey?: string | null; apiBaseUrl?: string | null;
+    contextWindow?: number | null; reasoningEffort?: "low" | "medium" | "high" | null;
     systemPrompt?: string;
   }) => {
     if (!editingAgent) return;
@@ -324,6 +325,8 @@ export function ChatPanel() {
           modelId: editingAgent.modelId,
           apiKey: editingAgent.apiKey,
           apiBaseUrl: editingAgent.apiBaseUrl,
+          contextWindow: editingAgent.contextWindow,
+          reasoningEffort: editingAgent.reasoningEffort,
           systemPrompt: editingAgent.systemPrompt
         } : undefined}
       />

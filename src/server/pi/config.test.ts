@@ -47,6 +47,33 @@ describe("immutable Pi execution configuration", () => {
     const binding = getDatabase().prepare("SELECT configuration_json FROM agent_execution_bindings WHERE version=?").get(execution.bindingVersion) as { configuration_json: string };
     expect(binding.configuration_json).not.toContain("private-fixture-key");
   });
+  it("feeds the configured window and thinking effort into Pi", () => {
+    const agent = createAgent({ name: "Window fixture", adapterName: "pi", modelProvider: "deepseek",
+      modelId: "deepseek-v4-flash", contextWindow: 10_000, reasoningEffort: "high", toolNames: ["fs_read"] });
+    const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
+    const workspace = getWorkspaceForConversation(conversation.id)!;
+    const triggerMessage = createMessage({ id: newMessageId(), conversationId: conversation.id, role: "user",
+      parts: [{ type: "text", content: "Fixture" }], status: "complete", now: Date.now() });
+    const input = capturePiConfiguration({ agent, conversation, workspace, triggerMessage,
+      runId: newRunId(), conversationId: conversation.id, workspacePath: workspace.rootPath,
+      recentMessages: [], toolNames: agent.toolNames, systemPrompt: agent.systemPrompt, apiKey: null });
+    const execution = preparePiInvocation(input);
+    const modelConfig = JSON.parse(fs.readFileSync(path.join(execution.home, "models.json"), "utf8"));
+    const settings = JSON.parse(fs.readFileSync(path.join(execution.home, "settings.json"), "utf8"));
+
+    // The configured value is what Pi's in-run compactor measures against.
+    expect(modelConfig.providers.agentmeld.models[0].contextWindow).toBe(10_000);
+    expect(modelConfig.providers.agentmeld.models[0].reasoning).toBe(true);
+    expect(modelConfig.providers.agentmeld.compat.supportsReasoningEffort).toBe(true);
+    expect(settings.compaction.keepRecentTokens).toBe(100_000);
+  });
+  it("defaults an unset DeepSeek window to the gateway's verified 1M", () => {
+    const input = capturePiConfiguration({ ...fixture(), apiKey: "fixture-key" });
+    const execution = preparePiInvocation(input);
+    const modelConfig = JSON.parse(fs.readFileSync(path.join(execution.home, "models.json"), "utf8"));
+    expect(modelConfig.providers.agentmeld.models[0].contextWindow).toBe(1_000_000);
+    expect(modelConfig.providers.agentmeld.compat.supportsReasoningEffort).toBe(false);
+  });
   it("rejects execution edits during a run but permits presentation edits", () => {
     const input = fixture();
     createRun({ id: input.runId, conversationId: input.conversationId, agentId: input.agent.id, triggerMessageId: input.triggerMessage.id, status: "running", now: Date.now() });

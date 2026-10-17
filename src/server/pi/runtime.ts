@@ -55,7 +55,9 @@ export async function* runPiInvocation(input: PiInvocationInput, signal: AbortSi
     child = new PiProcess({ cliPath: execution.cliPath, cwd: input.workspacePath, env: execution.env, args: [
       "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes",
       "--extension", path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "pi", "extension.mjs"),
-      "--provider", "agentmeld", "--model", input.agent.modelId!, "--thinking", "off",
+      // `low|medium|high` is the Agent's configured thinking intensity; unset
+      // keeps the previous request (thinking off, no reasoning_effort).
+      "--provider", "agentmeld", "--model", input.agent.modelId!, "--thinking", input.agent.reasoningEffort ?? "off",
       "--session-dir", path.join(execution.home, "sessions"), "--tools", tools.length ? tools.join(",") : "",
     ] });
     const ownedChild = child;

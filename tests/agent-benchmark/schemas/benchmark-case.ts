@@ -31,6 +31,10 @@ const benchmarkWorkspacePathSchema = z.string()
 
 const benchmarkRuntimeSchema = z.object({
   fsWriteApprovalMode: z.enum(["auto", "review"]).optional(),
+  contextMode: z.enum(["raw", "evidence"]).optional(),
+  // The window belongs to the Agent model config; the fixture sets it for the
+  // participating Agents so raw and evidence runs are measured on equal terms.
+  contextWindow: z.number().int().min(1000).max(10_000_000).optional(),
   workspaceFiles: z.array(z.object({
     path: benchmarkWorkspacePathSchema,
     content: z.string(),

@@ -327,12 +327,16 @@ describe("context budget and compaction", () => {
 
     const preview = getContextBudgetPreview(conv.id);
 
+    // No turn cap: every non-pinned message is eligible, and the window is the
+    // configured one (the Agent's default is the verified DeepSeek 1M).
     expect(preview).toMatchObject({
       summaryIncluded: false,
       pinnedMessageCount: 1,
-      recentMessageCount: 20,
-      omittedMessageCount: 4,
-      totalCompleteMessages: 25
+      recentMessageCount: 24,
+      omittedMessageCount: 0,
+      totalCompleteMessages: 25,
+      contextWindow: 1_000_000,
+      autoCompactThreshold: 800_000
     });
     expect(preview!.estimatedTokens).toBeGreaterThan(0);
   });

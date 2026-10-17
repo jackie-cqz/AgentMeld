@@ -51,6 +51,8 @@ export function ensureDatabase() {
       model_id TEXT,
       api_key TEXT,
       api_base_url TEXT,
+      context_window INTEGER,
+      reasoning_effort TEXT,
       tool_names TEXT NOT NULL,
       is_builtin INTEGER NOT NULL DEFAULT 0,
       is_conductor INTEGER NOT NULL DEFAULT 0,
@@ -170,6 +172,7 @@ export function ensureDatabase() {
       pinned_message_ids TEXT NOT NULL,
       archived INTEGER NOT NULL DEFAULT 0,
       fs_write_approval_mode TEXT NOT NULL DEFAULT 'review',
+      context_mode TEXT NOT NULL DEFAULT 'raw',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -663,11 +666,16 @@ function migrateLegacyTables() {
   ensureColumn("agents", "api_base_url", "TEXT");
   ensureColumn("agents", "is_conductor", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("agents", "supports_vision", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("agents", "context_window", "INTEGER");
+  ensureColumn("agents", "reasoning_effort", "TEXT");
   ensureColumn("collaboration_turns", "resolved_by", "TEXT");
   ensureColumn("collaboration_turns", "resolution_message_id", "TEXT");
   ensureColumn("collaboration_turns", "resolved_at", "INTEGER");
 
   ensureColumn("conversations", "archived", "INTEGER NOT NULL DEFAULT 0");
+  // Existing conversations keep today's behaviour: they were built from the
+  // original messages, so the backfill default is `raw`, not `evidence`.
+  ensureColumn("conversations", "context_mode", "TEXT NOT NULL DEFAULT 'raw'");
 
   ensureMessageOriginColumn();
 

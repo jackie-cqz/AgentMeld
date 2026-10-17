@@ -97,6 +97,25 @@ describe("benchmark case schema", () => {
     expect(parsed.runtime?.userScript?.approvals?.[0].decision).toBe("approve");
   });
 
+  it("accepts a fixture-owned context mode and window", () => {
+    const parsed = parseBenchmarkCase({
+      schemaVersion: 1,
+      id: "context-mode-case",
+      title: "Context mode case",
+      description: "Compares raw and evidence contexts on the same window.",
+      category: "collaboration",
+      prompt: "Create an app.",
+      expectedRoles: ["pm"],
+      assertions: [{ id: "pm-ran", type: "role_executed", role: "pm", required: true }],
+      limits: { maxDurationMs: 1000 },
+      runtime: { contextMode: "evidence", contextWindow: 10_000 },
+      tags: [],
+    });
+
+    expect(parsed.runtime?.contextMode).toBe("evidence");
+    expect(parsed.runtime?.contextWindow).toBe(10_000);
+  });
+
   it("accepts safe workspace seed files and rejects traversal", () => {
     const base = {
       schemaVersion: 1 as const,

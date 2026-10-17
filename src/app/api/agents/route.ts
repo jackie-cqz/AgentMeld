@@ -15,6 +15,8 @@ const createAgentSchema = z.object({
   modelId: z.string().max(100).nullable().optional(),
   apiKey: z.string().max(200).nullable().optional(),
   apiBaseUrl: z.string().max(500).nullable().optional(),
+  contextWindow: z.number().int().min(1000).max(10_000_000).nullable().optional(),
+  reasoningEffort: z.enum(["low", "medium", "high"]).nullable().optional(),
   systemPrompt: z.string().max(4000).optional(),
   toolNames: z.array(z.string()).max(64).optional()
 });
