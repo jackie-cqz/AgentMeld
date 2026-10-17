@@ -27,6 +27,7 @@ import type {
   ChannelConversation,
   Conversation,
   ConversationMode,
+  ContextMode,
   FsWriteApprovalMode,
   Message,
   MessagePart,
@@ -42,6 +43,8 @@ interface CreateConversationInput {
   mode: ConversationMode;
   agentIds: string[];
   fsWriteApprovalMode: FsWriteApprovalMode;
+  /** Defaults to `raw`; the service and channel binding state it explicitly. */
+  contextMode?: ContextMode;
   now: number;
 }
 
@@ -129,9 +132,9 @@ export function createConversation(input: CreateConversationInput): Conversation
     .prepare(
       `
         INSERT INTO conversations (
-          id, title, mode, agent_ids, fs_write_approval_mode,
+          id, title, mode, agent_ids, fs_write_approval_mode, context_mode,
           pinned_message_ids, archived, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -140,6 +143,7 @@ export function createConversation(input: CreateConversationInput): Conversation
       input.mode,
       JSON.stringify(input.agentIds),
       input.fsWriteApprovalMode,
+      input.contextMode ?? "raw",
       JSON.stringify([]),
       0,
       input.now,

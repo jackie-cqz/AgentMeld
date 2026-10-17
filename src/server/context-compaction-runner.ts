@@ -1,4 +1,3 @@
-import { getDatabase } from "@/db/client";
 import { runCompaction } from "@/server/conversation-context";
 import {
   abortCompactionJob,
@@ -19,8 +18,8 @@ import {
 } from "@/server/context-compaction-service";
 import { eventBus } from "@/server/event-bus";
 import { getAgent, getConversation } from "@/server/repositories";
+import { postSystemMessage } from "@/server/system-notice";
 import { newMessageId } from "@/shared/ids";
-import type { MessageOrigin } from "@/shared/types";
 
 export type StartCompactionResult =
   | {
@@ -241,56 +240,4 @@ async function executeCompactionJob(input: ExecuteCompactionJobInput): Promise<v
   } finally {
     removeCompactionJobController(jobId);
   }
-}
-
-function postSystemMessage(conversationId: string, content: string): void {
-  const now = Date.now();
-  const messageId = newMessageId();
-  const parts = [{ type: "text" as const, content }];
-  // This path writes with raw SQL instead of createMessage, so the origin has to
-  // be stated twice: once for the row and once for the published event. Keeping
-  // it on one constant stops the two from drifting — a mismatch is invisible
-  // until something actually reads the column, and then a client that reloads
-  // would see a different origin than the live event carried.
-  const origin: MessageOrigin = "internal";
-
-  getDatabase().prepare(`
-    INSERT INTO messages (
-      id, conversation_id, role, origin, agent_id, run_id, parts, status,
-      mentioned_agent_ids, parent_message_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    messageId,
-    conversationId,
-    "system",
-    origin,
-    null,
-    null,
-    JSON.stringify(parts),
-    "complete",
-    JSON.stringify([]),
-    null,
-    now,
-    now
-  );
-
-  eventBus.publish({
-    type: "message.added",
-    conversationId,
-    timestamp: now,
-    message: {
-      id: messageId,
-      conversationId,
-      role: "system",
-      origin,
-      agentId: null,
-      runId: null,
-      parts,
-      status: "complete",
-      parentMessageId: null,
-      mentionedAgentIds: [],
-      createdAt: now,
-      updatedAt: now
-    }
-  });
 }

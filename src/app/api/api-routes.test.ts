@@ -80,6 +80,32 @@ describe("POST /api/conversations", () => {
     const req = jsonRequest("POST", {});
     const res = await postConversations(req);
     expect(res.status).toBe(201);
+    const body = (await res.json()) as { conversation: { contextMode: string } };
+    expect(body.conversation.contextMode).toBe("raw");
+  });
+
+  it("accepts contextMode at creation and refuses to change it later", async () => {
+    const created = await postConversations(jsonRequest("POST", {
+      mode: "single",
+      agentIds: ["ag_mock_builder"],
+      contextMode: "evidence"
+    }));
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { conversation: { id: string; contextMode: string } };
+    expect(body.conversation.contextMode).toBe("evidence");
+
+    // The mode is fixed at creation: a PATCH carrying it is ignored by the API.
+    const patched = await patchConversation(jsonRequest("PATCH", { contextMode: "raw" }), {
+      params: Promise.resolve({ id: body.conversation.id })
+    });
+    expect(patched.status).toBe(200);
+    const after = (await patched.json()) as { conversation: { contextMode: string } };
+    expect(after.conversation.contextMode).toBe("evidence");
+  });
+
+  it("rejects an unknown context mode", async () => {
+    const res = await postConversations(jsonRequest("POST", { mode: "single", contextMode: "full" }));
+    expect(res.status).toBe(400);
   });
 });
 

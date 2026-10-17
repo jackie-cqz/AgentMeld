@@ -7,6 +7,10 @@ export interface AgentModelValue {
   modelId: string;
   apiKey: string;
   apiBaseUrl: string;
+  /** Form text: empty means "provider default". Converted to number on submit. */
+  contextWindow: string;
+  /** Empty means thinking stays off (today's behaviour). */
+  reasoningEffort: "" | "low" | "medium" | "high";
 }
 
 export interface AgentProviderChoice {
@@ -20,7 +24,7 @@ export interface AgentProviderChoice {
   unavailable?: boolean;
 }
 
-export const emptyAgentModel = (): AgentModelValue => ({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "" });
+export const emptyAgentModel = (): AgentModelValue => ({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" });
 
 export function agentProviderChoices(profiles: ModelProviderProfile[], snapshot: ProviderSnapshot,
   agents: Pick<Agent, "modelProvider" | "modelId">[], current: AgentModelValue): AgentProviderChoice[] {
@@ -47,5 +51,5 @@ export function agentProviderChoices(profiles: ModelProviderProfile[], snapshot:
 
 export function selectAgentProvider(current: AgentModelValue, provider: AgentProviderChoice): AgentModelValue {
   if (current.provider === provider.id) return current;
-  return { provider: provider.id, modelId: provider.defaultModel, apiKey: "", apiBaseUrl: "" };
+  return { provider: provider.id, modelId: provider.defaultModel, apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" };
 }

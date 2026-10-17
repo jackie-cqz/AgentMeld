@@ -39,6 +39,8 @@ interface CreateAgentDialogProps {
     modelId?: string | null;
     apiKey?: string | null;
     apiBaseUrl?: string | null;
+    contextWindow?: number | null;
+    reasoningEffort?: "low" | "medium" | "high" | null;
     systemPrompt?: string;
   }) => Promise<void>;
   // Edit mode: pre-fill form with existing agent data
@@ -53,6 +55,8 @@ interface CreateAgentDialogProps {
     modelId: string | null;
     apiKey: string | null;
     apiBaseUrl: string | null;
+    contextWindow: number | null;
+    reasoningEffort: "low" | "medium" | "high" | null;
     systemPrompt: string;
   };
 }
@@ -73,9 +77,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const adapterName: AdapterName = "pi";
   const [modelConfig, setModelConfig] = useState<AgentModelValue>(() => ({
     provider: initial?.modelProvider ?? null, modelId: initial?.modelId ?? "",
-    apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? ""
+    apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? "",
+    contextWindow: initial?.contextWindow === null || initial?.contextWindow === undefined ? "" : String(initial.contextWindow),
+    reasoningEffort: initial?.reasoningEffort ?? ""
   }));
-  const { provider: modelProvider, modelId, apiKey, apiBaseUrl } = modelConfig;
+  const { provider: modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort } = modelConfig;
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,6 +179,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
       setEditTab("model");
       return;
     }
+    if (contextWindow.trim() && (!/^\d+$/.test(contextWindow.trim()) || Number(contextWindow) < 1000 || Number(contextWindow) > 10_000_000)) {
+      setError("模型窗口必须是 1,000 到 10,000,000 之间的整数，或留空使用供应商默认值。");
+      setEditTab("model");
+      return;
+    }
     if (modelProvider === "openai-compatible") {
       if (!apiKey.trim()) {
         setError("OpenAI-Compatible 必须提供 API Key。");
@@ -197,6 +208,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         modelId: modelId.trim() || null,
         apiKey: apiKey.trim() || null,
         apiBaseUrl: apiBaseUrl.trim() || null,
+        contextWindow: contextWindow.trim() ? Number(contextWindow.trim()) : null,
+        reasoningEffort: reasoningEffort || null,
         systemPrompt: systemPrompt.trim() || undefined
       });
       resetCreateForm();
@@ -208,8 +221,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   };
 
-  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
-  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, systemPrompt]) !== original;
+  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.contextWindow ?? "", initial?.reasoningEffort ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
+  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt]) !== original;
   const discard = useUnsavedChanges(dirty, handleClose, submitting);
   return (
     <><Modal open={open} onClose={discard.requestClose} title={isEdit ? "编辑 Agent" : isChoice ? "新建 Agent" : isQuick ? "快速创建" : "详细配置"}

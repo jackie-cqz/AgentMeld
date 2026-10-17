@@ -178,7 +178,7 @@ export function Sidebar() {
 function CreateConversationDialog({ agents, onClose, onCreate }: {
   agents: Agent[];
   onClose: () => void;
-  onCreate: (payload: { title?: string; mode: "single" | "group"; agentIds: string[]; fsWriteApprovalMode: "auto" | "review" }) => Promise<void>;
+  onCreate: (payload: { title?: string; mode: "single" | "group"; agentIds: string[]; fsWriteApprovalMode: "auto" | "review"; contextMode: "raw" | "evidence" }) => Promise<void>;
 }) {
   const preferred = agents.filter(agent => agent.isConductor || agent.name.includes("前端")).map(agent => agent.id);
   const defaults = preferred.length >= 2 ? preferred : agents.slice(0, 2).map(agent => agent.id);
@@ -186,17 +186,20 @@ function CreateConversationDialog({ agents, onClose, onCreate }: {
   const [mode, setMode] = useState<"single" | "group">("group");
   const [agentIds, setAgentIds] = useState<string[]>(defaults);
   const [approvalMode, setApprovalMode] = useState<"auto" | "review">("review");
+  // Default to raw: a conversation created without a choice behaves exactly as
+  // it did before this option existed.
+  const [contextMode, setContextMode] = useState<"raw" | "evidence">("raw");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const valid = mode === "single" ? agentIds.length === 1 : agentIds.length >= 2;
   const { requestClose, confirmation } = useUnsavedChanges(
-    Boolean(title.trim()) || mode !== "group" || approvalMode !== "review" || JSON.stringify(agentIds) !== JSON.stringify(defaults), onClose, saving
+    Boolean(title.trim()) || mode !== "group" || approvalMode !== "review" || contextMode !== "raw" || JSON.stringify(agentIds) !== JSON.stringify(defaults), onClose, saving
   );
   const create = async () => {
     if (!valid || saving) return;
     setSaving(true);
     setError(null);
-    try { await onCreate({ title: title.trim() || undefined, mode, agentIds, fsWriteApprovalMode: approvalMode }); }
+    try { await onCreate({ title: title.trim() || undefined, mode, agentIds, fsWriteApprovalMode: approvalMode, contextMode }); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "创建会话失败。"); }
     finally { setSaving(false); }
   };
@@ -223,6 +226,12 @@ function CreateConversationDialog({ agents, onClose, onCreate }: {
         <select aria-label="文件写入审批" value={approvalMode} disabled={saving} onChange={event => setApprovalMode(event.target.value as "auto" | "review")}>
           <option value="review">Review · 手动审批</option><option value="auto">Auto · 自动审批</option>
         </select></label>
+      <label className="ui-field"><span className="ui-field-label">上下文模式（创建后不可更改）</span>
+        <select aria-label="上下文模式" value={contextMode} disabled={saving} onChange={event => setContextMode(event.target.value as "raw" | "evidence")}>
+          <option value="raw">原文 · 原始消息（默认）</option>
+          <option value="evidence">证据 · 已核实事实 + 近期原文</option>
+        </select></label>
+      <p className="ui-muted -mt-2 text-xs leading-relaxed">两种模式都会在历史达到模型窗口 80% 时自动压缩旧消息；压缩后仍放不下时会裁剪最旧的消息，并在会话中告知被裁剪的条数（置顶消息始终保留）。证据模式额外注入当前已核实的事实。</p>
       {!valid ? <Feedback tone="info">{mode === "single" ? "请选择 1 位 Agent" : "请至少选择 2 位 Agent"}</Feedback> : null}
     </Modal>
     {confirmation}

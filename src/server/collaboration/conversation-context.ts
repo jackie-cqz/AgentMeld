@@ -1,7 +1,7 @@
 import { buildHistoryFor, type ChatMessage } from "@/server/conversation-context";
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { listMessages } from "@/server/repositories";
-import { getModelLimits } from "@/shared/model-registry";
+import { getModelLimits, resolveContextWindow } from "@/shared/model-registry";
 import { estimateTokens } from "@/shared/token-estimate";
 import { PiRuntimeError } from "@/server/pi/process";
 import type { Agent, Message } from "@/shared/types";
@@ -33,7 +33,7 @@ export async function buildCollaborationHistory(input: {
   }] : [];
   const currentText = input.currentText ?? triggerMessage.parts.filter(part => part.type === "text").map(part => part.content).join("\n");
   const limits = getModelLimits(agent.modelProvider);
-  const available = limits.contextWindow - limits.outputReserve - PROTOCOL_AND_TOOLS_RESERVE
+  const available = resolveContextWindow(agent) - limits.outputReserve - PROTOCOL_AND_TOOLS_RESERVE
     - estimateTokens(systemPrompt) - estimateTokens(currentText) - tokens(activeFacts);
   const options = { excludeMessageId: triggerMessage.id, beforeMessageId: triggerMessage.id };
   // Pinned messages and the durable summary are mandatory. Never silently drop

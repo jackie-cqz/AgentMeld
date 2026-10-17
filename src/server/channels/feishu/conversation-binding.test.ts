@@ -333,6 +333,13 @@ describe("resolveChannelConversation", () => {
     expect(getConversation(channelConversation.conversationId)?.mode).toBe("single");
   });
 
+  it("creates a channel conversation in the default raw context mode", () => {
+    // There is no creation dialog on this path: the default must be stated in
+    // code, and it must be the mode that behaves like today's conversations.
+    const { channelConversation } = resolveChannelConversation(first);
+    expect(getConversation(channelConversation.conversationId)?.contextMode).toBe("raw");
+  });
+
   it("titles the conversation from the chat id rather than guessing at content", () => {
     // The account cannot read a chat's name either, so anything friendlier here
     // would be invented. A rename is the user's call.

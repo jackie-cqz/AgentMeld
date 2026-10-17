@@ -87,6 +87,12 @@ export function AgentModelConfig({ open, value, onChange }: {
         <summary><SlidersHorizontal size={15} />Agent 独立配置{value.apiKey || value.apiBaseUrl ? <span>已覆盖</span> : null}<ChevronRight size={14} /></summary>
         <label className="ui-field">API Key<div className="provider-key-input"><input aria-label="Agent API Key" autoComplete="off" type={showKey ? "text" : "password"} value={value.apiKey} placeholder="继承供应商密钥" onChange={event => onChange({ ...value, apiKey: event.target.value })} /><button type="button" className="ui-icon-button" title={showKey ? "隐藏密钥" : "显示密钥"} aria-label={showKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowKey(!showKey)}>{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
         <label className="ui-field">API 地址<input aria-label="Agent API 地址" type="url" value={value.apiBaseUrl} placeholder={selected?.baseUrl || "继承供应商地址"} onChange={event => onChange({ ...value, apiBaseUrl: event.target.value })} /></label>
+        <label className="ui-field">上下文窗口（tokens）<input aria-label="上下文窗口" inputMode="numeric" value={value.contextWindow} placeholder="留空 = 供应商默认（DeepSeek 为 1,000,000）" onChange={event => onChange({ ...value, contextWindow: event.target.value.replace(/[^0-9]/g, "") })} /></label>
+        <p className="ui-muted text-xs leading-relaxed">这个值同时用于应用侧的 80% 自动压缩和 Pi 自身的压缩窗口；留空不会改变现有 Agent 的行为。</p>
+        <label className="ui-field">思考强度<select aria-label="思考强度" value={value.reasoningEffort} onChange={event => onChange({ ...value, reasoningEffort: event.target.value as AgentModelValue["reasoningEffort"] })}>
+          <option value="">跟随默认（不启用）</option><option value="low">低 · low</option><option value="medium">中 · medium</option><option value="high">高 · high</option>
+        </select></label>
+        <p className="ui-muted text-xs leading-relaxed">网关实测接受 low / high 并计入 reasoning tokens；medium 会由 Pi 按模型能力就近映射。仅影响思考强度，不改变上下文预算。</p>
       </details>
     </div>
     {picker ? <section className="agent-model-inline" aria-label={picker === "provider" ? "选择供应商" : "选择模型"} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (pendingProvider) setPendingProvider(null); else setPicker(null); } }}>

@@ -28,7 +28,7 @@ import {
 import { PIN_LIMIT_PER_CONVERSATION } from "@/shared/constants";
 import { newConversationId, newMessageId, newWorkspaceId } from "@/shared/ids";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
-import type { Agent, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
+import type { Agent, ContextMode, Conversation, FsWriteApprovalMode, Message, MessageOrigin } from "@/shared/types";
 import { resolveMessageRecipients } from "@/shared/collaboration-routing";
 import { listConsultations } from "@/server/collaboration/consultations";
 import { listHandoffs } from "@/server/collaboration/handoffs";
@@ -61,6 +61,8 @@ interface CreateConversationInput {
   mode?: "single" | "group";
   agentIds?: string[];
   fsWriteApprovalMode?: FsWriteApprovalMode;
+  /** Fixed at creation; defaults to `raw`, today's behaviour. */
+  contextMode?: ContextMode;
 }
 
 interface UpdateConversationInput {
@@ -134,6 +136,7 @@ export function createConversation(input: CreateConversationInput) {
     mode,
     agentIds,
     fsWriteApprovalMode: input.fsWriteApprovalMode ?? "auto",
+    contextMode: input.contextMode ?? "raw",
     now
   });
 

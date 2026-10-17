@@ -50,6 +50,8 @@ export interface CreateConversationPayload {
   mode?: "single" | "group";
   agentIds?: string[];
   fsWriteApprovalMode?: "auto" | "review";
+  /** Fixed at creation: raw messages, or raw plus verified facts. */
+  contextMode?: "raw" | "evidence";
 }
 
 export interface CompactionState {

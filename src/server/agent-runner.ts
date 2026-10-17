@@ -24,7 +24,8 @@ import {
   updateMessageStatus,
   updateRunStatus
 } from "@/server/repositories";
-import { buildHistoryFor } from "@/server/conversation-context";
+import { buildRunHistory, pinnedContextTokens } from "@/server/run-context";
+import { reportContextTruncation } from "@/server/system-notice";
 import { getLatestSummary, calculateContextBudget } from "@/server/context-compaction-service";
 import { executeConductor, executeTaskHandoff } from "@/server/conductor-service";
 import { cancelPendingBashForRun } from "@/server/pending-bash";
@@ -32,7 +33,7 @@ import { cancelPendingWritesForRun } from "@/server/pending-writes";
 import { cancelPendingPlansForRun } from "@/server/dispatch-plan-manager";
 import { cancelPendingQuestionsForRun } from "@/server/pending-questions";
 import { estimateTokens } from "@/shared/token-estimate";
-import { getModelLimits } from "@/shared/model-registry";
+import { getModelLimits, resolveContextWindow } from "@/shared/model-registry";
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { Agent, AgentRun, Conversation, Message } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
@@ -424,33 +425,25 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   } else if (!input.parentRunId) {
     try {
       const limits = getModelLimits(agent.modelProvider);
-      const conversation = getConversation(input.conversationId);
       const summary = getLatestSummary(input.conversationId);
-
-      // P1: Calculate unified context budget
       const systemTokens = estimateTokens(systemPrompt);
       const summaryTokens = summary ? estimateTokens(summary.summary) : 0;
       const currentTurnTokens = estimateTokens(extractTextFromMessage(input.triggerMessage));
 
-      // P1: Pinned overflow check — if pinned alone exceeds budget, fail fast
-      let pinnedTokens = 0;
-      if (conversation) {
-        const pinnedIds = new Set(conversation.pinnedMessageIds);
-        const allMessages = listMessages(input.conversationId);
-        const pinned = allMessages.filter((m) => pinnedIds.has(m.id));
-        pinnedTokens = pinned.reduce((s, m) => s + estimateTokens(extractTextFromMessage(m)), 0);
-      }
-
+      // The configured window (or its verified provider default) is the single
+      // source of truth app-side; it also reaches Pi through models.json.
+      const contextWindow = resolveContextWindow(agent);
+      const pinned = pinnedContextTokens(input.conversationId);
       const budget = calculateContextBudget(
-        limits.contextWindow, limits.outputReserve,
-        systemTokens, summaryTokens, pinnedTokens, currentTurnTokens
+        contextWindow, limits.outputReserve,
+        systemTokens, summaryTokens, pinned.tokens, currentTurnTokens
       );
 
       // P0.4: Pinned overflow — reject before calling adapter
-      const fixedCost = systemTokens + summaryTokens + pinnedTokens + currentTurnTokens + budget.protocolMargin + limits.outputReserve;
-      if (fixedCost > limits.contextWindow && pinnedTokens > 0) {
+      const fixedCost = systemTokens + summaryTokens + pinned.tokens + currentTurnTokens + budget.protocolMargin + limits.outputReserve;
+      if (fixedCost > contextWindow && pinned.tokens > 0) {
         // Pinned context alone exceeds the model window — don't call adapter
-        const errorText = `上下文超出模型窗口限制。置顶消息占用约 ${pinnedTokens} tokens（${conversation?.pinnedMessageIds.length ?? 0} 条），系统提示 ${systemTokens} tokens，摘要 ${summaryTokens} tokens，当前消息 ${currentTurnTokens} tokens。总计约 ${fixedCost} tokens，超过 ${limits.contextWindow} 窗口。请取消部分置顶消息或缩短当前输入后重试。`;
+        const errorText = `上下文超出模型窗口限制。置顶消息占用约 ${pinned.tokens} tokens（${pinned.count} 条），系统提示 ${systemTokens} tokens，摘要 ${summaryTokens} tokens，当前消息 ${currentTurnTokens} tokens。总计约 ${fixedCost} tokens，超过 ${contextWindow} 窗口。请取消部分置顶消息或缩短当前输入后重试。`;
         message = { ...message, parts: [{ type: "text", content: `⚠️ ${errorText}` }], updatedAt: Date.now() };
         updateMessageParts(message.id, message.parts, Date.now());
         completeRun(run, message, "failed", errorText, { modelId: agent.modelId ?? "unknown", inputTokens: 0, outputTokens: 0 }, "context_overflow", false);
@@ -458,23 +451,19 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         return;
       }
 
-      if (budget.remainingTokens <= 0 && pinnedTokens > 0) {
-        // Recent budget exhausted but pinned+system+summary still within window
-        history = await buildHistoryFor(agent.id, input.conversationId, {
-          excludeMessageId: input.triggerMessage.id,
-          tokenBudget: 0
-        });
-      } else {
-        // Pass recent-only budget: buildHistoryFor includes pinned in its total,
-        // but pinned is immune to truncation. Add pinnedTokens back so the
-        // effective recent budget = remainingTokens.
-        history = await buildHistoryFor(agent.id, input.conversationId, {
-          excludeMessageId: input.triggerMessage.id,
-          tokenBudget: Math.max(0, budget.remainingTokens + pinnedTokens)
-        });
-      }
+      const context = await buildRunHistory({
+        agent,
+        conversationId: input.conversationId,
+        excludeMessageId: input.triggerMessage.id,
+        systemTokens,
+        currentTurnTokens
+      });
+      history = context.messages;
+      // Truncation is a visible event now: the count is reported and the user
+      // is told, instead of the oldest messages disappearing without a trace.
+      reportContextTruncation(input.conversationId, context.droppedMessageCount, context.contextWindow);
     } catch (err) {
-      console.warn("[agent-runner] buildHistoryFor failed, continuing without history", err);
+      console.warn("[agent-runner] context build failed, continuing without history", err);
       history = [];
     }
   }

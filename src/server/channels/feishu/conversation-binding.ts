@@ -49,6 +49,9 @@ export function resolveChannelConversation(input: {
     mode: input.chatType === "p2p" ? "single" : "group",
     agentIds: [input.receivingAgentId],
     fsWriteApprovalMode: "auto",
+    // There is no creation dialog on this path, so state the default: a Feishu
+    // conversation injects the original messages, with no verified-facts block.
+    contextMode: "raw",
     now: input.now
   });
 

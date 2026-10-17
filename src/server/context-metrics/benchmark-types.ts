@@ -252,6 +252,10 @@ export interface BenchmarkUserScript {
 
 export interface BenchmarkRuntimeConfig {
   fsWriteApprovalMode?: "auto" | "review";
+  /** Which context mode the comparison conversation is created with. */
+  contextMode?: "raw" | "evidence";
+  /** Overrides every participating Agent's model window for this case. */
+  contextWindow?: number;
   workspaceFiles?: BenchmarkWorkspaceFile[];
   assetBundle?: BenchmarkAssetBundle;
   verifiers?: BenchmarkCommandVerifier[];

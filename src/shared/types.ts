@@ -38,6 +38,18 @@ export type MessageOrigin = "human" | "bot" | "internal";
 export type MessageStatus = "streaming" | "complete" | "error" | "aborted";
 export type AgentRunStatus = "queued" | "running" | "complete" | "failed" | "aborted";
 export type FsWriteApprovalMode = "auto" | "review";
+/**
+ * How a conversation's prompt is built. Fixed at creation so a run never sees
+ * the contract change halfway through its history.
+ *
+ * `raw` injects the original messages; `evidence` injects the verified
+ * registry facts in addition to them. Both are bounded by the model window:
+ * both auto-compact old history at 80% and both truncate (visibly) when even
+ * that does not fit.
+ */
+export type ContextMode = "raw" | "evidence";
+/** Thinking intensity forwarded to the provider (Pi's `--thinking` level). */
+export type ReasoningEffort = "low" | "medium" | "high";
 export type WorkspaceMode = "sandbox" | "local";
 export type AttachmentKind = "image" | "file";
 export type CompanionMode = "off" | "lan" | "tailnet";
@@ -311,6 +323,14 @@ export interface Agent {
   modelId: string | null;
   apiKey: string | null;
   apiBaseUrl: string | null;
+  /**
+   * The model's context window, or null to fall back to the provider default.
+   * This is the single source of truth: it feeds the app budget and Pi's
+   * models.json, so the two compactors agree on where the window ends.
+   */
+  contextWindow: number | null;
+  /** Thinking intensity, or null to leave Pi's default (thinking off). */
+  reasoningEffort: ReasoningEffort | null;
   systemPrompt: string;
   toolNames: string[];
   isBuiltin: boolean;
@@ -326,6 +346,8 @@ export interface Conversation {
   mode: ConversationMode;
   agentIds: string[];
   fsWriteApprovalMode: FsWriteApprovalMode;
+  /** Chosen when the conversation is created and never editable afterwards. */
+  contextMode: ContextMode;
   pinnedMessageIds: string[];
   archived: boolean;
   pinnedAt: number | null;

@@ -79,6 +79,29 @@ describe("POST /api/agents", () => {
     expect(body.agent.name).toBe("New API Agent");
   });
 
+  it("persists the configured window and thinking effort", async () => {
+    const created = await postAgents(jsonRequest("POST", {
+      name: "Windowed API Agent",
+      adapterName: "pi",
+      modelProvider: "deepseek",
+      modelId: "deepseek-v4-flash",
+      contextWindow: 10_000,
+      reasoningEffort: "high"
+    }));
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { agent: { id: string; contextWindow: number | null; reasoningEffort: string | null } };
+    expect(body.agent.contextWindow).toBe(10_000);
+    expect(body.agent.reasoningEffort).toBe("high");
+
+    const cleared = await patchAgent(jsonRequest("PATCH", { contextWindow: null, reasoningEffort: null }), {
+      params: Promise.resolve({ id: body.agent.id })
+    });
+    expect(cleared.status).toBe(200);
+    const after = (await cleared.json()) as { agent: { contextWindow: number | null; reasoningEffort: string | null } };
+    expect(after.agent.contextWindow).toBeNull();
+    expect(after.agent.reasoningEffort).toBeNull();
+  });
+
   it("accepts full agent config", async () => {
     const req = jsonRequest("POST", {
       name: "Full Config",

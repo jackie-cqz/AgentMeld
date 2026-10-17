@@ -25,6 +25,8 @@ function makeStubAgent(overrides: Partial<Agent> = {}): Agent {
     modelId: "deepseek-chat",
     apiKey: null,
     apiBaseUrl: null,
+    contextWindow: null,
+    reasoningEffort: null,
     systemPrompt: "You are the Conductor.",
     toolNames: ["plan_tasks", "ask_user"],
     isBuiltin: true,

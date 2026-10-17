@@ -26,6 +26,8 @@ export interface AgentRow {
   model_id: string | null;
   api_key?: string | null;
   api_base_url?: string | null;
+  context_window?: number | null;
+  reasoning_effort?: string | null;
   system_prompt: string;
   tool_names: string;
   is_builtin: number;
@@ -41,6 +43,8 @@ export interface ConversationRow {
   mode: string;
   agent_ids: string;
   fs_write_approval_mode: string;
+  /** Absent only on a database read before the migration applied; defaults to raw. */
+  context_mode?: string | null;
   pinned_message_ids: string;
   archived?: number | null;
   pinned_at?: number | null;
@@ -183,6 +187,8 @@ export function mapAgent(row: AgentRow): Agent {
     modelId: row.model_id,
     apiKey: row.api_key ?? null,
     apiBaseUrl: row.api_base_url ?? null,
+    contextWindow: row.context_window ?? null,
+    reasoningEffort: (row.reasoning_effort as Agent["reasoningEffort"]) ?? null,
     systemPrompt: row.system_prompt,
     toolNames: parseJson<string[]>(row.tool_names, []),
     isBuiltin: row.is_builtin === 1,
@@ -200,6 +206,7 @@ export function mapConversation(row: ConversationRow): Conversation {
     mode: row.mode as Conversation["mode"],
     agentIds: parseJson<string[]>(row.agent_ids, []),
     fsWriteApprovalMode: row.fs_write_approval_mode as Conversation["fsWriteApprovalMode"],
+    contextMode: (row.context_mode as Conversation["contextMode"]) ?? "raw",
     pinnedMessageIds: parseJson<string[]>(row.pinned_message_ids, []),
     archived: row.archived === 1,
     pinnedAt: row.pinned_at ?? null,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { getDataDir, getDatabase } from "@/db/client";
-import { getModelLimits } from "@/shared/model-registry";
+import { getModelLimits, resolveContextWindow } from "@/shared/model-registry";
 import { getSettings, resolveApiKey } from "@/server/settings-service";
 import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
 import type { PiInvocationInput, PiProviderSnapshot } from "./types";
@@ -96,21 +96,33 @@ export function preparePiInvocation(input: PiInvocationInput) {
     : undefined;
   // Preserve master's verified 64K output allowance for legacy DeepSeek aliases.
   // Known models use the locked Pi catalog, rather than hand-maintained limits.
-  const contextWindow = nativeModel?.contextWindow ?? (deepseek ? 128_000 : limits.contextWindow);
+  // The window itself comes from the Agent's configured value (or the verified
+  // provider default), so Pi's in-run compactor and our 80% trigger agree.
+  const contextWindow = resolveContextWindow(input.agent, nativeModel?.contextWindow);
   const maxTokens = nativeModel?.maxTokens ?? (deepseek ? 65_536 : limits.outputReserve);
+  const reasoningEffort = input.agent.reasoningEffort;
   fs.writeFileSync(path.join(home, "models.json"), JSON.stringify({ providers: { agentmeld: {
     api: provider === "anthropic" ? "anthropic-messages" : "openai-completions",
     baseUrl, apiKey: "$AGENTMELD_PI_MODEL_KEY", authHeader: true,
-    compat: { ...nativeModel?.compat, supportsDeveloperRole: false, supportsReasoningEffort: false,
+    compat: { ...nativeModel?.compat, supportsDeveloperRole: false,
+      // Pi only sends `reasoning_effort` when this bit is on. The gateway
+      // accepts low|high (verified against usage.reasoning_tokens); leaving it
+      // off when no effort is configured keeps the previous request body.
+      supportsReasoningEffort: Boolean(reasoningEffort),
       ...(deepseek ? { supportsStore: false, maxTokensField: "max_tokens", requiresReasoningContentOnAssistantMessages: true, thinkingFormat: "deepseek" } : {}) },
-    models: [{ id: input.agent.modelId, name: input.agent.modelId, reasoning: nativeModel?.reasoning ?? deepseek,
+    models: [{ id: input.agent.modelId, name: input.agent.modelId,
+      reasoning: Boolean(reasoningEffort) || (nativeModel?.reasoning ?? deepseek),
       input: nativeModel?.input ?? (input.agent.supportsVision && !deepseek ? ["text", "image"] : ["text"]),
       contextWindow, maxTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
   } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(home, "settings.json"), JSON.stringify({
     defaultProvider: "agentmeld", defaultModel: input.agent.modelId,
-    compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2, baseDelayMs: 1000 },
+    // Pi compacts a single run internally; it must see the same window and
+    // keep the recent 100k it was told to. App-level compaction (80%, across
+    // runs) is a different compactor and lives in conversation-context.ts.
+    compaction: { enabled: true, keepRecentTokens: 100_000 },
+    retry: { enabled: true, maxRetries: 2, baseDelayMs: 1000 },
   }), { mode: 0o600 });
   const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV ?? "production" };
   // Pi discovers Git Bash through the Windows installation directories before
@@ -124,7 +136,7 @@ export function preparePiInvocation(input: PiInvocationInput) {
   const configuration = { harness: "pi", version: PI_VERSION, modelProvider: provider,
     modelId: input.agent.modelId, baseUrl, toolNames: input.toolNames,
     agentUpdatedAt: input.agent.updatedAt, credentialRef, providerRevision: input.providerRevision,
-    catalogProvider: input.catalogProvider, contextWindow, maxTokens };
+    catalogProvider: input.catalogProvider, contextWindow, maxTokens, reasoningEffort };
   const bindingVersion = createHash("sha256").update(JSON.stringify(configuration)).digest("hex");
   persistExecution(invocationId, input, home, bindingVersion, configuration);
   return { ...installation, invocationId, home, env, bindingVersion };
