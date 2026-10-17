@@ -9,7 +9,8 @@
 .decision-queue-header { display: flex; align-items: center; gap: 12px; padding: 6px 16px; min-height: 44px; }
 .decision-queue-header > span { flex-shrink: 0; font-size: 12px; color: var(--ui-muted); }
 .decision-queue-header strong { margin-left: 4px; color: var(--foreground); }
-.decision-queue-header select { min-width: 0; flex: 1; width: 0; height: 32px; font-size: 12px; background: var(--ui-subtle); border: 1px solid var(--ui-line); border-radius: 5px; padding: 0 8px; text-overflow: ellipsis; }
+.decision-queue-header .ui-select { min-width: 0; flex: 1; }
+.decision-queue-header .ui-select-trigger { min-height: 32px; font-size: 12px; background: var(--ui-subtle); border-radius: 5px; padding: 0 8px; }
 .decision-queue-content { max-height: min(30dvh, 300px); overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 8px; }
 .decision-queue-content[hidden], .decision-queue-content > [hidden] { display: none; }
 .decision-queue .ui-decision { border: 0; border-radius: 0; box-shadow: none; }
@@ -27,7 +28,8 @@
 .artifact-document .prose { color: var(--foreground); }
 .agent-library-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 16px 0 0; }
 .agent-library-filters .ui-search-field { flex: 1; min-width: 160px; max-width: 340px; }
-.agent-library-filters select { max-width: 180px; height: 36px; border: 1px solid var(--ui-line); border-radius: 6px; background: var(--ui-surface); padding: 0 8px; font-size: 12px; }
+.agent-library-filters .ui-select { max-width: 180px; }
+.agent-library-filters .ui-select-trigger { min-height: 36px; font-size: 12px; }
 .agent-library-filters > .ui-muted { font-size: 12px; }
 .agent-library-config { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12px; color: var(--ui-muted); margin-top: 10px; }
 .agent-library-config > span { max-width: 100%; overflow-wrap: anywhere; }
@@ -79,7 +81,7 @@
   .artifact-document { padding: 18px 14px; }
   .workspace-agent-grid.is-list .workspace-agent-row > .min-w-0 { display: block; }
   .workspace-agent-grid.is-list .workspace-agent-description { margin-top: 6px; }
-  .agent-library-filters select { max-width: 150px; }
+  .agent-library-filters .ui-select { max-width: 150px; }
   .ui-plan-actions .ui-button { font-size: 11px; padding: 5px 7px; }
   .decision-queue-header { gap: 8px; padding-inline: 12px; }
   .decision-queue-content { padding-inline: 12px; }

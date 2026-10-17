@@ -8,6 +8,7 @@ import { selectAgentList } from "@/stores/selectors";
 import { CreateAgentDialog } from "@/components/create-agent-dialog";
 import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
+import { Select } from "@/components/ui/select";
 import { requestJson } from "@/lib/request-json";
 import { AgentAvatar } from "@/components/agent-avatar";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
@@ -95,7 +96,11 @@ export function AgentsPanel() {
 
       <div className="agent-library-filters">
         <label className="ui-search-field"><Search size={15} /><input aria-label="搜索 Agent" placeholder="搜索 Agent" value={query} onChange={event => setQuery(event.target.value)} /></label>
-        <select aria-label="筛选执行引擎" value={adapter} onChange={event => setAdapter(event.target.value)}><option value="">全部执行引擎</option>{[...new Set(agentList.map(agent => agent.adapterName))].map(name => <option key={name} value={name}>{name === "pi" ? "Pi" : `${name}（已退役）`}</option>)}</select>
+        <Select aria-label="筛选执行引擎" size="sm" value={adapter} onChange={setAdapter}
+          options={[
+            { value: "", label: "全部执行引擎" },
+            ...[...new Set(agentList.map(agent => agent.adapterName))].map(name => ({ value: name, label: name === "pi" ? "Pi" : `${name}（已退役）` }))
+          ]} />
         <div className="ui-segmented" role="group" aria-label="Agent 显示方式">{([{ value: "grid", label: "卡片视图", Icon: LayoutGrid }, { value: "list", label: "紧凑列表", Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => setView(value)}><Icon size={16} /></button>)}</div>
         <span className="ui-muted">{visibleAgents.length}/{agentList.length}</span>
       </div>

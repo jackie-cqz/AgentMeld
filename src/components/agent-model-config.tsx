@@ -8,6 +8,7 @@ import { requestJson } from "@/lib/request-json";
 import { agentProviderChoices, selectAgentProvider, type AgentModelValue, type AgentProviderChoice } from "@/lib/agent-model-config";
 import type { ProviderSnapshot } from "@/lib/model-provider-settings";
 import { Feedback } from "@/components/ui/controls";
+import { Select } from "@/components/ui/select";
 import { ModelProviderSettings } from "@/components/model-provider-settings";
 
 export function AgentModelConfig({ open, value, onChange }: {
@@ -89,9 +90,15 @@ export function AgentModelConfig({ open, value, onChange }: {
         <label className="ui-field">API 地址<input aria-label="Agent API 地址" type="url" value={value.apiBaseUrl} placeholder={selected?.baseUrl || "继承供应商地址"} onChange={event => onChange({ ...value, apiBaseUrl: event.target.value })} /></label>
         <label className="ui-field">上下文窗口（tokens）<input aria-label="上下文窗口" inputMode="numeric" value={value.contextWindow} placeholder="留空 = 供应商默认（DeepSeek 为 1,000,000）" onChange={event => onChange({ ...value, contextWindow: event.target.value.replace(/[^0-9]/g, "") })} /></label>
         <p className="ui-muted text-xs leading-relaxed">这个值同时用于应用侧的 80% 自动压缩和 Pi 自身的压缩窗口；留空不会改变现有 Agent 的行为。</p>
-        <label className="ui-field">思考强度<select aria-label="思考强度" value={value.reasoningEffort} onChange={event => onChange({ ...value, reasoningEffort: event.target.value as AgentModelValue["reasoningEffort"] })}>
-          <option value="">跟随默认（不启用）</option><option value="low">低 · low</option><option value="medium">中 · medium</option><option value="high">高 · high</option>
-        </select></label>
+        <div className="ui-field">
+          <Select label="思考强度" value={value.reasoningEffort} onChange={next => onChange({ ...value, reasoningEffort: next as AgentModelValue["reasoningEffort"] })}
+            options={[
+              { value: "", label: "跟随默认（不启用）" },
+              { value: "low", label: "低 · low" },
+              { value: "medium", label: "中 · medium" },
+              { value: "high", label: "高 · high" }
+            ]} />
+        </div>
         <p className="ui-muted text-xs leading-relaxed">网关实测接受 low / high 并计入 reasoning tokens；medium 会由 Pi 按模型能力就近映射。仅影响思考强度，不改变上下文预算。</p>
       </details>
     </div>

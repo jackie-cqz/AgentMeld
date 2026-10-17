@@ -72,6 +72,10 @@ async function noOverflow(page, name) {
   const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
   assert(dimensions.scroll <= dimensions.client + 1, `${name}: page overflow ${JSON.stringify(dimensions)}`);
 }
+async function chooseDecision(page, key) {
+  await page.getByLabel('选择待处理事项', { exact: true }).click();
+  await page.locator(`.ui-select-menu [data-value="${key}"]`).click();
+}
 async function railGap(page) {
   const rail = await page.getByTitle('跳转到第 1 条消息', { exact: true }).boundingBox();
   const avatar = await page.locator('#message-ui_message_14').getByText('我', { exact: true }).last().boundingBox();
@@ -235,7 +239,7 @@ try {
     await page.route('**/api/dispatch-plans/ui_plan/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/pending-bash/ui_bash/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
     await page.route('**/api/pending-writes/ui_write/resolve', route => { submitted.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
-    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('question:ui_question');
+    await chooseDecision(page, 'question:ui_question');
     await page.getByRole('button', { name: '完整流程', exact: true }).click();
     await page.getByLabel('还有哪些验收要求？').fill('无横向溢出，保留任务证据');
     const answerResponse = page.waitForResponse(response => response.url().endsWith('/ui_question/answer'));
@@ -243,7 +247,7 @@ try {
     await answerResponse;
     await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'ask_user.answered', conversationId: conversation.id, timestamp: now, pendingId: 'ui_question', answers: submitted[0].answers });
     await page.getByText('需要你的选择', { exact: true }).waitFor({ state: 'detached' });
-    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('plan:ui_plan');
+    await chooseDecision(page, 'plan:ui_plan');
     const planSurface = page.locator('.ui-decision').filter({ hasText: '编排计划待审批' });
     const planResponse = page.waitForResponse(response => response.url().endsWith('/ui_plan/resolve'));
     await planSurface.getByTitle('批准执行', { exact: true }).click();
@@ -251,12 +255,12 @@ try {
     assert(await planSurface.getByTitle('批准执行', { exact: true }).isDisabled(), 'Resolved plan stays disabled until its stream event');
     await page.evaluate(event => window.uiEventSource.onmessage(new MessageEvent('message', { data: JSON.stringify(event) })), { type: 'dispatch.plan.resolved', conversationId: conversation.id, timestamp: now, pendingId: 'ui_plan', runId: 'ui_run', approved: true });
     await page.getByText('编排计划待审批', { exact: true }).waitFor({ state: 'detached' });
-    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('bash:ui_bash');
+    await chooseDecision(page, 'bash:ui_bash');
     const bashResponse = page.waitForResponse(response => response.url().endsWith('/ui_bash/resolve'));
     await page.getByTitle('拒绝执行', { exact: true }).click();
     await bashResponse;
     assert(await page.getByTitle('拒绝执行', { exact: true }).isDisabled(), 'Resolved command stays disabled until its stream event');
-    await page.getByLabel('选择待处理事项', { exact: true }).selectOption('write:ui_write');
+    await chooseDecision(page, 'write:ui_write');
     await page.getByRole('button', { name: '查看修改差异', exact: true }).click();
     await page.getByText('export const ready = true;', { exact: false }).waitFor();
     await noOverflow(page, `${width}-file-diff`);

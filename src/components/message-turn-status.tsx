@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
 import { requestJson } from "@/lib/request-json";
+import { Select } from "@/components/ui/select";
 import type { CollaborationAction, CollaborationTurn, CollaborationTurnStatus } from "@/shared/collaboration-types";
 
 const LABELS: Record<CollaborationTurnStatus, string> = {
@@ -53,9 +54,11 @@ function TurnStatus({ turn }: { turn: CollaborationTurn }) {
       <button type="button" disabled={busy} onClick={() => void act("discussion")} className="inline-flex items-center gap-1 rounded border border-[var(--ui-border)] px-2 py-1"><MessageSquare size={11} />继续讨论</button>
       <button type="button" disabled={busy} onClick={() => void act("new_task")} className="inline-flex items-center gap-1 rounded border border-[var(--ui-border)] px-2 py-1"><Play size={11} />作为任务执行</button>
       {related.length ? <>
-        <select aria-label="关联运行" value={selected} onChange={event => setTarget(event.target.value)} className="max-w-full rounded border border-[var(--ui-border)] bg-[var(--ui-surface)] px-1 py-1">
-          <option value="">选择关联运行</option>{related.map(run => <option key={run.id} value={run.id}>{agents[run.agentId]?.name ?? "Agent"} · {new Date(run.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</option>)}
-        </select>
+        <Select aria-label="关联运行" size="sm" value={selected} onChange={setTarget}
+          options={[
+            { value: "", label: "选择关联运行" },
+            ...related.map(run => ({ value: run.id, label: `${agents[run.agentId]?.name ?? "Agent"} · ${new Date(run.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` }))
+          ]} />
         <button type="button" disabled={busy || !selected} onClick={() => void act("supplement")} className="rounded border border-[var(--ui-border)] px-2 py-1">补充</button>
         <button type="button" disabled={busy || !selected} onClick={() => void act("cancel")} className="rounded border border-[var(--ui-border)] px-2 py-1">停止</button>
       </> : null}
