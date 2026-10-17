@@ -1,8 +1,8 @@
 # Workspace Toolkit
 
-AgentMeld exposes these tools to every Pi-backed Agent. They are not gated by a per-Agent tool permission or a tool preset: Agents run with the full native toolset, and tools Pi does not provide are registered as Pi extension tools. The Agent editor only displays this provisioned set read-only under **运行时工具** and offers no tool choice; **System Prompt** is a separate tab. SDK adapters keep their own native tools; this is not an external MCP client.
+AgentMeld exposes these tools to every Pi-backed Agent, including during discussion and consultation. They are not gated by a per-Agent tool permission or a tool preset: Agents run with the full native toolset, and tools Pi does not provide are registered as Pi extension tools. The Agent editor only displays this provisioned set read-only under **运行时工具** and offers no tool choice; **System Prompt** is a separate tab. Applicable approvals and command policy still apply. This is not an external MCP client.
 
-Two platform tools are not part of an Agent run: the Conductor PLAN stage's `plan_tasks` protocol tool, and `list_team_members`, which returns the conversation roster. The roster is conversation-scoped, so it is provisioned only for the Conductor's PLAN stage and its handler refuses other callers; the editor lists it nowhere in the Agent toolset.
+Terminal protocol tools are phase-scoped: `plan_tasks` belongs to Conductor PLAN, and `respond_to_consultation` to the admitted peer. They are not ordinary workspace capabilities. Every current member can call `list_team_members` for that conversation's roster; it does not disclose other conversations, credentials or prompts.
 
 ## Locate, Read, Edit
 
@@ -26,7 +26,7 @@ Arguments are Pi's native arguments, not the retired platform schemas: `read` us
 
 ## Background Verification
 
-The legacy `job_start`, `job_read`, `job_wait`, and `job_cancel` background kernel is not exposed under the Pi runtime; long verification uses native `bash` and waits for its terminal result. Native `bash` is unrestricted apart from timeout and output limits, and shell commands may create or change source files. Declared project scripts execute project code with the server user's OS permissions and are not sandboxed; use trusted workspaces or a separate sandbox for untrusted projects.
+The legacy `job_start`, `job_read`, `job_wait`, and `job_cancel` background kernel is not exposed under the Pi runtime; long verification uses native `bash` and waits for its terminal result. Native `bash` permits general commands, including source edits, subject to destructive-pattern checks, selected command approvals, timeout and output limits. Declared project scripts execute project code with the server user's OS permissions and are not sandboxed; use trusted workspaces or a separate sandbox for untrusted projects.
 
 The job mechanics below are retained only for historical job display and platform
 cleanup. A Pi Agent cannot call them: run the command with native `bash` and let it

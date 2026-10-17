@@ -4,9 +4,9 @@
   <img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-111111?logo=nextdotjs&logoColor=white">
   <img alt="React 19" src="https://img.shields.io/badge/React-19-087ea4?logo=react&logoColor=white">
   <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white">
+  <img alt="Pi 0.84.2" src="https://img.shields.io/badge/Pi-0.84.2-536b45">
   <img alt="SQLite local-first" src="https://img.shields.io/badge/SQLite-local--first-0b6b88?logo=sqlite&logoColor=white">
-  <img alt="pnpm 10" src="https://img.shields.io/badge/pnpm-10-f69220?logo=pnpm&logoColor=white">
-  <img alt="DeepSeek compatible" src="https://img.shields.io/badge/DeepSeek-compatible-4d6bfe">
+  <a href="https://github.com/jackie-cqz/AgentMeld/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jackie-cqz/AgentMeld/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22a06b"></a>
 </p>
 
@@ -14,231 +14,253 @@
   <strong>English</strong> · <a href="docs/README.zh-CN.md">简体中文</a>
 </p>
 
-AgentMeld is a local-first multi-agent collaboration workspace. It turns complex AI-assisted work into a visible team conversation: a Conductor clarifies intent, plans tasks, delegates work to specialist agents, tracks tool evidence, and keeps generated files and artifacts next to the discussion.
+**A local-first group-chat workspace for AI coding teams, powered by Pi.**
 
-The current release focuses on **evidence-aware context engineering** and **runtime observability**. AgentMeld does not just let agents chat. It records what each agent received, which upstream artifacts were available, which tools were used, what evidence was produced, and why a task passed, failed, retried, or got blocked.
+Bring specialized Agents into one conversation: discuss an approach, ask another Agent for help, execute a task, and hand unfinished work to a teammate without manually copying the whole chat. Files, tool calls, approvals, artifacts, and task evidence stay alongside the conversation.
 
-![AgentMeld workspace](docs/images/agentmeld-preview.png)
+AgentMeld currently uses **Pi as its only production execution engine**. Pi handles model requests and the Agent Loop; AgentMeld handles team identities, routing, task coordination, context, and the workspace. Cross-harness execution is a roadmap item, not a shipped feature.
 
-## What AgentMeld Is For
+![AgentMeld conversation and artifact workspace](docs/images/main-workspace/desktop-light.png)
 
-AgentMeld is built for local, inspectable workflows such as:
+[Quick Start](#quick-start) · [How Collaboration Works](#how-collaboration-works) · [Safety](#tools-and-safety) · [Limitations](#known-limitations) · [中文说明](docs/README.zh-CN.md)
 
-- turning a natural-language request into PRD, design, implementation, review, and preview steps;
-- coordinating PM, UI Designer, Frontend Engineer, Reviewer, and custom agents in one workspace;
-- letting agents work with files, commands, artifacts, user approvals, and local deployment previews;
-- debugging why a downstream agent missed a PRD, ignored a style guide, failed a build, or produced an unverifiable artifact;
-- experimenting with context engineering strategies without sending your local workspace to an external SaaS product.
+## What You Can Do
 
-## Highlights
+| Situation | AgentMeld workflow |
+| --- | --- |
+| Compare approaches before changing code | Discuss in the group, address specific Agents, or reply to an Agent. Discussion does not require a delivery plan. |
+| Make a small, well-defined change | Route it to an Agent without forcing a PM, design, implementation, and review pipeline. |
+| Deliver a multi-stage feature | Let Conductor propose a dependency-aware plan, review it, and track specialist tasks and outputs. |
+| Change requirements while work is running | Send a supplement or correction; the platform tracks its delivery and replaces the invocation when necessary. |
+| An Agent needs a second opinion | It can consult a current teammate through a bounded, tracked exchange. |
+| An implementation gets stuck | Confirm a task handoff to another Pi-backed Agent with the task contract, prior evidence, and relevant context. |
+| Inspect the result | Browse files, compare artifact versions, open static previews, and inspect Context Trace and tool evidence. |
 
-### Multi-Agent Workspace
+Built-in roles include Conductor, PM, UI Designer, Frontend Engineer, and Reviewer. You can also create Agents with your own identity, avatar, model, capabilities description, and system prompt.
 
-- Team-chat interface for single-agent or multi-agent conversations.
-- Conductor-led requirement clarification, task planning, DAG scheduling, retry, and aggregation.
-- Specialist agents with independent model, API key, base URL, system prompt, and capabilities. Every Agent run is provisioned with the full Pi toolset, identical for every Agent; the Agent editor shows that runtime set read-only and offers no per-Agent tool choice.
-- Plan review flow before executing multi-step work.
+## How Collaboration Works
 
-### Evidence-Aware Runtime
+### Chat First, Plans When Needed
 
-- Every dispatched task can carry expected outputs, required inputs, acceptance criteria, and required evidence.
-- Output bindings connect upstream artifacts to downstream tasks.
-- Verification checks artifact existence, artifact type, command evidence, deployment evidence, and structured acceptance results.
-- Failed tasks can be retried with failure-aware context instead of replaying the whole conversation.
+- Explicit recipients take priority over the Agent you reply to, then the conversation's default Conductor. Multiple explicit recipients can be addressed together; a group message does not automatically wake every Agent.
+- Ordinary discussion is possible without a Conductor. In a team without one, choose the recipients explicitly.
+- Complex delivery can use Conductor's plan review, DAG scheduling, retries, output bindings, and result aggregation. Simple requests do not have to follow a fixed role sequence.
+- Human turns have persistent submission identities and delivery states. Submission IDs deduplicate retries after a lost response; a progress query can inspect existing work without restarting it.
+- Corrections and executable supplements preserve the previous goal. When live input is unsafe, AgentMeld stops the old invocation, waits for confirmed cleanup, and compiles a fresh attempt with the updated requirement.
 
-### Context Engineering
+### Peer Consultation And Task Handoff
 
-- Task Context Compiler builds task-specific context from DAG dependencies, verified upstream outputs, active facts, workspace state, failure context, and relevant history.
-- Fact Registry keeps session-scoped structured facts, with validation and supersession support.
-- Context snapshots are persisted so a task attempt can be audited later.
-- Context Trace shows included and omitted context, upstream inputs, evidence, verdicts, output bindings, warnings, and a server-side diagnostic summary.
+These are different operations:
 
-### Tools And Safety
+| | Peer consultation | Task handoff |
+| --- | --- | --- |
+| Purpose | Ask another Agent for a bounded second opinion | Transfer responsibility for an unfinished or failed delegated task |
+| Ownership | The source remains responsible | A human-confirmed target receives a new run and attempt under the same task ID |
+| Context | Human request, consultation question, and relevant task context | Executed task contract, failure/evidence references, active facts, upstream artifact versions, and file fingerprints |
+| Completion | A reply is advice, not verified task completion | The receiving Agent must still report results and pass verification |
 
-- Built-in tools for file listing and directory creation, file reading, full-file writes, focused patches, shell verification, artifacts, deployments, user questions, attachments, evidence reads, context fact updates, task planning, and task reporting.
-- `fs_patch` is preferred for local source edits; `fs_write` is reserved for new files or intentional full replacement.
-- Shell commands are restricted to verification and approved dependency installation. Source edits through shell redirection, PowerShell writes, `sed`, and destructive cleanup are blocked.
-- Workspace paths are sandboxed and validated.
+Consultations are bounded and cannot recursively spawn an unrestricted conversation. A synchronously consulting Agent pauses its bridge and temporarily lends workspace ownership to the peer; it resumes only after confirmed peer teardown.
 
-### Artifacts And Local Preview
+Handoff packages are checked again before acceptance. Stale context, obsolete attempts, or uncertain source cleanup cannot silently start a second writer. Taking over a task from a failed plan does **not** automatically resume every downstream task in that plan.
 
-- Artifact types include document, web app, image, and presentation.
-- Web app artifacts and workspace builds can be deployed as local static previews.
-- Artifact library supports versions, preview, source view, edit flow, and generated deployment cards.
-
-### Observability
-
-- Context Trace API by attempt, child run, and conductor run.
-- Context Trace Drawer in the UI for diagnosing missing inputs, unread artifacts, output binding failures, failed verdicts, and weak tool evidence.
-- Runtime diagnostics dashboard with upstream read density, tool failures, duration, and preview readiness.
-- Structured run events over SSE for messages, tool calls, approvals, dispatch progress, context summaries, evidence, verdicts, artifacts, and usage.
-
-## Workflow Example
+For example:
 
 ```text
-User: "Build a pomodoro timer app"
-
-1. Conductor inspects the request and available agents.
-2. If the requirement is ambiguous, Conductor asks the user to clarify.
-3. If ready, Conductor calls plan_tasks and produces a DAG:
-   - PM: write a PRD
-   - UI Designer: write a style guide
-   - Frontend Engineer: implement and deploy the app
-   - Reviewer: inspect the result
-4. The user reviews and approves the plan.
-5. Agents run in dependency order.
-6. Each tool call is recorded as structured evidence.
-7. Upstream artifacts are verified and bound to output keys.
-8. Downstream agents receive only task-relevant context.
-9. Context Trace can explain what each agent saw and why.
-10. The final artifact and preview appear beside the conversation.
+You -> @Developer: "Compare two approaches first; don't implement yet."
+Developer -> @Reviewer: asks for a second opinion.
+You -> @Developer: "Use option B. Implement it and run the tests."
+You: "Keep the existing API response shape."
+AgentMeld: tracks the correction and safely replaces the invocation if needed.
+If the delegated task stalls: you confirm a handoff to another Agent.
+Receiver: gets a fresh task context, checks the files, and verifies its work.
 ```
 
-## Architecture
+Discussion instructions such as "don't implement yet" rely on model instruction-following. They do not remove tools or create a read-only security mode.
 
-```text
-src/
-  app/          Next.js pages and API routes
-  components/   Chat, agent, artifact, approval, trace, and workspace UI
-  db/           SQLite bootstrap, schema, seed data, and persistence helpers
-  server/       Pi runtime connection, Conductor, tools, verification, context, evidence
-  shared/       Shared types, ids, constants, and display helpers
-  stores/       Zustand state and SSE event reducers
-```
+## Workspace Features
 
-Runtime flow:
+### Evidence-Aware Context
 
-```text
-Next.js UI
-  -> API route
-  -> Conversation service
-  -> Agent runner
-  -> Pinned Pi RPC subprocess (model requests, Agent Loop, native tools)
-  -> Native tool admission / platform business tool bridge
-  -> Evidence Ledger / Artifact store / Workspace
-  -> SSE events back to UI
-```
+The Task Context Compiler organizes the current task, dependency contracts, verified upstream outputs, active session facts, relevant history, workspace state, acceptance criteria, and prior failures. Delegated Agents do not simply receive the entire group transcript.
 
-## Tech Stack
+- Session-scoped facts support validation and supersession.
+- Task attempts retain context snapshots and output bindings.
+- Tool outcomes feed the Evidence Ledger; a model's success sentence is not proof of completion.
+- Context Trace explains included and omitted context, missing inputs, evidence, verdicts, and warnings.
 
-- Next.js 16, React 19, TypeScript
-- Zustand and Immer for frontend state
-- SQLite, Drizzle ORM, and `better-sqlite3` for local persistence
-- Pi 0.84.2 execution engine with configured OpenAI-compatible or Anthropic models
-- Tailwind CSS
-- Vitest, ESLint, and TypeScript checks
+### Files, Tools, And Artifacts
 
-## Requirements
+- Pi-native file browsing, search, reading, writing, editing, and Bash execution.
+- Platform tools for user questions, team discovery, consultation, task reporting, facts, artifacts, and deployment.
+- Public web search/fetch, read-only Git inspection, and isolated browser acceptance checks.
+- Document, web app, image, and presentation artifacts with versions, source views, and preview.
+- Workspace static builds deployed as local previews, linked to real deployment records.
 
-- Node.js 22.19.0 or newer
-- pnpm 10 or newer
-- A model provider API key, such as DeepSeek
+### Workbench, Providers, And Channels
 
-## Getting Started
+- Light/dark workbench with conversations, workspace files, artifacts, diagnostics, and approval views.
+- Provider presets and centralized model configuration; each Agent selects its provider/model and can override connection settings.
+- Agent creation and editing with preset avatars, separate system-prompt settings, and a read-only runtime tool inventory.
+- Structured SSE updates for text, tools, approvals, usage, task progress, consultation, handoff, and artifacts. Persisted records restore the UI after reload; this is not process resumption.
+- Owner-device pairing and revocable browser sessions.
+- Optional Feishu channel bindings, including an individual bot identity per Agent. Channel events use platform identities and approval records rather than treating arbitrary bot mentions as execution authority. See [Feishu operations](docs/feishu-operations.md) for setup notes and validation boundaries.
+
+## Quick Start
+
+### Requirements
+
+- **Node.js >=22.19.0** and **pnpm 10**; the repository pins pnpm 10.33.4.
+- A supported model provider credential, such as DeepSeek, an OpenAI-compatible endpoint, or Anthropic.
+- On Windows: **Git Bash** for native command execution, plus Windows PowerShell/.NET for process lifecycle supervision.
+- Pi is installed from the lockfile. No global Pi installation is needed.
+- Optional: `rg` and `fd` on PATH for native search; Chromium for `browser_check`.
+
+### Install And Run
+
+On Linux/macOS or a POSIX-compatible shell:
 
 ```bash
 git clone https://github.com/jackie-cqz/AgentMeld.git
 cd AgentMeld
-pnpm install
+pnpm install --frozen-lockfile
 cp .env.example .env.local
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
-
 On Windows PowerShell:
 
 ```powershell
+git clone https://github.com/jackie-cqz/AgentMeld.git
+Set-Location AgentMeld
+pnpm install --frozen-lockfile
 Copy-Item .env.example .env.local
+pnpm exec next dev -H 127.0.0.1
 ```
 
-You can also enter API keys in the AgentMeld settings panel after startup.
+The PowerShell command avoids the POSIX environment-variable syntax in the `dev` script. Open [http://127.0.0.1:3000](http://127.0.0.1:3000).
 
-## Configuration
+1. Complete first-time pairing in that browser. Keep the service on loopback during initial setup.
+2. Open **Settings**, add a provider, enter its API key, and configure a model.
+3. Create or edit your Agents and select their models. The Pi installation check does not test provider authentication.
+4. Start a conversation with the desired teammates. Address an Agent explicitly, or use Conductor for coordination.
 
-Common environment variables (`.env.example` lists all of them, including benchmark-only ones):
+**The first startup automatically creates the SQLite database, tables, and built-in Agents. No manual database creation or `db:push` is required.**
+
+For browser acceptance checks, install Chromium if no supported executable is configured:
+
+```bash
+pnpm exec playwright install chromium
+```
+
+## Configuration And Local Data
+
+Settings can be managed in the UI. Alternatively, configure only the providers you use in `.env.local`, following the [environment example](.env.example):
 
 ```env
 AGENTMELD_DATA_DIR=.agentmeld-data
-AGENTMELD_DB_PATH=.agentmeld-data/agentmeld.db
 DEEPSEEK_API_KEY=your_api_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 
-Agent-level settings can override the default provider, model, base URL, and API key.
+Agent-specific connection settings override global settings, which override environment defaults. The app derives its database path from `AGENTMELD_DATA_DIR`; `AGENTMELD_DB_PATH` is for Drizzle CLI only.
 
-## Common Commands
+The default `.agentmeld-data/` directory contains the SQLite database, conversation workspaces, artifacts, deployments, and private Pi execution files. It is ignored by Git, as are `node_modules/` and local environment files. Never commit credentials, native session transcripts, or generated private workspaces.
 
-See [Workspace Toolkit](docs/workspace-toolkit.md) for file search, reads, public web research, read-only Git inspection, and isolated browser acceptance checks. Tools are no longer gated per Agent; web search and browser checks have optional server setup requirements.
+**Local-first does not mean offline.** Selected prompts, context, and tool results are sent to the configured model provider; web-search queries go to the search provider. Use trusted endpoints and do not expose secrets to Agent-accessible files.
 
-```bash
-pnpm dev        # Start the development server
-pnpm build      # Create a production build
-pnpm start      # Run the production server
-pnpm typecheck  # Check TypeScript
-pnpm lint       # Run ESLint
-pnpm test       # Run the Vitest suite
-pnpm db:push    # Apply the typed Drizzle mirror in src/db/schema.ts via drizzle-kit. Safe ONLY on a fresh empty database: on a database the app already created (src/db/bootstrap.ts) it proposes dropping the search (FTS) tables, so never run it against real data — and never with --force. See docs/schema.md
-pnpm db:seed    # Create the local database if needed, then print row counts (it does not insert sample data). Also runs the startup recovery pass — see the note below the command list
-pnpm e2e:fixture # Evaluate one completed run: pnpm e2e:fixture <runId> <fixturePath>
-pnpm e2e:report  # List benchmark fixtures, or evaluate one run with --run <runId> --fixture <path>
-pnpm quality:gates # Run the release quality gates over saved benchmark reports; exits non-zero when a gate fails. On a fresh clone there is no benchmark data yet, so the minimum-fixtures gate fails
-pnpm agent:bench        # Benchmark CLI; requires arguments (see: pnpm agent:bench:all). With none it prints usage and exits 1
-pnpm agent:bench:all    # List all benchmark fixtures and usage examples (it does not run them)
-pnpm agent:bench:smoke  # Run the benchmark cases tagged "smoke"
-pnpm agent:bench:full   # Run the full benchmark suite
-```
+If this browser loses its session, generate a pairing code on a still-paired device. If all owner sessions are lost, run `pnpm run auth:reset` on the server machine, then pair again. This revokes existing owner sessions, not conversation data. For a custom data directory, set `AGENTMELD_DATA_DIR` explicitly in that shell; this recovery script does not load `.env.local`.
 
-The repository also contains early evaluation and fixture scripts. The scripts that run app code (`db:seed`, `e2e:*`, `quality:gates`, `agent:bench*`) load `.env.local` first and then `.env` via `scripts/load-env.mjs`. Of those, `e2e:*` and `agent:bench --run/--compare` reach a running app over HTTP, while `agent:bench --case/--suite` drives the conversation in-process; all of them need provider credentials. The current release is positioned around runtime observability rather than a complete benchmark platform.
+## Tools And Safety
 
-`pnpm db:seed` calls `ensureDatabase()`, which runs the startup recovery pass (`src/db/bootstrap.ts`). That pass force-fails every run still marked `running` in the database it opens — and it opens the same database the app uses. Running `db:seed` next to a live dev server therefore does *not* stop the run that server is executing: nothing aborts it across processes, and the server overwrites the run status again once it finishes. It does, however, mark that run failed and its attempts rejected in the meantime, and the script reports exactly that (`[run-recovery] Marked 1 orphaned runs as interrupted.`). Stop the server first, or point `db:seed` at a different `AGENTMELD_DATA_DIR`. The other scripts are not affected: `e2e:*` and `quality:gates` never open the database, and `agent:bench*` switches `AGENTMELD_DATA_DIR` to its own benchmark directory before it calls `ensureDatabase()`.
+**All ordinary Agents receive the same full runtime toolset**, including during discussion and peer consultation. Stored per-Agent tool selections no longer grant or restrict capability. The Agent editor displays tools read-only.
 
-## Local Data
+File operations use Pi-native `read`, `write`, `edit`, `ls`, `grep`, and `find`. Platform names such as `fs_patch` map to those native implementations. Bash is general-purpose, including source edits; it is not verification-only. Internal classifier and Conductor protocol phases still have purpose-specific tools.
 
-By default, AgentMeld stores its local database, workspaces, previews, deployments, and generated runtime files in:
+Full access does **not** bypass the platform's applicable controls:
+
+- File review mode can require approval before a native write/edit; Auto file mode is not blanket approval for plans or commands.
+- Destructive command patterns are blocked, and selected commands still require approval.
+- Resource limits, evidence recording, file hashes, task verification, and workspace ownership remain in force.
+- New managed writers wait for confirmed cleanup. Uncertain Pi teardown retains a durable workspace lease instead of admitting another writer.
+
+**This is not an OS sandbox.** Native file tools are not confined to the workspace. File operations and shell/project scripts run with the AgentMeld server user's OS permissions. Approvals and leases do not isolate arbitrary code, background processes, dependencies, or secrets. Run only trusted projects, or supply your own OS/container isolation.
+
+The authenticated Pi extension bridge is a private local integration, **not an external MCP server**. See [Pi Runtime](docs/pi-runtime.md) and [Workspace Toolkit](docs/workspace-toolkit.md).
+
+## Architecture
 
 ```text
-.agentmeld-data/
+Next.js / React workbench
+  -> Authenticated API routes + SSE
+  -> Conversation routing / human-turn admission
+  -> Agent runner / Conductor / consultation / handoff
+  -> Pinned Pi RPC subprocess
+       Pi: model requests, Agent Loop, native tools, invocation history
+       AgentMeld bridge: approvals, platform tools, evidence, lifecycle
+  -> SQLite + task context / facts + workspace / artifacts / static previews
 ```
 
-On first startup, AgentMeld automatically creates `.agentmeld-data/agentmeld.db`, initializes the required tables, and seeds built-in agents. You do not need to create a database manually before running the app.
+| Area | Implementation |
+| --- | --- |
+| UI and state | Next.js 16, React 19, Tailwind CSS, Zustand, Immer |
+| Execution | Pi 0.84.2, private per-invocation configuration and RPC |
+| Persistence | SQLite, Drizzle ORM, `better-sqlite3` |
+| Runtime services | `src/server/`: coordination, context, evidence, tools, verification |
+| Shared contracts | `src/shared/`; API routes in `src/app/api/` |
+| Quality | TypeScript, ESLint, Vitest, Playwright, Linux/Windows Pi contract CI |
 
-This directory is ignored by Git. Do not commit `.env.local`, API keys, local databases, generated workspaces, or deployment output.
+The former custom Agent Loop and production Adapter registry are retired. Existing Custom/Mock Agent records migrate to Pi without replacing their identities, histories, or channel bindings; other retired executors require explicit migration.
 
-## Provider Notes
+## Development And Validation
 
-All production Agents, including Conductor, execute through the project-pinned Pi runtime. Configure the provider and model in AgentMeld Settings, then select them in the Agent editor. The editor shows the installed Pi version; this installation check is not a claim that provider authentication has succeeded.
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+pnpm start
+```
 
-The custom Agent Loop, production Adapter registry and Claude Code/Codex placeholder engines have been retired. Existing Custom/Mock Agent records migrate to Pi without changing their identities, history or channel bindings. Other retired configurations require explicit editing before execution; they do not silently fall back to a different engine.
+On Windows PowerShell, use `pnpm exec next start -H 127.0.0.1` for the production server. Build first.
 
-See [Pi Runtime](docs/pi-runtime.md) for the full-access tool model, configuration snapshots, cancellation, session ownership, diagnostics and recovery. Every Agent gets the full native toolset with no per-Agent whitelist: file and command tools are Pi-native, and platform tools such as `ask_user`, `plan_tasks`, artifact and deployment operations are Pi extension tools reached over a private loopback bridge. That bridge is a transport boundary, not an external MCP server.
+[CI](https://github.com/jackie-cqz/AgentMeld/actions/workflows/ci.yml) runs type checks, lint, the full suite, and a production build on Linux, plus Pi contract tests on Linux and Windows. Native integration tests launch the pinned Pi subprocess against deterministic local model fixtures without public API keys. They verify the integration, not every external provider's reliability or a live model's instruction-following quality.
+
+Advanced evaluation commands include `e2e:fixture`, `e2e:report`, `agent:bench:all`, `agent:bench:smoke`, `agent:bench:full`, and `quality:gates`. Benchmark execution requires configured credentials; quality gates need saved reports and are not a fresh-clone smoke test.
+
+Database maintenance is **not** part of normal setup. Do not run `db:push` against a real app database: the typed Drizzle mirror can propose dropping FTS tables. Do not run `db:seed` alongside a live server on the same data directory: it runs startup recovery and can mark live runs interrupted without stopping their processes. See [Database Schema](docs/schema.md).
 
 ## Known Limitations
 
-- AgentMeld targets a local, single-owner workflow with device pairing, not multi-tenant organization access control.
-- Each invocation gets a fresh Pi session. Platform history and task context are transferred, but old Custom histories are not converted into native Pi sessions. Interrupted commands are not automatically resumed.
-- Host commands are not OS-sandboxed and Agent tools are not confined to the workspace. Full native access means an Agent can read, change or execute anything the AgentMeld server user can, so arbitrary workspace scripts and dependencies remain unsafe to run untrusted.
-- Run one AgentMeld control server per data directory. Startup recovery assumes no other control server owns live runs. Unconfirmed Pi teardown keeps a durable workspace lease rather than admitting another writer.
-- Pi is pinned to 0.84.2; arbitrary global versions, user-installed Pi extensions, OAuth/native session import, other Harnesses and standalone server packaging are not supported by this integration.
-- Local deployment previews are static and local; AgentMeld does not publish generated apps to a hosted cloud platform.
-- Tool-call reliability still depends on model behavior, especially for large JSON tool arguments.
-- The benchmark/evaluation scripts are not yet a full automated benchmark platform.
-- Internal schemas and APIs may still change while the project is under active development.
+- **Pi only today.** DSH, OpenCode, Claude Code, Codex, arbitrary global Pi versions, user-installed Pi extensions, and native-session import are not supported execution backends.
+- **One owner, one control server per data directory.** Pairing is device access for that owner, not organizational tenancy or role-based isolation.
+- **Fresh Pi sessions.** Platform context crosses invocations, but native sessions and interrupted commands are not resumed automatically. A reload restores recorded state, not a running process.
+- **Managed workspace access is serialized.** Consultation uses controlled lease lending, not independent concurrent writers in the same directory.
+- **No host security sandbox.** Full-tool discussion is not enforced read-only execution. Human instructions and model behavior remain important.
+- **Static local previews only.** Deployment does not host SSR/API backends or publish apps to a cloud service.
+- **External dependencies vary.** Tool-call quality depends on the model; search/browser tools require optional setup. Feishu needs the relevant credentials and scopes; the latest collaboration changes have deterministic channel tests, not live Feishu certification.
+- **Early-stage APIs.** Schemas, runtime interfaces, and evaluation tooling are still evolving; standalone server packaging is not validated.
 
 ## Roadmap
 
-- Stable Prefix / Dynamic Suffix prompt layout for better prefix cache behavior.
-- Task State Context so each agent receives a structured view of current task status.
-- Evidence Cards that summarize long tool results before they enter context.
-- Playbook / Skill Registry for reusable process memory beyond factual memory.
-- Multi-intent Query Planner before Conductor task planning.
-- Stronger runtime diagnostics, trace navigation, and recovery UX.
-- External MCP tool integration while preserving ToolRegistry permissions, approvals, evidence, and SSE events.
+These are future directions, not current capabilities:
 
-## Status
+- Separate persistent Agent identity from execution bindings further, then add selected harnesses such as DSH or OpenCode.
+- Extend evidence-backed handoff across harnesses without promising native-session migration.
+- Improve Feishu collaboration, setup, delivery feedback, and real-device validation.
+- Add remote Worker / container / sandbox-provider execution before attempting custom cloud infrastructure.
+- Improve mobile monitoring, approvals, and takeover, initially through the web/PWA path.
+- Refine context selection, evidence summaries, failure recovery, and trace navigation.
+- Explore external MCP tools while preserving approval, provenance, lifecycle, and event semantics.
 
-AgentMeld is an active early-stage local-first agent runtime. The current release can be treated as a Context Observability and Evidence-Aware Runtime Diagnostics release.
+## Documentation
+
+- [简体中文](docs/README.zh-CN.md)
+- [Pi runtime, configuration, tools, and recovery](docs/pi-runtime.md)
+- [Workspace toolkit and browser checks](docs/workspace-toolkit.md)
+- [Collaboration implementation notes and historical acceptance log](docs/group-chat-collaboration-implementation.md)
+- [Feishu operations](docs/feishu-operations.md) and [real-device checks](docs/feishu-real-device-checks.md)
+- [Database schema and maintenance boundaries](docs/schema.md)
 
 ## License
 
-AgentMeld is released under the [MIT License](LICENSE).
+[MIT](LICENSE).

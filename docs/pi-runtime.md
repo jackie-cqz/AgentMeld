@@ -13,9 +13,11 @@ task DAGs, cross-task context and facts, bridge authentication, approvals,
 artifacts, evidence and run lifecycle. The connection layer does not contain
 another LLM loop or a JSON-repair fallback.
 
-Invocations sharing one workspace are serialized, including read-only roles.
+Full-tool invocations sharing one workspace are serialized, including discussion.
 The DAG may admit multiple tasks, but they wait for exclusive workspace ownership.
-This initial integration favors deterministic ownership over same-directory parallelism.
+A source synchronously awaiting peer consultation pauses its bridge and lends
+that ownership to the admitted peer. It resumes only after confirmed peer
+teardown. This is controlled lease lending, not concurrent independent writers.
 
 ## Configuration And Identity
 
@@ -46,16 +48,17 @@ marked interrupted at startup; they are not silently resumed in a new engine.
 
 Every Agent now runs with the full native toolset, the same way a standalone Pi
 agent does. There is no per-Agent tool whitelist, no tool preset that narrows
-capability, and no platform grant that decides whether a tool may run. The
-extension registers Pi's real tool implementations and lets Pi call all of them.
+capability, and no per-Agent grant that selects the available tools. The
+extension registers Pi's real tool implementations. Applicable approvals,
+command policy, resource limits and protocol admission still apply to calls.
 
-Two platform tools are deliberately not part of an Agent run. `plan_tasks` is
-the Conductor PLAN stage's protocol tool, and `list_team_members` returns this
-conversation's roster: the roster is conversation-scoped information, so it
-stays with the Conductor's PLAN stage rather than joining the open capability
-set. Opening capability was not a decision to disclose one conversation's roster
-to every member, so the tool is provisioned only there, is not advertised in
-other Agents' prompts, and its handler still refuses any non-Conductor caller.
+Terminal protocol tools are scoped to their actual phase: `plan_tasks` belongs
+to Conductor PLAN, and `respond_to_consultation` to the admitted peer invocation.
+They are not ordinary workspace capabilities. `list_team_members` is available
+to every current conversation member and returns only that conversation's roster,
+not credentials, prompts or Agents in other conversations. Ordinary discussion
+and consultation retain the full workspace toolset; discussion intent is an
+instruction, not an enforced read-only capability profile.
 The Agent editor has no per-Agent tool picker at all. Its "运行时工具"
 tab shows the server-provided runtime toolset read-only, so the UI cannot
 present a selection as a grant or imply that editing an Agent changes capability.
@@ -71,25 +74,28 @@ present a selection as a grant or imply that editing an Agent changes capability
 | `bash` | `bash` |
 
 File and command tools are Pi-native. Pi parses the arguments, computes batch
-edits, runs the shell and owns the loop; the platform no longer wraps them in its
-own admission or workspace-path policy. The extension observes the call and
-records its outcome as evidence. Native `grep`/`find` require `rg`/`fd` on PATH.
+edits, runs the shell and owns the loop. The extension obtains platform admission,
+waits for applicable approvals and records outcomes as evidence, but does not
+confine native paths to the workspace. Native `grep`/`find` require `rg`/`fd` on PATH.
 Offline execution does not silently download missing binaries. Installation
 status does not validate those optional helpers or claim that every model
 supports images. Search and read behavior is Pi's native behavior, not a promise
 of the retired tools' exact formatting or filtering.
 
-What the platform still applies are resource and integrity limits, not
-capability gates: command timeouts, bounded output capture, file-size and
-workspace-quota checks, and the exclusive workspace lease that serializes
-writers. Write approvals, post-write hashes and tool outcomes are recorded for
-evidence and audit; they no longer grant or deny the ability to call a tool.
+The platform retains command timeouts, bounded output capture, file-size and
+workspace-quota checks, and the exclusive workspace lease. Native writes and
+edits can wait for approval before mutation in file Review mode. Destructive
+command patterns are blocked, and selected commands require approval. File Auto
+mode does not approve plans or commands. Post-write hashes and tool outcomes
+are recorded for evidence and audit. Full tool availability does not imply
+unconditional approval of each call.
 
 `ask_user`, `plan_tasks`, `report_task_result`, facts, artifact, deployment and
 other platform business tools live in the AgentMeld server process, so Pi reaches
-them through a per-invocation authenticated loopback bridge. This is **not MCP**,
-and it is not a permission boundary: the bridge exists only because that platform
-state sits in a different process. The token is revoked at teardown and is
+them through a per-invocation authenticated loopback bridge. This is **not MCP**
+or an OS sandbox. It carries platform protocol admission, approvals and business
+state across processes; it does not provide per-Agent tool whitelists or host
+isolation. The token is revoked at teardown and is
 removed from native Bash command environments. An accepted plan or task report
 ends the invocation's business-tool activity. Artifact bindings are committed
 before Pi can submit the final task report.
@@ -102,10 +108,10 @@ may call, or change capability when an Agent is saved. Historical job display an
 platform cleanup helpers remain, but this is not a second production Agent
 command engine.
 
-Native commands use **Bash**, including on Windows. Commands are unrestricted
-apart from the resource limits above; shell commands may create or change source
-files, and there is no verification-only policy. Existing web and authenticated
-Feishu approval routes resolve the same pending IDs. Cancellation releases
+Native commands use **Bash**, including on Windows. Shell commands may create or
+change source files; there is no verification-only policy. Destructive-pattern
+checks, selected command approvals and resource limits still apply. Existing web
+and authenticated Feishu approval routes resolve the same pending IDs. Cancellation releases
 pending questions, plans, writes and commands without approving them.
 
 Windows process ownership also requires Windows PowerShell with `Add-Type` and
