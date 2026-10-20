@@ -80,11 +80,18 @@ describe("the Pi harness driver", () => {
     expect(doctor.detail).toBe(getPiDoctor().error);
   });
 
-  it("advertises only what Pi actually does", () => {
+  it("declares the capability matrix truthfully", () => {
     expect(piHarnessDriver.capabilities()).toEqual({
-      tools: "native+business",
-      cancellation: true,
-      cancellationMode: "signal",
+      // Pi's extension registers its own native tools…
+      nativeTools: true,
+      // …and reaches the server-side business tools through the bridge.
+      businessTools: true,
+      // Cancellable only by aborting the signal the caller passed to run().
+      cancellation: { supported: true, mode: "signal" },
+      // Native outcomes are hashed and business receipts reach the ledger.
+      evidence: true,
+      // Pi is handed the packet the platform compiles, not one it builds itself.
+      contextPacket: "platform",
       followUp: true,
       streaming: true,
     });
@@ -92,7 +99,7 @@ describe("the Pi harness driver", () => {
 
   it("does not pretend to abort by run id, because Pi exposes no such entry point", () => {
     // The only cancellation channel is the AbortSignal handed to run().
-    expect(piHarnessDriver.capabilities().cancellationMode).toBe("signal");
+    expect(piHarnessDriver.capabilities().cancellation).toEqual({ supported: true, mode: "signal" });
     expect(piHarnessDriver.abort("run_pi_driver")).toBe(false);
   });
 });

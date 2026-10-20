@@ -17,7 +17,15 @@ function fakeHarness(id: AdapterName): HarnessDriver {
   return {
     id,
     doctor: () => ({ available: true, version: "fixture" }),
-    capabilities: () => ({ tools: "business", cancellation: false, followUp: false, streaming: true }),
+    capabilities: () => ({
+      nativeTools: true,
+      businessTools: true,
+      cancellation: { supported: true, mode: "signal" },
+      evidence: true,
+      contextPacket: "platform",
+      followUp: false,
+      streaming: true,
+    }),
     run: async function* (): HarnessRunStream { /* empty */ },
     abort: () => false,
   };

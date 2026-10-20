@@ -61,7 +61,15 @@ describe("harness dispatch at the real run entry point", () => {
     const fake: HarnessDriver = {
       id: "mock",
       doctor: () => ({ available: true, version: "fixture" }),
-      capabilities: () => ({ tools: "business", cancellation: false, followUp: false, streaming: true }),
+      capabilities: () => ({
+        nativeTools: true,
+        businessTools: true,
+        cancellation: { supported: true, mode: "signal" },
+        evidence: true,
+        contextPacket: "platform",
+        followUp: false,
+        streaming: true,
+      }),
       run: async function* (input, signal): HarnessRunStream {
         calls.push({ input, signal });
         const base = { conversationId: input.conversationId, timestamp: Date.now(), messageId: "", partIndex: 0 };

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { consumeStream } from "@/server/consume-stream";
-import { runPiInvocation } from "@/server/pi/runtime";
+import { getHarness } from "@/server/harness/registry";
 import { PiRuntimeError } from "@/server/pi/process";
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { createMessage, createRun, getAgent, getArtifact, getConversation, getMessage, getRun, getWorkspaceForConversation, updateMessageParts, updateMessageStatus, updateRunStage, updateRunStatus } from "@/server/repositories";
@@ -97,7 +97,11 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
   }
   const target = getAgent(request.targetAgentId);
   const workspace = getWorkspaceForConversation(ctx.conversationId);
-  if (!target || target.adapterName !== "pi" || !workspace) throw new Error("Consultation target or Pi workspace is unavailable.");
+  // The peer run belongs to the target Agent, so the target's adapter selects
+  // the engine. With only Pi registered this is the same dispatch as before; a
+  // second driver must not need an edit here.
+  const targetHarness = target ? getHarness(target.adapterName) : null;
+  if (!target || !targetHarness || !workspace) throw new Error("Consultation target or Pi workspace is unavailable.");
   const payload = { targetAgentId: target.id, question: request.question, artifactIds: [...new Set(request.artifactIds)].sort() };
   const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   // Resolve idempotency before rebuilding snapshots: an artifact version may
@@ -168,7 +172,7 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
     publish(id);
     const tools = [...provisionedPlatformToolNames(), "respond_to_consultation"];
     const result = await consumeStream({ messageId: response.id, runId: childRunId, signal,
-      stream: runPiInvocation({ conversationId: ctx.conversationId, runId: childRunId,
+      stream: targetHarness.run({ conversationId: ctx.conversationId, runId: childRunId,
         agent: { ...target, toolNames: tools }, conversation, workspace, triggerMessage: question,
         recentMessages: [], toolNames: tools, apiKey: null, workspacePath: ctx.workspacePath,
         accessMode: "workspace", workspaceLease: ctx.consultationLease, maxTurns: 4, timeoutMs: TTL_MS,

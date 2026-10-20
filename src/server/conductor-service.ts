@@ -3,6 +3,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
 import { getHarness } from "@/server/harness/registry";
+import { assertHarnessSupports } from "@/server/harness/capabilities";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
 import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
@@ -82,6 +83,12 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
   setConductorStage(input.conversationId, input.conductorRunId, "planning");
   const agent = listAgents().find(agent => agent.id === input.conductorAgentId);
   if (agent) input.piConfiguration ??= snapshotPiProvider(agent);
+  // Honest degradation before any stage runs: the Conductor's PLAN, aggregate and
+  // recovery stages are all business-tool stages and rely on the platform packet.
+  const conductorHarness = agent ? getHarness(agent.adapterName) : null;
+  if (conductorHarness) {
+    assertHarnessSupports(conductorHarness, { businessTools: true, cancellation: true, contextPacket: "platform" });
+  }
   // Stage 0: FACT EXTRACTION — extract structured facts from user message
   const userText = extractTextFromMessage(input.triggerMessage);
   try {
