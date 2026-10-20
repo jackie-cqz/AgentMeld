@@ -154,8 +154,8 @@ describe("human turn admission", () => {
     expect(fixture.stopped).toContain(original.runIds[0]);
     expect(getRun(original.runIds[0])?.status).toBe("aborted");
     const replacement = fixture.inputs.find(input => input.runId === corrected.runIds[0])!;
-    expect(replacement.contextXml).toContain("Build the original task");
-    expect(replacement.contextXml).toContain("Change the primary color to blue");
+    expect(replacement.prompt).toContain("Build the original task");
+    expect(replacement.prompt).toContain("Change the primary color to blue");
     const turn = listCollaborationTurns(conversation.id).find(item => item.runId === corrected.runIds[0])!;
     expect(turn.status).toBe("applied");
     expect(turn.contextSnapshotId).toBeTruthy();
@@ -183,8 +183,8 @@ describe("human turn admission", () => {
     const replacement = fixture.inputs.find(input => input.runId === next.runIds[0])!;
     expect(fixture.stopped).toContain(original.runIds[0]);
     expect(replacement.accessMode).not.toBe("conversation");
-    expect(replacement.contextXml).toContain("Original executable goal");
-    expect(replacement.contextXml).toContain("Also preserve keyboard navigation");
+    expect(replacement.prompt).toContain("Original executable goal");
+    expect(replacement.prompt).toContain("Also preserve keyboard navigation");
   });
 
   it("stops a live writer when the human changes the request to discussion only", async () => {
@@ -262,7 +262,7 @@ describe("human turn admission", () => {
     expect(fixture.followupConsumers).toHaveLength(0);
     expect(fixture.stopped).toContain(original.runIds[0]);
     expect(isRunActive(original.runIds[0])).toBe(false);
-    expect(fixture.inputs[1].contextXml).toContain("Focus on the compact option");
+    expect(fixture.inputs[1].prompt).toContain("Focus on the compact option");
   });
 
   it("does not duplicate an accepted send when the client retries its request identity", async () => {

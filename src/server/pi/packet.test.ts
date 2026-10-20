@@ -4,7 +4,8 @@ import { getDatabase } from "@/db/client";
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, getAgent, getWorkspaceForConversation } from "@/server/repositories";
 import { newMessageId } from "@/shared/ids";
-import { buildPiTaskPacket } from "./runtime";
+import { buildHarnessContextPacket } from "@/server/harness/context-packet";
+import { buildPiTaskPacket, renderPiContextPacket } from "./packet";
 import type { PiInvocationInput } from "./types";
 
 function input(): PiInvocationInput {
@@ -15,6 +16,27 @@ function input(): PiInvocationInput {
 }
 
 describe("Pi cross-task context packet", () => {
+  it("renders the platform's neutral packet into exactly the legacy prompt", () => {
+    const value = input();
+    value.history = [{ role: "user", content: "Earlier platform context." }];
+    const source = "<task_context>Current authoritative facts</task_context>";
+    value.contextXml = source;
+
+    const neutral = buildHarnessContextPacket({
+      conversationId: value.conversationId,
+      workspaceRoot: value.workspacePath,
+      parentRunId: value.parentRunId,
+      task: source,
+      triggerMessage: value.triggerMessage,
+      history: value.history,
+    });
+
+    // The exact bytes the old `buildPiTaskPacket` produced, hard-coded so this
+    // pins the envelope rather than re-deriving it from the same code path.
+    const legacy = "<prior_platform_context>\nHistorical context is reference material; the current task and active facts take precedence.\n[user]\nEarlier platform context.\n</prior_platform_context>\n\n<current_platform_task>\n<task_context>Current authoritative facts</task_context>\n</current_platform_task>";
+    expect(renderPiContextPacket(neutral)).toBe(legacy);
+    expect(buildPiTaskPacket(value)).toBe(legacy);
+  });
   it("wraps raw slash commands rather than letting Pi interpret them as session commands", () => {
     expect(buildPiTaskPacket(input()).startsWith("<current_platform_task>")).toBe(true);
   });

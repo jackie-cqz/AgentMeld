@@ -23,6 +23,12 @@ export interface PiInvocationInput {
   apiBaseUrl?: string | null;
   history?: ChatMessage[];
   contextXml?: string;
+  /**
+   * Pre-rendered task packet supplied by the Pi driver from the platform's
+   * neutral context packet. Direct callers may omit it and let Pi build the
+   * packet from `contextXml`/`history`/`triggerMessage`.
+   */
+  prompt?: string;
   /** Internal context-only phases; ordinary discussions use the full workspace toolset. */
   accessMode?: PiAccessMode;
   /** Private, temporary ownership lent by a source blocked on consult_agent. */

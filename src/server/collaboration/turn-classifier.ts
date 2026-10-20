@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
-import type { PiInvocationInput } from "@/server/pi/types";
+import type { HarnessInvocationInput } from "@/server/harness/types";
+import { buildHarnessContextPacket } from "@/server/harness/context-packet";
 import { PiRuntimeError } from "@/server/pi/process";
 import { buildCollaborationHistory } from "./conversation-context";
 import type { AgentRun } from "@/shared/types";
@@ -34,7 +35,7 @@ export function explicitlyDiscussionOnly(text: string): boolean {
     || /\b(?:do not|don't) (?:change|modify|write|edit) (?:any )?files\b|\bdiscussion only\b/i.test(text);
 }
 
-export async function classifyHumanTurn(input: PiInvocationInput, relatedRuns: AgentRun[], signal: AbortSignal, action?: CollaborationAction, explicitTarget?: string): Promise<TurnDecision> {
+export async function classifyHumanTurn(input: HarnessInvocationInput, relatedRuns: AgentRun[], signal: AbortSignal, action?: CollaborationAction, explicitTarget?: string): Promise<TurnDecision> {
   const text = input.triggerMessage.parts.filter(part => part.type === "text").map(part => part.content).join("\n");
   if (action) {
     if (explicitTarget && !relatedRuns.some(run => run.id === explicitTarget)) throw new Error("The selected run does not belong to the current conversation/team.");
@@ -51,11 +52,24 @@ export async function classifyHumanTurn(input: PiInvocationInput, relatedRuns: A
     throw new PiRuntimeError(failure.message, failure.category);
   }
   let output = "";
-  for await (const event of harness.run({ ...input, toolNames: [], agent: { ...input.agent, toolNames: [] },
-    systemPrompt: TURN_CLASSIFIER_PROMPT, history: context.history, recentMessages: [], accessMode: "conversation", maxTurns: 1, timeoutMs: 60_000,
+  const classifierTask = JSON.stringify({ latest_human_message: text, related_runs: relatedRuns.map(run => ({ id: run.id, agentId: run.agentId, status: run.status, stage: run.stage, triggerMessageId: run.triggerMessageId })) });
+  for await (const event of harness.run({
+    ...input,
+    tools: { names: [], required: [] },
+    requirements: {},
+    agent: { ...input.agent, toolNames: [] },
+    context: {
+      systemPrompt: TURN_CLASSIFIER_PROMPT,
+      packet: buildHarnessContextPacket({ conversationId: input.conversationId, workspaceRoot: input.workspaceRoot,
+        parentRunId: input.parentRunId, task: classifierTask, triggerMessage: input.triggerMessage, history: context.history }),
+      recentMessages: [],
+    },
+    access: "conversation",
+    maxTurns: 1,
+    timeoutMs: 60_000,
     onTaskAccepted: undefined,
-    onContextCaptured: undefined, onStage: undefined,
-    contextXml: JSON.stringify({ latest_human_message: text, related_runs: relatedRuns.map(run => ({ id: run.id, agentId: run.agentId, status: run.status, stage: run.stage, triggerMessageId: run.triggerMessageId })) }),
+    onContextCaptured: undefined,
+    onStage: undefined,
   }, signal)) {
     if (event.type === "part.delta" && event.delta.type === "text.append") output += event.delta.text;
     if (output.length > 8000) throw new PiRuntimeError("Turn classification exceeded its response budget.", "classification");

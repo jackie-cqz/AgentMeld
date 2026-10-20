@@ -28,7 +28,8 @@ describe("Conductor context wiring", () => {
       runId: run.id, parts: [], status: "streaming", now: Date.now() });
     await executeConductor({ conversationId: conversation.id, conductorAgentId: "ag_mock_conductor", triggerMessage,
       availableAgentIds: conversation.agentIds, conductorRunId: run.id, messageId: response.id,
-      piConfiguration: { apiKey: "fixture-only", apiBaseUrl: "http://127.0.0.1:1", providerRevision: "fixture" } });
+      provider: { providerId: "fixture", catalogProvider: "fixture", modelId: "fixture-model",
+        endpoint: "http://127.0.0.1:1", credential: "fixture-only", revision: "fixture" } });
     const invocation = captured.at(-1)!;
     expect(invocation.history?.map(message => message.content).join("\n")).toContain("Proposal two: compact sidebar");
     expect(invocation.history?.map(message => message.content).join("\n")).not.toContain("Discuss the second proposal");

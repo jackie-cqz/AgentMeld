@@ -18,10 +18,10 @@ import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import { classifyHumanTurn } from "@/server/collaboration/turn-classifier";
+import { resolveHarnessProvider } from "./provider-target";
 import { proposeConsultationResponse, requestConsultation } from "@/server/collaboration/consultations";
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, createRun, getAgent, getRun, getWorkspaceForConversation } from "@/server/repositories";
-import type { PiInvocationInput } from "@/server/pi/types";
 import type { ToolContext } from "@/server/tools/types";
 import type { StreamEvent } from "@/shared/types";
 import { newMessageId, newRunId } from "@/shared/ids";
@@ -80,7 +80,7 @@ function fakeDriver(calls: HarnessInvocationInput[], events: FakeEvents = () => 
   };
 }
 
-function classifierInput(adapterName: "mock" | "claude-code"): PiInvocationInput {
+function classifierInput(adapterName: "mock" | "claude-code"): HarnessInvocationInput {
   const conversation = createConversation({ mode: "single", agentIds: ["ag_mock_builder"] });
   getDatabase().prepare("UPDATE agents SET adapter_name = ? WHERE id = 'ag_mock_builder'").run(adapterName);
   const trigger = createMessage({
@@ -103,11 +103,11 @@ function classifierInput(adapterName: "mock" | "claude-code"): PiInvocationInput
     conversation,
     workspace,
     triggerMessage: trigger,
-    recentMessages: [],
-    toolNames: [],
-    systemPrompt: "",
-    workspacePath: workspace.rootPath,
-    apiKey: null,
+    context: { systemPrompt: "", packet: { task: "", priorHistory: [], attachments: [] }, recentMessages: [] },
+    tools: { names: [], required: [] },
+    requirements: {},
+    provider: resolveHarnessProvider(agent),
+    workspaceRoot: workspace.rootPath,
   };
 }
 
@@ -163,9 +163,9 @@ describe("collaboration dispatch through the harness registry", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].agent.adapterName).toBe("mock");
     // The classifier still strips the toolset: it is a context-only turn.
-    expect(calls[0].toolNames).toEqual([]);
-    expect(calls[0].accessMode).toBe("conversation");
-    expect(calls[0].systemPrompt).toContain("AGENTMELD_TURN_CLASSIFIER_V1");
+    expect(calls[0].tools.names).toEqual([]);
+    expect(calls[0].access).toBe("conversation");
+    expect(calls[0].context.systemPrompt).toContain("AGENTMELD_TURN_CLASSIFIER_V1");
     expect(piRuntime.calls).toBe(0);
   });
 
@@ -186,7 +186,7 @@ describe("collaboration dispatch through the harness registry", () => {
         conversationId: invocation.conversationId,
         runId: invocation.runId,
         agentId: invocation.agent.id,
-        workspacePath: invocation.workspacePath,
+        workspacePath: invocation.workspaceRoot,
         abortSignal: signal,
       }, "replied", CONSULTATION_ANSWER);
       return [{
@@ -208,7 +208,7 @@ describe("collaboration dispatch through the harness registry", () => {
     expect(calls[0].agent.id).toBe("ag_designer");
     expect(calls[0].agent.adapterName).toBe("mock");
     expect(calls[0].runId).toBe(result.targetRunId);
-    expect(calls[0].toolNames).toContain("respond_to_consultation");
+    expect(calls[0].tools.names).toContain("respond_to_consultation");
     expect(piRuntime.calls).toBe(0);
   });
 

@@ -4,8 +4,9 @@ import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
 import { getHarness } from "@/server/harness/registry";
 import { assertHarnessSupports } from "@/server/harness/capabilities";
-import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
-import { snapshotPiProvider } from "@/server/pi/config";
+import type { HarnessInvocationInput, HarnessProviderTarget } from "@/server/harness/types";
+import { buildHarnessContextPacket } from "@/server/harness/context-packet";
+import { resolveHarnessProvider } from "@/server/harness/provider-target";
 import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PiRuntimeError } from "@/server/pi/process";
 import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
@@ -28,7 +29,6 @@ import { rebuildAllFts } from "@/server/search/context-fts-index";
 import { evaluateChildTaskResult } from "@/server/task-result-report";
 import { verifyTaskAttempt } from "@/server/verification/verification-engine";
 import { upsertCriterionVerdict } from "@/server/repositories/evidence-repository";
-import { resolveApiKey, getSettings } from "@/server/settings-service";
 import { newMessageId, newTaskAttemptId, newContextSnapshotId } from "@/shared/ids";
 import type { Message, MessagePart, StreamEvent, DispatchPlanItem, Agent } from "@/shared/types";
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
@@ -61,10 +61,10 @@ export interface ConductorInput {
   /** messageId of the conductor's streaming response bubble, so events can target it */
   messageId: string;
   signal?: AbortSignal;
-  piConfiguration?: PiProviderSnapshot;
+  provider?: HarnessProviderTarget;
   objectiveContext?: string;
   onTaskAccepted?: () => void;
-  onContextCaptured?: PiInvocationInput["onContextCaptured"];
+  onContextCaptured?: HarnessInvocationInput["onContextCaptured"];
 }
 
 function setConductorStage(conversationId: string, runId: string, stage: string): void {
@@ -82,7 +82,7 @@ function taskWriterRunIds(runIds: string[]): string[] {
 export async function executeConductor(input: ConductorInput): Promise<void> {
   setConductorStage(input.conversationId, input.conductorRunId, "planning");
   const agent = listAgents().find(agent => agent.id === input.conductorAgentId);
-  if (agent) input.piConfiguration ??= snapshotPiProvider(agent);
+  if (agent) input.provider ??= resolveHarnessProvider(agent);
   // Honest degradation before any stage runs: the Conductor's PLAN, aggregate and
   // recovery stages are all business-tool stages and rely on the platform packet.
   const conductorHarness = agent ? getHarness(agent.adapterName) : null;
@@ -243,7 +243,7 @@ export async function executeConductor(input: ConductorInput): Promise<void> {
     await executeConductorPlan(
       input.conversationId, finalPlan, input.availableAgentIds,
       input.conductorRunId, planId, input.triggerMessage, input.conductorAgentId,
-      input.messageId, input.signal, input.piConfiguration
+      input.messageId, input.signal, input.provider
     );
   }
 }
@@ -343,7 +343,7 @@ export async function executeConductorPlan(
   conductorAgentId: string,
   messageId: string,
   signal?: AbortSignal,
-  piConfiguration?: PiProviderSnapshot
+  provider?: HarnessProviderTarget
 ): Promise<{ results: Map<string, TaskResult>; completionStatus: CompletionStatus; conflicts: StructuredConflict[] }> {
   plan = enforceExplicitFrameworkContracts(plan, extractTextFromMessage(triggerMessage));
   const results = new Map<string, TaskResult>();
@@ -513,7 +513,7 @@ export async function executeConductorPlan(
     try {
       const recoveryResult = await generateRecoveryPlan(
         conversationId, conductorAgentId, conductorRunId,
-        recoveryPrompt, plan, results, abortSignal, piConfiguration
+        recoveryPrompt, plan, results, abortSignal, provider
       );
 
       if (recoveryResult && recoveryResult.tasks.length > 0) {
@@ -584,7 +584,7 @@ export async function executeConductorPlan(
   await runAggregateStage(
     conversationId, plan, results, outputBindings,
     conductorAgentId, conductorRunId, triggerMessage,
-    completionStatus, messageId, abortSignal, piConfiguration
+    completionStatus, messageId, abortSignal, provider
   );
 
   return { results, completionStatus, conflicts: allConflicts };
@@ -1475,7 +1475,7 @@ async function runAggregateStage(
   completionStatus: CompletionStatus,
   messageId: string,
   signal: AbortSignal,
-  piConfiguration?: PiProviderSnapshot
+  provider?: HarnessProviderTarget
 ): Promise<void> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
@@ -1493,9 +1493,8 @@ async function runAggregateStage(
     return;
   }
 
-  const settings = getSettings();
-  const apiKey = piConfiguration ? piConfiguration.apiKey : resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
-  if (!apiKey) {
+  const target = provider ?? resolveHarnessProvider(agent);
+  if (!target.credential) {
     await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
   }
@@ -1512,20 +1511,26 @@ async function runAggregateStage(
 
   // Tools: remove plan_tasks and ask_user
   const aggregateTools = provisionedPlatformToolNames().filter((t) => t !== "ask_user");
+  const aggregateTrigger = { ...triggerMessage, parts: [{ type: "text" as const, content: aggregateUserPrompt }] };
+  const workspacePath = workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath;
 
-  const invocationInput: PiInvocationInput = {
+  const invocationInput: HarnessInvocationInput = {
     conversationId,
     runId: conductorRunId,
     agent: { ...agent, toolNames: aggregateTools, systemPrompt: aggregateSystemPrompt },
     conversation,
     workspace,
-    triggerMessage: { ...triggerMessage, parts: [{ type: "text", content: aggregateUserPrompt }] },
-    recentMessages: [],
-    toolNames: aggregateTools,
-    systemPrompt: aggregateSystemPrompt,
-    ...piConfiguration,
-    workspacePath: workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath,
-    apiKey
+    triggerMessage: aggregateTrigger,
+    context: {
+      systemPrompt: aggregateSystemPrompt,
+      packet: buildHarnessContextPacket({ conversationId, workspaceRoot: workspacePath, task: aggregateUserPrompt, triggerMessage: aggregateTrigger }),
+      recentMessages: [],
+    },
+    tools: { names: aggregateTools, required: aggregateTools },
+    requirements: { businessTools: true, cancellation: true, contextPacket: "platform" },
+    provider: target,
+    workspaceRoot: workspacePath,
+    access: "workspace",
   };
 
   // Route the aggregate stream through consumeStream so every event carries the
@@ -2068,10 +2073,8 @@ async function runConductorAssess(
     return { mode: "direct" };
   }
 
-  const settings = getSettings();
-  const provider = agent.modelProvider ?? "deepseek";
-  const apiKey = input.piConfiguration ? input.piConfiguration.apiKey : resolveApiKey(provider, agent.apiKey, settings);
-  if (!apiKey) {
+  const target = input.provider ?? resolveHarnessProvider(agent);
+  if (!target.credential) {
     // Name the provider the agent is actually configured with: the Conductor is
     // not necessarily on DeepSeek, and a message that says otherwise sends the
     // user to the wrong settings field. `openai-compatible` is per-agent only —
@@ -2079,9 +2082,9 @@ async function runConductorAssess(
     // for it — so pointing at the settings panel would be wrong outright.
     createSystemMessage(
       input.conversationId,
-      provider === "openai-compatible"
+      target.providerId === "openai-compatible"
         ? `⚠️ 该 Conductor 使用 provider "openai-compatible"，其 API Key 只能配置在 Agent 上（不会读取全局设置或环境变量）。请编辑该 Agent 填入 Key。`
-        : `⚠️ 缺少 provider "${provider}" 的 API Key，请在设置中为该 provider 配置后再试。`
+        : `⚠️ 缺少 provider "${target.providerId}" 的 API Key，请在设置中为该 provider 配置后再试。`
     );
     failConductor("No API key configured.", "authentication");
     return { mode: "direct" };
@@ -2098,20 +2101,24 @@ async function runConductorAssess(
   const { history, recentMessages } = await buildCollaborationHistory({
     agent, triggerMessage: input.triggerMessage, systemPrompt: assessSystemPrompt, currentText: userText,
   });
-  const invocationInput: PiInvocationInput = {
+  const assessTrigger = { ...input.triggerMessage, parts: [{ type: "text" as const, content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] };
+  const invocationInput: HarnessInvocationInput = {
     conversationId: input.conversationId,
     runId: input.conductorRunId,
     agent: { ...agent, toolNames: assessToolNames, systemPrompt: assessSystemPrompt },
     conversation,
     workspace,
-    triggerMessage: { ...input.triggerMessage, parts: [{ type: "text", content: userText }, ...input.triggerMessage.parts.filter(part => part.type !== "text")] },
-    recentMessages,
-    history,
-    toolNames: assessToolNames,
-    systemPrompt: assessSystemPrompt,
-    ...input.piConfiguration,
-    workspacePath,
-    apiKey,
+    triggerMessage: assessTrigger,
+    context: {
+      systemPrompt: assessSystemPrompt,
+      packet: buildHarnessContextPacket({ conversationId: input.conversationId, workspaceRoot: workspacePath, task: userText, triggerMessage: assessTrigger, history }),
+      recentMessages,
+    },
+    tools: { names: assessToolNames, required: assessToolNames },
+    requirements: { businessTools: true, cancellation: true, contextPacket: "platform" },
+    provider: target,
+    workspaceRoot: workspacePath,
+    access: "workspace",
     onTaskAccepted: input.onTaskAccepted,
     onContextCaptured: input.onContextCaptured,
   };
@@ -2285,7 +2292,7 @@ async function generateRecoveryPlan(
   originalPlan: ParsedTask[],
   results: Map<string, TaskResult>,
   signal: AbortSignal,
-  piConfiguration?: PiProviderSnapshot
+  provider?: HarnessProviderTarget
 ): Promise<{ reasoning: string; tasks: RecoveryTask[] } | null> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
@@ -2296,9 +2303,8 @@ async function generateRecoveryPlan(
   const workspace = getWorkspaceForConversation(conversationId);
   if (!conversation || !workspace) return null;
 
-  const settings = getSettings();
-  const apiKey = piConfiguration ? piConfiguration.apiKey : resolveApiKey(agent.modelProvider ?? "deepseek", agent.apiKey, settings);
-  if (!apiKey) return null;
+  const target = provider ?? resolveHarnessProvider(agent);
+  if (!target.credential) return null;
 
   const otherAgents = agents.filter(
     (candidate) => !candidate.isConductor && conversation.agentIds.includes(candidate.id)
@@ -2341,21 +2347,28 @@ ${originalPlan
   .map((task) => `- id: "${task.id}", agentId: "${task.agentId}", title: "${task.title}"`)
   .join("\n")}`;
 
-  const invocationInput: PiInvocationInput = {
+  const recoveryTrigger: Message = { id: "", conversationId, origin: "internal", role: "user", agentId: null, runId: null,
+    parts: [{ type: "text", content: recoveryPrompt }], status: "complete",
+    mentionedAgentIds: [], parentMessageId: null, createdAt: Date.now(), updatedAt: Date.now() };
+  const recoveryTools = ["plan_tasks"];
+
+  const invocationInput: HarnessInvocationInput = {
     conversationId,
     runId: conductorRunId,
-    agent: { ...agent, toolNames: ["plan_tasks"], systemPrompt },
+    agent: { ...agent, toolNames: recoveryTools, systemPrompt },
     conversation,
     workspace,
-    triggerMessage: { id: "", conversationId, origin: "internal", role: "user", agentId: null, runId: null,
-      parts: [{ type: "text", content: recoveryPrompt }], status: "complete",
-      mentionedAgentIds: [], parentMessageId: null, createdAt: Date.now(), updatedAt: Date.now() },
-    recentMessages: [],
-    toolNames: ["plan_tasks"],
-    systemPrompt,
-    workspacePath,
-    apiKey,
-    ...piConfiguration
+    triggerMessage: recoveryTrigger,
+    context: {
+      systemPrompt,
+      packet: buildHarnessContextPacket({ conversationId, workspaceRoot: workspacePath, task: recoveryPrompt, triggerMessage: recoveryTrigger }),
+      recentMessages: [],
+    },
+    tools: { names: recoveryTools, required: recoveryTools },
+    requirements: { businessTools: true, cancellation: true, contextPacket: "platform" },
+    provider: target,
+    workspaceRoot: workspacePath,
+    access: "workspace",
   };
 
   let capturedPlan: { reasoning: string; tasks: Array<Record<string, unknown>> } | null = null;

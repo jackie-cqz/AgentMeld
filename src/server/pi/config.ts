@@ -3,8 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { getDataDir, getDatabase } from "@/db/client";
 import { getModelLimits, resolveContextWindow } from "@/shared/model-registry";
-import { getSettings, resolveApiKey } from "@/server/settings-service";
-import { resolveProviderBaseUrl } from "@/server/provider-endpoints";
+import { resolveHarnessProvider } from "@/server/harness/provider-target";
 import type { PiInvocationInput, PiProviderSnapshot } from "./types";
 import type { Agent } from "@/shared/types";
 import { createRequire } from "node:module";
@@ -151,14 +150,11 @@ export function capturePiConfiguration(input: PiInvocationInput): PiInvocationIn
 }
 
 export function snapshotPiProvider(agent: Agent): PiProviderSnapshot {
-  const provider = agent.modelProvider ?? "deepseek";
-  const settings = getSettings();
-  const revision = provider.startsWith("profile:")
-    ? getDatabase().prepare("SELECT updated_at,preset_id FROM model_provider_profiles WHERE id=?").get(provider.slice(8)) as { updated_at: number; preset_id?: string } | undefined
-    : getDatabase().prepare("SELECT updated_at FROM app_settings WHERE id='singleton'").get() as { updated_at: number; preset_id?: string } | undefined;
-  return { providerRevision: `${provider}:${revision?.updated_at ?? 0}`, catalogProvider: revision?.preset_id ?? provider,
-    apiKey: resolveApiKey(provider, agent.apiKey, settings),
-    apiBaseUrl: resolveProviderBaseUrl(provider, agent.apiBaseUrl ?? (provider === "anthropic" ? settings.anthropicBaseUrl : null)) };
+  // Same platform resolution as every harness; Pi only maps the neutral target
+  // onto its own snapshot field names.
+  const target = resolveHarnessProvider(agent);
+  return { providerRevision: target.revision, catalogProvider: target.catalogProvider,
+    apiKey: target.credential, apiBaseUrl: target.endpoint };
 }
 
 function persistExecution(id: string, input: PiInvocationInput, home: string, version: string, config: object): void {

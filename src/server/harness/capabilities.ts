@@ -1,22 +1,9 @@
 import type { AdapterName } from "@/shared/types";
-import type { HarnessDriver } from "./types";
+import type { HarnessDriver, HarnessRequirements } from "./types";
 
-/**
- * What one run needs from its harness before the platform may start it.
- *
- * Requirements are derived by the run owner from what that run is actually
- * provisioned with, never invented by a driver. A field that is absent or
- * `false` is not required: a classifier turn, for example, needs neither native
- * tools nor business tools.
- */
-export interface HarnessRequirements {
-  nativeTools?: boolean;
-  businessTools?: boolean;
-  evidence?: boolean;
-  cancellation?: boolean;
-  /** Only the platform-built packet is a requirement; a harness may otherwise build its own context. */
-  contextPacket?: "platform";
-}
+// Requirements are part of the invocation contract (#25 P2); re-exported here so
+// existing callers that check capabilities keep their import site.
+export type { HarnessRequirements } from "./types";
 
 /**
  * A run selected an engine that cannot do what the run needs.

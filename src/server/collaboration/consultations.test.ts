@@ -57,8 +57,8 @@ describe("bounded authenticated peer consultations", () => {
     expect(getRun(result.targetRunId!)?.status).toBe("complete");
     expect(fixture.inputs[0]).toMatchObject({ accessMode: "workspace", maxTurns: 4 });
     expect(fixture.inputs[0].toolNames).toEqual(expect.arrayContaining(["respond_to_consultation", "fs_read", "fs_write", "fs_patch", "bash", "deploy_workspace"]));
-    expect(fixture.inputs[0].contextXml).toContain('"humanRequest"');
-    expect(fixture.inputs[0].contextXml).toContain("Discuss this layout, do not modify files");
+    expect(fixture.inputs[0].prompt).toContain('"humanRequest"');
+    expect(fixture.inputs[0].prompt).toContain("Discuss this layout, do not modify files");
     expect(fixture.inputs[0].systemPrompt).toContain("take precedence over the source Agent's question");
     expect(fixture.inputs[0].parentRunId).toBeUndefined();
     expect(listConsultations(conversation.id)).toHaveLength(1);
