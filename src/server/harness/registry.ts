@@ -1,4 +1,5 @@
 import type { AdapterName } from "@/shared/types";
+import type { HarnessErrorCategory } from "./errors";
 import { piHarnessDriver } from "./pi-driver";
 import type { HarnessDriver } from "./types";
 
@@ -39,14 +40,14 @@ export function listHarnesses(): HarnessDriver[] {
 /**
  * The failure a caller must raise when no driver is registered for an Agent's
  * adapter, as `{ message, category }` so the run owner keeps deciding how to
- * turn it into a `PiRuntimeError`.
+ * turn it into a neutral `HarnessError`.
  *
  * Retired names keep the exact migration message and `migration_required`
  * category, because old Agent rows must still send the user to edit and migrate
  * rather than to a dead end. Any other unregistered name reports what actually
  * happened: nothing can run it.
  */
-export function unregisteredHarnessError(name: AdapterName): { message: string; category: string } {
+export function unregisteredHarnessError(name: AdapterName): { message: string; category: HarnessErrorCategory } {
   if (RETIRED_ADAPTERS.has(name)) {
     return {
       message: "This Agent uses a retired execution engine. Edit its model configuration to migrate to Pi.",

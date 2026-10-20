@@ -72,10 +72,9 @@ describe("harness dispatch at the real run entry point", () => {
       }),
       run: async function* (input, signal): HarnessRunStream {
         calls.push({ input, signal });
-        const base = { conversationId: input.conversationId, timestamp: Date.now(), messageId: "", partIndex: 0 };
-        yield { ...base, type: "part.start", part: { type: "text", content: "" } };
-        yield { ...base, type: "part.delta", delta: { type: "text.append", text: "Fake harness reply" } };
-        yield { ...base, type: "part.end" };
+        yield { type: "output.start", blockIndex: 0, kind: "text" };
+        yield { type: "output.delta", blockIndex: 0, kind: "text", text: "Fake harness reply" };
+        yield { type: "output.end", blockIndex: 0 };
       },
       abort: () => false,
     };

@@ -6,7 +6,8 @@ import { getHarness } from "@/server/harness/registry";
 import type { HarnessInvocationInput } from "@/server/harness/types";
 import { buildHarnessContextPacket } from "@/server/harness/context-packet";
 import { resolveHarnessProvider } from "@/server/harness/provider-target";
-import { PiRuntimeError } from "@/server/pi/process";
+import { HarnessError } from "@/server/harness/errors";
+import { projectHarnessStream } from "@/server/harness/events";
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { createMessage, createRun, getAgent, getArtifact, getConversation, getMessage, getRun, getWorkspaceForConversation, updateMessageParts, updateMessageStatus, updateRunStage, updateRunStatus } from "@/server/repositories";
 import type { ToolContext } from "@/server/tools/types";
@@ -202,7 +203,7 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
       timeoutMs: TTL_MS,
     };
     const result = await consumeStream({ messageId: response.id, runId: childRunId, signal,
-      stream: targetHarness.run(invocation, signal),
+      stream: projectHarnessStream(targetHarness.run(invocation, signal), ctx.conversationId),
     });
     signal.throwIfAborted();
     assertSource(ctx);
@@ -224,10 +225,10 @@ export async function requestConsultation(request: ConsultationRequest, ctx: Too
     eventBus.publish({ type: "message.end", conversationId: ctx.conversationId, timestamp: Date.now(), messageId: response.id, status: "complete" });
     eventBus.publish({ type: "run.end", conversationId: ctx.conversationId, timestamp: Date.now(), runId: childRunId, status: "complete" });
   } catch (error) {
-    const cleanupFailed = error instanceof PiRuntimeError && error.category === "cleanup_failed";
+    const cleanupFailed = error instanceof HarnessError && error.category === "cleanup_failed";
     const status = cleanupFailed ? "failed" : deadline.aborted ? "expired" : signal.aborted ? "cancelled" : "failed";
     getDatabase().prepare("UPDATE agent_consultations SET status=?,answer=NULL,error=?,updated_at=? WHERE id=? AND status IN ('requested','running')")
-      .run(status, cleanupFailed ? "Peer process teardown was not confirmed." : error instanceof PiRuntimeError ? error.message : status === "failed" ? "Peer consultation failed." : `Consultation ${status}.`, Date.now(), id);
+      .run(status, cleanupFailed ? "Peer process teardown was not confirmed." : error instanceof HarnessError ? error.message : status === "failed" ? "Peer consultation failed." : `Consultation ${status}.`, Date.now(), id);
     if (started) {
       const runStatus = status === "cancelled" ? "aborted" : "failed";
       updateRunStatus(childRunId, runStatus, null, Date.now(), cleanupFailed ? "cleanup_failed" : status);

@@ -5,7 +5,7 @@ import { getTaskAttemptByChildRun } from "@/server/repositories/evidence-reposit
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { extractFactsForUserTurn } from "@/server/context-facts/conductor-fact-extraction";
 import { submitPiFollowup, type PiFollowupReceipt } from "@/server/pi/controls";
-import { PiRuntimeError } from "@/server/pi/process";
+import { HarnessError } from "@/server/harness/errors";
 import type { HarnessInvocationInput } from "@/server/harness/types";
 import type { AgentRun } from "@/shared/types";
 import type { CollaborationAction, CollaborationTurn } from "@/shared/collaboration-types";
@@ -114,7 +114,7 @@ export async function admitHumanTurn(input: HarnessInvocationInput, run: AgentRu
     // An engine that is not registered for this Agent is a configuration
     // problem, not an ambiguous message: say so instead of asking the user to
     // re-confirm intent that we could not classify because no engine ran.
-    if (error instanceof PiRuntimeError && ["cleanup_failed", "authentication", "configuration", "migration_required", "harness_unavailable"].includes(error.category)) throw error;
+    if (error instanceof HarnessError && ["cleanup_failed", "authentication", "configuration", "migration_required", "harness_unavailable"].includes(error.category)) throw error;
     updateCollaborationTurn(turn.id, { intent: "clarify", status: "needs_confirmation", reason: "无法可靠判断这条消息的处理方式，请确认讨论还是执行。" });
     return { handled: true, turnId: turn.id, response: "这条消息尚未开始执行。请确认是继续讨论、开启新任务，还是补充已有任务。" };
   }

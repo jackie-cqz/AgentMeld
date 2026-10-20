@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
 import type { HarnessInvocationInput } from "@/server/harness/types";
 import { buildHarnessContextPacket } from "@/server/harness/context-packet";
-import { PiRuntimeError } from "@/server/pi/process";
+import { HarnessError } from "@/server/harness/errors";
 import { buildCollaborationHistory } from "./conversation-context";
 import type { AgentRun } from "@/shared/types";
 import type { CollaborationAction } from "@/shared/collaboration-types";
@@ -49,7 +49,7 @@ export async function classifyHumanTurn(input: HarnessInvocationInput, relatedRu
   const harness = getHarness(input.agent.adapterName);
   if (!harness) {
     const failure = unregisteredHarnessError(input.agent.adapterName);
-    throw new PiRuntimeError(failure.message, failure.category);
+    throw new HarnessError(failure.message, failure.category);
   }
   let output = "";
   const classifierTask = JSON.stringify({ latest_human_message: text, related_runs: relatedRuns.map(run => ({ id: run.id, agentId: run.agentId, status: run.status, stage: run.stage, triggerMessageId: run.triggerMessageId })) });
@@ -71,11 +71,11 @@ export async function classifyHumanTurn(input: HarnessInvocationInput, relatedRu
     onContextCaptured: undefined,
     onStage: undefined,
   }, signal)) {
-    if (event.type === "part.delta" && event.delta.type === "text.append") output += event.delta.text;
-    if (output.length > 8000) throw new PiRuntimeError("Turn classification exceeded its response budget.", "classification");
+    if (event.type === "output.delta" && event.kind === "text") output += event.text;
+    if (output.length > 8000) throw new HarnessError("Turn classification exceeded its response budget.", "classification");
   }
   const decision = decisionSchema.parse(JSON.parse(output));
-  if (decision.targetRunId && !relatedRuns.some(run => run.id === decision.targetRunId)) throw new PiRuntimeError("Turn classifier named an unrelated run.", "classification");
+  if (decision.targetRunId && !relatedRuns.some(run => run.id === decision.targetRunId)) throw new HarnessError("Turn classifier named an unrelated run.", "classification");
   if (explicitlyDiscussionOnly(text)) {
     const active = relatedRuns.filter(run => run.status === "running" || run.status === "queued");
     const own = active.filter(run => run.agentId === input.agent.id);

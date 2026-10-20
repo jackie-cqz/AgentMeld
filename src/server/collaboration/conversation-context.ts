@@ -3,7 +3,7 @@ import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { listMessages } from "@/server/repositories";
 import { getModelLimits, resolveContextWindow } from "@/shared/model-registry";
 import { estimateTokens } from "@/shared/token-estimate";
-import { PiRuntimeError } from "@/server/pi/process";
+import { HarnessError } from "@/server/harness/errors";
 import type { Agent, Message } from "@/shared/types";
 
 const MAX_RECENT_TOKENS = 12_000;
@@ -21,7 +21,7 @@ export async function buildCollaborationHistory(input: {
   const conversationId = triggerMessage.conversationId;
   const messages = listMessages(conversationId);
   const boundary = messages.findIndex(message => message.id === triggerMessage.id);
-  if (boundary < 0) throw new PiRuntimeError("The conversation context trigger is missing.", "configuration");
+  if (boundary < 0) throw new HarnessError("The conversation context trigger is missing.", "configuration");
   const recentMessages = messages.slice(0, boundary).filter(message => message.status === "complete").slice(-20);
   const facts = loadActiveFacts(conversationId).map(fact => ({
     id: fact.id, key: fact.canonicalKey, value: fact.value, trustLevel: fact.trustLevel,
@@ -41,7 +41,7 @@ export async function buildCollaborationHistory(input: {
   const mandatory = await buildHistoryFor(agent.id, conversationId, { ...options, tokenBudget: 0 });
   const mandatoryTokens = tokens(mandatory);
   if (available < mandatoryTokens) {
-    throw new PiRuntimeError("Conversation context exceeds the model budget. Shorten pinned context, active facts or the current request.", "context_overflow");
+    throw new HarnessError("Conversation context exceeds the model budget. Shorten pinned context, active facts or the current request.", "context_overflow");
   }
   // buildHistoryFor excludes summary tokens from its selection budget. Charge
   // both that overhead and per-message framing in the final budget check.
@@ -51,7 +51,7 @@ export async function buildCollaborationHistory(input: {
     budget = Math.max(0, budget - (tokens(history) - available) - 64);
     history = await buildHistoryFor(agent.id, conversationId, { ...options, tokenBudget: budget ? mandatoryTokens + budget : 0 });
   }
-  if (tokens(history) > available) throw new PiRuntimeError("Mandatory conversation context exceeds the model budget.", "context_overflow");
+  if (tokens(history) > available) throw new HarnessError("Mandatory conversation context exceeds the model budget.", "context_overflow");
   history = [...history, ...activeFacts];
   return { history, recentMessages, estimatedTokens: tokens(history) };
 }
