@@ -2,7 +2,7 @@ import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
 import { takeRunRefusalReason } from "@/server/run-refusals";
 import { consumeStream } from "@/server/consume-stream";
-import { runPiInvocation } from "@/server/pi/runtime";
+import { getHarness } from "@/server/harness/registry";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { snapshotPiProvider } from "@/server/pi/config";
 import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
@@ -1472,7 +1472,8 @@ async function runAggregateStage(
 ): Promise<void> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
-  if (!agent || agent.adapterName !== "pi") {
+  const harness = agent ? getHarness(agent.adapterName) : null;
+  if (!agent || !harness) {
     // Fallback to template summary
     await generateAggregateFallback(conversationId, messageId, conductorRunId, results, plan, outputBindings);
     return;
@@ -1525,7 +1526,7 @@ async function runAggregateStage(
   // (Previously events were published straight from the adapter with messageId: "",
   // and the client reducer dropped them because state.messages[""] is undefined.)
   await consumeStream({
-    stream: runPiInvocation(invocationInput, signal),
+    stream: harness.run(invocationInput, signal),
     messageId,
     runId: conductorRunId,
     signal,
@@ -2045,7 +2046,8 @@ async function runConductorAssess(
 ): Promise<AssessResult> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === input.conductorAgentId);
-  if (!agent || agent.adapterName !== "pi") {
+  const harness = agent ? getHarness(agent.adapterName) : null;
+  if (!agent || !harness) {
     createSystemMessage(input.conversationId, "⚠️ Conductor 需要配置 Pi 执行引擎。");
     failConductor("Conductor requires the Pi execution engine.", "migration_required");
     return { mode: "direct" };
@@ -2119,7 +2121,7 @@ async function runConductorAssess(
 
   try {
     await consumeStream({
-      stream: runPiInvocation(invocationInput, signal),
+      stream: harness.run(invocationInput, signal),
       messageId: input.messageId,
       runId: input.conductorRunId,
       signal,
@@ -2280,7 +2282,8 @@ async function generateRecoveryPlan(
 ): Promise<{ reasoning: string; tasks: RecoveryTask[] } | null> {
   const agents = listAgents();
   const agent = agents.find((a) => a.id === conductorAgentId);
-  if (!agent || agent.adapterName !== "pi") return null;
+  const harness = agent ? getHarness(agent.adapterName) : null;
+  if (!agent || !harness) return null;
 
   const conversation = getConversation(conversationId);
   const workspace = getWorkspaceForConversation(conversationId);
@@ -2352,7 +2355,7 @@ ${originalPlan
   let planCallId: string | null = null;
 
   try {
-    for await (const event of runPiInvocation(invocationInput, signal)) {
+    for await (const event of harness.run(invocationInput, signal)) {
       if (
         event.type === "tool.call" &&
         "toolName" in event &&
