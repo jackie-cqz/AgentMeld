@@ -1,6 +1,6 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
-import { runPiInvocation } from "@/server/pi/runtime";
+import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { PiRuntimeError } from "@/server/pi/process";
 import { getPiRunUsage, snapshotPiProvider } from "@/server/pi/config";
@@ -515,15 +515,20 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   };
   if (!input.parentRunId) publishRunStage(run, discussion ? "discussion" : "execution");
 
-  // 8. Consume adapter stream via unified consumeStream
+  // 8. Consume the registered harness stream via unified consumeStream
   try {
     // Inside the try on purpose: an unknown adapter name used to throw out of
     // this function entirely, leaving the run row "running" for ever and
     // nothing said. Here it becomes an ordinary failure — recorded, announced,
-    // and visible.
-    if (agent.adapterName !== "pi") throw new PiRuntimeError("This Agent uses a retired execution engine. Edit its model configuration to migrate to Pi.", "migration_required");
+    // and visible. A registered driver runs; nothing else does. No non-Pi
+    // driver exists yet, so retired rows still get the migration path.
+    const harness = getHarness(agent.adapterName);
+    if (!harness) {
+      const failure = unregisteredHarnessError(agent.adapterName);
+      throw new PiRuntimeError(failure.message, failure.category);
+    }
     const { parts, usage: streamUsage } = await consumeStream({
-      stream: runPiInvocation(invocationInput, abortController.signal),
+      stream: harness.run(invocationInput, abortController.signal),
       messageId: message.id,
       runId: run.id,
       signal: abortController.signal
