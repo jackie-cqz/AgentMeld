@@ -6,7 +6,7 @@ import { loadActiveFacts } from "@/server/context-facts/fact-service";
 import { extractFactsForUserTurn } from "@/server/context-facts/conductor-fact-extraction";
 import { submitPiFollowup, type PiFollowupReceipt } from "@/server/pi/controls";
 import { PiRuntimeError } from "@/server/pi/process";
-import type { PiInvocationInput } from "@/server/pi/types";
+import type { HarnessInvocationInput } from "@/server/harness/types";
 import type { AgentRun } from "@/shared/types";
 import type { CollaborationAction, CollaborationTurn } from "@/shared/collaboration-types";
 import { classifyHumanTurn } from "./turn-classifier";
@@ -60,7 +60,7 @@ function rootRun(target: AgentRun): AgentRun {
   return root;
 }
 
-function relatedRuns(input: PiInvocationInput, explicitTarget?: string): AgentRun[] {
+function relatedRuns(input: HarnessInvocationInput, explicitTarget?: string): AgentRun[] {
   const parent = input.triggerMessage.parentMessageId ? getMessage(input.triggerMessage.parentMessageId) : null;
   const replyRun = parent?.runId ? getRun(parent.runId) : null;
   const candidates = listRuns(input.conversationId).filter(run => run.id !== input.runId &&
@@ -74,7 +74,7 @@ function relatedRuns(input: PiInvocationInput, explicitTarget?: string): AgentRu
   return candidates;
 }
 
-function snapshotFor(input: PiInvocationInput, target: AgentRun | null, objective?: string): string {
+function snapshotFor(input: HarnessInvocationInput, target: AgentRun | null, objective?: string): string {
   const attempt = target ? getTaskAttemptByChildRun(target.id) : undefined;
   return JSON.stringify({
     sourceMessageId: input.triggerMessage.id, sourceRunId: target?.id ?? null,
@@ -93,7 +93,7 @@ function retireContextForCorrection(target: AgentRun): void {
   getDatabase().prepare("UPDATE task_evidence SET status='stale',invalidated_at=? WHERE conductor_run_id=? AND invalidated_at IS NULL").run(now, root.id);
 }
 
-export async function admitHumanTurn(input: PiInvocationInput, run: AgentRun, signal: AbortSignal, controls: TurnControls,
+export async function admitHumanTurn(input: HarnessInvocationInput, run: AgentRun, signal: AbortSignal, controls: TurnControls,
   override?: { action?: CollaborationAction; targetRunId?: string }): Promise<TurnAdmission> {
   const turn = createCollaborationTurn(run, input.triggerMessage);
   publishRunStage(run, "admission.received");

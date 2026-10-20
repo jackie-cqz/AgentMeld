@@ -3,15 +3,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { getDatabase } from "@/db/client";
+import type { HarnessWorkspaceLease } from "@/server/harness/types";
 import { PiRuntimeError } from "./process";
 
 interface LeaseRow { token: string; owner_pid: number; child_pid: number | null; status: string }
-export interface PiWorkspaceLease {
-  workspacePath: string;
-  attachChild: (pid: number) => void;
-  assertActive: () => void;
-  release: () => void;
-  poison: () => void;
+/**
+ * Pi's durable lease extends the platform's neutral ownership interface; the
+ * extra `lend` operation is Pi's own consultation handoff, not a neutral
+ * capability.
+ */
+export interface PiWorkspaceLease extends HarnessWorkspaceLease {
   lend: <T>(runPeer: (lease: PiWorkspaceLease) => Promise<T>) => Promise<T>;
 }
 

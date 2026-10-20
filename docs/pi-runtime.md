@@ -13,6 +13,13 @@ task DAGs, cross-task context and facts, bridge authentication, approvals,
 artifacts, evidence and run lifecycle. The connection layer does not contain
 another LLM loop or a JSON-repair fallback.
 
+The harness boundary is harness-neutral (#25 P2): the platform hands a driver run
+identity, a compiled context packet, the platform tool surface, a resolved
+provider/model target, workspace ownership, budgets and access mode
+(`src/server/harness/types.ts`). Pi's own input shape, provider snapshot and
+prompt envelope are produced by the Pi driver, so a second engine does not
+inherit them.
+
 Full-tool invocations sharing one workspace are serialized, including discussion.
 The DAG may admit multiple tasks, but they wait for exclusive workspace ownership.
 A source synchronously awaiting peer consultation pauses its bridge and lends
@@ -137,9 +144,13 @@ provider endpoints, and keep secrets away from anything the server user can read
 
 The platform compiles current task identity, active facts, relevant history,
 upstream artifacts, prior failure reasons and acceptance requirements into one
-task packet. Delegated work does not receive the entire group transcript again.
-Pi maintains history within that invocation; platform code does not append an
-extra copy of the task packet on every model turn.
+task packet. The platform decides the neutral packet content (task text, prior
+history, authorized attachment references); the Pi driver renders Pi's XML
+envelope from it (`src/server/pi/packet.ts`). A second harness receives the same
+platform decision without inheriting Pi's packet shape. Delegated work does not
+receive the entire group transcript again. Pi maintains history within that
+invocation; platform code does not append an extra copy of the task packet on
+every model turn.
 
 File outcomes are re-read and hashed. Native command outcomes and business tool
 receipts feed the existing evidence ledger. Agent reports remain declarations;

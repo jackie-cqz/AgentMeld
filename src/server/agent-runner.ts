@@ -1,10 +1,12 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
-import { assertHarnessSupports, HarnessCapabilityError, type HarnessRequirements } from "@/server/harness/capabilities";
-import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
+import { assertHarnessSupports, HarnessCapabilityError } from "@/server/harness/capabilities";
+import type { HarnessInvocationInput, HarnessRequirements } from "@/server/harness/types";
+import { buildHarnessContextPacket } from "@/server/harness/context-packet";
+import { resolveHarnessProvider } from "@/server/harness/provider-target";
 import { PiRuntimeError } from "@/server/pi/process";
-import { getPiRunUsage, snapshotPiProvider } from "@/server/pi/config";
+import { getPiRunUsage } from "@/server/pi/config";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
 import { eventBus } from "@/server/event-bus";
@@ -172,18 +174,18 @@ function wasCancelled(error: unknown, signal?: AbortSignal): boolean {
 const NATIVE_PLATFORM_TOOLS: ReadonlySet<string> = new Set(Object.values(PI_NATIVE_TO_PLATFORM));
 
 /** What this invocation cannot run without, derived from what it is provisioned with. */
-function harnessRequirements(input: PiInvocationInput): HarnessRequirements {
+function harnessRequirements(tools: HarnessInvocationInput["tools"], taskExecution: StartRunInput["taskExecution"], contextRequired: boolean): HarnessRequirements {
   return {
-    nativeTools: input.toolNames.some(name => NATIVE_PLATFORM_TOOLS.has(name)),
-    businessTools: input.toolNames.some(name => !NATIVE_PLATFORM_TOOLS.has(name)),
+    nativeTools: tools.required.some(name => NATIVE_PLATFORM_TOOLS.has(name)),
+    businessTools: tools.required.some(name => !NATIVE_PLATFORM_TOOLS.has(name)),
     // Only delegated work carries a task identity, and only that work is verified
     // from tool evidence.
-    evidence: Boolean(input.taskExecution),
+    evidence: Boolean(taskExecution),
     // The platform always cancels through the signal it owns.
     cancellation: true,
     // The compiled packet carries task identity, active facts and upstream
     // artifacts; a delegated or admitted run must not lose it.
-    contextPacket: input.taskExecution || input.contextXml ? "platform" : undefined,
+    contextPacket: contextRequired ? "platform" : undefined,
   };
 }
 
@@ -329,16 +331,21 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
   });
 
   const workspacePath = workspace.mode === "local" && workspace.boundPath ? workspace.boundPath : workspace.rootPath;
+  // Resolve the provider/model target once, before admission, so every phase of
+  // this turn (classifier, execution, Conductor) sees the same binding.
+  const provider = resolveHarnessProvider(agent);
   let admission: TurnAdmission | null = null;
-  let providerConfiguration: PiProviderSnapshot | undefined;
   if (input.humanTurn) {
     if (input.parentRunId) throw new Error("Delegated execution cannot change its admission mode.");
-    providerConfiguration = input.humanTurn.action === "progress" || input.humanTurn.action === "cancel"
-      ? undefined : snapshotPiProvider(agent);
     try {
-      admission = await admitHumanTurn({ conversationId: conversation.id, runId: run.id, agent, conversation, workspace,
-        triggerMessage: input.triggerMessage, workspacePath, recentMessages: [], toolNames: [], systemPrompt: "", apiKey: null,
-        ...providerConfiguration,
+      admission = await admitHumanTurn({
+        conversationId: conversation.id, runId: run.id, parentRunId: input.parentRunId ?? null,
+        taskExecution: input.taskExecution ?? null, taskContract: input.taskContract ?? null,
+        agent, conversation, workspace, triggerMessage: input.triggerMessage,
+        // Admission only needs identity and the trigger message; the classifier
+        // replaces the context and tool surface before it dispatches.
+        context: { systemPrompt: "", packet: { task: "", priorHistory: [], attachments: [] }, recentMessages: [] },
+        tools: { names: [], required: [] }, requirements: {}, provider, workspaceRoot: workspacePath,
       }, run, abortController.signal, { stop: abortRun, waitForStop: waitForRunTreeStop }, input.humanTurn);
     } catch (error) {
       rejectUnappliedTurn(run.id, error instanceof PiRuntimeError ? error.message : "消息处理被中断，尚未确认生效。", abortController.signal.aborted);
@@ -395,8 +402,8 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     }
     return;
   }
-  const captureContext: PiInvocationInput["onContextCaptured"] = admission && !admission.handled
-    ? snapshot => { updateCollaborationTurn(admission!.turnId, { context: JSON.stringify({ kind: "compiled_pi_invocation", sourceMessageId: input.triggerMessage.id, ...snapshot }) }); }
+  const captureContext: HarnessInvocationInput["onContextCaptured"] = admission && !admission.handled
+    ? receipt => { updateCollaborationTurn(admission!.turnId, { context: JSON.stringify({ kind: "compiled_pi_invocation", sourceMessageId: input.triggerMessage.id, ...receipt }) }); }
     : undefined;
 
   // 6. Conductor branch: group chat without @ → assess → (direct reply | plan → approve → DAG → aggregate)
@@ -410,7 +417,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         conductorRunId: run.id,
         messageId: message.id,
         signal: abortController.signal,
-        piConfiguration: providerConfiguration,
+        provider,
         objectiveContext: admission && !admission.handled ? admission.contextText : undefined,
         onTaskAccepted: admission && !admission.handled ? admission.onAccepted : undefined,
         onContextCaptured: captureContext,
@@ -496,17 +503,29 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     }
   }
 
-  // P0: For child tasks, extract the trigger message text as dynamic context XML
-  let contextXml: string | undefined;
-  if (admission && !admission.handled) contextXml = admission.contextText;
+  // Child tasks get the trigger text as their authoritative task context; the
+  // neutral packet builder decides what else (history, attachments) travels with it.
+  let taskContext: string | undefined;
+  if (admission && !admission.handled) taskContext = admission.contextText;
   if (input.taskExecution) {
-    contextXml = input.triggerMessage.parts
+    taskContext = input.triggerMessage.parts
       .filter((p) => p.type === "text")
       .map((p) => p.content)
       .join("\n");
   }
 
-  const invocationInput: PiInvocationInput = {
+  const tools = { names: effectiveToolNames, required: effectiveToolNames };
+  const contextPacket = buildHarnessContextPacket({
+    conversationId: input.conversationId,
+    workspaceRoot: workspacePath,
+    parentRunId: input.parentRunId,
+    task: taskContext,
+    triggerMessage: input.triggerMessage,
+    history,
+  });
+  const requirements = harnessRequirements(tools, input.taskExecution, Boolean(taskContext || input.taskExecution));
+
+  const invocationInput: HarnessInvocationInput = {
     conversationId: input.conversationId,
     runId: run.id,
     parentRunId: input.parentRunId ?? null,
@@ -516,16 +535,12 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     conversation,
     workspace,
     triggerMessage: input.triggerMessage,
-    recentMessages,
-    toolNames: effectiveToolNames,
-    systemPrompt,
-    workspacePath,
-    // Resolve credential and endpoint together when Pi captures the invocation.
-    apiKey: null,
-    history,
-    contextXml,
-    ...providerConfiguration,
-    accessMode: "workspace",
+    context: { systemPrompt, packet: contextPacket, recentMessages },
+    tools,
+    requirements,
+    provider,
+    workspaceRoot: workspacePath,
+    access: "workspace",
     onTaskAccepted: admission && !admission.handled ? admission.onAccepted : undefined,
     onContextCaptured: captureContext,
     onStage: stage => publishRunStage(run, discussion ? "discussion" : stage === "queued" ? "execution.queued" : "execution"),
@@ -546,7 +561,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     }
     // Honest degradation: an engine that cannot do what this run needs fails
     // here, before it produces output the platform cannot verify.
-    assertHarnessSupports(harness, harnessRequirements(invocationInput));
+    assertHarnessSupports(harness, invocationInput.requirements);
     const { parts, usage: streamUsage } = await consumeStream({
       stream: harness.run(invocationInput, abortController.signal),
       messageId: message.id,
