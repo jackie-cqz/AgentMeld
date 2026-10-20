@@ -23,10 +23,9 @@ import { proposeConsultationResponse, requestConsultation } from "@/server/colla
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, createRun, getAgent, getRun, getWorkspaceForConversation } from "@/server/repositories";
 import type { ToolContext } from "@/server/tools/types";
-import type { StreamEvent } from "@/shared/types";
 import { newMessageId, newRunId } from "@/shared/ids";
 import { registerHarness, unregisterHarness } from "./registry";
-import type { HarnessDriver, HarnessInvocationInput, HarnessRunStream } from "./types";
+import type { HarnessDriver, HarnessEvent, HarnessInvocationInput, HarnessRunStream } from "./types";
 
 /**
  * Task #25 P1 closes the two remaining Pi-only call sites: human-turn
@@ -57,7 +56,7 @@ afterEach(() => {
 const DECISION = { intent: "new_task", targetRunId: null, mode: "execution", reason: "Explicit implementation request." } as const;
 const CONSULTATION_ANSWER = "A compact sidebar is preferable; this is a peer opinion.";
 
-type FakeEvents = (input: HarnessInvocationInput, signal: AbortSignal) => StreamEvent[];
+type FakeEvents = (input: HarnessInvocationInput, signal: AbortSignal) => HarnessEvent[];
 
 function fakeDriver(calls: HarnessInvocationInput[], events: FakeEvents = () => []): HarnessDriver {
   return {
@@ -148,13 +147,11 @@ describe("collaboration dispatch through the harness registry", () => {
   it("classifies a human turn through the Agent's registered driver", async () => {
     const input = classifierInput("mock");
     const calls: HarnessInvocationInput[] = [];
-    registerHarness(fakeDriver(calls, (invocation) => [{
-      type: "part.delta",
-      conversationId: invocation.conversationId,
-      timestamp: Date.now(),
-      messageId: "",
-      partIndex: 0,
-      delta: { type: "text.append", text: JSON.stringify(DECISION) },
+    registerHarness(fakeDriver(calls, () => [{
+      type: "output.delta",
+      blockIndex: 0,
+      kind: "text",
+      text: JSON.stringify(DECISION),
     }]));
 
     const decision = await classifyHumanTurn(input, [], new AbortController().signal);
@@ -190,12 +187,10 @@ describe("collaboration dispatch through the harness registry", () => {
         abortSignal: signal,
       }, "replied", CONSULTATION_ANSWER);
       return [{
-        type: "part.start",
-        conversationId: invocation.conversationId,
-        timestamp: Date.now(),
-        messageId: "",
-        partIndex: 0,
-        part: { type: "text", content: CONSULTATION_ANSWER },
+        type: "output.start",
+        blockIndex: 0,
+        kind: "text",
+        content: CONSULTATION_ANSWER,
       }];
     }));
 

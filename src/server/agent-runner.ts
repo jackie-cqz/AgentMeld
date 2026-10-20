@@ -1,11 +1,12 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
-import { assertHarnessSupports, HarnessCapabilityError } from "@/server/harness/capabilities";
+import { assertHarnessSupports } from "@/server/harness/capabilities";
 import type { HarnessInvocationInput, HarnessRequirements } from "@/server/harness/types";
+import { HarnessError } from "@/server/harness/errors";
+import { projectHarnessStream } from "@/server/harness/events";
 import { buildHarnessContextPacket } from "@/server/harness/context-packet";
 import { resolveHarnessProvider } from "@/server/harness/provider-target";
-import { PiRuntimeError } from "@/server/pi/process";
 import { getPiRunUsage } from "@/server/pi/config";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
 import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
@@ -99,7 +100,7 @@ export function isRunActive(runId: string): boolean {
 export async function waitForRunTreeStop(runId: string, signal: AbortSignal): Promise<void> {
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]);
   const root = getRun(runId);
-  if (!root) throw new PiRuntimeError("关联运行不存在，无法确认停止状态。", "control_unavailable");
+  if (!root) throw new HarnessError("关联运行不存在，无法确认停止状态。", "control_unavailable");
   for (;;) {
     deadline.throwIfAborted();
     const all = listRuns(root.conversationId);
@@ -127,10 +128,10 @@ export async function waitForRunTreeStop(runId: string, signal: AbortSignal): Pr
     for (const id of ids) {
       const current = getRun(id);
       if (!current || !isTerminalRunStatus(current.status) || current.interrupted || current.errorCategory === "cleanup_failed") {
-        throw new PiRuntimeError("旧执行的停止或清理尚未确认，不会启动替代写入。", "cleanup_failed");
+        throw new HarnessError("旧执行的停止或清理尚未确认，不会启动替代写入。", "cleanup_failed");
       }
       const uncertain = getDatabase().prepare("SELECT id FROM harness_executions WHERE run_id=? AND (finished_at IS NULL OR status='interrupted' OR error_category='cleanup_failed') LIMIT 1").get(id);
-      if (uncertain) throw new PiRuntimeError("旧 Pi 进程缺少可靠的退出回执，不会启动替代执行。", "cleanup_failed");
+      if (uncertain) throw new HarnessError("旧 Pi 进程缺少可靠的退出回执，不会启动替代执行。", "cleanup_failed");
     }
     return;
   }
@@ -167,7 +168,7 @@ export interface RunHandle {
 }
 
 function wasCancelled(error: unknown, signal?: AbortSignal): boolean {
-  return Boolean(signal?.aborted) && !(error instanceof PiRuntimeError && error.category === "cleanup_failed");
+  return Boolean(signal?.aborted) && !(error instanceof HarnessError && error.category === "cleanup_failed");
 }
 
 /** Platform file/command tools; every other provisioned name is a business tool. */
@@ -191,8 +192,7 @@ function harnessRequirements(tools: HarnessInvocationInput["tools"], taskExecuti
 
 /** Preserve a harness-owned failure category instead of flattening it to "runtime". */
 function failureCategory(error: unknown, fallback: string): string {
-  if (error instanceof PiRuntimeError) return error.category;
-  if (error instanceof HarnessCapabilityError) return error.category;
+  if (error instanceof HarnessError) return error.category;
   return fallback;
 }
 
@@ -208,7 +208,7 @@ export function startAgentRun(input: StartRunInput): RunHandle {
         createMessage({ id: newMessageId(), conversationId: input.conversationId, role: "agent", agentId: input.agentId, runId,
           parts: [{ type: "text", content: "Pi execution could not be initialized." }], status: "error", now });
       const cancelled = wasCancelled(error, activeRuns.get(runId)?.signal);
-      completeRun(run, message, cancelled ? "aborted" : "failed", error instanceof PiRuntimeError ? error.message : "Pi execution setup failed.", {}, cancelled ? "aborted" : failureCategory(error, "startup"));
+      completeRun(run, message, cancelled ? "aborted" : "failed", error instanceof HarnessError ? error.message : "Pi execution setup failed.", {}, cancelled ? "aborted" : failureCategory(error, "startup"));
     }
   }).finally(() => {
     activeRuns.delete(runId);
@@ -348,7 +348,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
         tools: { names: [], required: [] }, requirements: {}, provider, workspaceRoot: workspacePath,
       }, run, abortController.signal, { stop: abortRun, waitForStop: waitForRunTreeStop }, input.humanTurn);
     } catch (error) {
-      rejectUnappliedTurn(run.id, error instanceof PiRuntimeError ? error.message : "消息处理被中断，尚未确认生效。", abortController.signal.aborted);
+      rejectUnappliedTurn(run.id, error instanceof HarnessError ? error.message : "消息处理被中断，尚未确认生效。", abortController.signal.aborted);
       throw error;
     }
     if (admission.handled && !admission.response) {
@@ -557,13 +557,13 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
     const harness = getHarness(agent.adapterName);
     if (!harness) {
       const failure = unregisteredHarnessError(agent.adapterName);
-      throw new PiRuntimeError(failure.message, failure.category);
+      throw new HarnessError(failure.message, failure.category);
     }
     // Honest degradation: an engine that cannot do what this run needs fails
     // here, before it produces output the platform cannot verify.
     assertHarnessSupports(harness, invocationInput.requirements);
     const { parts, usage: streamUsage } = await consumeStream({
-      stream: harness.run(invocationInput, abortController.signal),
+      stream: projectHarnessStream(harness.run(invocationInput, abortController.signal), input.conversationId),
       messageId: message.id,
       runId: run.id,
       signal: abortController.signal

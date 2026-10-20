@@ -20,6 +20,19 @@ provider/model target, workspace ownership, budgets and access mode
 prompt envelope are produced by the Pi driver, so a second engine does not
 inherit them.
 
+Output is neutral too. A driver yields `HarnessEvent`s — run lifecycle, text and
+thinking output blocks, tool call/result, artifact/deployment outcomes, usage and
+one terminal `run.settled` (`src/server/harness/events.ts`). Pi's `StreamEvent`
+projection (`contentIndex`, `messageId: ""`, `partIndex` slots, `text.append`)
+stays inside the Pi driver; `projectHarnessStream` turns the neutral events into
+today's persisted `part.*`/`tool.*`/`run.usage` shapes exactly once. Failures
+cross the seam as a neutral `HarnessError` with one of the categories the
+platform already persists in `agent_runs.error_category`
+(`src/server/harness/errors.ts`); the Pi driver wraps `PiRuntimeError` and keeps
+every existing category string. An engine category the taxonomy does not know
+degrades to `runtime` (the platform's existing generic engine failure) while the
+raw category is retained for diagnostics only.
+
 Full-tool invocations sharing one workspace are serialized, including discussion.
 The DAG may admit multiple tasks, but they wait for exclusive workspace ownership.
 A source synchronously awaiting peer consultation pauses its bridge and lends

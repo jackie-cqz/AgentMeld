@@ -1,4 +1,5 @@
 import type { AdapterName } from "@/shared/types";
+import { HarnessError } from "./errors";
 import type { HarnessDriver, HarnessRequirements } from "./types";
 
 // Requirements are part of the invocation contract (#25 P2); re-exported here so
@@ -8,13 +9,12 @@ export type { HarnessRequirements } from "./types";
 /**
  * A run selected an engine that cannot do what the run needs.
  *
- * It carries a category so the run owner can record an honest failure instead of
- * flattening it to "runtime", and names the engine plus every missing capability
- * so the message tells the user what to change.
+ * It is a neutral `HarnessError` with the `harness_capability` category, so the
+ * run owner can catch one contract type while callers/tests can still ask
+ * specifically about a capability failure. It names the engine plus every
+ * missing capability so the message tells the user what to change.
  */
-export class HarnessCapabilityError extends Error {
-  readonly category = "harness_capability";
-
+export class HarnessCapabilityError extends HarnessError {
   constructor(
     readonly harnessId: AdapterName,
     readonly missing: readonly string[],
@@ -22,6 +22,7 @@ export class HarnessCapabilityError extends Error {
     super(
       `The "${harnessId}" execution engine cannot run this Agent: it does not support ${missing.join("; ")}. ` +
         "Nothing was executed. Choose an Agent configured with an execution engine that supports this work.",
+      "harness_capability",
     );
     this.name = "HarnessCapabilityError";
   }

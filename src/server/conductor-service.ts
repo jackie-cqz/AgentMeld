@@ -8,7 +8,9 @@ import type { HarnessInvocationInput, HarnessProviderTarget } from "@/server/har
 import { buildHarnessContextPacket } from "@/server/harness/context-packet";
 import { resolveHarnessProvider } from "@/server/harness/provider-target";
 import { CONVERSATION_ROSTER_TOOL, provisionedPlatformToolNames } from "@/server/pi/tool-surface";
-import { PiRuntimeError } from "@/server/pi/process";
+import { HarnessError } from "@/server/harness/errors";
+import type { HarnessErrorCategory } from "@/server/harness/errors";
+import { projectHarnessStream } from "@/server/harness/events";
 import { createMessage, getConversation, getRun, getMessage, getWorkspaceForConversation, listAgents, getArtifact, updateRunStage, persistConductorTask, persistConductorPlan, persistOutputBinding, supersedeOutputBinding, persistConductorConflict, listOutputBindings } from "@/server/repositories";
 import { getDatabase } from "@/db/client";
 import { registerPendingPlan } from "@/server/dispatch-plan-manager";
@@ -1538,7 +1540,7 @@ async function runAggregateStage(
   // (Previously events were published straight from the adapter with messageId: "",
   // and the client reducer dropped them because state.messages[""] is undefined.)
   await consumeStream({
-    stream: harness.run(invocationInput, signal),
+    stream: projectHarnessStream(harness.run(invocationInput, signal), conversationId),
     messageId,
     runId: conductorRunId,
     signal,
@@ -2043,9 +2045,9 @@ export function buildContinuationPrompt(
 }
 
 /** Forward a planning failure to the sole terminal-state owner. */
-export function failConductor(error: string, category = "conductor_contract"): never {
+export function failConductor(error: string, category: HarnessErrorCategory = "conductor_contract"): never {
   // Only agent-runner owns terminal publication, message settlement and cleanup.
-  throw new PiRuntimeError(error, category);
+  throw new HarnessError(error, category);
 }
 
 type AssessResult =
@@ -2135,7 +2137,7 @@ async function runConductorAssess(
 
   try {
     await consumeStream({
-      stream: harness.run(invocationInput, signal),
+      stream: projectHarnessStream(harness.run(invocationInput, signal), input.conversationId),
       messageId: input.messageId,
       runId: input.conductorRunId,
       signal,
@@ -2376,21 +2378,12 @@ ${originalPlan
 
   try {
     for await (const event of harness.run(invocationInput, signal)) {
-      if (
-        event.type === "tool.call" &&
-        "toolName" in event &&
-        (event as { toolName: string }).toolName === "plan_tasks"
-      ) {
-        planCallId = (event as { callId: string }).callId;
+      if (event.type === "tool.call" && event.toolName === "plan_tasks") {
+        planCallId = event.callId;
         continue;
       }
-      if (
-        event.type === "tool.result" &&
-        "callId" in event &&
-        (event as { callId: string }).callId === planCallId &&
-        !(event as { isError?: boolean }).isError
-      ) {
-        capturedPlan = readPlanToolResult((event as { result: unknown }).result);
+      if (event.type === "tool.result" && event.callId === planCallId && !event.isError) {
+        capturedPlan = readPlanToolResult(event.result);
         if (capturedPlan) break;
       }
     }

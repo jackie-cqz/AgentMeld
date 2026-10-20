@@ -4,7 +4,9 @@ import { runPiInvocation } from "@/server/pi/runtime";
 import { PiRuntimeError } from "@/server/pi/process";
 import type { PiInvocationInput } from "@/server/pi/types";
 import type { PiWorkspaceLease } from "@/server/pi/workspace-lease";
-import type { Agent } from "@/shared/types";
+import type { Agent, StreamEvent } from "@/shared/types";
+import { HarnessError, harnessErrorFromCategory } from "./errors";
+import type { HarnessEvent, HarnessOutputKind } from "./events";
 import type {
   HarnessAccessMode,
   HarnessCapabilities,
@@ -75,9 +77,70 @@ export function toPiInvocationInput(input: HarnessInvocationInput): PiInvocation
 function piWorkspaceLease(lease: HarnessWorkspaceLease | undefined): PiWorkspaceLease | undefined {
   if (!lease) return undefined;
   if (!("lend" in lease)) {
-    throw new PiRuntimeError("The workspace handoff did not come from a Pi execution.", "workspace_ownership");
+    throw new HarnessError("The workspace handoff did not come from a Pi execution.", "workspace_ownership");
   }
   return lease as PiWorkspaceLease;
+}
+
+/**
+ * Map one Pi projection event onto the neutral event vocabulary.
+ *
+ * This is the only Pi→neutral translation. Pi may only emit the subset below
+ * from `runPiInvocation`; the rest of `StreamEvent` (`run.start`, `message.*`,
+ * `dispatch.*`, …) is platform-originated and never reaches this function.
+ * `contentIndex` never crosses the seam: Pi's projection already allocated a
+ * monotonically increasing `partIndex`, which becomes the neutral
+ * `blockIndex` (unique per run), so the platform can project the same blocks.
+ */
+export function toHarnessEvent(event: StreamEvent): HarnessEvent {
+  switch (event.type) {
+    case "part.start": {
+      if (event.part.type !== "text" && event.part.type !== "thinking") {
+        throw new HarnessError(`Pi emitted a "${event.part.type}" part, which is not assistant output.`, "protocol");
+      }
+      const kind: HarnessOutputKind = event.part.type;
+      return { type: "output.start", blockIndex: event.partIndex, kind, content: event.part.content };
+    }
+    case "part.delta": {
+      if (event.delta.type === "text.append") {
+        return { type: "output.delta", blockIndex: event.partIndex, kind: "text", text: event.delta.text };
+      }
+      if (event.delta.type === "thinking.append") {
+        return { type: "output.delta", blockIndex: event.partIndex, kind: "thinking", text: event.delta.text };
+      }
+      throw new HarnessError("Pi emitted an output delta the harness contract cannot carry.", "protocol");
+    }
+    case "part.end":
+      return { type: "output.end", blockIndex: event.partIndex };
+    case "tool.call":
+      return { type: "tool.call", callId: event.callId, toolName: event.toolName, args: event.args };
+    case "tool.result":
+      return { type: "tool.result", callId: event.callId, result: event.result, isError: event.isError === true };
+    case "artifact.create":
+      return { type: "artifact.created", artifact: event.artifact };
+    case "deploy.status":
+      return { type: "deployment.status", deployment: event.deployment };
+    case "run.usage":
+      return { type: "run.usage", usage: event.usage };
+    default:
+      // Pi's runtime never yields these; a second Pi event kind must be added to
+      // the neutral contract deliberately rather than silently dropped.
+      throw new HarnessError(`Pi emitted "${event.type}", which the harness event contract does not carry.`, "protocol");
+  }
+}
+
+/** Translate Pi's failure category into the neutral taxonomy exactly once. */
+export function toHarnessError(error: PiRuntimeError): HarnessError {
+  return harnessErrorFromCategory(error.message, error.category);
+}
+
+/**
+ * An aborted signal is not always an aborted run: unconfirmed teardown is a
+ * failure, which is the same distinction the run owner's `wasCancelled` makes.
+ */
+function settledAbortStatus(error: unknown, signal: AbortSignal): "aborted" | "failed" {
+  if (!signal.aborted) return "failed";
+  return error instanceof HarnessError && error.category === "cleanup_failed" ? "failed" : "aborted";
 }
 
 /**
@@ -121,8 +184,26 @@ export const piHarnessDriver: HarnessDriver = {
     };
   },
 
-  run(input: HarnessInvocationInput, signal: AbortSignal): HarnessRunStream {
-    return runPiInvocation(toPiInvocationInput(input), signal);
+  async *run(input: HarnessInvocationInput, signal: AbortSignal): HarnessRunStream {
+    yield { type: "run.started" };
+    try {
+      for await (const event of runPiInvocation(toPiInvocationInput(input), signal)) {
+        yield toHarnessEvent(event);
+      }
+    } catch (error) {
+      // Wrap Pi's exception exactly once, then still report a terminal event so
+      // the stream is explicit about how the invocation ended. The error itself
+      // is rethrown: the run owner has always treated a throw (not absence of
+      // events) as the failure signal, and that stays byte-identical.
+      const failure = error instanceof PiRuntimeError ? toHarnessError(error) : error;
+      yield {
+        type: "run.settled",
+        status: settledAbortStatus(failure, signal),
+        reason: failure instanceof Error ? failure.message : undefined,
+      };
+      throw failure;
+    }
+    yield { type: "run.settled", status: "completed" };
   },
 
   // Pi exposes no run-id abort (`src/server/pi/controls.ts` only carries

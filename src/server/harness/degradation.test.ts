@@ -8,7 +8,7 @@ import { eventBus } from "@/server/event-bus";
 import { startAgentRun } from "@/server/agent-runner";
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, getRun, listMessages } from "@/server/repositories";
-import type { AdapterName, StreamEvent } from "@/shared/types";
+import type { AdapterName } from "@/shared/types";
 import type { TaskExecutionIdentity } from "@/shared/evidence-types";
 import { registerHarness, unregisterHarness } from "./registry";
 import type { HarnessCapabilities, HarnessDriver, HarnessInvocationInput, HarnessRunStream } from "./types";
@@ -71,9 +71,7 @@ function fakeDriver(calls: HarnessInvocationInput[], overrides: Partial<HarnessC
     }),
     run: async function* (input): HarnessRunStream {
       calls.push(input);
-      const base = { conversationId: input.conversationId, timestamp: Date.now(), messageId: "", partIndex: 0 };
-      const event: StreamEvent = { ...base, type: "part.start", part: { type: "text", content: "Fake harness reply" } };
-      yield event;
+      yield { type: "output.start", blockIndex: 0, kind: "text", content: "Fake harness reply" };
     },
     abort: () => false,
   };

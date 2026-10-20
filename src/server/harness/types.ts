@@ -1,6 +1,9 @@
-import type { AdapterName, Agent, Conversation, Message, StreamEvent, Workspace } from "@/shared/types";
+import type { AdapterName, Agent, Conversation, Message, Workspace } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
+import type { HarnessEvent } from "./events";
+
+export type { HarnessEvent } from "./events";
 
 /**
  * The seam between the platform and an execution engine (issue #25).
@@ -104,7 +107,7 @@ export interface HarnessCapabilities {
   /** Whether the harness accepts live steering/follow-ups mid-run. */
   followUp: boolean;
 
-  /** Whether output is incremental (`StreamEvent`s) rather than a final blob. */
+  /** Whether output is incremental (`HarnessEvent`s) rather than a final blob. */
   streaming: boolean;
 }
 
@@ -285,7 +288,11 @@ export interface HarnessInvocationInput {
 }
 
 /**
- * The event stream a harness produces. Still expressed with the platform's
- * `StreamEvent` vocabulary (the output side of #25 is a separate task).
+ * The event stream a harness produces (#25 P2 output contract).
+ *
+ * It is the neutral `HarnessEvent` vocabulary, never the platform's persisted
+ * `StreamEvent` wire shape: the driver reports output, tool activity, usage and
+ * a terminal event, and `projectHarnessStream` turns that into today's
+ * `part.*` / `tool.*` / `run.usage` shapes for `consumeStream`.
  */
-export type HarnessRunStream = AsyncGenerator<StreamEvent>;
+export type HarnessRunStream = AsyncGenerator<HarnessEvent>;
