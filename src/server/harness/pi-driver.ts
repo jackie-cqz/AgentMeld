@@ -32,12 +32,19 @@ export const piHarnessDriver: HarnessDriver = {
 
   capabilities(): HarnessCapabilities {
     return {
-      // Pi's own native tools plus the platform tools registered through the
-      // bridge (`src/server/pi/bridge.ts`).
-      tools: "native+business",
+      // Pi's own native toolset (read/write/edit/bash/…) is registered by its
+      // extension; platform business tools reach it through the bridge
+      // (`src/server/pi/bridge.ts`, `extension.mjs`).
+      nativeTools: true,
+      businessTools: true,
       // Cancellable, but only through the AbortSignal supplied to `run`.
-      cancellation: true,
-      cancellationMode: "signal",
+      cancellation: { supported: true, mode: "signal" },
+      // Native outcomes are hashed and recorded in `native-tools.ts`; business
+      // tool receipts go through `captureEvidence` / `dispatch-tool-evidence`.
+      evidence: true,
+      // Pi is given `buildPiTaskPacket(input)` once per invocation instead of
+      // compiling its own task context.
+      contextPacket: "platform",
       followUp: true,
       streaming: true,
     };

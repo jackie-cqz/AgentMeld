@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { runPiInvocation } from "@/server/pi/runtime";
+import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
 import type { PiInvocationInput } from "@/server/pi/types";
 import { PiRuntimeError } from "@/server/pi/process";
 import { buildCollaborationHistory } from "./conversation-context";
@@ -42,8 +42,16 @@ export async function classifyHumanTurn(input: PiInvocationInput, relatedRuns: A
       mode: action === "new_task" || action === "correction" && !explicitlyDiscussionOnly(text) ? "execution" : "discussion", reason: "Explicit human action." };
   }
   const context = await buildCollaborationHistory({ agent: input.agent, triggerMessage: input.triggerMessage, systemPrompt: TURN_CLASSIFIER_PROMPT });
+  // The classifier turn belongs to the Agent whose conversation is being read,
+  // so that Agent's adapter selects the engine. A retired or unknown adapter has
+  // no driver and must fail honestly rather than silently classifying with Pi.
+  const harness = getHarness(input.agent.adapterName);
+  if (!harness) {
+    const failure = unregisteredHarnessError(input.agent.adapterName);
+    throw new PiRuntimeError(failure.message, failure.category);
+  }
   let output = "";
-  for await (const event of runPiInvocation({ ...input, toolNames: [], agent: { ...input.agent, toolNames: [] },
+  for await (const event of harness.run({ ...input, toolNames: [], agent: { ...input.agent, toolNames: [] },
     systemPrompt: TURN_CLASSIFIER_PROMPT, history: context.history, recentMessages: [], accessMode: "conversation", maxTurns: 1, timeoutMs: 60_000,
     onTaskAccepted: undefined,
     onContextCaptured: undefined, onStage: undefined,

@@ -1,10 +1,12 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import { getHarness, unregisteredHarnessError } from "@/server/harness/registry";
+import { assertHarnessSupports, HarnessCapabilityError, type HarnessRequirements } from "@/server/harness/capabilities";
 import type { PiInvocationInput, PiProviderSnapshot } from "@/server/pi/types";
 import { PiRuntimeError } from "@/server/pi/process";
 import { getPiRunUsage, snapshotPiProvider } from "@/server/pi/config";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
+import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
 import { eventBus } from "@/server/event-bus";
 import { consumeStream } from "@/server/consume-stream";
 import {
@@ -166,6 +168,32 @@ function wasCancelled(error: unknown, signal?: AbortSignal): boolean {
   return Boolean(signal?.aborted) && !(error instanceof PiRuntimeError && error.category === "cleanup_failed");
 }
 
+/** Platform file/command tools; every other provisioned name is a business tool. */
+const NATIVE_PLATFORM_TOOLS: ReadonlySet<string> = new Set(Object.values(PI_NATIVE_TO_PLATFORM));
+
+/** What this invocation cannot run without, derived from what it is provisioned with. */
+function harnessRequirements(input: PiInvocationInput): HarnessRequirements {
+  return {
+    nativeTools: input.toolNames.some(name => NATIVE_PLATFORM_TOOLS.has(name)),
+    businessTools: input.toolNames.some(name => !NATIVE_PLATFORM_TOOLS.has(name)),
+    // Only delegated work carries a task identity, and only that work is verified
+    // from tool evidence.
+    evidence: Boolean(input.taskExecution),
+    // The platform always cancels through the signal it owns.
+    cancellation: true,
+    // The compiled packet carries task identity, active facts and upstream
+    // artifacts; a delegated or admitted run must not lose it.
+    contextPacket: input.taskExecution || input.contextXml ? "platform" : undefined,
+  };
+}
+
+/** Preserve a harness-owned failure category instead of flattening it to "runtime". */
+function failureCategory(error: unknown, fallback: string): string {
+  if (error instanceof PiRuntimeError) return error.category;
+  if (error instanceof HarnessCapabilityError) return error.category;
+  return fallback;
+}
+
 export function startAgentRun(input: StartRunInput): RunHandle {
   const runId = input.runId ?? newRunId();
   const promise = executeRun({ ...input, runId }).catch(async (error: unknown) => {
@@ -178,7 +206,7 @@ export function startAgentRun(input: StartRunInput): RunHandle {
         createMessage({ id: newMessageId(), conversationId: input.conversationId, role: "agent", agentId: input.agentId, runId,
           parts: [{ type: "text", content: "Pi execution could not be initialized." }], status: "error", now });
       const cancelled = wasCancelled(error, activeRuns.get(runId)?.signal);
-      completeRun(run, message, cancelled ? "aborted" : "failed", error instanceof PiRuntimeError ? error.message : "Pi execution setup failed.", {}, cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "startup");
+      completeRun(run, message, cancelled ? "aborted" : "failed", error instanceof PiRuntimeError ? error.message : "Pi execution setup failed.", {}, cancelled ? "aborted" : failureCategory(error, "startup"));
     }
   }).finally(() => {
     activeRuns.delete(runId);
@@ -399,7 +427,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       const errorText = error instanceof Error ? error.message : "Conductor failed.";
       const cancelled = wasCancelled(error, abortController.signal);
       await cancelJobsForRun(run.id);
-      completeRun(run, message, cancelled ? "aborted" : "failed", errorText, { modelId: agent.modelId ?? "conductor" }, cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "runtime");
+      completeRun(run, message, cancelled ? "aborted" : "failed", errorText, { modelId: agent.modelId ?? "conductor" }, cancelled ? "aborted" : failureCategory(error, "runtime"));
     }
     activeRuns.delete(run.id);
     return;
@@ -516,6 +544,9 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       const failure = unregisteredHarnessError(agent.adapterName);
       throw new PiRuntimeError(failure.message, failure.category);
     }
+    // Honest degradation: an engine that cannot do what this run needs fails
+    // here, before it produces output the platform cannot verify.
+    assertHarnessSupports(harness, harnessRequirements(invocationInput));
     const { parts, usage: streamUsage } = await consumeStream({
       stream: harness.run(invocationInput, abortController.signal),
       messageId: message.id,
@@ -552,7 +583,7 @@ async function executeRun(input: ExecuteRunInput): Promise<void> {
       updatedAt: Date.now()
     };
     completeRun(run, message, cancelled ? "aborted" : "failed", errorText, fallbackUsage,
-      cancelled ? "aborted" : error instanceof PiRuntimeError ? error.category : "runtime");
+      cancelled ? "aborted" : failureCategory(error, "runtime"));
   }
   await cancelJobsForRun(run.id);
   activeRuns.delete(run.id);

@@ -24,7 +24,7 @@ export interface HarnessDriver {
    */
   doctor(): HarnessDoctor;
 
-  /** What this driver can truthfully do; the seed of #25 P1, not the matrix. */
+  /** What this driver can truthfully do (#25 P1 capability matrix). */
   capabilities(): HarnessCapabilities;
 
   /**
@@ -44,8 +44,8 @@ export interface HarnessDriver {
    * Pi has no run-id abort entry point: the only cancellation channel it
    * exposes is the AbortSignal handed to `run`, which the platform owns. The Pi
    * driver therefore reports `false` and advertises
-   * `cancellationMode: "signal"`; this is not a bug to paper over with an
-   * invented abort registry inside the driver.
+   * `cancellation: { supported: true, mode: "signal" }`; this is not a bug to
+   * paper over with an invented abort registry inside the driver.
    */
   abort(runId: string): boolean;
 }
@@ -58,20 +58,51 @@ export interface HarnessDoctor {
 }
 
 /**
- * Seed capability matrix (expanded in #25 P1).
+ * The capability matrix (#25 P1).
  *
- * `tools` describes how a run receives tools: `"native"` = only the harness's
- * own tools, `"business"` = only platform tools, `"native+business"` = both.
- * `cancellation` says whether a run can be cancelled at all, and
- * `cancellationMode` names the only supported channel: `"signal"` (the caller
- * aborts the signal it passed to `run`) or `"run-id"` (`abort(runId)` works).
+ * Every field answers a question the platform asks before it dispatches: can
+ * this engine do the work an Agent's run needs, and can the platform still
+ * verify it? A capability a driver cannot honestly provide is `false`, and the
+ * run then fails through `assertHarnessSupports` before any work begins instead
+ * of producing output nobody can verify. There is deliberately no field for a
+ * capability the platform does not currently depend on.
  */
 export interface HarnessCapabilities {
-  tools: "native" | "native+business" | "business";
-  cancellation: boolean;
-  cancellationMode?: "signal" | "run-id";
+  /** The harness brings its own file and command tools (read/write/edit/bash/…). */
+  nativeTools: boolean;
+
+  /**
+   * The harness can invoke the platform's business tools — `write_artifact`,
+   * `deploy_*`, `report_task_result`, `ask_user` and the rest of the server-side
+   * tool registry — not only its own native tools. Artifact delivery and
+   * delegated task reporting both depend on this.
+   */
+  businessTools: boolean;
+
+  /**
+   * How a run can be cancelled. `"signal"`: the caller aborts the `AbortSignal`
+   * it handed to `run`. `"run-id"`: `abort(runId)` also works. `mode` is `null`
+   * when the harness cannot be cancelled at all.
+   */
+  cancellation: { supported: boolean; mode: "signal" | "run-id" | null };
+
+  /**
+   * Whether tool outcomes can be mapped into the platform evidence contract
+   * (file hashes, command results, business-tool receipts). Without it a run may
+   * still produce files, but delegated acceptance cannot be verified.
+   */
+  evidence: boolean;
+
+  /**
+   * `"platform"`: the harness consumes the context packet the platform compiles
+   * (task identity, active facts, upstream artifacts, acceptance contract).
+   * `"harness"`: it builds its own context, so that packet never reaches the model.
+   */
+  contextPacket: "platform" | "harness";
+
   /** Whether the harness accepts live steering/follow-ups mid-run. */
   followUp: boolean;
+
   /** Whether output is incremental (`StreamEvent`s) rather than a final blob. */
   streaming: boolean;
 }
