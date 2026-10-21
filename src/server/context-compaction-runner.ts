@@ -17,9 +17,11 @@ import {
   type CompactionJob
 } from "@/server/context-compaction-service";
 import { eventBus } from "@/server/event-bus";
+import { isHarnessAvailable } from "@/server/harness/availability";
 import { getAgent, getConversation } from "@/server/repositories";
 import { postSystemMessage } from "@/server/system-notice";
 import { newMessageId } from "@/shared/ids";
+import type { Agent } from "@/shared/types";
 
 export type StartCompactionResult =
   | {
@@ -60,12 +62,18 @@ export function startConversationCompaction(
     return { ok: false, reason: "No messages to compact." };
   }
 
-  const compactionAgent = conversation.agentIds
+  // Compaction may use any member whose engine this build can actually run. The
+  // preference for a DeepSeek member is unchanged; when the conversation has Pi
+  // members they are the runnable ones (Pi is the only production driver), so
+  // the member chosen today is still chosen today. When nothing can run, the
+  // historical provider/model defaults are kept and the job fails honestly at
+  // the provider call instead of borrowing an unavailable engine's credential.
+  const members = conversation.agentIds
     .map((agentId) => getAgent(agentId))
-    .find((agent) => agent?.adapterName === "pi" && agent.modelProvider === "deepseek")
-    ?? conversation.agentIds
-      .map((agentId) => getAgent(agentId))
-      .find((agent) => agent?.adapterName === "pi");
+    .filter((agent): agent is Agent => Boolean(agent));
+  const runnableMembers = members.filter((agent) => isHarnessAvailable(agent.adapterName));
+  const compactionAgent = runnableMembers.find((agent) => agent.modelProvider === "deepseek")
+    ?? runnableMembers[0];
 
   const provider = compactionAgent?.modelProvider ?? "deepseek";
   const model = compactionAgent?.modelId ?? "deepseek-v4-flash";

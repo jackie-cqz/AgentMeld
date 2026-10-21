@@ -9,9 +9,11 @@ import type { HarnessProviderTarget } from "./types";
  *
  * This is platform policy (which provider, endpoint and credential an Agent
  * resolves to), not Pi configuration: it deliberately returns a neutral target
- * so a second harness never inherits Pi's snapshot object. The resolution order
- * and revision string are unchanged from `snapshotPiProvider`, which now derives
- * from this function.
+ * so a second harness never inherits Pi's snapshot object. The model-shaping
+ * choices the Agent owns — thinking effort, image input and the configured
+ * context window — travel with the target, so a driver never has to read them
+ * back off a platform `Agent` row. The resolution order and revision string are
+ * unchanged from `snapshotPiProvider`, which now derives from this function.
  */
 export function resolveHarnessProvider(agent: Agent): HarnessProviderTarget {
   const provider = agent.modelProvider ?? "deepseek";
@@ -26,5 +28,8 @@ export function resolveHarnessProvider(agent: Agent): HarnessProviderTarget {
     endpoint: resolveProviderBaseUrl(provider, agent.apiBaseUrl ?? (provider === "anthropic" ? settings.anthropicBaseUrl : null)) ?? null,
     credential: resolveApiKey(provider, agent.apiKey, settings),
     revision: `${provider}:${revision?.updated_at ?? 0}`,
+    reasoningEffort: agent.reasoningEffort,
+    vision: agent.supportsVision,
+    contextWindow: agent.contextWindow,
   };
 }

@@ -79,6 +79,11 @@ function neutralInput(overrides: Partial<HarnessInvocationInput> = {}): HarnessI
       endpoint: "http://127.0.0.1:1/v1",
       credential: "fixture-not-real",
       revision: "deepseek:1",
+      // The fixture Agent's own model-shaping values, so this literal is exactly
+      // what `resolveHarnessProvider(agent)` produces (see provider-target.test).
+      reasoningEffort: "high",
+      vision: false,
+      contextWindow: null,
     },
     workspaceRoot: "/tmp/fixture-workspace",
     maxTurns: 3,
@@ -150,6 +155,10 @@ describe("the Pi harness driver", () => {
       apiBaseUrl: "http://127.0.0.1:1/v1",
       providerRevision: "deepseek:1",
       catalogProvider: "deepseek",
+      // The provider target is authoritative for the model-shaping values too.
+      contextWindow: null,
+      reasoningEffort: "high",
+      supportsVision: false,
       accessMode: "workspace",
       workspaceLease: undefined,
       maxTurns: 3,
@@ -160,16 +169,22 @@ describe("the Pi harness driver", () => {
     });
   });
 
-  it("contains no Pi-shaped fields at the seam", () => {
+  it("contains no Pi-shaped fields at the seam, and the provider target is complete", () => {
     const input = neutralInput();
     const forbidden = [
       "apiKey", "apiBaseUrl", "providerRevision", "catalogProvider",
       "contextXml", "taskPacket", "providerSnapshot", "accessMode", "systemPrompt", "toolNames",
     ];
     for (const field of forbidden) expect(input).not.toHaveProperty(field);
+    // The neutral target carries the four facts a second engine needs to shape a
+    // request: provider/model, thinking effort, image input and the configured
+    // window. `maxOutput` is deliberately absent: the platform owns no per-Agent
+    // output cap, so there is no truthful value to carry.
     expect(Object.keys(input.provider).sort()).toEqual([
-      "catalogProvider", "credential", "endpoint", "modelId", "providerId", "revision",
+      "catalogProvider", "contextWindow", "credential", "endpoint", "modelId", "providerId",
+      "reasoningEffort", "revision", "vision",
     ]);
+    expect(input.provider).not.toHaveProperty("maxOutput");
     expect(Object.keys(input.context).sort()).toEqual(["packet", "recentMessages", "systemPrompt"]);
   });
 

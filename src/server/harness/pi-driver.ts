@@ -52,6 +52,11 @@ export function toPiInvocationInput(input: HarnessInvocationInput): PiInvocation
     apiBaseUrl: input.provider.endpoint,
     providerRevision: input.provider.revision,
     catalogProvider: input.provider.catalogProvider,
+    // The Agent's model-shaping choices are part of the resolved target, so Pi
+    // reads them from the target rather than from a stale Agent snapshot.
+    contextWindow: input.provider.contextWindow,
+    reasoningEffort: input.provider.reasoningEffort,
+    supportsVision: input.provider.vision,
     accessMode: input.access,
     workspaceLease: piWorkspaceLease(input.workspaceLease),
     maxTurns: input.maxTurns,

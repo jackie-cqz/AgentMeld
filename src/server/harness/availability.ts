@@ -52,6 +52,18 @@ export function getHarnessAvailability(name: AdapterName | string): HarnessAvail
 }
 
 /**
+ * Whether an Agent's engine can run on this machine right now.
+ *
+ * This is the single predicate collaboration and maintenance paths use instead
+ * of comparing an adapter name to a literal: a driver must be registered for the
+ * name *and* its own `doctor()` must pass. Any other state is honestly "not
+ * runnable", including a retired row with no driver.
+ */
+export function isHarnessAvailable(name: AdapterName | string): boolean {
+  return getHarnessAvailability(name).state === "available";
+}
+
+/**
  * The `/api/harnesses` payload: every known name, with the runtime truth.
  *
  * It lists retired names too (so the UI can explain an old Agent row) but never

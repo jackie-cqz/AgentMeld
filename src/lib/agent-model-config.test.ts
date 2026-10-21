@@ -8,7 +8,7 @@ const profile: ModelProviderProfile = { id: "mp_test", name: "GLM 国内", prese
 
 describe("Agent model selection", () => {
   it("starts with an explicit empty choice instead of a hardcoded provider", () => {
-    expect(emptyAgentModel()).toEqual({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" });
+    expect(emptyAgentModel()).toEqual({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "", supportsVision: true });
     expect(agentProviderChoices([], snapshot, [], emptyAgentModel())).toEqual([]);
   });
   it("uses saved models and default while preserving regional endpoint and separate profile identities", () => {
@@ -25,7 +25,7 @@ describe("Agent model selection", () => {
     expect(JSON.stringify(choices)).not.toContain("ApiKey");
   });
   it("retains missing/private provider and manual model when editing", () => {
-    const current = { provider: "profile:deleted" as const, modelId: "private-model", apiKey: "private-key", apiBaseUrl: "https://private.invalid/v1", contextWindow: "", reasoningEffort: "" as const };
+    const current = { provider: "profile:deleted" as const, modelId: "private-model", apiKey: "private-key", apiBaseUrl: "https://private.invalid/v1", contextWindow: "", reasoningEffort: "" as const, supportsVision: false };
     const [choice] = agentProviderChoices([], snapshot, [], current);
     expect(choice.id).toBe(current.provider);
     expect(choice.unavailable).toBe(true);
@@ -34,10 +34,10 @@ describe("Agent model selection", () => {
     expect(JSON.stringify(choice)).not.toContain("private-key");
   });
   it("does not mutate manual model/overrides on same-provider selection, clears them only on a different provider", () => {
-    const current = { provider: "profile:mp_test" as const, modelId: "manual", apiKey: "agent-key", apiBaseUrl: "https://override.invalid", contextWindow: "", reasoningEffort: "" as const };
+    const current = { provider: "profile:mp_test" as const, modelId: "manual", apiKey: "agent-key", apiBaseUrl: "https://override.invalid", contextWindow: "", reasoningEffort: "" as const, supportsVision: false };
     const [choice] = agentProviderChoices([profile], snapshot, [], current);
     expect(selectAgentProvider(current, choice)).toBe(current);
-    expect(selectAgentProvider(current, { ...choice, id: "profile:other" })).toEqual({ provider: "profile:other", modelId: "glm-default", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" });
+    expect(selectAgentProvider(current, { ...choice, id: "profile:other" })).toEqual({ provider: "profile:other", modelId: "glm-default", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "", supportsVision: true });
     expect(current.apiKey).toBe("agent-key");
   });
 });

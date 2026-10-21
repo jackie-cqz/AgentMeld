@@ -6,16 +6,27 @@ import { createAgent, updateAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, createRun, getWorkspaceForConversation } from "@/server/repositories";
 import { newRunId, newMessageId } from "@/shared/ids";
+import type { Agent } from "@/shared/types";
 import { capturePiConfiguration, preparePiInvocation, snapshotPiProvider } from "./config";
 import type { PiInvocationInput } from "./types";
 
 afterEach(() => { vi.unstubAllEnvs(); });
-function fixture(): PiInvocationInput {
-  const agent = createAgent({ name: "Configuration fixture", adapterName: "pi", modelId: "deepseek-chat", toolNames: ["fs_read"] });
+function invocationFor(agent: Agent, overrides: Partial<PiInvocationInput> = {}): PiInvocationInput {
   const conversation = createConversation({ mode: "single", agentIds: [agent.id] });
   const workspace = getWorkspaceForConversation(conversation.id)!;
   const triggerMessage = createMessage({ id: newMessageId(), conversationId: conversation.id, role: "user", parts: [{ type: "text", content: "Fixture" }], status: "complete", now: Date.now() });
-  return { agent, conversation, workspace, triggerMessage, runId: newRunId(), conversationId: conversation.id, workspacePath: workspace.rootPath, recentMessages: [], toolNames: agent.toolNames, systemPrompt: agent.systemPrompt, apiKey: null };
+  return { agent, conversation, workspace, triggerMessage, runId: newRunId(), conversationId: conversation.id, workspacePath: workspace.rootPath, recentMessages: [], toolNames: agent.toolNames, systemPrompt: agent.systemPrompt, apiKey: null, ...overrides };
+}
+function fixture(): PiInvocationInput {
+  return invocationFor(createAgent({ name: "Configuration fixture", adapterName: "pi", modelId: "deepseek-chat", toolNames: ["fs_read"] }));
+}
+
+function readModelsJson(input: PiInvocationInput): { models: Array<{ contextWindow: number; reasoning: boolean; input: string[] }>; compat: { supportsReasoningEffort: boolean } } {
+  const execution = preparePiInvocation(input);
+  const config = JSON.parse(fs.readFileSync(path.join(execution.home, "models.json"), "utf8")) as {
+    providers: { agentmeld: { models: Array<{ contextWindow: number; reasoning: boolean; input: string[] }>; compat: { supportsReasoningEffort: boolean } } };
+  };
+  return config.providers.agentmeld;
 }
 
 describe("immutable Pi execution configuration", () => {
@@ -88,5 +99,34 @@ describe("immutable Pi execution configuration", () => {
     value.agent.toolNames.push("job_start");
     const captured = capturePiConfiguration(value);
     expect(captured.toolNames).toContain("job_start");
+  });
+
+  it("takes the window and thinking effort from the resolved provider target when supplied", () => {
+    // The platform resolved these values once; Pi must not re-read a stale Agent.
+    const config = readModelsJson(capturePiConfiguration({
+      ...fixture(), apiKey: "fixture-key", contextWindow: 12_000, reasoningEffort: "low",
+    }));
+    expect(config.models[0].contextWindow).toBe(12_000);
+    expect(config.models[0].reasoning).toBe(true);
+    expect(config.compat.supportsReasoningEffort).toBe(true);
+
+    // An explicitly unset effort turns thinking off even if the Agent row says high.
+    const agent = createAgent({ name: "Effort fixture", adapterName: "pi", modelId: "deepseek-chat", reasoningEffort: "high", toolNames: ["fs_read"] });
+    const off = readModelsJson(capturePiConfiguration({ ...invocationFor(agent), apiKey: "fixture-key", reasoningEffort: null }));
+    expect(off.models[0].reasoning).toBe(true); // deepseek models reason regardless
+    expect(off.compat.supportsReasoningEffort).toBe(false); // but no effort is requested
+  });
+
+  it("uses the target's vision bit for the model input list, without changing unset behaviour", () => {
+    const agent = createAgent({ name: "Vision fixture", adapterName: "pi", modelProvider: "openai", modelId: "gpt-fixture", toolNames: ["fs_read"] });
+    const textOnly = readModelsJson(capturePiConfiguration({ ...invocationFor(agent), apiKey: "fixture-key", supportsVision: false }));
+    expect(textOnly.models[0].input).toEqual(["text"]);
+
+    const withImages = readModelsJson(capturePiConfiguration({ ...invocationFor(agent), apiKey: "fixture-key", supportsVision: true }));
+    expect(withImages.models[0].input).toEqual(["text", "image"]);
+
+    // No target field: the Agent's own default (vision-capable) still decides.
+    const fromAgent = readModelsJson(capturePiConfiguration({ ...invocationFor(agent), apiKey: "fixture-key" }));
+    expect(fromAgent.models[0].input).toEqual(["text", "image"]);
   });
 });

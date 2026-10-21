@@ -18,6 +18,7 @@ const patchAgentSchema = z.object({
   apiBaseUrl: z.string().max(500).nullable().optional(),
   contextWindow: z.number().int().min(1000).max(10_000_000).nullable().optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).nullable().optional(),
+  supportsVision: z.boolean().optional(),
   systemPrompt: z.string().max(4000).optional(),
   toolNames: z.array(z.string()).max(64).optional()
 });

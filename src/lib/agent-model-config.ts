@@ -11,6 +11,8 @@ export interface AgentModelValue {
   contextWindow: string;
   /** Empty means thinking stays off (today's behaviour). */
   reasoningEffort: "" | "low" | "medium" | "high";
+  /** Whether the selected model accepts image input; every new Agent starts on. */
+  supportsVision: boolean;
 }
 
 export interface AgentProviderChoice {
@@ -24,7 +26,7 @@ export interface AgentProviderChoice {
   unavailable?: boolean;
 }
 
-export const emptyAgentModel = (): AgentModelValue => ({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" });
+export const emptyAgentModel = (): AgentModelValue => ({ provider: null, modelId: "", apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "", supportsVision: true });
 
 export function agentProviderChoices(profiles: ModelProviderProfile[], snapshot: ProviderSnapshot,
   agents: Pick<Agent, "modelProvider" | "modelId">[], current: AgentModelValue): AgentProviderChoice[] {
@@ -51,5 +53,5 @@ export function agentProviderChoices(profiles: ModelProviderProfile[], snapshot:
 
 export function selectAgentProvider(current: AgentModelValue, provider: AgentProviderChoice): AgentModelValue {
   if (current.provider === provider.id) return current;
-  return { provider: provider.id, modelId: provider.defaultModel, apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "" };
+  return { provider: provider.id, modelId: provider.defaultModel, apiKey: "", apiBaseUrl: "", contextWindow: "", reasoningEffort: "", supportsVision: true };
 }

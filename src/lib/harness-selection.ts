@@ -6,7 +6,7 @@ import {
   type HarnessDoctorReport,
   type HarnessState,
 } from "@/shared/harness-catalog";
-import type { AdapterName } from "@/shared/types";
+import type { AdapterName, Agent } from "@/shared/types";
 
 /**
  * Pure view-model for the agent editor's harness picker.
@@ -121,6 +121,44 @@ export function harnessMigrationNotice(stored: AdapterName | string | null | und
   const descriptor = harnessDescriptor(stored);
   const reason = descriptor.declaredState === "retired" ? "已退役" : "不在当前构建中";
   return `原执行引擎 ${descriptor.label} ${reason}：保存后此 Agent 将改用 Pi 运行，身份与历史不变。`;
+}
+
+/**
+ * Whether the server's availability report says this engine can run here.
+ *
+ * Only a confirmed `available` row counts. A missing row (still loading, or a
+ * failed read) is not evidence that the engine runs, so callers must not offer
+ * an action on it.
+ */
+export function harnessIsRunnable(
+  availability: readonly HarnessAvailability[] | null | undefined,
+  name: AdapterName | string,
+): boolean {
+  return (availability ?? []).some((entry) => entry.id === name && entry.state === "available");
+}
+
+/**
+ * Team members a task can be handed off to: current non-Conductor members whose
+ * engine the platform reports as available, in roster order.
+ *
+ * Derived from the catalog/availability instead of a stored adapter literal so a
+ * second registered engine becomes a real handoff target, while an engine this
+ * build cannot run is never offered.
+ */
+export function handoffTargets(input: {
+  agentIds: readonly string[];
+  agents: Readonly<Record<string, Agent>>;
+  sourceAgentId: string;
+  availability: readonly HarnessAvailability[] | null | undefined;
+}): Agent[] {
+  return input.agentIds
+    .map((id) => input.agents[id])
+    .filter((agent): agent is Agent => Boolean(agent))
+    .filter((agent) =>
+      !agent.isConductor &&
+      agent.id !== input.sourceAgentId &&
+      harnessIsRunnable(input.availability, agent.adapterName),
+    );
 }
 
 /** Everything the picker and the dialog's save button need, derived once. */

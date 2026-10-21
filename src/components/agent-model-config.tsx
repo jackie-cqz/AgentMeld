@@ -100,6 +100,15 @@ export function AgentModelConfig({ open, value, onChange }: {
             ]} />
         </div>
         <p className="ui-muted text-xs leading-relaxed">网关实测接受 low / high 并计入 reasoning tokens；medium 会由 Pi 按模型能力就近映射。仅影响思考强度，不改变上下文预算。</p>
+        <label className="mt-4 flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={value.supportsVision}
+            onChange={event => onChange({ ...value, supportsVision: event.target.checked })}
+          />
+          支持视觉输入
+        </label>
+        <p className="ui-muted text-xs leading-relaxed">关闭后此 Agent 的模型只接收文本；仅在确认所选模型支持图片时开启。</p>
       </details>
     </div>
     {picker ? <section className="agent-model-inline" aria-label={picker === "provider" ? "选择供应商" : "选择模型"} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (pendingProvider) setPendingProvider(null); else setPicker(null); } }}>

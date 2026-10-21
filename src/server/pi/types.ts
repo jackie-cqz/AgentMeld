@@ -1,4 +1,4 @@
-import type { Agent, Conversation, Message, StreamEvent, Workspace } from "@/shared/types";
+import type { Agent, Conversation, Message, ReasoningEffort, StreamEvent, Workspace } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { PiAccessMode } from "./access-profile";
@@ -42,6 +42,14 @@ export interface PiInvocationInput {
   /** Public configuration revision only; never a credential value or hash. */
   providerRevision?: string;
   catalogProvider?: string;
+  /**
+   * Model-shaping fields from the platform's resolved provider target. Omitted by
+   * direct callers, which then read the same values off `agent` — exactly the
+   * pre-target behaviour.
+   */
+  contextWindow?: number | null;
+  reasoningEffort?: ReasoningEffort | null;
+  supportsVision?: boolean;
 }
 
 export type PiInvocationStream = AsyncGenerator<StreamEvent>;

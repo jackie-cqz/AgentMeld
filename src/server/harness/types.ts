@@ -1,4 +1,4 @@
-import type { AdapterName, Agent, Conversation, Message, Workspace } from "@/shared/types";
+import type { AdapterName, Agent, Conversation, Message, ReasoningEffort, Workspace } from "@/shared/types";
 import type { ChatMessage } from "@/server/conversation-context";
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { HarnessEvent } from "./events";
@@ -144,6 +144,10 @@ export type HarnessAccessMode = "workspace" | "conversation";
  * configuration file format still receives the same decision instead of
  * inheriting Pi's object shape. Drivers must treat `credential` as a secret and
  * must not persist it into their own configuration or logs.
+ *
+ * It also carries the Agent's model-shaping choices — thinking effort, image
+ * input and the configured context window — because a second engine needs the
+ * same decision, not a Pi-shaped config to translate.
  */
 export interface HarnessProviderTarget {
   /** Provider id configured on the Agent (`deepseek`, `anthropic`, `profile:<id>`, …). */
@@ -158,6 +162,26 @@ export interface HarnessProviderTarget {
   credential: string | null;
   /** Public configuration revision (never a credential), used for binding/audit. */
   revision: string;
+  /**
+   * The Agent's configured thinking effort, or `null` to leave thinking off.
+   * The platform owns the choice; each driver maps it onto its own request shape.
+   */
+  reasoningEffort: ReasoningEffort | null;
+  /** Whether the configured model accepts image input (`Agent.supportsVision`). */
+  vision: boolean;
+  /**
+   * The Agent's configured context window, or `null` for the engine/model
+   * default. Deliberately *not* resolved to a number here: the effective window
+   * depends on the engine's own model catalog, so a driver resolves this against
+   * it (Pi does so in `pi/config.ts`, which keeps its current numbers exactly).
+   */
+  contextWindow: number | null;
+  /*
+   * There is deliberately no `maxOutput`: the platform has no per-Agent output
+   * cap. Pi derives it from its locked model catalog (falling back to the
+   * provider's `outputReserve`), and inventing a platform field here would be a
+   * number no Agent row owns.
+   */
 }
 
 /** One attachment the platform authorized this invocation to reference. */
