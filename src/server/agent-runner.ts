@@ -8,8 +8,8 @@ import { projectHarnessStream } from "@/server/harness/events";
 import { buildHarnessContextPacket } from "@/server/harness/context-packet";
 import { resolveHarnessProvider } from "@/server/harness/provider-target";
 import { getPiRunUsage } from "@/server/pi/config";
-import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
-import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
+import { provisionedPlatformToolNames } from "@/server/harness/tool-surface";
+import { NATIVE_WORKSPACE_TOOLS } from "@/server/harness/native-tools";
 import { eventBus } from "@/server/event-bus";
 import { consumeStream } from "@/server/consume-stream";
 import {
@@ -172,7 +172,7 @@ function wasCancelled(error: unknown, signal?: AbortSignal): boolean {
 }
 
 /** Platform file/command tools; every other provisioned name is a business tool. */
-const NATIVE_PLATFORM_TOOLS: ReadonlySet<string> = new Set(Object.values(PI_NATIVE_TO_PLATFORM));
+const NATIVE_PLATFORM_TOOLS: ReadonlySet<string> = new Set(NATIVE_WORKSPACE_TOOLS);
 
 /** What this invocation cannot run without, derived from what it is provisioned with. */
 function harnessRequirements(tools: HarnessInvocationInput["tools"], taskExecution: StartRunInput["taskExecution"], contextRequired: boolean): HarnessRequirements {

@@ -1,6 +1,6 @@
 import type { TaskExecutionContract, TaskExecutionIdentity } from "@/shared/evidence-types";
 import type { ToolCapability } from "@/server/tools/capabilities";
-import type { PiWorkspaceLease } from "@/server/pi/workspace-lease";
+import type { HarnessWorkspaceLease } from "@/server/harness/types";
 
 export interface ToolContext {
   conversationId: string;
@@ -11,8 +11,11 @@ export interface ToolContext {
   taskExecution?: TaskExecutionIdentity | null;
   taskContract?: TaskExecutionContract | null;
   abortSignal: AbortSignal;
-  /** Private runtime handoff while a source is blocked awaiting its peer. */
-  consultationLease?: PiWorkspaceLease;
+  /**
+   * Ownership handed to the peer while a source is blocked awaiting it. This is
+   * the platform lease the neutral bridge lends; a driver never supplies one.
+   */
+  consultationLease?: HarnessWorkspaceLease;
 }
 
 export type ToolFailureCategory =
@@ -24,7 +27,11 @@ export type ToolFailureCategory =
 export interface ToolExecutionMeta {
   /** Stable ID from the model/MCP tool call. */
   callId: string;
-  source?: "llm" | "mcp" | "pi" | "system" | "benchmark";
+  /**
+   * Audit label for the caller. Deliberately open: Pi passes "pi", the bridge
+   * passes the driver id, and platform-internal preflight passes "system".
+   */
+  source?: string;
 }
 
 export type ToolResult =

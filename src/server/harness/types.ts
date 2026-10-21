@@ -237,11 +237,15 @@ export interface HarnessToolProvisioning {
 }
 
 /**
- * A workspace-ownership handoff from a run that is blocked waiting on a peer.
+ * A workspace-ownership handoff supplied by the platform lease manager.
  *
- * This is the platform's durable ownership concept, not Pi's lease class: the
- * platform owns the record and a driver supplies the implementation. Lending a
- * workspace while blocked is deliberately not part of this interface.
+ * This is the platform's durable ownership concept (`src/server/harness/
+ * workspace-lease.ts`), not Pi's lease class: the platform acquires it and hands
+ * the same object to whatever driver runs. `lend` is deliberately not part of
+ * this base contract — the platform's tool bridge performs the consultation lend
+ * itself (see `LendableWorkspaceLease`), so a driver never implements it and a
+ * second engine does not have to copy Pi's handoff code. A driver asserts,
+ * attaches, releases and poisons the ownership it is given.
  */
 export interface HarnessWorkspaceLease {
   readonly workspacePath: string;
@@ -249,6 +253,20 @@ export interface HarnessWorkspaceLease {
   attachChild(pid: number): void;
   release(): void;
   poison(): void;
+}
+
+/**
+ * The platform-issued lease, which additionally owns the controlled peer lend.
+ *
+ * Only the platform lease manager produces this; it is what the platform's tool
+ * bridge uses around `consult_agent`. A driver receives it as the base
+ * `HarnessWorkspaceLease` and does not need to know about lending.
+ *
+ * It is a separate type rather than a base member so a driver is never asked to
+ * implement (or fake) a platform ownership lifecycle operation.
+ */
+export interface LendableWorkspaceLease extends HarnessWorkspaceLease {
+  lend: <T>(runPeer: (lease: LendableWorkspaceLease) => Promise<T>) => Promise<T>;
 }
 
 /** Audit receipt for the context the run actually sent. */

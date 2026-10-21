@@ -1,46 +1,13 @@
-import { PI_RETIRED_TOOLS } from "@/shared/agent-constants";
-import { toolRegistry } from "@/server/tools/registry";
-import { PI_NATIVE_TO_PLATFORM } from "@/server/pi/native-tools";
-
 /**
- * Platform protocol tools that are NOT Agent capabilities.
+ * Pi's historical import site for the platform tool surface.
  *
- * `plan_tasks` is how the Conductor's PLAN stage terminates and hands a DAG to
- * the platform; it is provisioned explicitly by that stage. Handing it to every
- * Agent would let any worker end its own tool loop by "planning", so it stays a
- * stage tool rather than becoming a full-access grant.
+ * The surface itself is platform-owned now (#25 P2): `src/server/harness/
+ * tool-surface.ts` decides which platform tools an invocation is provisioned
+ * with, and every driver reads that same list. This module stays only so Pi-side
+ * call sites and tests keep a stable path.
  */
-const INTERNAL_PROTOCOL_TOOLS: readonly string[] = ["plan_tasks", "respond_to_consultation"];
-
-/**
- * The roster is shared by all current conversation members. It does not expose
- * credentials, prompts, or Agents outside the caller's conversation.
- */
-export const CONVERSATION_ROSTER_TOOL = "list_team_members";
-
-/**
- * Every platform tool an Agent run is provisioned with (issue #79).
- *
- * AgentMeld no longer keeps a per-Agent capability whitelist: a Pi Agent is a
- * native Pi agent, so an Agent run always receives the whole Pi toolset and the
- * model decides what to use. The stored `agent.toolNames` grants are kept only
- * as a record — they no longer select or authorize anything, which is also why
- * an old record naming a retired tool can no longer break a run.
- *
- * The retired job_* command kernel stays out. PR #75 removed it from the Pi
- * runtime on purpose, and that is a property of the runtime, not a per-Agent
- * grant: re-admitting it as "full permission" would quietly restore the old
- * command kernel this core replaced. Terminal protocol operations stay scoped
- * to their actual platform phase; they are not workspace capabilities.
- *
- * Names are PLATFORM names (fs_read, …). The bridge maps the filesystem family
- * to the Pi native names and registers every other entry as an extension tool.
- */
-export function provisionedPlatformToolNames(): string[] {
-  const native = Object.values(PI_NATIVE_TO_PLATFORM);
-  const excluded = [...PI_RETIRED_TOOLS, ...INTERNAL_PROTOCOL_TOOLS];
-  return [
-    ...native,
-    ...toolRegistry.listNames().filter((name) => !native.includes(name) && !excluded.includes(name))
-  ];
-}
+export {
+  CONVERSATION_ROSTER_TOOL,
+  assertHarnessAccessProfile,
+  provisionedPlatformToolNames,
+} from "@/server/harness/tool-surface";

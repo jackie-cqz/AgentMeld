@@ -13,7 +13,7 @@ import { createMessage, createRun, getAgent, getArtifact, getConversation, getMe
 import type { ToolContext } from "@/server/tools/types";
 import type { AgentConsultation, ConsultationStatus } from "@/shared/collaboration-types";
 import { newMessageId, newRunId } from "@/shared/ids";
-import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
+import { provisionedPlatformToolNames } from "@/server/harness/tool-surface";
 
 const TTL_MS = 120_000;
 const MAX_PER_RUN = 4;
