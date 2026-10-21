@@ -73,15 +73,17 @@ export class OpenCodeEventProjection {
   private readonly assistantUsage = new Map<string, AssistantUsage>();
   private readonly sessionId: string;
   private readonly expectedUserPrompt: string | undefined;
+  private readonly toolNamePrefix: string | undefined;
   private nextBlockIndex = 0;
   private idle = false;
   private taskAccepted = false;
   private failure: OpenCodeFailure | null = null;
   private sawAssistantMessage = false;
 
-  constructor(options: { sessionId: string; expectedUserPrompt?: string }) {
+  constructor(options: { sessionId: string; expectedUserPrompt?: string; toolNamePrefix?: string }) {
     this.sessionId = options.sessionId;
     this.expectedUserPrompt = options.expectedUserPrompt;
+    this.toolNamePrefix = options.toolNamePrefix;
   }
 
   /** Consume one SDK event and return the neutral events it implies. */
@@ -294,7 +296,7 @@ export class OpenCodeEventProjection {
       // `{}` until the call starts). Waiting for running/completed/error is what
       // makes the neutral `tool.call` carry the arguments the engine is using.
       emitted.called = true;
-      events.push({ type: "tool.call", callId, toolName: part.tool, args: state.input });
+      events.push({ type: "tool.call", callId, toolName: this.toolName(part.tool), args: state.input });
     }
 
     if (!emitted.resulted && (state.status === "completed" || state.status === "error")) {
@@ -314,6 +316,16 @@ export class OpenCodeEventProjection {
           });
     }
     return events;
+  }
+
+  /**
+   * Business tools arrive from OpenCode's MCP client as `<server>_<tool>`.
+   * The neutral stream speaks platform names, so the MCP prefix is removed
+   * here; a name without the prefix (OpenCode's native tools) is unchanged.
+   */
+  private toolName(name: string): string {
+    const prefix = this.toolNamePrefix;
+    return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
   }
 
   private closeBlock(partId: string): HarnessEvent[] {
