@@ -231,7 +231,7 @@ Database maintenance is **not** part of normal setup. Do not run `db:push` again
 
 ## Known Limitations
 
-- **Pi only today.** DSH, OpenCode, Claude Code, Codex, arbitrary global Pi versions, user-installed Pi extensions, and native-session import are not supported execution backends.
+- **Pi is the default; OpenCode is partial.** OpenCode 1.19.3 has a real driver that runs prompts and streams output, but platform business tools and evidence are not wired for it, so artifact-producing, delegated and normal full-toolset runs are refused with `harness_capability`. DSH, Claude Code, Codex, arbitrary global Pi versions, user-installed Pi extensions, and native-session import are not supported execution backends.
 - **One owner, one control server per data directory.** Pairing is device access for that owner, not organizational tenancy or role-based isolation.
 - **Fresh Pi sessions.** Platform context crosses invocations, but native sessions and interrupted commands are not resumed automatically. A reload restores recorded state, not a running process.
 - **Managed workspace access is serialized.** Consultation uses controlled lease lending, not independent concurrent writers in the same directory.
@@ -244,7 +244,7 @@ Database maintenance is **not** part of normal setup. Do not run `db:push` again
 
 These are future directions, not current capabilities:
 
-- Separate persistent Agent identity from execution bindings further, then add selected harnesses such as DSH or OpenCode.
+- Wire platform business tools and evidence into OpenCode (for example through a per-run MCP transport), then add other selected harnesses such as DSH.
 - Extend evidence-backed handoff across harnesses without promising native-session migration.
 - Improve Feishu collaboration, setup, delivery feedback, and real-device validation.
 - Add remote Worker / container / sandbox-provider execution before attempting custom cloud infrastructure.
@@ -256,6 +256,7 @@ These are future directions, not current capabilities:
 
 - [简体中文](docs/README.zh-CN.md)
 - [Pi runtime, configuration, tools, and recovery](docs/pi-runtime.md)
+- [OpenCode runtime: pinned SDK/CLI, event mapping and honest capabilities](docs/opencode-runtime.md)
 - [Workspace toolkit and browser checks](docs/workspace-toolkit.md)
 - [Collaboration implementation notes and historical acceptance log](docs/group-chat-collaboration-implementation.md)
 - [Feishu operations](docs/feishu-operations.md) and [real-device checks](docs/feishu-real-device-checks.md)

@@ -39,7 +39,11 @@ export interface HarnessDescriptor {
   id: AdapterName;
   /** Product name shown in the editor and agent lists. */
   label: string;
-  /** Baseline state this build ships with. Runtime availability may downgrade it. */
+  /**
+   * Baseline state this build ships with, before any runtime probe. A selectable
+   * name with a registered driver still only becomes `available` when that
+   * driver's `doctor()` passes, so the baseline never promises execution.
+   */
   declaredState: HarnessState;
   /** Whether a new Agent may select it. Retired names are historical only. */
   selectable: boolean;
@@ -83,9 +87,10 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
   opencode: {
     id: "opencode",
     label: "OpenCode",
-    // Selectable because the product surface must be able to name the engine a
-    // user wants, but no OpenCode driver exists in this build. Saving is
-    // truthful; running fails as harness_unavailable instead of pretending.
+    // A real driver is registered in this build, but the declared baseline stays
+    // not-installed: `deriveHarnessState` only reports `available` when that
+    // driver's `doctor()` also passes (pinned SDK + CLI installed). This is what
+    // keeps the UI honest on a machine where the engine is missing.
     declaredState: "not-installed",
     selectable: true,
     retiredMessage: null,

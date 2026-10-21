@@ -3,6 +3,7 @@ import { getDatabase } from "@/db/client";
 import { createAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
 import { getWorkspaceForConversation } from "@/server/repositories";
+import { getOpenCodeDoctor } from "@/server/harness/opencode-driver";
 import { listTeamMembersTool } from "./list-team-members";
 
 describe("shared conversation roster", () => {
@@ -51,9 +52,14 @@ describe("shared conversation roster", () => {
     expect(byId.get(worker.id)).toMatchObject({
       executionEngine: "pi", executionEngineState: "available", executionEngineAvailable: true, retired: false,
     });
-    // `opencode` is a current choice, not retired, and honestly not installed.
+    // `opencode` is a current choice with a real driver, so its availability is
+    // whatever this machine's doctor says — never a hardcoded label.
+    const opencodeAvailable = getOpenCodeDoctor().available;
     expect(byId.get(peer.id)).toMatchObject({
-      executionEngine: "opencode", executionEngineState: "not-installed", executionEngineAvailable: false, retired: false,
+      executionEngine: "opencode",
+      executionEngineState: opencodeAvailable ? "available" : "not-installed",
+      executionEngineAvailable: opencodeAvailable,
+      retired: false,
     });
     expect(byId.get(retired.id)).toMatchObject({
       executionEngine: "custom", executionEngineState: "retired", executionEngineAvailable: false, retired: true,

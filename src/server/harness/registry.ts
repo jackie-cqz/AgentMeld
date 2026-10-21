@@ -1,16 +1,18 @@
 import type { AdapterName } from "@/shared/types";
 import { unregisteredHarnessFailure } from "@/shared/harness-catalog";
 import type { HarnessErrorCategory } from "./errors";
+import { opencodeHarnessDriver } from "./opencode-driver";
 import { piHarnessDriver } from "./pi-driver";
 import type { HarnessDriver } from "./types";
 
 /**
  * The only list of execution engines the platform will dispatch to.
  *
- * Registration is explicit and happens at module load: Pi is the one production
- * driver, and adding a second engine in P1 must be a visible edit here rather
- * than a name-based branch inside the run loop. There is deliberately no
- * fallback driver — an Agent whose adapter has no driver fails honestly.
+ * Registration is explicit and happens at module load. Pi is the production
+ * driver every existing Agent row uses; OpenCode is the second real driver (#25).
+ * Adding an engine must be a visible edit here rather than a name-based branch
+ * inside the run loop. There is deliberately no fallback driver — an Agent whose
+ * adapter has no driver fails honestly.
  *
  * Which adapter names exist, which are selectable and which are retired is NOT
  * decided here: `src/shared/harness-catalog.ts` is the single source of truth,
@@ -54,5 +56,7 @@ export function unregisteredHarnessError(name: AdapterName): { message: string; 
   return unregisteredHarnessFailure(name);
 }
 
-// Pi is the single production driver. P1 registers more here, one at a time.
+// Pi remains the default; OpenCode is registered only once its driver can
+// actually run (`doctor()` still decides whether the UI may call it available).
 registerHarness(piHarnessDriver);
+registerHarness(opencodeHarnessDriver);

@@ -75,12 +75,21 @@ export function harnessOptionBadge(option: HarnessOption): string {
 export function harnessStatusText(option: HarnessOption): string {
   if (!option.checked) return "正在检查执行引擎安装状态…";
   if (option.state === "available") {
+    // "Available" is an installation fact, not a promise that every run works:
+    // the dispatch gate still checks the capabilities a task requires (an
+    // OpenCode run, for example, is refused when it needs business tools).
     return option.doctor?.version
-      ? `已安装 ${option.doctor.version}，可以运行。`
-      : "已安装，可以运行。";
+      ? `已安装 ${option.doctor.version}；运行时会按任务所需能力校验。`
+      : "已安装；运行时会按任务所需能力校验。";
   }
   if (option.state === "retired") {
     return "该执行引擎已退役，不能作为新选择。";
+  }
+  if (option.doctor) {
+    // The driver exists in this build but its own probe failed (for example,
+    // the platform CLI is not installed). Name the real reason instead of
+    // pretending the driver is missing.
+    return `${option.label} 的驱动已包含在当前构建中，但引擎当前不可运行：${option.doctor.detail ?? "安装检查未通过"}。可以保存；运行会失败，不会自动改用 Pi。`;
   }
   return `${option.label} 驱动未包含在当前构建中：可以保存，但运行时会以 harness_unavailable（执行引擎不可用）失败，不会自动改用 Pi。`;
 }
@@ -99,13 +108,15 @@ export function harnessSelectionIsAllowed(option: HarnessOption | null): boolean
 /**
  * Label for rosters and lists: a name this build cannot run says so.
  *
- * The declared state is the right source here, not a live probe: a cached list
- * must not imply that an unregistered engine is runnable.
+ * The declared state is the right source here, not a live probe. A selectable
+ * name such as OpenCode ships a driver, so its runtime availability (doctor) is
+ * deliberately not asserted by this cached label; a non-selectable unknown name
+ * has no driver in this build and keeps the warning.
  */
 export function harnessDisplayLabel(name: AdapterName | string): string {
   const descriptor = harnessDescriptor(name);
   if (descriptor.declaredState === "retired") return `${descriptor.label}（已退役）`;
-  if (descriptor.declaredState === "not-installed") return `${descriptor.label}（不可运行）`;
+  if (descriptor.declaredState === "not-installed" && !descriptor.selectable) return `${descriptor.label}（不可运行）`;
   return descriptor.label;
 }
 

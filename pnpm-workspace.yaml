@@ -3,3 +3,8 @@ packages:
   - "apps/*"
 onlyBuiltDependencies:
   - better-sqlite3
+  # `opencode-ai` ships a platform-specific native CLI through optional
+  # dependencies; its postinstall links that binary into `bin/opencode.exe`.
+  # Without it the package is a stub that exits 1, and the OpenCode driver's
+  # doctor() (correctly) reports the engine as unavailable.
+  - opencode-ai

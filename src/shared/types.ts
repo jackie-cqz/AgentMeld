@@ -3,9 +3,10 @@ import type { AgentConsultation, CollaborationTurn, TaskHandoff } from "./collab
 /**
  * The execution engine named on an Agent row.
  *
- * `pi` is the only engine with a production driver in this build. `opencode` is
- * a selectable name whose driver is deliberately not implemented yet: it can be
- * saved, but a run fails honestly as `harness_unavailable`. The remaining values
+ * `pi` and `opencode` are the engines with production drivers in this build.
+ * OpenCode is selectable and runnable only when its driver's `doctor()` passes;
+ * its driver declares business tools and evidence unsupported in this slice, so
+ * an artifact-producing run is refused before work starts. The remaining values
  * are retired names kept readable so old rows can be migrated; they never run.
  * Which names are selectable and which are retired is declared once in
  * `src/shared/harness-catalog.ts`, never by branching on the union here.

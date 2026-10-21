@@ -4,8 +4,10 @@
 
 AgentMeld pins `@earendil-works/pi-coding-agent` to **0.84.2**. Install with the
 repository lockfile and Node.js **>=22.19.0**. No global Pi installation is needed.
-Only Pi is a production execution engine. DSH, OpenCode, Claude Code and Codex
-are not part of this integration.
+Pi is the default production execution engine. OpenCode 1.19.3 has its own driver
+with a deliberately narrower, honest capability set (see
+[OpenCode Runtime](opencode-runtime.md)). DSH, Claude Code and Codex are not part
+of this integration.
 
 Pi owns provider requests, argument parsing, tool iteration, retries, internal
 history and native compaction. AgentMeld owns stable Agent identities, routing,

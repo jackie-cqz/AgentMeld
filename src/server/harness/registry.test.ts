@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AdapterName } from "@/shared/types";
+import { opencodeHarnessDriver } from "./opencode-driver";
 import { piHarnessDriver } from "./pi-driver";
 import {
   getHarness,
@@ -32,10 +33,11 @@ function fakeHarness(id: AdapterName): HarnessDriver {
 }
 
 describe("the harness registry", () => {
-  it("registers Pi as the only production driver", () => {
-    expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi"]);
+  it("registers Pi and OpenCode as the production drivers", () => {
+    expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi", "opencode"]);
     expect(getHarness("pi")).toBe(piHarnessDriver);
-    // No non-Pi adapter is dispatched in P0, however old the Agent row is.
+    expect(getHarness("opencode")).toBe(opencodeHarnessDriver);
+    // Retired names still have no driver, however old the Agent row is.
     for (const retired of ["claude-code", "codex", "custom", "mock"] as const) {
       expect(getHarness(retired)).toBeNull();
     }
@@ -47,12 +49,12 @@ describe("the harness registry", () => {
     try {
       expect(previous).toBeNull();
       expect(getHarness("mock")).toBe(fake);
-      expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi", "mock"]);
+      expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi", "opencode", "mock"]);
     } finally {
       expect(unregisterHarness("mock")).toBe(true);
     }
     expect(getHarness("mock")).toBeNull();
-    expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi"]);
+    expect(listHarnesses().map((driver) => driver.id)).toEqual(["pi", "opencode"]);
   });
 
   it("returns the replaced driver from the registration point", () => {
