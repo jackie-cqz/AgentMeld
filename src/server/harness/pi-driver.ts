@@ -4,6 +4,7 @@ import { runPiInvocation } from "@/server/pi/runtime";
 import { PiRuntimeError } from "@/server/pi/process";
 import type { PiInvocationInput } from "@/server/pi/types";
 import type { PiWorkspaceLease } from "@/server/pi/workspace-lease";
+import { isPlatformWorkspaceLease } from "./workspace-lease";
 import type { Agent, StreamEvent } from "@/shared/types";
 import { HarnessError, harnessErrorFromCategory } from "./errors";
 import type { HarnessEvent, HarnessOutputKind } from "./events";
@@ -75,16 +76,19 @@ export function toPiInvocationInput(input: HarnessInvocationInput): PiInvocation
 }
 
 /**
- * Pi can only use a lease it produced (its peer handoff has its own `lend`
- * operation). Refuse a foreign ownership token instead of silently acquiring a
- * second lease or, worse, pretending the handoff exists.
+ * Pi can only use workspace ownership the platform manager issued, because the
+ * platform's tool bridge performs the consultation lend. This is no longer a
+ * "Pi-only" check: a lease acquired by any engine through
+ * `acquireWorkspaceLease` is accepted, and only a hand-rolled object that never
+ * came from the platform is refused instead of silently acquiring a second
+ * lease or pretending the handoff exists.
  */
 function piWorkspaceLease(lease: HarnessWorkspaceLease | undefined): PiWorkspaceLease | undefined {
   if (!lease) return undefined;
-  if (!("lend" in lease)) {
-    throw new HarnessError("The workspace handoff did not come from a Pi execution.", "workspace_ownership");
+  if (!isPlatformWorkspaceLease(lease)) {
+    throw new HarnessError("The workspace handoff was not issued by the platform workspace lease manager.", "workspace_ownership");
   }
-  return lease as PiWorkspaceLease;
+  return lease;
 }
 
 /**
