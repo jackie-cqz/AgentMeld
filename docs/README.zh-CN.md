@@ -231,7 +231,7 @@ Windows PowerShell 的生产启动使用 `pnpm exec next start -H 127.0.0.1`，�
 
 ## 已知限制
 
-- **当前仅支持 Pi。** DSH、OpenCode、Claude Code、Codex、任意全局 Pi 版本、用户自装 Pi 扩展和原生会话导入都不是已支持的执行后端。
+- **Pi 是默认引擎，OpenCode 只接入了部分能力。** OpenCode 1.19.3 已有真实 driver，可以运行提示词并流式返回输出；但平台业务工具与证据尚未接入，因此会产生产物、委派以及使用完整工具集的普通运行都会以 `harness_capability` 提前拒绝。DSH、Claude Code、Codex、任意全局 Pi 版本、用户自装 Pi 扩展和原生会话导入都不是已支持的执行后端。
 - **单所有者，每个数据目录只运行一个控制服务。** 配对是该所有者的设备访问，不是组织级多租户或角色权限隔离。
 - **每次调用使用新的 Pi 会话。** 平台上下文可跨调用传递，但原生会话和中断命令不会自动续跑；刷新恢复的是记录，不是进程。
 - **托管工作区访问串行化。** 咨询采用受控租约借用，不代表同一目录允许多个独立写入者并行。
@@ -244,7 +244,7 @@ Windows PowerShell 的生产启动使用 `pnpm exec next start -H 127.0.0.1`，�
 
 以下是后续计划，不是当前已实现功能：
 
-- 进一步分离长期 Agent 身份与执行绑定，再按需接入 DSH、OpenCode 等 Harness。
+- 为 OpenCode 接入平台业务工具与证据（例如每次运行一个 MCP 传输），再按需接入 DSH 等其他 Harness。
 - 将基于证据的交接扩展到跨 Harness，不承诺直接迁移原生会话。
 - 改善飞书协作、初始化、投递反馈与真实设备验证。
 - 接入远程 Worker、容器或沙箱供应商，而不是先自建完整云基础设施。
@@ -256,6 +256,7 @@ Windows PowerShell 的生产启动使用 `pnpm exec next start -H 127.0.0.1`，�
 
 - [English](../README.md)
 - [Pi 执行、配置、工具与恢复](pi-runtime.md)
+- [OpenCode 执行：固定 SDK/CLI、事件映射与能力边界](opencode-runtime.md)
 - [工作区工具与浏览器验收](workspace-toolkit.md)
 - [群聊协作实现说明与历史验收记录](group-chat-collaboration-implementation.md)
 - [飞书运维说明](feishu-operations.md)与[真实设备检查](feishu-real-device-checks.md)

@@ -28,17 +28,17 @@ function report(id: HarnessAvailability["id"], overrides: Partial<HarnessAvailab
   };
 }
 
-/** The production payload this build actually serves. */
-const PRODUCTION: HarnessAvailability[] = [
+/** A payload for a machine where the pinned OpenCode CLI is not installed. */
+const NOT_INSTALLED_OPENCODE: HarnessAvailability[] = [
   report("pi", { doctor: { available: true, version: "0.84.2" } }),
-  report("opencode", { state: "not-installed", driverRegistered: false, doctor: null }),
+  report("opencode", { state: "not-installed", driverRegistered: true, doctor: { available: false, detail: "opencode CLI not found" } }),
 ];
 
 describe("the harness picker view-model", () => {
   it("offers only selectable catalog names: Pi and OpenCode, never a retired name", () => {
     expect(harnessOptions(null).map((option) => option.value)).toEqual(["pi", "opencode"]);
-    expect(harnessOptions(PRODUCTION).map((option) => option.value)).toEqual(["pi", "opencode"]);
-    expect(harnessOptions(PRODUCTION).map((option) => option.label)).toEqual(["Pi", "OpenCode"]);
+    expect(harnessOptions(NOT_INSTALLED_OPENCODE).map((option) => option.value)).toEqual(["pi", "opencode"]);
+    expect(harnessOptions(NOT_INSTALLED_OPENCODE).map((option) => option.label)).toEqual(["Pi", "OpenCode"]);
   });
 
   it("claims nothing is runnable before the availability report arrives", () => {
@@ -55,24 +55,51 @@ describe("the harness picker view-model", () => {
   });
 
   it("marks an installed Pi as available and runnable", () => {
-    const pi = selectedHarnessOption(harnessOptions(PRODUCTION), "pi")!;
+    const pi = selectedHarnessOption(harnessOptions(NOT_INSTALLED_OPENCODE), "pi")!;
 
     expect(pi).toMatchObject({ checked: true, runnable: true, state: "available" });
     expect(harnessOptionBadge(pi)).toBe("可用");
     expect(harnessStatusText(pi)).toContain("0.84.2");
+    // Availability is installation-level; the copy must not promise that every
+    // task shape will run.
+    expect(harnessStatusText(pi)).toContain("能力校验");
     expect(harnessSaveSuffix(pi)).toBe("");
   });
 
-  it("keeps OpenCode selectable but visibly not runnable, without implying it works", () => {
-    const opencode = selectedHarnessOption(harnessOptions(PRODUCTION), "opencode")!;
+  it("reports an installed OpenCode as available without claiming every run works", () => {
+    const installed = selectedHarnessOption(harnessOptions([
+      report("pi", { doctor: { available: true, version: "0.84.2" } }),
+      report("opencode", { doctor: { available: true, version: "1.19.3" } }),
+    ]), "opencode")!;
+    expect(installed).toMatchObject({ checked: true, runnable: true, state: "available" });
+    expect(harnessOptionBadge(installed)).toBe("可用");
+    expect(harnessStatusText(installed)).toContain("1.19.3");
+    expect(harnessStatusText(installed)).toContain("能力校验");
+    expect(harnessSaveSuffix(installed)).toBe("");
+  });
+
+  it("keeps an uninstalled OpenCode selectable but visibly not runnable", () => {
+    const opencode = selectedHarnessOption(harnessOptions(NOT_INSTALLED_OPENCODE), "opencode")!;
 
     expect(opencode).toMatchObject({ checked: true, runnable: false, state: "not-installed" });
     expect(harnessOptionBadge(opencode)).toBe("不可运行");
-    expect(harnessStatusText(opencode)).toContain("harness_unavailable");
+    // A registered driver whose probe failed names the real reason, not a
+    // fabricated "driver missing" error.
+    expect(harnessStatusText(opencode)).toContain("驱动已包含");
+    expect(harnessStatusText(opencode)).toContain("opencode CLI not found");
     expect(harnessStatusText(opencode)).toContain("不会自动改用 Pi");
     expect(harnessSaveSuffix(opencode)).toBe("（不可运行）");
     // Selectable is a different question from runnable: saving is still allowed.
     expect(harnessSelectionIsAllowed(opencode)).toBe(true);
+  });
+
+  it("names harness_unavailable only when no driver is registered at all", () => {
+    const withoutDriver = selectedHarnessOption(harnessOptions([
+      report("pi", { doctor: { available: true, version: "0.84.2" } }),
+      report("opencode", { state: "not-installed", driverRegistered: false, doctor: null }),
+    ]), "opencode")!;
+    expect(harnessStatusText(withoutDriver)).toContain("harness_unavailable");
+    expect(harnessStatusText(withoutDriver)).toContain("驱动未包含");
   });
 
   it("refuses a retired selection even though it is never offered", () => {
@@ -107,20 +134,22 @@ describe("the harness picker view-model", () => {
 
   it("labels rosters honestly instead of calling every non-Pi engine retired", () => {
     expect(harnessDisplayLabel("pi")).toBe("Pi");
-    expect(harnessDisplayLabel("opencode")).toBe("OpenCode（不可运行）");
+    // OpenCode is selectable and ships a driver; its runtime availability is
+    // reported by /api/harnesses, not assumed by this cached label.
+    expect(harnessDisplayLabel("opencode")).toBe("OpenCode");
     expect(harnessDisplayLabel("claude-code")).toBe("Claude Code（已退役）");
     expect(harnessDisplayLabel("future-engine")).toBe("future-engine（不可运行）");
   });
 
   it("derives one consistent model for the picker and the save button", () => {
-    const opencode = harnessEditorModel({ availability: PRODUCTION, selected: "opencode", stored: null });
+    const opencode = harnessEditorModel({ availability: NOT_INSTALLED_OPENCODE, selected: "opencode", stored: null });
     expect(opencode.selected?.value).toBe("opencode");
     expect(opencode.canSave).toBe(true);
     expect(opencode.saveSuffix).toBe("（不可运行）");
-    expect(opencode.statusText).toContain("harness_unavailable");
+    expect(opencode.statusText).toContain("驱动已包含");
     expect(opencode.migrationNotice).toBeNull();
 
-    const migrating = harnessEditorModel({ availability: PRODUCTION, selected: "pi", stored: "claude-code" });
+    const migrating = harnessEditorModel({ availability: NOT_INSTALLED_OPENCODE, selected: "pi", stored: "claude-code" });
     expect(migrating.selected?.value).toBe("pi");
     expect(migrating.canSave).toBe(true);
     expect(migrating.migrationNotice).toContain("Pi");
@@ -130,7 +159,7 @@ describe("the harness picker view-model", () => {
     expect(loading.saveSuffix).toBe("");
 
     // Defensive: a retired name is not a saveable selection.
-    const retiredSelection = harnessEditorModel({ availability: PRODUCTION, selected: "claude-code", stored: null });
+    const retiredSelection = harnessEditorModel({ availability: NOT_INSTALLED_OPENCODE, selected: "claude-code", stored: null });
     expect(retiredSelection.selected).toBeNull();
     expect(retiredSelection.canSave).toBe(false);
   });
@@ -154,14 +183,14 @@ describe("handoff target eligibility", () => {
   };
 
   it("answers runnability only for a confirmed available report", () => {
-    expect(harnessIsRunnable(PRODUCTION, "pi")).toBe(true);
-    expect(harnessIsRunnable(PRODUCTION, "opencode")).toBe(false);
+    expect(harnessIsRunnable(NOT_INSTALLED_OPENCODE, "pi")).toBe(true);
+    expect(harnessIsRunnable(NOT_INSTALLED_OPENCODE, "opencode")).toBe(false);
     expect(harnessIsRunnable(null, "pi")).toBe(false);
-    expect(harnessIsRunnable(PRODUCTION, "future-engine")).toBe(false);
+    expect(harnessIsRunnable(NOT_INSTALLED_OPENCODE, "future-engine")).toBe(false);
   });
 
   it("offers only current non-Conductor members whose engine the runtime reports available", () => {
-    const input = { agentIds: Object.keys(agents), agents, sourceAgentId: "ag_worker", availability: PRODUCTION };
+    const input = { agentIds: Object.keys(agents), agents, sourceAgentId: "ag_worker", availability: NOT_INSTALLED_OPENCODE };
 
     // Pi peers are still offered: the Pi-equivalent outcome is unchanged.
     expect(handoffTargets(input).map((agent) => agent.id)).toEqual(["ag_peer"]);

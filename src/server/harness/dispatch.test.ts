@@ -14,6 +14,7 @@ import { startAgentRun } from "@/server/agent-runner";
 import { createConversation } from "@/server/conversation-service";
 import { createMessage, getRun, listMessages } from "@/server/repositories";
 import type { AdapterName } from "@/shared/types";
+import { opencodeHarnessDriver } from "./opencode-driver";
 import { getHarness, registerHarness, unregisterHarness } from "./registry";
 import type { HarnessDriver, HarnessInvocationInput, HarnessRunStream } from "./types";
 
@@ -121,29 +122,56 @@ describe("harness dispatch at the real run entry point", () => {
     });
   });
 
-  it("fails a saved opencode Agent as harness_unavailable, not migration_required", async () => {
+  it("fails a saved opencode Agent as harness_unavailable when no driver is registered", async () => {
     const { conversation, trigger } = seedRun("opencode");
-    // This build ships no OpenCode driver; the row is still a real, saved choice.
-    expect(getHarness("opencode")).toBeNull();
+    // The row is still a real, saved choice; simulate a build that does not ship
+    // the driver so the unregistered-name contract stays covered.
+    unregisterHarness("opencode");
+    try {
+      expect(getHarness("opencode")).toBeNull();
+      const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
+      await handle.promise;
+
+      expect(getRun(handle.runId)).toMatchObject({
+        status: "failed",
+        errorCategory: "harness_unavailable",
+      });
+      const failed = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
+      expect(failed?.status).toBe("error");
+      expect(failed?.parts).toContainEqual({
+        type: "text",
+        content: expect.stringContaining('No execution engine is registered for "opencode".'),
+      });
+      expect(failed?.parts).toContainEqual({
+        type: "text",
+        content: expect.stringContaining("Install or enable its harness before running this Agent."),
+      });
+      // The user must not be sent to a migration that cannot help here.
+      expect(JSON.stringify(failed?.parts)).not.toContain("retired");
+    } finally {
+      registerHarness(opencodeHarnessDriver);
+    }
+  });
+
+  it("refuses an artifact-producing run through the registered OpenCode driver before it executes", async () => {
+    const { conversation, trigger } = seedRun("opencode");
+    expect(getHarness("opencode")).toBe(opencodeHarnessDriver);
 
     const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
     await handle.promise;
 
+    // The capability gate runs before `run`: a normal Agent run is provisioned
+    // with business tools and evidence, which this slice does not wire for
+    // OpenCode. The run must fail honestly, not produce unverifiable output.
     expect(getRun(handle.runId)).toMatchObject({
       status: "failed",
-      errorCategory: "harness_unavailable",
+      errorCategory: "harness_capability",
     });
     const failed = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
-    expect(failed?.status).toBe("error");
     expect(failed?.parts).toContainEqual({
       type: "text",
-      content: expect.stringContaining('No execution engine is registered for "opencode".'),
+      content: expect.stringContaining('The "opencode" execution engine cannot run this Agent'),
     });
-    expect(failed?.parts).toContainEqual({
-      type: "text",
-      content: expect.stringContaining("Install or enable its harness before running this Agent."),
-    });
-    // The user must not be sent to a migration that cannot help here.
     expect(JSON.stringify(failed?.parts)).not.toContain("retired");
   });
 

@@ -32,7 +32,7 @@ export function HarnessPicker({ model, loading, error, onSelect, onRefresh }: {
       <Cpu size={16} />
       <div>
         <h3>执行引擎</h3>
-        <p>「可选」表示可以保存这个选择；只有标为「可用」的引擎，运行才会真正执行。</p>
+        <p>「可选」表示可以保存这个选择；「可用」表示引擎已安装，运行时还会校验任务所需的能力。</p>
       </div>
       <button type="button" className="ui-icon-button" title="重新检查执行引擎" aria-label="重新检查执行引擎" disabled={loading} onClick={onRefresh}>
         <RefreshCw size={14} />

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdapterName } from "@/shared/types";
 import { HARNESS_DESCRIPTORS } from "@/shared/harness-catalog";
 import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
@@ -42,6 +42,14 @@ function fakeDriver(id: AdapterName, doctor: () => HarnessDoctor): HarnessDriver
   };
 }
 
+beforeEach(() => {
+  // Registration + doctor is the mapping under test. The production registry
+  // registers the real OpenCode driver, so remove it here and register only the
+  // scripted drivers each case needs; the real driver's own registration and
+  // availability derivation are covered in opencode-driver.test.ts.
+  unregisterHarness("opencode");
+});
+
 afterEach(() => {
   unregisterHarness("opencode");
   resetTestAuth();
@@ -61,7 +69,7 @@ describe("harness availability", () => {
     expect(pi.doctor?.detail).toContain("Node.js");
   });
 
-  it("reports OpenCode as a selectable but not-installed engine in this build", () => {
+  it("reports an unregistered OpenCode as selectable but not-installed", () => {
     expect(getHarnessAvailability("opencode")).toEqual({
       id: "opencode",
       label: "OpenCode",
