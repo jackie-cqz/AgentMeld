@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { modelProviderSchema } from "@/shared/model-provider-schema";
+import { selectableAdapterNameSchema } from "@/shared/harness-schema";
 import { createAgent, getAllAgents } from "@/server/agent-service";
 import { gateRequest } from "@/server/api-gate";
 
@@ -10,7 +11,7 @@ const createAgentSchema = z.object({
   avatar: z.string().max(10).optional(),
   description: z.string().max(500).optional(),
   capabilities: z.array(z.string()).max(10).optional(),
-  adapterName: z.literal("pi"),
+  adapterName: selectableAdapterNameSchema,
   modelProvider: modelProviderSchema.nullable().optional(),
   modelId: z.string().max(100).nullable().optional(),
   apiKey: z.string().max(200).nullable().optional(),

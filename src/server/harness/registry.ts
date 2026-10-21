@@ -1,4 +1,5 @@
 import type { AdapterName } from "@/shared/types";
+import { unregisteredHarnessFailure } from "@/shared/harness-catalog";
 import type { HarnessErrorCategory } from "./errors";
 import { piHarnessDriver } from "./pi-driver";
 import type { HarnessDriver } from "./types";
@@ -10,11 +11,12 @@ import type { HarnessDriver } from "./types";
  * driver, and adding a second engine in P1 must be a visible edit here rather
  * than a name-based branch inside the run loop. There is deliberately no
  * fallback driver — an Agent whose adapter has no driver fails honestly.
+ *
+ * Which adapter names exist, which are selectable and which are retired is NOT
+ * decided here: `src/shared/harness-catalog.ts` is the single source of truth,
+ * and this module only answers "is a driver registered for this name?".
  */
 const drivers = new Map<AdapterName, HarnessDriver>();
-
-/** Adapter values produced before the Pi-only refactor, kept readable for old rows. */
-const RETIRED_ADAPTERS: ReadonlySet<AdapterName> = new Set(["claude-code", "codex", "custom", "mock"]);
 
 /** Register (or replace) the driver that claims an adapter name. Returns the previous driver. */
 export function registerHarness(driver: HarnessDriver): HarnessDriver | null {
@@ -42,22 +44,14 @@ export function listHarnesses(): HarnessDriver[] {
  * adapter, as `{ message, category }` so the run owner keeps deciding how to
  * turn it into a neutral `HarnessError`.
  *
- * Retired names keep the exact migration message and `migration_required`
- * category, because old Agent rows must still send the user to edit and migrate
- * rather than to a dead end. Any other unregistered name reports what actually
- * happened: nothing can run it.
+ * The mapping is derived from the shared descriptor table, not a second list:
+ * retired names keep the exact migration message and `migration_required`
+ * category (old Agent rows must still send the user to edit and migrate rather
+ * than to a dead end), while every other unregistered name — including the
+ * selectable-but-not-installed `opencode` — reports `harness_unavailable`.
  */
 export function unregisteredHarnessError(name: AdapterName): { message: string; category: HarnessErrorCategory } {
-  if (RETIRED_ADAPTERS.has(name)) {
-    return {
-      message: "This Agent uses a retired execution engine. Edit its model configuration to migrate to Pi.",
-      category: "migration_required",
-    };
-  }
-  return {
-    message: `No execution engine is registered for "${name}". Install or enable its harness before running this Agent.`,
-    category: "harness_unavailable",
-  };
+  return unregisteredHarnessFailure(name);
 }
 
 // Pi is the single production driver. P1 registers more here, one at a time.

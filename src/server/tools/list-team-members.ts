@@ -1,11 +1,12 @@
 import { getAgent, getConversation, listAgents } from "@/server/repositories";
 import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
+import { isRetiredAdapter } from "@/shared/harness-catalog";
 import { TOOL_CAPABILITIES } from "./capabilities";
 import type { ToolDef } from "./types";
 
 export const listTeamMembersTool: ToolDef = {
   name: "list_team_members",
-  description: "Query the current conversation's Agent roster before consultation or planning. Use exact member IDs; retired engines must be migrated before delegation. No credentials or system prompts are returned.",
+  description: "Query the current conversation's Agent roster before consultation or planning. Use exact member IDs; a retired engine must be migrated before delegation, and an engine the platform reports as unavailable cannot run. No credentials or system prompts are returned.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
   capabilities: TOOL_CAPABILITIES.list_team_members,
   async handler(_args, ctx) {
@@ -23,7 +24,9 @@ export const listTeamMembersTool: ToolDef = {
     return { ok: true, value: { members: listAgents().filter(agent => conversation.agentIds.includes(agent.id)).map(agent => ({
       id: agent.id, name: agent.name, description: agent.description, capabilities: agent.capabilities,
       toolNames: tools, isConductor: agent.isConductor, executionEngine: agent.adapterName,
-      retired: agent.adapterName !== "pi", modelProvider: agent.modelProvider, modelId: agent.modelId,
+      // `opencode` is not retired: it is a current choice whose driver this
+      // build does not ship, so it must not be mislabelled as a legacy name.
+      retired: isRetiredAdapter(agent.adapterName), modelProvider: agent.modelProvider, modelId: agent.modelId,
     })) } };
   },
 };

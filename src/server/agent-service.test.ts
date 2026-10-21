@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
-import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
+import { resetDatabaseForTests as resetClientForTests, getDatabase } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
 import {
   createAgent,
@@ -90,6 +90,27 @@ describe("agent-service", () => {
         toolNames: ["write_artifact"]
       })).toThrow("Pi execution engine");
     });
+
+    it("accepts a saved OpenCode Agent even though this build ships no driver", () => {
+      // The row is the user's durable choice; run time fails honestly instead of
+      // silently rewriting the choice to Pi here.
+      const agent = createAgent({
+        name: "OpenCode Agent",
+        adapterName: "opencode",
+        modelProvider: "deepseek",
+        modelId: "deepseek-v4-flash"
+      });
+
+      expect(agent.adapterName).toBe("opencode");
+      expect(getAgentById(agent.id)?.adapterName).toBe("opencode");
+    });
+
+    it("still names the engine honestly when an OpenCode Agent is missing its model", () => {
+      expect(() => createAgent({
+        name: "OpenCode Agent without model",
+        adapterName: "opencode"
+      })).toThrow("OpenCode Agents must specify a model ID.");
+    });
   });
 
   describe("getAgentById / getAllAgents", () => {
@@ -137,6 +158,30 @@ describe("agent-service", () => {
       expect(updated).not.toBeNull();
       expect(updated!.modelId).toBe("gpt-4.1-mini");
       expect(updated!.systemPrompt).toBe("Updated builtin prompt.");
+    });
+
+    it("saves an OpenCode row and keeps the selected engine", () => {
+      const agent = createAgent({
+        name: "Switchable",
+        adapterName: "pi",
+        modelId: "gpt-4"
+      });
+
+      const updated = updateAgent(agent.id, { adapterName: "opencode" });
+
+      expect(updated).not.toBeNull();
+      expect(updated!.adapterName).toBe("opencode");
+      expect(getAgentById(agent.id)?.adapterName).toBe("opencode");
+    });
+
+    it("keeps the historical migration error for a stored retired row until it is migrated", () => {
+      const agent = createAgent({ name: "Legacy row", adapterName: "pi", modelId: "gpt-4" });
+      // Old rows predate the Pi-only refactor; write one exactly as it exists.
+      getDatabase().prepare("UPDATE agents SET adapter_name = 'claude-code' WHERE id = ?").run(agent.id);
+
+      expect(() => updateAgent(agent.id, { name: "Renamed legacy row" }))
+        .toThrow("Choose Pi and configure a provider to migrate this retired Agent.");
+      expect(getAgentById(agent.id)?.adapterName).toBe("claude-code");
     });
 
     it("returns null for non-existent agent", () => {

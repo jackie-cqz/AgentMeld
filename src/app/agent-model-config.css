@@ -1,4 +1,27 @@
 .agent-model-config { padding-top: 8px; }
+.harness-picker { margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--ui-line); }
+.harness-picker-heading { display: flex; align-items: flex-start; gap: 9px; padding: 4px 0 12px; }
+.harness-picker-heading > svg { color: var(--ui-muted); margin-top: 2px; }
+.harness-picker-heading > div { flex: 1; min-width: 0; }
+.harness-picker-heading h3 { font-size: 14px; font-weight: 600; }
+.harness-picker-heading p { margin-top: 5px; font-size: 11px; line-height: 1.6; color: var(--ui-muted); }
+.harness-picker-options { display: grid; gap: 8px; }
+.harness-option { display: flex; align-items: center; gap: 10px; padding: 12px 14px; text-align: left; border: 1px solid var(--ui-line); border-radius: 7px; background: var(--ui-surface); }
+.harness-option:hover { border-color: var(--ui-accent); background: var(--ui-subtle); }
+.harness-option[aria-pressed=true] { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.harness-option-name { flex: 1; min-width: 0; }
+.harness-option-name strong { display: block; font-size: 13px; font-weight: 550; }
+.harness-option-name small { display: block; margin-top: 4px; font-size: 11px; color: var(--ui-muted); overflow-wrap: anywhere; }
+.harness-chip { flex-shrink: 0; padding: 2px 8px; border-radius: 999px; font-size: 10px; color: var(--ui-muted); background: var(--ui-subtle); }
+.harness-badge { flex-shrink: 0; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.harness-badge.is-available { color: var(--ui-success); background: var(--ui-success-soft); }
+.harness-badge.is-not-installed { color: var(--ui-danger); background: var(--ui-danger-soft); }
+.harness-badge.is-checking { color: var(--ui-muted); background: var(--ui-subtle); }
+.harness-status { margin-top: 10px; font-size: 11px; line-height: 1.6; color: var(--ui-muted); }
+.harness-status.is-available { color: var(--ui-success); }
+.harness-status.is-not-installed { color: var(--ui-danger); }
+.harness-migration { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; padding: 9px 11px; border-radius: 6px; font-size: 11px; line-height: 1.6; color: #92400e; background: #fffbeb; }
+.harness-migration > svg { flex-shrink: 0; margin-top: 1px; }
 .agent-model-heading { display: flex; align-items: center; gap: 9px; padding: 4px 0 20px; }
 .agent-model-heading > svg { color: var(--ui-muted); }
 .agent-model-heading h3 { font-size: 14px; font-weight: 600; }

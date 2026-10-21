@@ -1,7 +1,16 @@
 import type { AgentConsultation, CollaborationTurn, TaskHandoff } from "./collaboration-types";
 
-/** Legacy values remain readable for migration; new production agents use Pi only. */
-export type AdapterName = "pi" | "claude-code" | "codex" | "custom" | "mock";
+/**
+ * The execution engine named on an Agent row.
+ *
+ * `pi` is the only engine with a production driver in this build. `opencode` is
+ * a selectable name whose driver is deliberately not implemented yet: it can be
+ * saved, but a run fails honestly as `harness_unavailable`. The remaining values
+ * are retired names kept readable so old rows can be migrated; they never run.
+ * Which names are selectable and which are retired is declared once in
+ * `src/shared/harness-catalog.ts`, never by branching on the union here.
+ */
+export type AdapterName = "pi" | "opencode" | "claude-code" | "codex" | "custom" | "mock";
 
 export type ModelProvider =
   | "anthropic"
