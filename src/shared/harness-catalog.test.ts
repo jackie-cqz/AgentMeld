@@ -54,6 +54,15 @@ describe("the harness catalog", () => {
       .toEqual(["pi", "opencode"]);
   });
 
+  it("declares a fixed credential policy only for the engines that never chose a provider", () => {
+    expect(HARNESS_DESCRIPTORS.filter((descriptor) => descriptor.credential !== null).map((descriptor) => descriptor.id))
+      .toEqual(["claude-code", "codex"]);
+    // Every current engine resolves its key from the Agent's modelProvider.
+    for (const descriptor of HARNESS_DESCRIPTORS.filter((entry) => entry.declaredState !== "retired")) {
+      expect(descriptor.credential).toBeNull();
+    }
+  });
+
   it("treats a name outside the stored union as not-installed, never retired", () => {
     const unknown = harnessDescriptor("future-engine");
     expect(unknown).toMatchObject({

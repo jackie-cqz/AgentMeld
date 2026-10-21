@@ -44,6 +44,7 @@ export function AgentsPanel() {
     apiBaseUrl?: string | null;
     contextWindow?: number | null;
     reasoningEffort?: "low" | "medium" | "high" | null;
+    supportsVision?: boolean;
     systemPrompt?: string;
   }) => {
     setError(null);
@@ -196,6 +197,7 @@ export function AgentsPanel() {
             apiBaseUrl: editingAgent.apiBaseUrl,
             contextWindow: editingAgent.contextWindow,
             reasoningEffort: editingAgent.reasoningEffort,
+            supportsVision: editingAgent.supportsVision,
             systemPrompt: editingAgent.systemPrompt
           }}
         />

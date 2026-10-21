@@ -124,6 +124,28 @@ describe("POST /api/agents", () => {
     expect(after.agent.reasoningEffort).toBeNull();
   });
 
+  it("persists the model's vision capability, defaulting to capable when absent", async () => {
+    const legacy = await postAgents(jsonRequest("POST", {
+      name: "Legacy API Agent", adapterName: "pi", modelProvider: "deepseek", modelId: "deepseek-v4-flash"
+    }));
+    const legacyBody = (await legacy.json()) as { agent: { id: string; supportsVision: boolean } };
+    expect(legacyBody.agent.supportsVision).toBe(true);
+
+    const created = await postAgents(jsonRequest("POST", {
+      name: "Text-only API Agent", adapterName: "pi", modelProvider: "deepseek",
+      modelId: "deepseek-v4-flash", supportsVision: false
+    }));
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { agent: { id: string; supportsVision: boolean } };
+    expect(body.agent.supportsVision).toBe(false);
+
+    const patched = await patchAgent(jsonRequest("PATCH", { supportsVision: true }), {
+      params: Promise.resolve({ id: body.agent.id })
+    });
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { agent: { supportsVision: boolean } }).agent.supportsVision).toBe(true);
+  });
+
   it("accepts full agent config", async () => {
     const req = jsonRequest("POST", {
       name: "Full Config",

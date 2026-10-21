@@ -93,13 +93,19 @@ export function preparePiInvocation(input: PiInvocationInput) {
   const nativeModel = catalogProvider
     ? catalogProvider().getModels().find(model => model.id === input.agent.modelId)
     : undefined;
+  // Model-shaping values come from the platform's resolved provider target when
+  // the driver supplied it; direct callers (tests, fixtures) fall back to the
+  // same Agent fields as before, so their config stays byte-identical.
+  //
   // Preserve master's verified 64K output allowance for legacy DeepSeek aliases.
   // Known models use the locked Pi catalog, rather than hand-maintained limits.
   // The window itself comes from the Agent's configured value (or the verified
   // provider default), so Pi's in-run compactor and our 80% trigger agree.
-  const contextWindow = resolveContextWindow(input.agent, nativeModel?.contextWindow);
+  const configuredWindow = input.contextWindow !== undefined ? input.contextWindow : input.agent.contextWindow;
+  const contextWindow = resolveContextWindow({ modelProvider: provider, contextWindow: configuredWindow }, nativeModel?.contextWindow);
   const maxTokens = nativeModel?.maxTokens ?? (deepseek ? 65_536 : limits.outputReserve);
-  const reasoningEffort = input.agent.reasoningEffort;
+  const reasoningEffort = input.reasoningEffort !== undefined ? input.reasoningEffort : input.agent.reasoningEffort;
+  const supportsVision = input.supportsVision !== undefined ? input.supportsVision : input.agent.supportsVision;
   fs.writeFileSync(path.join(home, "models.json"), JSON.stringify({ providers: { agentmeld: {
     api: provider === "anthropic" ? "anthropic-messages" : "openai-completions",
     baseUrl, apiKey: "$AGENTMELD_PI_MODEL_KEY", authHeader: true,
@@ -111,7 +117,7 @@ export function preparePiInvocation(input: PiInvocationInput) {
       ...(deepseek ? { supportsStore: false, maxTokensField: "max_tokens", requiresReasoningContentOnAssistantMessages: true, thinkingFormat: "deepseek" } : {}) },
     models: [{ id: input.agent.modelId, name: input.agent.modelId,
       reasoning: Boolean(reasoningEffort) || (nativeModel?.reasoning ?? deepseek),
-      input: nativeModel?.input ?? (input.agent.supportsVision && !deepseek ? ["text", "image"] : ["text"]),
+      input: nativeModel?.input ?? (supportsVision && !deepseek ? ["text", "image"] : ["text"]),
       contextWindow, maxTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
   } } }), { mode: 0o600 });

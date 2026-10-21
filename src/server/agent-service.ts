@@ -33,6 +33,8 @@ export interface CreateAgentInput {
   contextWindow?: number | null;
   /** Null keeps today's behaviour: Pi runs without thinking. */
   reasoningEffort?: ReasoningEffort | null;
+  /** Whether the model accepts image input. Absent keeps new Agents vision-capable. */
+  supportsVision?: boolean;
   systemPrompt?: string;
   toolNames?: string[];
 }
@@ -49,6 +51,7 @@ export interface UpdateAgentInput {
   apiBaseUrl?: string | null;
   contextWindow?: number | null;
   reasoningEffort?: ReasoningEffort | null;
+  supportsVision?: boolean;
   systemPrompt?: string;
   toolNames?: string[];
 }
@@ -119,7 +122,8 @@ export function createAgent(input: CreateAgentInput): Agent {
     JSON.stringify(toolNames),
     0, // is_builtin
     0, // is_conductor
-    1,
+    // Absent keeps the historical default: a new Agent accepts image input.
+    input.supportsVision === false ? 0 : 1,
     now,
     now
   );
@@ -146,6 +150,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   const apiBaseUrl = input.apiBaseUrl !== undefined ? (input.apiBaseUrl?.trim() || null) : existing.apiBaseUrl;
   const contextWindow = input.contextWindow !== undefined ? validateContextWindow(input.contextWindow) : existing.contextWindow;
   const reasoningEffort = input.reasoningEffort !== undefined ? validateReasoningEffort(input.reasoningEffort) : existing.reasoningEffort;
+  const supportsVision = input.supportsVision !== undefined ? input.supportsVision : existing.supportsVision;
 
   const adapterName = input.adapterName ?? existing.adapterName;
   // Retired rows keep today's exact migration error until the caller explicitly
@@ -158,8 +163,8 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
     throw new Error(unregisteredHarnessFailure(adapterName).message);
   }
   const toolNames = input.toolNames ?? existing.toolNames;
-  const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt, toolNames]) !==
-    JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.contextWindow, existing.reasoningEffort, existing.systemPrompt, existing.toolNames]);
+  const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, supportsVision, systemPrompt, toolNames]) !==
+    JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.contextWindow, existing.reasoningEffort, existing.supportsVision, existing.systemPrompt, existing.toolNames]);
   const active = db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE agent_id=? AND status IN ('queued','running')").get(agentId) as { count: number };
   if (executionChanged && active.count > 0) throw new Error("Stop the Agent's active runs before changing its execution configuration.");
   validateCustomAgentConfig(
@@ -174,13 +179,13 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
     UPDATE agents SET
       name = ?, avatar = ?, description = ?, capabilities = ?, system_prompt = ?,
       adapter_name = ?, model_provider = ?, model_id = ?, api_key = ?, api_base_url = ?,
-      context_window = ?, reasoning_effort = ?,
+      context_window = ?, reasoning_effort = ?, supports_vision = ?,
       tool_names = ?, updated_at = ?
     WHERE id = ?
   `).run(
     name, avatar, description, JSON.stringify(capabilities),
     systemPrompt, adapterName, modelProvider, modelId, apiKey, apiBaseUrl,
-    contextWindow, reasoningEffort,
+    contextWindow, reasoningEffort, supportsVision ? 1 : 0,
     JSON.stringify(toolNames), now, agentId
   );
 

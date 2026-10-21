@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getDatabase } from "@/db/client";
 import { createAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
 import { getWorkspaceForConversation } from "@/server/repositories";
@@ -22,5 +23,40 @@ describe("shared conversation roster", () => {
     expect(JSON.stringify(result.value)).not.toContain("apiKey");
     expect(JSON.stringify(result.value)).not.toContain("apiBaseUrl");
     expect(await listTeamMembersTool.handler({}, { ...ctx, agentId: "ag_pm" })).toMatchObject({ ok: false, category: "security_policy" });
+  });
+
+  it("reports each member's engine availability, not just the engine name", async () => {
+    const worker = createAgent({ name: "Roster worker", adapterName: "pi", modelId: "fixture", toolNames: [] });
+    const peer = createAgent({ name: "Roster OpenCode peer", adapterName: "opencode", modelId: "fixture", toolNames: [] });
+    const retired = createAgent({ name: "Legacy peer", adapterName: "pi", modelId: "fixture", toolNames: [] });
+    // A retired row is historical state no editing path produces any more.
+    getDatabase().prepare("UPDATE agents SET adapter_name='custom' WHERE id=?").run(retired.id);
+    const conversation = createConversation({ mode: "group", agentIds: [worker.id, peer.id, retired.id] });
+    const ctx = { conversationId: conversation.id, agentId: worker.id, runId: "roster-fixture",
+      workspacePath: getWorkspaceForConversation(conversation.id)!.rootPath, abortSignal: new AbortController().signal };
+
+    const result = await listTeamMembersTool.handler({}, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    type Member = {
+      id: string;
+      executionEngine: string;
+      executionEngineState: string;
+      executionEngineAvailable: boolean;
+      retired: boolean;
+    };
+    const byId = new Map((result.value as { members: Member[] }).members.map(member => [member.id, member]));
+
+    // The Pi outcome is the pre-change one, with the runtime state added.
+    expect(byId.get(worker.id)).toMatchObject({
+      executionEngine: "pi", executionEngineState: "available", executionEngineAvailable: true, retired: false,
+    });
+    // `opencode` is a current choice, not retired, and honestly not installed.
+    expect(byId.get(peer.id)).toMatchObject({
+      executionEngine: "opencode", executionEngineState: "not-installed", executionEngineAvailable: false, retired: false,
+    });
+    expect(byId.get(retired.id)).toMatchObject({
+      executionEngine: "custom", executionEngineState: "retired", executionEngineAvailable: false, retired: true,
+    });
   });
 });

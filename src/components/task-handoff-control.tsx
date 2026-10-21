@@ -5,6 +5,8 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "@/stores/app-store";
 import { requestJson } from "@/lib/request-json";
+import { handoffTargets } from "@/lib/harness-selection";
+import { useHarnessAvailability } from "@/lib/harness-availability";
 import { Select } from "@/components/ui/select";
 import type { TaskHandoff } from "@/shared/collaboration-types";
 
@@ -20,7 +22,18 @@ export function TaskHandoffControl({ runId, taskId, attemptId, sourceAgentId, ve
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const candidates = (conversation?.agentIds ?? []).map(id => agents[id]).filter(agent => agent && !agent.isConductor && agent.adapterName === "pi" && agent.id !== sourceAgentId);
+  // Eligibility comes from the catalog plus the server's runtime report, never
+  // from a stored adapter name: a second engine that reports available becomes a
+  // real target, and one this build cannot run is not offered at all.
+  const { availability } = useHarnessAvailability();
+  const candidates = conversation
+    ? handoffTargets({
+        agentIds: conversation.agentIds,
+        agents,
+        sourceAgentId,
+        availability,
+      })
+    : [];
   const selected = target || candidates[0]?.id || "";
   const create = async () => {
     setBusy(true); setError(null);

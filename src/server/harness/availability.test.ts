@@ -3,7 +3,7 @@ import type { AdapterName } from "@/shared/types";
 import { HARNESS_DESCRIPTORS } from "@/shared/harness-catalog";
 import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { GET as getHarnesses } from "@/app/api/harnesses/route";
-import { getHarnessAvailability, listHarnessAvailability } from "./availability";
+import { getHarnessAvailability, isHarnessAvailable, listHarnessAvailability } from "./availability";
 import { registerHarness, unregisterHarness } from "./registry";
 import type { HarnessDoctor, HarnessDriver, HarnessRunStream } from "./types";
 
@@ -127,6 +127,20 @@ describe("harness availability", () => {
       "retired",
       "retired",
     ]);
+  });
+
+  it("answers runnability with the same registration + doctor evidence", () => {
+    // Pi: a registered driver whose doctor passes.
+    expect(isHarnessAvailable("pi")).toBe(true);
+    // OpenCode: selectable but no driver, so not runnable.
+    expect(isHarnessAvailable("opencode")).toBe(false);
+    // A retired name is never runnable without a real driver.
+    expect(isHarnessAvailable("claude-code")).toBe(false);
+    // An unknown name is not runnable, never retired.
+    expect(isHarnessAvailable("future-engine")).toBe(false);
+
+    registerHarness(fakeDriver("opencode", () => ({ available: true, version: "9.9.9" })));
+    expect(isHarnessAvailable("opencode")).toBe(true);
   });
 
   it("serves the no-store payload the Agent editor reads", async () => {

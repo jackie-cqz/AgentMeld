@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authedRequest, pairTestOwner, resetTestAuth } from "@/test/auth-test-helper";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { POST as retryCompaction } from "@/app/api/context-compaction-jobs/[id]/retry/route";
+import { updateAgent } from "@/server/agent-service";
 import { createConversation } from "@/server/conversation-service";
 import {
   createCompactionJob,
@@ -14,6 +15,8 @@ import {
 } from "@/server/context-compaction-service";
 import { startConversationCompaction } from "@/server/context-compaction-runner";
 import { eventBus } from "@/server/event-bus";
+import { registerHarness, unregisterHarness } from "@/server/harness/registry";
+import type { HarnessDoctor, HarnessDriver, HarnessRunStream } from "@/server/harness/types";
 import { createMessage } from "@/server/repositories";
 import { updateSettings } from "@/server/settings-service";
 import type { StreamEvent } from "@/shared/types";
@@ -41,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unregisterHarness("opencode");
   globalThis.fetch = originalFetch;
   resetBootstrapForTests();
   resetClientForTests();
@@ -49,6 +53,25 @@ afterEach(() => {
   eventBus.clearForTests();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+/** Only `doctor()` matters here: compaction calls the provider directly, not the driver. */
+function secondEngine(doctor: () => HarnessDoctor): HarnessDriver {
+  return {
+    id: "opencode",
+    doctor,
+    capabilities: () => ({
+      nativeTools: true,
+      businessTools: true,
+      cancellation: { supported: true, mode: "signal" },
+      evidence: true,
+      contextPacket: "platform",
+      followUp: false,
+      streaming: true,
+    }),
+    run: async function* (): HarnessRunStream { /* unused: compaction is not a harness run */ },
+    abort: () => false,
+  };
+}
 
 describe("context compaction runner", () => {
   it("links a completed job to the persisted context summary", async () => {
@@ -130,6 +153,45 @@ describe("context compaction runner", () => {
     const completed = await waitForJob(body.job.id, "complete");
     expect(completed.previousJobId).toBe(oldJobId);
   });
+
+  it("keeps using the Pi DeepSeek member for an existing Pi conversation", async () => {
+    const conversation = createCompactionConversation();
+    const started = startConversationCompaction(conversation.id);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // Exactly the pre-change choice: the runnable Pi member's own provider/model.
+    expect(started.job).toMatchObject({ modelProvider: "deepseek", modelId: "deepseek-v4-flash" });
+    await waitForJob(started.job.id, "complete");
+    await waitForCompactionNotice(conversation.id);
+  });
+
+  it("does not borrow a member whose engine is registered but not available", async () => {
+    const conversation = createCompactionConversation();
+    updateAgent("ag_mock_builder", { adapterName: "opencode", modelProvider: "openai", modelId: "opencode-fixture" });
+    registerHarness(secondEngine(() => ({ available: false, detail: "opencode CLI not found" })));
+
+    const started = startConversationCompaction(conversation.id);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    // The historical provider default is used, never the unavailable engine's model.
+    expect(started.job).toMatchObject({ modelProvider: "deepseek", modelId: "deepseek-v4-flash" });
+    await waitForJob(started.job.id, "complete");
+    await waitForCompactionNotice(conversation.id);
+  });
+
+  it("uses a non-Pi member once its own engine reports available", async () => {
+    const conversation = createCompactionConversation();
+    updateAgent("ag_mock_builder", { adapterName: "opencode", modelProvider: "openai", modelId: "opencode-fixture" });
+    updateSettings({ openaiApiKey: "test-key" });
+    registerHarness(secondEngine(() => ({ available: true, version: "fixture" })));
+
+    const started = startConversationCompaction(conversation.id);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect(started.job).toMatchObject({ modelProvider: "openai", modelId: "opencode-fixture" });
+    await waitForJob(started.job.id, "complete");
+    await waitForCompactionNotice(conversation.id);
+  });
 });
 
 function createCompactionConversation() {
@@ -155,4 +217,18 @@ async function waitForJob(jobId: string, expectedStatus: "complete" | "failed") 
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for compaction job ${jobId} to become ${expectedStatus}.`);
+}
+
+/**
+ * The runner publishes its system notice after marking the job complete, so a
+ * test that ends right after `waitForJob` can tear the database down underneath
+ * that insert. Waiting for the notice keeps the job's final step inside the test.
+ */
+async function waitForCompactionNotice(conversationId: string) {
+  await vi.waitFor(() => {
+    const row = getDatabase()
+      .prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'system' LIMIT 1")
+      .get(conversationId);
+    expect(row).toBeTruthy();
+  }, { timeout: 3000, interval: 10 });
 }

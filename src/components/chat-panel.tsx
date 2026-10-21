@@ -110,6 +110,7 @@ export function ChatPanel() {
     name: string; avatar?: string; description: string; capabilities?: string[]; adapterName: AdapterName; modelProvider?: ModelProvider | null;
     modelId?: string | null; apiKey?: string | null; apiBaseUrl?: string | null;
     contextWindow?: number | null; reasoningEffort?: "low" | "medium" | "high" | null;
+    supportsVision?: boolean;
     systemPrompt?: string;
   }) => {
     if (!editingAgent) return;
@@ -327,6 +328,7 @@ export function ChatPanel() {
           apiBaseUrl: editingAgent.apiBaseUrl,
           contextWindow: editingAgent.contextWindow,
           reasoningEffort: editingAgent.reasoningEffort,
+          supportsVision: editingAgent.supportsVision,
           systemPrompt: editingAgent.systemPrompt
         } : undefined}
       />

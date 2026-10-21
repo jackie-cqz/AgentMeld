@@ -45,6 +45,7 @@ interface CreateAgentDialogProps {
     apiBaseUrl?: string | null;
     contextWindow?: number | null;
     reasoningEffort?: "low" | "medium" | "high" | null;
+    supportsVision?: boolean;
     systemPrompt?: string;
   }) => Promise<void>;
   // Edit mode: pre-fill form with existing agent data
@@ -61,6 +62,7 @@ interface CreateAgentDialogProps {
     apiBaseUrl: string | null;
     contextWindow: number | null;
     reasoningEffort: "low" | "medium" | "high" | null;
+    supportsVision?: boolean;
     systemPrompt: string;
   };
 }
@@ -93,9 +95,10 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     provider: initial?.modelProvider ?? null, modelId: initial?.modelId ?? "",
     apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? "",
     contextWindow: initial?.contextWindow === null || initial?.contextWindow === undefined ? "" : String(initial.contextWindow),
-    reasoningEffort: initial?.reasoningEffort ?? ""
+    reasoningEffort: initial?.reasoningEffort ?? "",
+    supportsVision: initial?.supportsVision ?? true
   }));
-  const { provider: modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort } = modelConfig;
+  const { provider: modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, supportsVision } = modelConfig;
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -252,6 +255,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         apiBaseUrl: apiBaseUrl.trim() || null,
         contextWindow: contextWindow.trim() ? Number(contextWindow.trim()) : null,
         reasoningEffort: reasoningEffort || null,
+        supportsVision,
         systemPrompt: systemPrompt.trim() || undefined
       });
       resetCreateForm();
@@ -263,8 +267,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   };
 
-  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initialAdapter, initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.contextWindow ?? "", initial?.reasoningEffort ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
-  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt]) !== original;
+  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initialAdapter, initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.contextWindow ?? "", initial?.reasoningEffort ?? "", initial?.supportsVision ?? true, initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
+  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, supportsVision, systemPrompt]) !== original;
   const discard = useUnsavedChanges(dirty, handleClose, submitting);
   return (
     <><Modal open={open} onClose={discard.requestClose} title={isEdit ? "编辑 Agent" : isChoice ? "新建 Agent" : isQuick ? "快速创建" : "详细配置"}

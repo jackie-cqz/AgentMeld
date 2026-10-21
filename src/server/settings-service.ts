@@ -1,6 +1,7 @@
 import { ensureDatabase } from "@/db/bootstrap";
 import { getDatabase } from "@/db/client";
 import type { AppSettings, CompanionMode } from "@/shared/types";
+import { harnessDescriptor } from "@/shared/harness-catalog";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
 export type ApiKeySource = "app_settings" | "environment" | "missing";
@@ -127,12 +128,13 @@ export function resolveApiKey(
 }
 
 /**
- * Resolve API key for an agent, taking adapter type into account.
+ * Resolve API key for an agent, taking its engine into account.
  *
- * Mapping per api-key-management.md §6.2:
- *   claude-code → anthropic_api_key
- *   codex       → openai_api_key
- *   custom      → by agent.modelProvider
+ * An engine that has no per-Agent provider choice (the retired `claude-code`
+ * and `codex` rows) still reads one fixed global key; that mapping is declared
+ * on its harness catalog entry (`HarnessCredentialPolicy`), not hardcoded here.
+ * Every current engine resolves through the Agent's `modelProvider` exactly as
+ * before.
  */
 export function resolveApiKeyForAgent(
   agent: { adapterName: string; modelProvider?: string | null; apiKey?: string | null },
@@ -141,34 +143,28 @@ export function resolveApiKeyForAgent(
   // 1. Per-agent override — always wins
   if (agent.apiKey) return agent.apiKey;
 
-  // 2. Determine which global field / env var to check based on adapter
-  if (agent.adapterName === "claude-code") {
-    return (
-      settings.anthropicApiKey ??
-      process.env.ANTHROPIC_AUTH_TOKEN ??
-      process.env.ANTHROPIC_API_KEY ??
-      null
-    );
+  // 2. A fixed engine credential (historical adapters) reads its declared field
+  //    and environment fallback, in the catalog's order.
+  const policy = harnessDescriptor(agent.adapterName).credential;
+  if (policy) {
+    const fromSettings = settings[policy.settingKey];
+    if (fromSettings !== null) return fromSettings;
+    for (const envKey of policy.envKeys) {
+      if (process.env[envKey] !== undefined) return process.env[envKey]!;
+    }
+    return null;
   }
 
-  if (agent.adapterName === "codex") {
-    return (
-      settings.openaiApiKey ??
-      process.env.CODEX_API_KEY ??
-      process.env.OPENAI_API_KEY ??
-      null
-    );
-  }
-
-  // 3. Custom adapter — delegate to provider-based resolution
+  // 3. Otherwise delegate to provider-based resolution
   const provider = agent.modelProvider ?? "openai";
   return resolveApiKey(provider, null, settings);
 }
 
 /**
  * Resolve API base URL for an agent.
- * Per api-key-management.md §6.5:
- *   agent.apiBaseUrl → (claude-code) app_settings.anthropicBaseUrl → SDK default
+ *
+ * Precedence: agent.apiBaseUrl → the engine's declared global base URL (only
+ * the retired `claude-code` rows have one) → SDK default.
  */
 export function resolveApiBaseUrl(
   agent: { adapterName: string; apiBaseUrl?: string | null },
@@ -176,11 +172,8 @@ export function resolveApiBaseUrl(
 ): string | null {
   if (agent.apiBaseUrl) return agent.apiBaseUrl;
 
-  if (agent.adapterName === "claude-code") {
-    return settings.anthropicBaseUrl ?? null;
-  }
-
-  return null;
+  const policy = harnessDescriptor(agent.adapterName).credential;
+  return policy?.baseUrlSettingKey ? settings[policy.baseUrlSettingKey] : null;
 }
 
 // ---------------------------------------------------------------------------

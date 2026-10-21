@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { HarnessAvailability } from "@/shared/harness-catalog";
+import type { AdapterName, Agent } from "@/shared/types";
 import {
+  handoffTargets,
   harnessDisplayLabel,
   harnessEditorModel,
+  harnessIsRunnable,
   harnessMigrationNotice,
   harnessOptionBadge,
   harnessOptions,
@@ -130,5 +133,46 @@ describe("the harness picker view-model", () => {
     const retiredSelection = harnessEditorModel({ availability: PRODUCTION, selected: "claude-code", stored: null });
     expect(retiredSelection.selected).toBeNull();
     expect(retiredSelection.canSave).toBe(false);
+  });
+});
+
+function member(id: string, adapterName: AdapterName, isConductor = false): Agent {
+  return {
+    id, name: id, avatar: "A", description: "", capabilities: [], adapterName,
+    modelProvider: "deepseek", modelId: "fixture", apiKey: null, apiBaseUrl: null,
+    contextWindow: null, reasoningEffort: null, systemPrompt: "", toolNames: [],
+    isBuiltin: false, isConductor, supportsVision: true, createdAt: 1, updatedAt: 1,
+  };
+}
+
+describe("handoff target eligibility", () => {
+  const agents = {
+    ag_worker: member("ag_worker", "pi"),
+    ag_peer: member("ag_peer", "pi"),
+    ag_opencode: member("ag_opencode", "opencode"),
+    ag_conductor: member("ag_conductor", "pi", true),
+  };
+
+  it("answers runnability only for a confirmed available report", () => {
+    expect(harnessIsRunnable(PRODUCTION, "pi")).toBe(true);
+    expect(harnessIsRunnable(PRODUCTION, "opencode")).toBe(false);
+    expect(harnessIsRunnable(null, "pi")).toBe(false);
+    expect(harnessIsRunnable(PRODUCTION, "future-engine")).toBe(false);
+  });
+
+  it("offers only current non-Conductor members whose engine the runtime reports available", () => {
+    const input = { agentIds: Object.keys(agents), agents, sourceAgentId: "ag_worker", availability: PRODUCTION };
+
+    // Pi peers are still offered: the Pi-equivalent outcome is unchanged.
+    expect(handoffTargets(input).map((agent) => agent.id)).toEqual(["ag_peer"]);
+
+    // Before the report arrives (or when the read failed) nothing is offered,
+    // instead of guessing that Pi runs.
+    expect(handoffTargets({ ...input, availability: null })).toEqual([]);
+    expect(handoffTargets({ ...input, availability: [] })).toEqual([]);
+
+    // A second engine becomes a real target only when its own report says so.
+    expect(handoffTargets({ ...input, availability: [report("pi"), report("opencode")] })
+      .map((agent) => agent.id)).toEqual(["ag_peer", "ag_opencode"]);
   });
 });

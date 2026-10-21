@@ -8,7 +8,9 @@ import { eventBus } from "@/server/event-bus";
 import { createMessage, getAgent, getArtifact, getConversation, getMessage, getRun, getWorkspaceForConversation, listOutputBindings } from "@/server/repositories";
 import { getContextSnapshot, getTaskAttempt, listEvidenceForAttempt } from "@/server/repositories/evidence-repository";
 import { loadActiveFacts } from "@/server/context-facts/fact-service";
+import { isHarnessAvailable } from "@/server/harness/availability";
 import { resolveToolPath } from "@/server/tools/workspace-access";
+import { harnessDescriptor } from "@/shared/harness-catalog";
 import { newMessageId, newRunId } from "@/shared/ids";
 import type { TaskHandoff } from "@/shared/collaboration-types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
@@ -118,8 +120,14 @@ function fileHashes(conversationId: string, paths: string[]): HandoffPackage["fi
 function assertTarget(handoff: Pick<TaskHandoff, "conversationId" | "sourceAgentId" | "targetAgentId">): void {
   const conversation = getConversation(handoff.conversationId);
   const target = getAgent(handoff.targetAgentId);
-  if (!conversation?.agentIds.includes(handoff.targetAgentId) || !conversation.agentIds.includes(handoff.sourceAgentId) || !target || target.adapterName !== "pi" || target.isConductor || target.id === handoff.sourceAgentId) {
-    throw new Error("Choose a different current Pi team member to take over this task.");
+  // Eligibility is the harness contract, not a name: the target may take over
+  // only when a driver is registered for its engine and that driver's own
+  // `doctor()` says it can run here. A retired row or an engine this build does
+  // not ship fails exactly as before, with the same user-visible message.
+  const targetCanRun = target !== null && isHarnessAvailable(target.adapterName);
+  const engine = target ? harnessDescriptor(target.adapterName).label : "Pi";
+  if (!conversation?.agentIds.includes(handoff.targetAgentId) || !conversation.agentIds.includes(handoff.sourceAgentId) || !target || !targetCanRun || target.isConductor || target.id === handoff.sourceAgentId) {
+    throw new Error(`Choose a different current ${engine} team member to take over this task.`);
   }
 }
 export async function proposeHandoff(sourceAttemptId: string, targetAgentId: string, principal: AuthPrincipal): Promise<TaskHandoff> {

@@ -14,6 +14,23 @@ import type { AdapterName } from "./types";
 export type HarnessState = "available" | "not-installed" | "retired";
 
 /**
+ * Where an engine's stored Agent rows read their credential from.
+ *
+ * Legacy engines (`claude-code`, `codex`) never chose a provider per row: their
+ * key came from one global settings field and a fixed environment fallback.
+ * That mapping belongs to the engine, so it lives next to the engine's catalog
+ * entry instead of a `switch (adapterName)` in the settings service.
+ */
+export interface HarnessCredentialPolicy {
+  /** The `AppSettings` field holding this engine's key. */
+  settingKey: "anthropicApiKey" | "openaiApiKey";
+  /** Environment variables checked in order when the setting is empty. */
+  envKeys: readonly string[];
+  /** The `AppSettings` field holding this engine's base URL, when it has one. */
+  baseUrlSettingKey?: "anthropicBaseUrl";
+}
+
+/**
  * The declared half of the truth: what this build ships, before any runtime
  * probe. The server refines it with registration + `doctor()`; nothing in the UI
  * may turn `not-installed`/`retired` into `available` on its own.
@@ -31,6 +48,12 @@ export interface HarnessDescriptor {
    * The run-time error reads this so the editor and the run cannot disagree.
    */
   retiredMessage: string | null;
+  /**
+   * The fixed global-credential mapping for engines that have no per-Agent
+   * provider choice, or `null` for engines whose key is resolved from the
+   * Agent's `modelProvider` like every current engine.
+   */
+  credential: HarnessCredentialPolicy | null;
 }
 
 /**
@@ -55,6 +78,7 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "available",
     selectable: true,
     retiredMessage: null,
+    credential: null,
   },
   opencode: {
     id: "opencode",
@@ -65,6 +89,7 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "not-installed",
     selectable: true,
     retiredMessage: null,
+    credential: null,
   },
   "claude-code": {
     id: "claude-code",
@@ -72,6 +97,12 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "retired",
     selectable: false,
     retiredMessage: RETIRED_HARNESS_MESSAGE,
+    // The historical mapping: one Anthropic key, no per-Agent provider.
+    credential: {
+      settingKey: "anthropicApiKey",
+      envKeys: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      baseUrlSettingKey: "anthropicBaseUrl",
+    },
   },
   codex: {
     id: "codex",
@@ -79,6 +110,10 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "retired",
     selectable: false,
     retiredMessage: RETIRED_HARNESS_MESSAGE,
+    credential: {
+      settingKey: "openaiApiKey",
+      envKeys: ["CODEX_API_KEY", "OPENAI_API_KEY"],
+    },
   },
   custom: {
     id: "custom",
@@ -86,6 +121,7 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "retired",
     selectable: false,
     retiredMessage: RETIRED_HARNESS_MESSAGE,
+    credential: null,
   },
   mock: {
     id: "mock",
@@ -93,6 +129,7 @@ const DESCRIPTORS: Readonly<Record<AdapterName, HarnessDescriptor>> = {
     declaredState: "retired",
     selectable: false,
     retiredMessage: RETIRED_HARNESS_MESSAGE,
+    credential: null,
   },
 };
 
@@ -122,6 +159,7 @@ export function harnessDescriptor(name: AdapterName | string): HarnessDescriptor
     declaredState: "not-installed",
     selectable: false,
     retiredMessage: null,
+    credential: null,
   };
 }
 

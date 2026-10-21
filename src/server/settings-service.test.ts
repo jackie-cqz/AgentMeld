@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { resetDatabaseForTests as resetClientForTests } from "@/db/client";
 import { getSettings, updateSettings, resolveApiKey, resolveApiKeyForAgent, resolveApiBaseUrl } from "@/server/settings-service";
+import { harnessDescriptor } from "@/shared/harness-catalog";
 import type { AppSettings } from "@/shared/types";
 
 let tempDir: string;
@@ -184,6 +185,48 @@ describe("settings-service", () => {
       );
       expect(key).toBe("sk-ds-global");
     });
+
+    it("declares the fixed credential mapping on the harness catalog, not in this service", () => {
+      // Old rows keep working because the two historical engines still declare
+      // exactly the fields and environment order they always read.
+      expect(harnessDescriptor("claude-code").credential).toEqual({
+        settingKey: "anthropicApiKey",
+        envKeys: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        baseUrlSettingKey: "anthropicBaseUrl",
+      });
+      expect(harnessDescriptor("codex").credential).toEqual({
+        settingKey: "openaiApiKey",
+        envKeys: ["CODEX_API_KEY", "OPENAI_API_KEY"],
+      });
+      // Current engines and unknown names have no fixed mapping: they resolve
+      // through the Agent's modelProvider like every other run.
+      expect(harnessDescriptor("pi").credential).toBeNull();
+      expect(harnessDescriptor("opencode").credential).toBeNull();
+      expect(harnessDescriptor("future-engine").credential).toBeNull();
+    });
+
+    it("checks an engine's declared environment fallbacks in order", () => {
+      const previousToken = process.env.ANTHROPIC_AUTH_TOKEN;
+      const previousKey = process.env.ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_AUTH_TOKEN = "sk-token-first";
+      process.env.ANTHROPIC_API_KEY = "sk-key-second";
+      try {
+        const settings = { ...getSettings(), anthropicApiKey: null };
+        expect(resolveApiKeyForAgent({ adapterName: "claude-code", apiKey: null }, settings)).toBe("sk-token-first");
+      } finally {
+        if (previousToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+        else process.env.ANTHROPIC_AUTH_TOKEN = previousToken;
+        if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = previousKey;
+      }
+    });
+
+    it("resolves a current engine by modelProvider instead of a fixed mapping", () => {
+      updateSettings({ deepseekApiKey: "sk-ds-global", anthropicApiKey: "sk-ant-global" });
+      const settings = getSettings();
+      expect(resolveApiKeyForAgent({ adapterName: "pi", modelProvider: "deepseek", apiKey: null }, settings)).toBe("sk-ds-global");
+      expect(resolveApiKeyForAgent({ adapterName: "opencode", modelProvider: "deepseek", apiKey: null }, settings)).toBe("sk-ds-global");
+    });
   });
 
   describe("resolveApiBaseUrl", () => {
@@ -213,6 +256,14 @@ describe("settings-service", () => {
         settings
       );
       expect(url).toBeNull();
+    });
+
+    it("reads the declared global base URL only for the engine that declares one", () => {
+      updateSettings({ anthropicBaseUrl: "https://anyrouter.io" });
+      const settings = getSettings();
+      expect(resolveApiBaseUrl({ adapterName: "claude-code", apiBaseUrl: null }, settings)).toBe("https://anyrouter.io");
+      expect(resolveApiBaseUrl({ adapterName: "codex", apiBaseUrl: null }, settings)).toBeNull();
+      expect(resolveApiBaseUrl({ adapterName: "pi", apiBaseUrl: null }, settings)).toBeNull();
     });
   });
 });

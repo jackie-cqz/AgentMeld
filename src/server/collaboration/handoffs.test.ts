@@ -36,6 +36,8 @@ import { eventBus } from "@/server/event-bus";
 import { approvePlan } from "@/server/dispatch-plan-manager";
 import { decideHandoff, getHandoff, getHandoffPackage, listHandoffs, proposeHandoff, validateHandoffPackage } from "./handoffs";
 import { getDatabase } from "@/db/client";
+import { registerHarness, unregisterHarness } from "@/server/harness/registry";
+import type { HarnessDoctor, HarnessDriver, HarnessRunStream } from "@/server/harness/types";
 import type { ParsedTask } from "@/server/tools/conductor-tools";
 import type { AuthPrincipal } from "@/server/auth";
 import { recoverOrphanedRuns } from "@/server/run-recovery";
@@ -44,10 +46,30 @@ import { persistedDispatches } from "./dispatch-projection";
 const owner: AuthPrincipal = { kind: "owner-session", sessionId: "fixture-owner", createdAt: 1 };
 beforeEach(() => { fixture.inputs.length = 0; fixture.stopped.length = 0; fixture.report = true; fixture.plan = null; fixture.holdSource = false; });
 afterEach(async () => {
+  unregisterHarness("opencode");
   const all = getDatabase().prepare("SELECT id FROM agent_runs").all() as Array<{ id: string }>;
   all.forEach(row => abortRun(row.id));
   await vi.waitFor(() => expect(all.some(row => isRunActive(row.id))).toBe(false));
 });
+
+/** The smallest driver that can report an engine as runnable; `run` is never used here. */
+function fakeDriver(id: "opencode", doctor: () => HarnessDoctor): HarnessDriver {
+  return {
+    id,
+    doctor,
+    capabilities: () => ({
+      nativeTools: true,
+      businessTools: true,
+      cancellation: { supported: true, mode: "signal" },
+      evidence: true,
+      contextPacket: "platform",
+      followUp: false,
+      streaming: true,
+    }),
+    run: async function* (): HarnessRunStream { /* proposing never enters the engine */ },
+    abort: () => false,
+  };
+}
 
 function world(overrides: Partial<ParsedTask> = {}) {
   for (const id of ["ag_mock_conductor", "ag_mock_builder", "ag_designer"]) updateAgent(id, { adapterName: "pi", modelProvider: "openai-compatible", modelId: "fixture-model", apiKey: "fixture-not-secret", apiBaseUrl: "http://127.0.0.1:1", toolNames: ["report_task_result", "read_artifact"] });
@@ -228,5 +250,30 @@ describe("formal Pi task handoff", () => {
     expect(replay).toMatchObject({ id: proposal.id, status: "accepted", executionStatus: "interrupted", coordinatorRunId: "reserved-before-crash", targetRunId: null });
     expect(fixture.inputs).toHaveLength(0);
     expect(getBootstrapPayload().handoffsByConversation[state.conversation.id]).toEqual(expect.arrayContaining([expect.objectContaining({ id: proposal.id, executionStatus: "interrupted" })]));
+  });
+
+  it("derives target eligibility from the harness contract instead of the stored adapter name", async () => {
+    const state = world();
+    // Pi is the production driver, so the historical outcome is unchanged.
+    const piProposal = await proposeHandoff(state.attemptId, "ag_designer", owner);
+    expect(piProposal.targetAgentId).toBe("ag_designer");
+    await decideHandoff(piProposal.id, "cancel", owner);
+
+    // A selectable second engine with no registered driver cannot take over;
+    // the user sees the same actionable refusal, now naming that engine.
+    updateAgent("ag_designer", { adapterName: "opencode" });
+    await expect(proposeHandoff(state.attemptId, "ag_designer", owner))
+      .rejects.toThrow("Choose a different current OpenCode team member to take over this task.");
+
+    // A registered driver whose doctor fails is still not a usable target.
+    registerHarness(fakeDriver("opencode", () => ({ available: false, detail: "opencode CLI not found" })));
+    await expect(proposeHandoff(state.attemptId, "ag_designer", owner)).rejects.toThrow("OpenCode team member");
+
+    // Registration plus a passing probe makes the same member a real target:
+    // eligibility follows the driver contract, not a literal name.
+    registerHarness(fakeDriver("opencode", () => ({ available: true, version: "fixture" })));
+    const opencodeProposal = await proposeHandoff(state.attemptId, "ag_designer", owner);
+    expect(opencodeProposal.targetAgentId).toBe("ag_designer");
+    expect(opencodeProposal.status).toBe("proposed");
   });
 });
