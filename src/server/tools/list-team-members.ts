@@ -1,5 +1,5 @@
 import { getAgent, getConversation, listAgents } from "@/server/repositories";
-import { provisionedPlatformToolNames } from "@/server/pi/tool-surface";
+import { provisionedPlatformToolNames } from "@/server/harness/tool-surface";
 import { isRetiredAdapter, type HarnessAvailability } from "@/shared/harness-catalog";
 import { TOOL_CAPABILITIES } from "./capabilities";
 import type { ToolDef } from "./types";
