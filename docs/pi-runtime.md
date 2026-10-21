@@ -39,6 +39,16 @@ A source synchronously awaiting peer consultation pauses its bridge and lends
 that ownership to the admitted peer. It resumes only after confirmed peer
 teardown. This is controlled lease lending, not concurrent independent writers.
 
+The ownership lifecycle itself is platform-owned (#25 P2): acquisition, release,
+poisoning and controlled lending live in `src/server/harness/workspace-lease.ts`
+and the resulting lease is handed to every driver through
+`HarnessInvocationInput.workspaceLease`. Pi's `src/server/pi/workspace-lease.ts`
+is an adapter over that manager, so the existing durable receipt, test messages
+and lend semantics are unchanged, and a second engine acquires the same
+ownership instead of copying Pi's implementation. Lending is a platform
+operation performed by the tool bridge; a driver receives ownership and never
+implements the handoff.
+
 ## Configuration And Identity
 
 1. Configure a provider, endpoint, credential and model in AgentMeld Settings.
@@ -112,7 +122,16 @@ unconditional approval of each call.
 
 `ask_user`, `plan_tasks`, `report_task_result`, facts, artifact, deployment and
 other platform business tools live in the AgentMeld server process, so Pi reaches
-them through a per-invocation authenticated loopback bridge. This is **not MCP**
+them through a per-invocation authenticated loopback bridge. The platform-side
+semantics of that bridge are harness-neutral (#25 P2): the business-tool
+catalogue with its JSON schemas, platform admission and approvals, evidence,
+call-id replay protection, terminal-tool gating and the consultation workspace
+lend live in `src/server/harness/tool-bridge.ts`; admission/approval/evidence for
+the native workspace tool family lives in `src/server/harness/native-tools.ts`.
+Pi's loopback layer only carries those calls across its process boundary with the
+bearer token, maps Pi's native tool names to the platform names and extracts
+Pi's own result shape. A second engine calls the same bridge in-process and
+obtains the same results and evidence. This is **not MCP**
 or an OS sandbox. It carries platform protocol admission, approvals and business
 state across processes; it does not provide per-Agent tool whitelists or host
 isolation. The token is revoked at teardown and is
@@ -215,7 +234,11 @@ Do not edit an execution's private files or clear leases while it is running.
 deterministic model server. It covers text, native write and batch edit, provider
 failure, output limits, cancellation, pending approval, and dependent multi-Agent
 Conductor execution. Protocol, projection, concurrency and lease tests complement
-that contract. The CI Pi job runs these tests on Windows and Linux without API
+that contract. `src/server/harness/tool-bridge.test.ts` drives both Pi's loopback
+transport and an in-process second engine through the neutral bridge and asserts
+the same business/native results, evidence rows, approval decisions and refusals;
+`src/server/harness/workspace-lease.test.ts` proves the platform lease and a
+cross-engine handoff without Pi's adapter. The CI Pi job runs these tests on Windows and Linux without API
 credentials. This does not claim that every external provider behaves identically.
 
 Provider-specific live smoke testing is opt-in and must use isolated test data.
