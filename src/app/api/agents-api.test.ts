@@ -79,6 +79,28 @@ describe("POST /api/agents", () => {
     expect(body.agent.name).toBe("New API Agent");
   });
 
+  it("creates a saved opencode Agent and returns 201", async () => {
+    const req = jsonRequest("POST", {
+      name: "OpenCode API Agent",
+      adapterName: "opencode",
+      modelProvider: "deepseek",
+      modelId: "deepseek-v4-flash"
+    });
+    const res = await postAgents(req);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { agent: { adapterName: string } };
+    expect(body.agent.adapterName).toBe("opencode");
+  });
+
+  it("rejects a retired engine as a new choice", async () => {
+    const res = await postAgents(jsonRequest("POST", {
+      name: "Retired API Agent",
+      adapterName: "claude-code",
+      modelId: "gpt-4.1-mini"
+    }));
+    expect(res.status).toBe(400);
+  });
+
   it("persists the configured window and thinking effort", async () => {
     const created = await postAgents(jsonRequest("POST", {
       name: "Windowed API Agent",

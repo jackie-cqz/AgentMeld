@@ -3,6 +3,12 @@ import { getDatabase } from "@/db/client";
 import { listAgents, getAgent } from "@/server/repositories";
 import { newAgentId } from "@/shared/ids";
 import { TOOL_PRESETS, DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
+import {
+  harnessDescriptor,
+  isRetiredAdapter,
+  isSelectableAdapter,
+  unregisteredHarnessFailure,
+} from "@/shared/harness-catalog";
 import type { AdapterName, Agent, ModelProvider, ReasoningEffort } from "@/shared/types";
 import { requireModelProviderProfile } from "@/server/model-provider-service";
 
@@ -32,7 +38,7 @@ export interface CreateAgentInput {
 }
 
 export interface UpdateAgentInput {
-  adapterName?: "pi";
+  adapterName?: AdapterName;
   name?: string;
   avatar?: string;
   description?: string;
@@ -59,13 +65,30 @@ export function getAllAgents(): Agent[] {
   return listAgents();
 }
 
+/**
+ * Resolve the harness a brand-new Agent may be created with.
+ *
+ * The catalog is the allowlist (Pi plus `opencode`, whose driver this build
+ * deliberately does not ship). Retired names keep their exact historical create
+ * error; an unknown name is reported as unavailable, never as retired, so the
+ * user is not sent to a migration that cannot help.
+ */
+function newAgentHarness(name: AdapterName): AdapterName {
+  if (isSelectableAdapter(name)) return name;
+  if (isRetiredAdapter(name)) throw new Error("New Agents must use the Pi execution engine.");
+  throw new Error(unregisteredHarnessFailure(name).message);
+}
+
 export function createAgent(input: CreateAgentInput): Agent {
   const db = getDatabase();
   const id = newAgentId();
   const now = Date.now();
 
-  if (input.adapterName !== "pi") throw new Error("New Agents must use the Pi execution engine.");
-  const adapterName = "pi";
+  // The catalog decides what a new Agent may select. `opencode` is accepted
+  // even though this build registers no OpenCode driver: the row is the user's
+  // real, durable choice and a run must fail honestly (`harness_unavailable`),
+  // not silently become Pi. Retired names keep their historical error.
+  const adapterName = newAgentHarness(input.adapterName);
   const toolNames = input.toolNames ?? TOOL_PRESETS["all-purpose"].tools;
   const modelProvider = input.modelProvider ?? "deepseek";
   validateCustomAgentConfig(adapterName, modelProvider, input.modelId, input.apiKey, input.apiBaseUrl);
@@ -125,7 +148,15 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): Agent | n
   const reasoningEffort = input.reasoningEffort !== undefined ? validateReasoningEffort(input.reasoningEffort) : existing.reasoningEffort;
 
   const adapterName = input.adapterName ?? existing.adapterName;
-  if (adapterName !== "pi") throw new Error("Choose Pi and configure a provider to migrate this retired Agent.");
+  // Retired rows keep today's exact migration error until the caller explicitly
+  // picks a selectable engine; `opencode` is a selectable name even when its
+  // driver is not installed, so it can be saved and then fails at run time.
+  if (!isSelectableAdapter(adapterName)) {
+    if (isRetiredAdapter(adapterName)) {
+      throw new Error("Choose Pi and configure a provider to migrate this retired Agent.");
+    }
+    throw new Error(unregisteredHarnessFailure(adapterName).message);
+  }
   const toolNames = input.toolNames ?? existing.toolNames;
   const executionChanged = JSON.stringify([adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt, toolNames]) !==
     JSON.stringify([existing.adapterName, existing.modelProvider, existing.modelId, existing.apiKey, existing.apiBaseUrl, existing.contextWindow, existing.reasoningEffort, existing.systemPrompt, existing.toolNames]);
@@ -163,15 +194,23 @@ function validateCustomAgentConfig(
   apiKey: string | null | undefined,
   apiBaseUrl: string | null | undefined
 ) {
-  if (adapterName !== "pi") throw new Error("The selected execution engine has been retired.");
+  if (!isSelectableAdapter(adapterName)) {
+    if (isRetiredAdapter(adapterName)) throw new Error("The selected execution engine has been retired.");
+    throw new Error(unregisteredHarnessFailure(adapterName).message);
+  }
+  // A selectable-but-not-installed engine (`opencode`) still records the same
+  // provider/model configuration: the platform's model resolution is
+  // harness-neutral, so a future driver must not need a second config shape.
+  // Pi's messages stay byte-identical; another engine names itself honestly.
+  const engine = adapterName === "pi" ? "Pi" : harnessDescriptor(adapterName).label;
   // No tool-name validation: `toolNames` no longer authorizes anything (see
   // pi/tool-surface.ts). Rejecting retired or unknown names here would only
   // prevent an Agent whose stored record is stale from being edited at all.
   if (!modelProvider) {
-    throw new Error("Pi Agents must specify a model provider.");
+    throw new Error(`${engine} Agents must specify a model provider.`);
   }
   if (!modelId?.trim()) {
-    throw new Error("Pi Agents must specify a model ID.");
+    throw new Error(`${engine} Agents must specify a model ID.`);
   }
   if (modelProvider === "openai-compatible") {
     if (!apiKey?.trim()) {

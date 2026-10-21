@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Pi's real engine is an installed CLI; the dispatch contract (not Pi's HTTP
+// calls) is what these tests own, so substitute the lifecycle fixture. This also
+// proves a Pi Agent still runs through the same entry point.
+vi.mock("@/server/pi/runtime", async () => ({ runPiInvocation: (await import("@/test/pi-runtime-fixture")).fixturePiInvocation }));
+import { stopFixtureRuns } from "@/test/pi-runtime-fixture";
 import { ensureDatabase, resetBootstrapForTests } from "@/db/bootstrap";
 import { getDatabase, resetDatabaseForTests } from "@/db/client";
 import { eventBus } from "@/server/event-bus";
@@ -27,7 +32,8 @@ beforeEach(() => {
   ensureDatabase();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await stopFixtureRuns();
   unregisterHarness("mock");
   resetBootstrapForTests();
   resetDatabaseForTests();
@@ -113,5 +119,44 @@ describe("harness dispatch at the real run entry point", () => {
       type: "text",
       content: expect.stringContaining("retired execution engine"),
     });
+  });
+
+  it("fails a saved opencode Agent as harness_unavailable, not migration_required", async () => {
+    const { conversation, trigger } = seedRun("opencode");
+    // This build ships no OpenCode driver; the row is still a real, saved choice.
+    expect(getHarness("opencode")).toBeNull();
+
+    const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
+    await handle.promise;
+
+    expect(getRun(handle.runId)).toMatchObject({
+      status: "failed",
+      errorCategory: "harness_unavailable",
+    });
+    const failed = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
+    expect(failed?.status).toBe("error");
+    expect(failed?.parts).toContainEqual({
+      type: "text",
+      content: expect.stringContaining('No execution engine is registered for "opencode".'),
+    });
+    expect(failed?.parts).toContainEqual({
+      type: "text",
+      content: expect.stringContaining("Install or enable its harness before running this Agent."),
+    });
+    // The user must not be sent to a migration that cannot help here.
+    expect(JSON.stringify(failed?.parts)).not.toContain("retired");
+  });
+
+  it("leaves Pi dispatch untouched", async () => {
+    const { conversation, trigger } = seedRun("pi");
+    expect(getHarness("pi")).not.toBeNull();
+
+    const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
+    await handle.promise;
+
+    expect(getRun(handle.runId)).toMatchObject({ status: "complete", errorCategory: null });
+    const reply = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
+    expect(reply?.status).toBe("complete");
+    expect(reply?.parts).toEqual([{ type: "text", content: "Pi lifecycle fixture response" }]);
   });
 });

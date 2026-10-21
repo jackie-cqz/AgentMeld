@@ -13,13 +13,17 @@ import {
 } from "lucide-react";
 import type { AdapterName, ModelProvider } from "@/shared/types";
 import { emptyAgentModel, type AgentModelValue } from "@/lib/agent-model-config";
+import { harnessDisplayLabel, harnessEditorModel } from "@/lib/harness-selection";
+import { isSelectableAdapter, type HarnessAvailability } from "@/shared/harness-catalog";
 import { AgentModelConfig } from "@/components/agent-model-config";
 import { AgentAvatarPicker } from "@/components/agent-avatar-picker";
+import { HarnessPicker } from "@/components/harness-picker";
 import { PiRuntimeStatus } from "@/components/pi-runtime-status";
 import { AGENT_AVATAR_AUTO } from "@/shared/agent-avatar-presets";
 import { Modal, useUnsavedChanges } from "@/components/ui/modal";
 import { Feedback, Tabs, SectionHeading } from "@/components/ui/controls";
 import { useAppStore } from "@/stores/app-store";
+import { requestJson } from "@/lib/request-json";
 import { getToolDisplayName } from "@/shared/tool-display";
 import { DEFAULT_CUSTOM_PROMPT } from "@/shared/agent-constants";
 
@@ -74,7 +78,17 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   const formRef = useRef<HTMLDivElement>(null);
   const [description, setDescription] = useState(initial?.description ?? "");
   const [capabilitiesInput, setCapabilitiesInput] = useState((initial?.capabilities ?? []).join("，"));
-  const adapterName: AdapterName = "pi";
+  // The engine is a real, editable choice now. A stored retired name is not a
+  // choice: the editor opens on the migration target (Pi) and says so, which is
+  // also what saving does. A current name (Pi or OpenCode) opens selected.
+  const initialAdapter: AdapterName = initial && isSelectableAdapter(initial.adapterName) ? initial.adapterName : "pi";
+  const [adapterName, setAdapterName] = useState<AdapterName>(initialAdapter);
+  // Runtime truth for the picker, refreshed from /api/harnesses on every open.
+  // Until it arrives the catalog's declared states are shown, and nothing is
+  // claimed to be runnable.
+  const [availability, setAvailability] = useState<HarnessAvailability[] | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [availabilityRevision, setAvailabilityRevision] = useState(0);
   const [modelConfig, setModelConfig] = useState<AgentModelValue>(() => ({
     provider: initial?.modelProvider ?? null, modelId: initial?.modelId ?? "",
     apiKey: initial?.apiKey ?? "", apiBaseUrl: initial?.apiBaseUrl ?? "",
@@ -103,6 +117,24 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   }, [open, editTab, createStage]);
 
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    requestJson<{ harnesses?: HarnessAvailability[] }>("/api/harnesses", { signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(payload.harnesses)) throw new Error("执行引擎安装状态读取失败。");
+        setAvailability(payload.harnesses);
+        setAvailabilityError(null);
+      })
+      .catch((failure) => {
+        if (!controller.signal.aborted) {
+          setAvailabilityError(failure instanceof Error ? failure.message : "执行引擎安装状态读取失败。");
+        }
+      });
+    return () => controller.abort();
+  }, [open, availabilityRevision]);
+
   const resetCreateForm = () => {
     if (isEdit) return;
     setCreateStage("choice");
@@ -111,6 +143,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     setAvatar(AGENT_AVATAR_AUTO);
     setDescription("");
     setCapabilitiesInput("");
+    setAdapterName("pi");
+    setAvailability(null);
     setModelConfig(emptyAgentModel());
     setSystemPrompt(DEFAULT_CUSTOM_PROMPT);
     setError(null);
@@ -158,6 +192,9 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
   };
 
   const capabilities = parseCapabilities(capabilitiesInput);
+  // One derivation for the picker, the basic-tab summary and the save button, so
+  // they cannot disagree about whether the selection can actually run.
+  const harness = harnessEditorModel({ availability, selected: adapterName, stored: initial?.adapterName ?? null });
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -166,6 +203,11 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     if (!description.trim()) {
       setError("Agent 描述为必填项，会显示在 Agent 卡片中。");
       setEditTab("basic");
+      return;
+    }
+    if (!harness.canSave) {
+      setError("请选择一个可保存的执行引擎。");
+      setEditTab("model");
       return;
     }
     // Config validation
@@ -221,8 +263,8 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
     }
   };
 
-  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.contextWindow ?? "", initial?.reasoningEffort ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
-  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt]) !== original;
+  const original = JSON.stringify([initial?.name ?? "", initial?.description ?? "", (initial?.capabilities ?? []).join("，"), initialAdapter, initial?.modelProvider ?? null, initial?.modelId ?? "", initial?.apiKey ?? "", initial?.apiBaseUrl ?? "", initial?.contextWindow ?? "", initial?.reasoningEffort ?? "", initial?.systemPrompt ?? DEFAULT_CUSTOM_PROMPT]);
+  const dirty = avatar !== (initial?.avatar ?? AGENT_AVATAR_AUTO) || Boolean(quickDesc.trim()) || JSON.stringify([name, description, capabilitiesInput, adapterName, modelProvider, modelId, apiKey, apiBaseUrl, contextWindow, reasoningEffort, systemPrompt]) !== original;
   const discard = useUnsavedChanges(dirty, handleClose, submitting);
   return (
     <><Modal open={open} onClose={discard.requestClose} title={isEdit ? "编辑 Agent" : isChoice ? "新建 Agent" : isQuick ? "快速创建" : "详细配置"}
@@ -232,7 +274,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         {!isEdit && !isChoice ? <button disabled={submitting} className="ui-button ui-button--quiet mr-auto" onClick={() => { setError(null); setCreateStage("choice"); }}><ArrowLeft size={15} />返回</button> : null}
         <button className="ui-button ui-button--quiet" onClick={discard.requestClose} disabled={submitting}>取消</button>
         {isQuick ? <button className="ui-button ui-button--primary" disabled={!quickDesc.trim()} onClick={handleGenerateDraft}><Sparkles size={14} />生成草稿并预览</button> : null}
-        {isDetailed ? <button className="ui-button ui-button--primary" onClick={() => void handleSubmit()} disabled={!name.trim() || !description.trim() || submitting}>{submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}</button> : null}</>}>
+        {isDetailed ? <button className="ui-button ui-button--primary" onClick={() => void handleSubmit()} disabled={!name.trim() || !description.trim() || submitting}>{submitting ? "保存中..." : isEdit ? "保存修改" : "创建 Agent"}{harness.saveSuffix}</button> : null}</>}>
         <div ref={formRef} className={`ui-form ${isDetailed ? "ui-agent-form" : "agent-entry-form"}`}>
           {isChoice ? <div className="agent-create-methods">
             <button type="button" data-autofocus onClick={() => setCreateStage("quick")}>
@@ -318,7 +360,7 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
           <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
             <div className="flex items-center justify-between gap-3">
               <span>运行方式</span>
-              <span className="font-medium text-slate-800">Pi</span>
+              <span className="font-medium text-slate-800">{harnessDisplayLabel(adapterName)}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span>当前模型</span>
@@ -328,12 +370,16 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
         ) : null}
 
         {!isEdit ? (
-          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-            执行引擎：Pi
+          <div className={`mt-4 rounded-md border px-3 py-2 text-xs leading-5 ${harness.selected?.state === "available"
+            ? "border-blue-200 bg-blue-50 text-blue-800"
+            : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+            执行引擎：{harnessDisplayLabel(adapterName)}。{harness.selected?.checked
+              ? harness.statusText
+              : "可在「模型与执行引擎」中切换；只有标为「可用」的引擎，运行才会真正执行。"}
           </div>
-        ) : initial?.adapterName !== "pi" ? (
-          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            原执行引擎已退役。确认模型后保存，将迁移到 Pi；已有历史与身份不变。
+        ) : harness.migrationNotice ? (
+          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+            {harness.migrationNotice}
           </div>
         ) : null}
 
@@ -347,7 +393,14 @@ export function CreateAgentDialog({ open, onClose, onCreate, initial }: CreateAg
 
         {isDetailed ? (
         <section role="tabpanel" aria-label="模型与执行引擎" className={editTab === "model" ? "" : "hidden"}>
-        <PiRuntimeStatus open={open} />
+        <HarnessPicker
+          model={harness}
+          loading={availability === null && availabilityError === null}
+          error={availabilityError}
+          onSelect={(value) => { setAdapterName(value); setError(null); }}
+          onRefresh={() => { setAvailability(null); setAvailabilityError(null); setAvailabilityRevision(current => current + 1); }}
+        />
+        {adapterName === "pi" ? <PiRuntimeStatus open={open} /> : null}
         <AgentModelConfig open={open} value={modelConfig} onChange={value => { setModelConfig(value); setError(null); }} />
         </section>
         ) : null}

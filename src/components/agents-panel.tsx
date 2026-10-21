@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/modal";
 import { Feedback } from "@/components/ui/controls";
 import { Select } from "@/components/ui/select";
 import { requestJson } from "@/lib/request-json";
+import { harnessDisplayLabel } from "@/lib/harness-selection";
 import { AgentAvatar } from "@/components/agent-avatar";
 import type { AdapterName, Agent, ModelProvider } from "@/shared/types";
 
@@ -99,7 +100,7 @@ export function AgentsPanel() {
         <Select aria-label="筛选执行引擎" size="sm" value={adapter} onChange={setAdapter}
           options={[
             { value: "", label: "全部执行引擎" },
-            ...[...new Set(agentList.map(agent => agent.adapterName))].map(name => ({ value: name, label: name === "pi" ? "Pi" : `${name}（已退役）` }))
+            ...[...new Set(agentList.map(agent => agent.adapterName))].map(name => ({ value: name, label: harnessDisplayLabel(name) }))
           ]} />
         <div className="ui-segmented" role="group" aria-label="Agent 显示方式">{([{ value: "grid", label: "卡片视图", Icon: LayoutGrid }, { value: "list", label: "紧凑列表", Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-label={label} title={label} aria-pressed={view === value} onClick={() => setView(value)}><Icon size={16} /></button>)}</div>
         <span className="ui-muted">{visibleAgents.length}/{agentList.length}</span>
@@ -126,7 +127,7 @@ export function AgentsPanel() {
                 ) : null}
               </div>
               <p className="workspace-agent-description">{agent.description || "未填写职责描述"}</p>
-              <div className="agent-library-config"><span title={`执行引擎 ${agent.adapterName}`}>{agent.adapterName === "pi" ? "Pi" : "待迁移"}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span title="运行时工具集：所有 Agent 相同">全部 {provisionedToolNames.length} 个工具</span></div>
+              <div className="agent-library-config"><span title={`执行引擎 ${agent.adapterName}`}>{harnessDisplayLabel(agent.adapterName)}</span><span title={`模型 ${agent.modelId || "未配置"}`}>{agent.modelId || "未配置模型"}</span><span title="运行时工具集：所有 Agent 相同">全部 {provisionedToolNames.length} 个工具</span></div>
             </div>
             <button
               type="button"
@@ -162,7 +163,7 @@ export function AgentsPanel() {
         footer={<button className="ui-button ui-button--primary" onClick={() => { setEditingAgent(viewingAgent); setViewingAgent(null); }}><Pencil size={15} />编辑配置</button>}>
         <p className="text-sm leading-6">{viewingAgent.description || "未填写 Agent 描述"}</p>
         <div className="my-4 flex flex-wrap gap-2">{viewingAgent.capabilities.map(tag => <span key={tag} className="rounded bg-[var(--ui-subtle)] px-2 py-1 text-xs">{tag}</span>)}</div>
-        <p className="ui-muted">{viewingAgent.adapterName} · {viewingAgent.modelId || "未配置模型"}</p>
+        <p className="ui-muted">{harnessDisplayLabel(viewingAgent.adapterName)} · {viewingAgent.modelId || "未配置模型"}</p>
         <p className="ui-muted">运行时工具集：全部 {provisionedToolNames.length} 个（所有 Agent 相同）</p>
         <details className="mt-1">
           <summary className="cursor-pointer text-xs text-stone-500">查看运行时工具集</summary>
