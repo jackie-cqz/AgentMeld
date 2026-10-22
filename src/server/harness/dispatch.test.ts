@@ -153,26 +153,54 @@ describe("harness dispatch at the real run entry point", () => {
     }
   });
 
-  it("refuses an artifact-producing run through the registered OpenCode driver before it executes", async () => {
+  it("refuses an artifact-producing run before the driver runs when the engine lacks the capability", async () => {
     const { conversation, trigger } = seedRun("opencode");
-    expect(getHarness("opencode")).toBe(opencodeHarnessDriver);
+    // The gate is the contract under test here, not the real engine: stand in a
+    // registered driver that honestly declares it cannot carry business tools.
+    const calls: HarnessInvocationInput[] = [];
+    const limited: HarnessDriver = {
+      id: "opencode",
+      doctor: () => ({ available: true, version: "fixture" }),
+      capabilities: () => ({
+        nativeTools: true,
+        businessTools: false,
+        cancellation: { supported: true, mode: "signal" },
+        evidence: false,
+        contextPacket: "platform",
+        followUp: false,
+        streaming: true,
+      }),
+      run: async function* (input): HarnessRunStream {
+        calls.push(input);
+        yield { type: "run.started" };
+        yield { type: "run.settled", status: "completed" };
+      },
+      abort: () => false,
+    };
+    unregisterHarness("opencode");
+    registerHarness(limited);
+    try {
+      const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
+      await handle.promise;
 
-    const handle = startAgentRun({ conversationId: conversation.id, agentId: "ag_mock_builder", triggerMessage: trigger });
-    await handle.promise;
-
-    // The capability gate runs before `run`: a normal Agent run is provisioned
-    // with business tools and evidence, which this slice does not wire for
-    // OpenCode. The run must fail honestly, not produce unverifiable output.
-    expect(getRun(handle.runId)).toMatchObject({
-      status: "failed",
-      errorCategory: "harness_capability",
-    });
-    const failed = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
-    expect(failed?.parts).toContainEqual({
-      type: "text",
-      content: expect.stringContaining('The "opencode" execution engine cannot run this Agent'),
-    });
-    expect(JSON.stringify(failed?.parts)).not.toContain("retired");
+      // The capability gate runs before `run`: a normal Agent run is provisioned
+      // with business tools and evidence. The run must fail honestly, without
+      // starting the engine, rather than produce output the platform cannot verify.
+      expect(calls).toHaveLength(0);
+      expect(getRun(handle.runId)).toMatchObject({
+        status: "failed",
+        errorCategory: "harness_capability",
+      });
+      const failed = listMessages(conversation.id).find((message) => message.role === "agent" && message.runId === handle.runId);
+      expect(failed?.parts).toContainEqual({
+        type: "text",
+        content: expect.stringContaining('The "opencode" execution engine cannot run this Agent'),
+      });
+      expect(JSON.stringify(failed?.parts)).not.toContain("retired");
+    } finally {
+      unregisterHarness("opencode");
+      registerHarness(opencodeHarnessDriver);
+    }
   });
 
   it("leaves Pi dispatch untouched", async () => {

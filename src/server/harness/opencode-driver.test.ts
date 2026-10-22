@@ -18,6 +18,7 @@ import {
   type OpenCodeClientLike,
   type OpenCodeEngine,
   type OpenCodeEngineFactory,
+  type OpenCodeEngineStartOptions,
 } from "./opencode-driver";
 import { acquireWorkspaceLease } from "./workspace-lease";
 import type { HarnessEvent, HarnessInvocationInput } from "./types";
@@ -147,6 +148,8 @@ function fakeEngine(events: Event[], options: { stopResult?: boolean } = {}): {
   calls: {
     prompt: Array<NonNullable<Parameters<OpenCodeClientLike["prompt"]>[1]>>;
     permissions: Array<{ permissionId: string; response: "once" | "always" | "reject" }>;
+    configs: OpenCodeEngineStartOptions["config"][];
+    envs: Array<Record<string, string> | undefined>;
     stopped: number;
     aborted: number;
     deleted: number;
@@ -155,6 +158,8 @@ function fakeEngine(events: Event[], options: { stopResult?: boolean } = {}): {
   const calls = {
     prompt: [] as Array<NonNullable<Parameters<OpenCodeClientLike["prompt"]>[1]>>,
     permissions: [] as Array<{ permissionId: string; response: "once" | "always" | "reject" }>,
+    configs: [] as OpenCodeEngineStartOptions["config"][],
+    envs: [] as Array<Record<string, string> | undefined>,
     stopped: 0,
     aborted: 0,
     deleted: 0,
@@ -174,7 +179,10 @@ function fakeEngine(events: Event[], options: { stopResult?: boolean } = {}): {
     client,
     async stop() { calls.stopped++; return options.stopResult ?? true; },
   };
-  return { factory: async () => engine, calls };
+  return {
+    factory: async (options) => { calls.configs.push(options.config); calls.envs.push(options.env); return engine; },
+    calls,
+  };
 }
 
 async function drain(stream: AsyncIterable<HarnessEvent>): Promise<HarnessEvent[]> {
@@ -198,11 +206,12 @@ describe("OpenCode driver declaration", () => {
     expect(opencodeHarnessDriver.id).toBe("opencode");
     expect(opencodeHarnessDriver.capabilities()).toEqual({
       nativeTools: true,
-      // Not wired in this slice: the platform refuses artifact-producing runs.
-      businessTools: false,
+      // Business tools load as the `agentmeld` MCP server from the run config.
+      businessTools: true,
       cancellation: { supported: true, mode: "signal" },
-      // Tool events are visible but not admitted/hashed into the ledger.
-      evidence: false,
+      // Native calls are admitted before execution and completed through the
+      // tool bridge, which is where the ledger receives their evidence.
+      evidence: true,
       contextPacket: "platform",
       followUp: false,
       streaming: true,
@@ -255,7 +264,11 @@ describe("OpenCode config mapping", () => {
       limit: { context: 65_536, output: 65_536 },
     });
     expect(config.permission).toMatchObject({ edit: "allow", bash: "allow", webfetch: "deny" });
-    expect(config.tools).toBeUndefined();
+    // Engine-internal paths that bypass the platform bridge stay off.
+    expect(config.tools).toEqual({ task: false, apply_patch: false, question: false });
+    // No tool transport was passed, so OpenCode gets neither MCP nor plugin.
+    expect(config.mcp).toBeUndefined();
+    expect(config.plugin).toBeUndefined();
   });
 
   it("omits model limits when the Agent configures no context window", () => {
@@ -275,8 +288,26 @@ describe("OpenCode config mapping", () => {
   it("disables OpenCode's native tools for a context-only invocation", () => {
     const config = buildOpenCodeConfig(neutralInput({ access: "conversation" }), "conversation");
     expect(config.permission).toMatchObject({ edit: "deny", bash: "deny", webfetch: "deny" });
-    expect(config.tools).toMatchObject({ bash: false, edit: false, write: false, read: false, webfetch: false });
+    expect(config.tools).toMatchObject({ bash: false, edit: false, write: false, read: false, webfetch: false, apply_patch: false, question: false });
     expect(config.provider?.agentmeld?.models?.["deepseek-chat"]?.tool_call).toBe(false);
+  });
+
+  it("wires the per-invocation MCP server, plugin and business-tool naming", () => {
+    const config = buildOpenCodeConfig(neutralInput(), "workspace", {
+      mcp: {
+        agentmeld: {
+          type: "local",
+          command: ["/usr/bin/node", "/repo/src/server/harness/opencode-mcp-server.mjs"],
+          environment: { AGENTMELD_OPENCODE_BRIDGE_URL: "http://127.0.0.1:1", AGENTMELD_OPENCODE_BRIDGE_TOKEN: "t" },
+          enabled: true,
+          timeout: 10_000,
+        },
+      },
+      plugin: ["/repo/src/server/harness/opencode-evidence-plugin.mjs"],
+      hasBusinessTools: true,
+    });
+    expect(config.mcp?.agentmeld?.type).toBe("local");
+    expect(config.plugin).toEqual(["/repo/src/server/harness/opencode-evidence-plugin.mjs"]);
   });
 
   it("fails honestly when the provider target is incomplete", () => {
@@ -328,9 +359,69 @@ describe("OpenCode invocation lifecycle", () => {
     expect(calls.stopped).toBe(1);
     expect(calls.deleted).toBe(1);
 
+    // The native-admission plugin and its invocation-scoped bridge environment
+    // were handed to the engine; no MCP server is needed without business tools.
+    expect(calls.configs[0].plugin).toEqual([path.join(process.cwd(), "src", "server", "harness", "opencode-evidence-plugin.mjs")]);
+    expect(calls.configs[0].mcp).toBeUndefined();
+    expect(calls.envs[0]).toMatchObject({
+      AGENTMELD_OPENCODE_BRIDGE_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
+      AGENTMELD_OPENCODE_BRIDGE_TOKEN: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    // Teardown revoked the token: the endpoint no longer answers at all.
+    const revoked = await fetch(`${calls.envs[0]!.AGENTMELD_OPENCODE_BRIDGE_URL}/manifest`, {
+      headers: { Authorization: `Bearer ${calls.envs[0]!.AGENTMELD_OPENCODE_BRIDGE_TOKEN}` },
+    }).catch(() => null);
+    expect(revoked).toBeNull();
+
     // The lease was released, so the same workspace can be acquired again.
     const reacquired = await acquireWorkspaceLease(tempDir, new AbortController().signal, { ownerLabel: "test" });
     reacquired.release();
+  });
+
+  it("advertises platform business tools over MCP and names them neutrally", async () => {
+    const input = neutralInput({
+      tools: { names: ["fs_read", "read_artifact"], required: ["read_artifact"] },
+    });
+    const prompt = renderOpenCodeContextPacket(input.context.packet);
+    const { factory, calls } = fakeEngine([
+      { type: "message.updated", properties: { info: userMessage() } },
+      { type: "message.part.updated", properties: { part: { id: "prt_user", sessionID: SESSION, messageID: "msg_user", type: "text", text: prompt } } },
+      { type: "message.updated", properties: { info: assistantMessage() } },
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "prt_artifact", sessionID: SESSION, messageID: "msg_assistant", type: "tool",
+            callID: "call_artifact", tool: "agentmeld_read_artifact",
+            state: { status: "completed", input: { artifactId: "art_missing" }, output: "{}", title: "artifact", metadata: {}, time: { start: 1, end: 2 } },
+          },
+        },
+      },
+      { type: "message.part.updated", properties: { part: textPart("pong") } },
+      { type: "session.idle", properties: { sessionID: SESSION } },
+    ]);
+    const onContextCaptured = vi.fn();
+
+    const events = await drain(runOpenCodeInvocation(
+      { ...input, onContextCaptured },
+      new AbortController().signal,
+      { engineFactory: factory },
+    ));
+
+    const mcp = calls.configs[0].mcp?.agentmeld;
+    expect(mcp).toMatchObject({ type: "local", enabled: true });
+    if (mcp?.type !== "local") throw new Error("expected a local MCP server");
+    expect(mcp.command.at(-1)).toMatch(/opencode-mcp-server\.mjs$/);
+    expect(calls.configs[0].plugin).toHaveLength(1);
+    expect(calls.prompt[0].system).toContain("agentmeld_read_artifact");
+    expect(calls.prompt[0].system).toContain("OpenCode tool naming");
+    expect(onContextCaptured).toHaveBeenCalledWith(expect.objectContaining({
+      toolNames: ["fs_read", "read_artifact"],
+    }));
+    // The MCP prefix is stripped so the platform stream speaks platform names.
+    expect(events).toContainEqual({
+      type: "tool.call", callId: "call_artifact", toolName: "read_artifact", args: { artifactId: "art_missing" },
+    });
   });
 
   it("approves only workspace edit/bash/external-directory permissions", async () => {

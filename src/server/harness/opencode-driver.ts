@@ -17,14 +17,20 @@ import {
   OpenCodeEventProjection,
   toHarnessError,
 } from "./opencode-events";
-import { renderOpenCodeContextPacket } from "./opencode-packet";
-import { isNativeWorkspaceTool } from "./native-tools";
+import { renderOpenCodeContextPacket, renderOpenCodeSystemPrompt } from "./opencode-packet";
+import { type HarnessNativeOutcome } from "./native-tools";
+import {
+  createOpenCodeToolEndpoint,
+  OPENCODE_TOOL_PREFIX,
+  type OpenCodeToolEndpoint,
+} from "./opencode-mcp";
 import { assertHarnessAccessProfile } from "./tool-surface";
 import type {
   HarnessAccessMode,
   HarnessCapabilities,
   HarnessDoctor,
   HarnessDriver,
+  HarnessEvent,
   HarnessInvocationInput,
   HarnessRunStream,
   HarnessWorkspaceLease,
@@ -45,11 +51,25 @@ export const OPENCODE_SDK_VERSION = "1.19.3";
 /** OpenCode's provider id the platform's resolved target is mapped onto. */
 const OPENCODE_PROVIDER_ID = "agentmeld";
 
-/** OpenCode's own native tools, used only to disable them for context-only runs. */
+/** OpenCode's own native tools, disabled for context-only runs. */
 const OPENCODE_NATIVE_TOOLS = [
   "bash", "edit", "write", "read", "grep", "glob", "list", "patch",
-  "webfetch", "todowrite", "todoread", "task",
+  "webfetch", "websearch", "todowrite", "todoread", "task", "apply_patch",
+  "question", "skill",
 ] as const;
+
+/**
+ * Engine tools a workspace run does not get, because they would leave the
+ * platform's evidence and workspace-owned lifecycle:
+ *
+ * - `task` starts a subagent in a child session whose tool calls never reach
+ *   this invocation's bridge or its session-scoped event projection.
+ * - `apply_patch` mutates files through a second format the platform has no
+ *   admitted native mapping for (`edit` is `fs_patch`).
+ * - `question` has no headless interaction channel; the platform's `ask_user`
+ *   business tool is the supported way to ask.
+ */
+const OPENCODE_UNEVIDENCED_TOOLS = ["task", "apply_patch", "question"] as const;
 
 interface OpenCodeInstallation {
   cliPath: string;
@@ -191,9 +211,18 @@ export interface OpenCodeEngine {
 
 export interface OpenCodeEngineStartOptions {
   workspaceRoot: string;
-  /** OpenCode's own config document; passed through `OPENCODE_CONFIG_CONTENT`. */
+  /**
+   * OpenCode's own config document. The engine writes it to a per-run file and
+   * points OpenCode at it with `OPENCODE_CONFIG`; see `writeRunConfig`.
+   */
   config: OpenCodeConfig;
   signal: AbortSignal;
+  /**
+   * Invocation-scoped environment additions (the tool bridge URL/token the
+   * native-evidence plugin reads). Kept out of `config` so the secret is not
+   * serialized into the config document.
+   */
+  env?: Record<string, string>;
 }
 
 export type OpenCodeEngineFactory = (options: OpenCodeEngineStartOptions) => Promise<OpenCodeEngine>;
@@ -210,12 +239,21 @@ export type OpenCodeEngineFactory = (options: OpenCodeEngineStartOptions) => Pro
 async function startOpenCodeEngine(options: OpenCodeEngineStartOptions): Promise<OpenCodeEngine> {
   const installation = openCodeInstallation();
   const port = await freePort();
-  const home = path.join(getDataDir(), "opencode");
+  // `AGENTMELD_OPENCODE_HOME` is the same kind of seam as
+  // `AGENTMELD_OPENCODE_CLI_PATH`: a packaged build may ship a shared engine
+  // home, and the end-to-end test points it at a cache so it does not reinstall
+  // OpenCode's plugin runtime on every run. Production leaves it unset.
+  const home = process.env.AGENTMELD_OPENCODE_HOME
+    ? path.resolve(process.env.AGENTMELD_OPENCODE_HOME)
+    : path.join(getDataDir(), "opencode");
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  // The config document carries the resolved provider credential and the
+  // invocation's bridge token, so it belongs to this run only.
+  const runConfig = writeRunConfig(home, options.config);
 
   const child = spawn(installation.cliPath, ["serve", "--hostname=127.0.0.1", `--port=${port}`, "--log-level=ERROR"], {
     cwd: options.workspaceRoot,
-    env: childEnvironment(home, options.config),
+    env: childEnvironment(home, runConfig.path, options.env),
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
   });
@@ -227,6 +265,7 @@ async function startOpenCodeEngine(options: OpenCodeEngineStartOptions): Promise
     // A startup that never produced a URL still owns a process (it may be
     // wedged before listening). It must not outlive the failed invocation.
     await killTree(child);
+    runConfig.remove();
     throw error;
   }
   const sdk = createOpencodeClient({ baseUrl: url, directory: options.workspaceRoot });
@@ -267,7 +306,11 @@ async function startOpenCodeEngine(options: OpenCodeEngineStartOptions): Promise
       // Confirmed teardown means the whole process group is gone, not only the
       // leader: native bash tools run as grandchildren and must not outlive the
       // workspace lease that this run is about to release.
-      return killTree(child);
+      const stopped = await killTree(child);
+      // The document holds a live provider credential; it is deleted even when
+      // teardown could not be confirmed, because the run is over either way.
+      runConfig.remove();
+      return stopped;
     },
   };
 }
@@ -278,11 +321,11 @@ async function startOpenCodeEngine(options: OpenCodeEngineStartOptions): Promise
  * Pi already runs with a minimal environment; OpenCode gets the same treatment so
  * an unrelated credential (another provider's key, a channel token) is never
  * visible to the engine or to a bash tool it starts. The only credential present
- * is the platform's resolved target inside `OPENCODE_CONFIG_CONTENT`, and the
- * engine's HOME/XDG roots point at this install's private directory rather than
- * the user's own OpenCode state.
+ * is the platform's resolved target inside the run's config file named by
+ * `OPENCODE_CONFIG`, and the engine's HOME/XDG roots point at this install's
+ * private directory rather than the user's own OpenCode state.
  */
-function childEnvironment(home: string, config: OpenCodeConfig): NodeJS.ProcessEnv {
+function childEnvironment(home: string, configPath: string, extra?: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV ?? "production" };
   for (const key of [
     "PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "SystemDrive",
@@ -298,10 +341,41 @@ function childEnvironment(home: string, config: OpenCodeConfig): NodeJS.ProcessE
     XDG_CONFIG_HOME: path.join(home, "config"),
     XDG_CACHE_HOME: path.join(home, "cache"),
     OPENCODE_DISABLE_AUTOUPDATE: "1",
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+    OPENCODE_CONFIG: configPath,
     NO_COLOR: "1",
-  });
+  }, extra ?? {});
   return env;
+}
+
+/**
+ * Write this invocation's OpenCode config to a file the CLI actually reads.
+ *
+ * OpenCode 1.19.3 has no `--config` flag. Its supported inputs are the project
+ * `opencode.json` in the session directory, `$XDG_CONFIG_HOME/opencode/*.json`,
+ * and the `OPENCODE_CONFIG` env var naming one file (all verified against the
+ * pinned binary: the CLI logs `loading path=…` for the first two and
+ * `loaded custom config path=…` for `OPENCODE_CONFIG`). The project file would
+ * mutate the user's workspace and the XDG file would be shared by concurrent
+ * runs, so each run gets its own file here; `OPENCODE_CONFIG` is what makes
+ * OpenCode read it. The isolated home is otherwise kept across runs because
+ * OpenCode installs its plugin runtime into `$XDG_CONFIG_HOME/opencode` and that
+ * cache must not be re-downloaded (or made unavailable offline) per run.
+ */
+function writeRunConfig(home: string, config: OpenCodeConfig): { path: string; remove: () => void } {
+  const directory = fs.mkdtempSync(path.join(home, "run-"));
+  const file = path.join(directory, "opencode.json");
+  fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  return {
+    path: file,
+    remove() {
+      try {
+        fs.rmSync(directory, { recursive: true, force: true });
+      } catch {
+        // Best effort: the run is over and the bridge token is revoked. A
+        // leftover file is still inside the platform's private data dir.
+      }
+    },
+  };
 }
 
 function sdkFailure(fallback: string, error: unknown): HarnessError {
@@ -449,7 +523,11 @@ async function waitForGroupGone(pid: number, timeoutMs: number): Promise<boolean
 }
 
 /** Build OpenCode's own config document from the platform's resolved target. */
-export function buildOpenCodeConfig(input: HarnessInvocationInput, access: HarnessAccessMode): OpenCodeConfig {
+export function buildOpenCodeConfig(
+  input: HarnessInvocationInput,
+  access: HarnessAccessMode,
+  toolConfig?: OpenCodeToolConfig,
+): OpenCodeConfig {
   const modelId = input.provider.modelId;
   const endpoint = input.provider.endpoint;
   const credential = input.provider.credential;
@@ -500,7 +578,11 @@ export function buildOpenCodeConfig(input: HarnessInvocationInput, access: Harne
         models: {
           [modelId]: {
             name: modelId,
-            tool_call: !conversationOnly,
+            // A context-only invocation without business tools has nothing to
+            // call. When the platform does provision business tools (the roster,
+            // a consultation reply), the model must still be allowed to call
+            // the MCP tools that carry them.
+            tool_call: !conversationOnly || toolConfig?.hasBusinessTools === true,
             reasoning: Boolean(input.provider.reasoningEffort),
             attachment: input.provider.vision,
             ...modelLimits,
@@ -513,16 +595,31 @@ export function buildOpenCodeConfig(input: HarnessInvocationInput, access: Harne
     permission: conversationOnly
       ? { edit: "deny", bash: "deny", webfetch: "deny", external_directory: "deny", doom_loop: "deny" }
       : { edit: "allow", bash: "allow", webfetch: "deny", external_directory: "allow", doom_loop: "allow" },
-    ...(conversationOnly ? { tools: disabledTools() } : {}),
+    ...(toolConfig?.mcp ? { mcp: toolConfig.mcp } : {}),
+    ...(toolConfig?.plugin ? { plugin: toolConfig.plugin } : {}),
+    ...(conversationOnly ? { tools: disabledTools() } : { tools: disabledWorkspaceTools() }),
   };
+}
+
+/** Config shape for the invocation-scoped OpenCode tool transport. */
+export interface OpenCodeToolConfig {
+  /** `mcp` entries OpenCode should load (present only when business tools exist). */
+  mcp?: NonNullable<OpenCodeConfig["mcp"]>;
+  /** Absolute plugin paths (the native-admission hook). */
+  plugin?: string[];
+  hasBusinessTools: boolean;
 }
 
 function disabledTools(): Record<string, boolean> {
   return Object.fromEntries(OPENCODE_NATIVE_TOOLS.map(name => [name, false]));
 }
 
+function disabledWorkspaceTools(): Record<string, boolean> {
+  return Object.fromEntries(OPENCODE_UNEVIDENCED_TOOLS.map(name => [name, false]));
+}
+
 function toolFlags(access: HarnessAccessMode): Record<string, boolean> | undefined {
-  return access === "conversation" ? disabledTools() : undefined;
+  return access === "conversation" ? disabledTools() : disabledWorkspaceTools();
 }
 
 /** A prompt attachment becomes an OpenCode file part when it is inside the workspace. */
@@ -585,6 +682,7 @@ export async function* runOpenCodeInvocation(
   let sessionId: string | null = null;
   let streamAbort: AbortController | null = null;
   let removeAbortListener: (() => void) | null = null;
+  let toolEndpoint: OpenCodeToolEndpoint | null = null;
 
   try {
     effective.throwIfAborted();
@@ -602,8 +700,48 @@ export async function* runOpenCodeInvocation(
     }
 
     input.onStage?.("running");
-    const config = buildOpenCodeConfig(input, access);
-    engine = await engineFactory({ workspaceRoot: input.workspaceRoot, config, signal: effective });
+    // The transport is only needed when the platform actually provisioned tools.
+    // It is invocation-scoped: a fresh loopback endpoint + bearer token, a stdio
+    // MCP server OpenCode spawns, and a plugin for OpenCode's own native tools.
+    if (input.tools.names.length > 0) {
+      toolEndpoint = await createOpenCodeToolEndpoint(
+        input,
+        effective,
+        lease && isPlatformWorkspaceLease(lease) ? lease : null,
+        {
+          mcpServerPath: harnessAsset("opencode-mcp-server.mjs"),
+          pluginPath: harnessAsset("opencode-evidence-plugin.mjs"),
+        },
+      );
+    }
+    const businessTools = toolEndpoint?.businessTools ?? [];
+    const toolConfig: OpenCodeToolConfig | undefined = toolEndpoint
+      ? {
+          mcp: businessTools.length > 0
+            ? { [toolEndpoint.serverName]: toolEndpoint.mcpConfig() }
+            : undefined,
+          plugin: [harnessAsset("opencode-evidence-plugin.mjs")],
+          hasBusinessTools: businessTools.length > 0,
+        }
+      : undefined;
+    const systemPrompt = toolEndpoint
+      ? renderOpenCodeSystemPrompt(input.context.systemPrompt, {
+          native: toolEndpoint.nativeTools,
+          business: businessTools,
+          serverName: toolEndpoint.serverName,
+        })
+      : input.context.systemPrompt;
+
+    // A substituted engine (tests/desktop) owns its own transport lifecycle;
+    // production must prove both bridge halves came up before the model runs.
+    const realEngine = engineFactory === startOpenCodeEngine;
+    const config = buildOpenCodeConfig(input, access, toolConfig);
+    engine = await engineFactory({
+      workspaceRoot: input.workspaceRoot,
+      config,
+      signal: effective,
+      env: toolEndpoint?.pluginEnvironment,
+    });
     if (engine.pid !== null) lease?.attachChild(engine.pid);
     client = engine.client;
 
@@ -611,10 +749,12 @@ export async function* runOpenCodeInvocation(
     const promptText = renderOpenCodeContextPacket(input.context.packet);
     input.onContextCaptured?.({
       prompt: promptText,
-      systemPromptHash: createHash("sha256").update(input.context.systemPrompt).digest("hex"),
-      // Only the platform-native names have a counterpart in OpenCode's own
-      // toolset; business tools are deliberately not claimed in this receipt.
-      toolNames: input.tools.names.filter(isNativeWorkspaceTool),
+      systemPromptHash: createHash("sha256").update(systemPrompt).digest("hex"),
+      // Everything this invocation can actually call: the native family OpenCode
+      // implements itself plus the business tools the MCP server advertises.
+      toolNames: toolEndpoint
+        ? [...toolEndpoint.nativeTools, ...businessTools]
+        : [],
       access,
     });
 
@@ -626,12 +766,25 @@ export async function* runOpenCodeInvocation(
     const events = await client.subscribe(streamController.signal);
     await client.prompt(sessionId, {
       model: { providerID: OPENCODE_PROVIDER_ID, modelID: input.provider.modelId! },
-      system: input.context.systemPrompt,
+      system: systemPrompt,
       tools: toolFlags(access),
       parts: [{ type: "text", text: promptText }, ...attachmentParts(input)],
     });
+    if (realEngine && toolEndpoint) {
+      // OpenCode resolves both transports lazily while it composes the session's
+      // toolset: MCP `tools/list` happens per prompt, and a plugin initializes
+      // when the prompt starts. Gate after enqueueing (not before, which would
+      // deadlock) so a transport that never reported in fails the run instead
+      // of letting the model run unaudited or without the business tools.
+      if (businessTools.length > 0) await toolEndpoint.awaitMcpReady(15_000, effective);
+      if (toolEndpoint.nativeTools.length > 0) await toolEndpoint.awaitPluginReady(15_000, effective);
+    }
 
-    const projection = new OpenCodeEventProjection({ sessionId, expectedUserPrompt: promptText });
+    const projection = new OpenCodeEventProjection({
+      sessionId,
+      expectedUserPrompt: promptText,
+      toolNamePrefix: toolEndpoint ? `${toolEndpoint.serverName}_` : OPENCODE_TOOL_PREFIX,
+    });
     let taskAccepted = false;
     for await (const event of events) {
       if (effective.aborted) break;
@@ -645,7 +798,15 @@ export async function* runOpenCodeInvocation(
         await client.respondPermission(sessionId, event.properties.id, allowed ? "once" : "reject").catch(() => undefined);
         continue;
       }
-      for (const neutral of projection.observe(event)) yield neutral;
+      for (const neutral of projection.observe(event)) {
+        // Native outcomes are completed here, not in the plugin: OpenCode's
+        // `tool.execute.after` hook never runs when a tool throws, while its
+        // event stream reports both success and failure for an admitted call.
+        if (neutral.type === "tool.result" && toolEndpoint?.bridge.nativeAdmitted(neutral.callId)) {
+          await toolEndpoint.bridge.completeNative(neutral.callId, nativeOutcome(neutral));
+        }
+        yield neutral;
+      }
       const state = projection.state();
       if (!taskAccepted && state.taskAccepted) {
         taskAccepted = true;
@@ -684,8 +845,14 @@ export async function* runOpenCodeInvocation(
       await client.deleteSession(sessionId).catch(() => undefined);
     }
     const stopped = engine ? await engine.stop().catch(() => false) : true;
+    // Close after the engine so a tool call already in flight can settle; the
+    // close revokes the token and cancels any pending platform approvals.
+    const transportStopped = await (toolEndpoint?.close() ?? Promise.resolve()).then(
+      () => true,
+      () => false,
+    );
     if (lease) {
-      if (stopped) lease.release();
+      if (stopped && transportStopped) lease.release();
       else lease.poison();
     }
     if (!stopped) {
@@ -695,7 +862,36 @@ export async function* runOpenCodeInvocation(
         "cleanup_failed",
       );
     }
+    if (!transportStopped) {
+      // The engine is gone but its bridge could not be revoked. Treat the
+      // ownership as uncertain rather than admitting a later writer.
+      // eslint-disable-next-line no-unsafe-finally -- an unrevoked bridge must override the run result
+      throw new HarnessError(
+        "OpenCode's tool bridge could not be revoked; the workspace remains locked.",
+        "cleanup_failed",
+      );
+    }
   }
+}
+
+/**
+ * Where the driver's runtime assets live. The Pi driver resolves its extension
+ * the same way: the server runs from the project root, and a packaged desktop
+ * build may point `AGENTMELD_OPENCODE_CLI_PATH` elsewhere but not these files.
+ */
+function harnessAsset(name: string): string {
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "src", "server", "harness", name);
+}
+
+/** The engine's native outcome in the smallest neutral shape. */
+function nativeOutcome(event: Extract<HarnessEvent, { type: "tool.result" }>): HarnessNativeOutcome {
+  const result = event.result && typeof event.result === "object"
+    ? event.result as { output?: unknown; error?: unknown }
+    : {};
+  const text = event.isError
+    ? (typeof result.error === "string" && result.error.length > 0 ? result.error : "Native OpenCode tool failed.")
+    : (typeof result.output === "string" ? result.output : "");
+  return { text, isError: event.isError };
 }
 
 /**
@@ -730,13 +926,11 @@ export async function* runOpenCodeHarness(
 /**
  * The OpenCode driver.
  *
- * Capabilities are declared exactly as wired in this slice. OpenCode brings its
- * own native file/shell tools, and its event stream carries their lifecycle, but
- * this driver does not yet carry platform business tools over OpenCode's
- * transport and does not admit/hash native outcomes through the platform tool
- * bridge. `businessTools` and `evidence` are therefore false: artifact-producing
- * and delegated runs fail through `assertHarnessSupports` before any work begins
- * rather than producing output the platform cannot verify.
+ * Capabilities are declared exactly as wired. OpenCode brings its own native
+ * file/shell tools; the platform's business tools reach it through a stdio MCP
+ * server (`opencode-mcp-server.mjs`) that relays every call to the invocation's
+ * neutral tool bridge, and native outcomes are admitted before execution and
+ * completed/hashed through that same bridge.
  */
 export const opencodeHarnessDriver: HarnessDriver = {
   id: "opencode",
@@ -749,14 +943,18 @@ export const opencodeHarnessDriver: HarnessDriver = {
     return {
       // OpenCode's own read/write/edit/bash/grep/glob/… toolset.
       nativeTools: true,
-      // Not wired in this slice: no business-tool transport exists for OpenCode.
-      businessTools: false,
+      // Business tools are loaded as an MCP server from the run's config and
+      // exposed to the model as `agentmeld_<tool>`; every call is relayed to the
+      // platform bridge. Verified end to end by `opencode-tools.e2e.test.ts`.
+      businessTools: true,
       // The platform owns the AbortSignal; `session.abort` and process teardown
       // are driven from it. There is no run-id abort registry.
       cancellation: { supported: true, mode: "signal" },
-      // Native outcomes are visible as tool events but are not admitted or
-      // hashed by the platform tool bridge, so they cannot become evidence.
-      evidence: false,
+      // Native calls are admitted (names, target paths, proposed bytes) by the
+      // pre-execution plugin before they run, and their outcomes are completed
+      // and hashed through the platform tool bridge; business-tool receipts take
+      // the same path. Verified against the evidence ledger end to end.
+      evidence: true,
       // The platform packet is rendered into OpenCode's prompt and system field.
       contextPacket: "platform",
       // No live steering/follow-up channel is wired.

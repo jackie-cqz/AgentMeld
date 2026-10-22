@@ -124,6 +124,16 @@ export interface HarnessToolBridge {
   /** Record the engine's native outcome; returns the platform-shaped result. */
   completeNative(callId: string, outcome: HarnessNativeOutcome): Promise<ToolResult>;
 
+  /**
+   * Whether `callId` is an admitted, not-yet-completed native call.
+   *
+   * A driver learns about native outcomes from its engine's event stream, which
+   * also reports calls the platform refused before they ran. Only admitted calls
+   * can be completed; asking first keeps a refusal from being mistaken for a
+   * tool that produced evidence.
+   */
+  nativeAdmitted(callId: string): boolean;
+
   /** The platform result for an already-consumed call id, once it exists. */
   result(callId: string): ToolResult | undefined;
 
@@ -268,6 +278,8 @@ export function createHarnessToolBridge(input: HarnessToolBridgeInput): HarnessT
       results.set(callId, result);
       return result;
     },
+
+    nativeAdmitted(callId) { return admissions.has(callId); },
 
     result(callId) { return results.get(callId); },
 
