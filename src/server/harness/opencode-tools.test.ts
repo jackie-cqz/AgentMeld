@@ -281,9 +281,10 @@ describe("OpenCode tool transport", () => {
     const openCodeValue = JSON.parse(raw.content[0].text) as Record<string, unknown>;
     expect(openCodeValue).toMatchObject({ title: "Parity note", type: "document", outputKey: "note", bindingMode: "replace" });
     expect(piResult).toMatchObject({ ok: true, value: { title: "Parity note", type: "document" } });
-    const { artifactId: _openCodeArtifact, ...openCodeShape } = openCodeValue;
-    const { artifactId: _piArtifact, ...piShape } = piResult.value;
-    expect(openCodeShape).toEqual(piShape);
+    // Artifact ids are generated per call; compare the rest of the value.
+    delete openCodeValue.artifactId;
+    delete piResult.value.artifactId;
+    expect(openCodeValue).toEqual(piResult.value);
     expect(evidenceRows(f.openCodeRunId)).toEqual(evidenceRows(f.piRunId));
     expect(evidenceRows(f.piRunId)[0]).toMatchObject({ type: "artifact_created", status: "valid", subjectType: "artifact" });
   });
@@ -399,6 +400,30 @@ describe("OpenCode tool transport", () => {
     await expect(endpoint.awaitMcpReady(50, new AbortController().signal)).rejects.toMatchObject({
       category: "extension_unavailable",
     });
+  });
+
+  it("resolves a readiness wait that started before the transport reported", async () => {
+    const f = fixture();
+    const { endpoint, post } = await openCode(f, ["read_artifact"]);
+    // OpenCode resolves both transports after the prompt is enqueued: the MCP
+    // server reports when OpenCode first lists its tools, and the plugin reports
+    // when OpenCode bootstraps the session. A waiter must be woken by the report
+    // rather than checking the flag once when the wait begins.
+    const mcpWait = endpoint.awaitMcpReady(5_000, new AbortController().signal);
+    const pluginWait = endpoint.awaitPluginReady(5_000, new AbortController().signal);
+    expect((await post("/ready", { kind: "mcp" })).status).toBe(200);
+    expect((await post("/ready", { kind: "plugin" })).status).toBe(200);
+    await expect(mcpWait).resolves.toBeUndefined();
+    await expect(pluginWait).resolves.toBeUndefined();
+  });
+
+  it("rejects a readiness wait when the run is cancelled", async () => {
+    const f = fixture();
+    const { endpoint } = await openCode(f, ["read_artifact"]);
+    const controller = new AbortController();
+    const wait = endpoint.awaitMcpReady(10_000, controller.signal);
+    controller.abort();
+    await expect(wait).rejects.toMatchObject({ category: "aborted" });
   });
 
   it("exits the MCP server when its stdin closes (no orphan process)", async () => {

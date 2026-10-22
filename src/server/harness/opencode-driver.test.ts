@@ -206,11 +206,12 @@ describe("OpenCode driver declaration", () => {
     expect(opencodeHarnessDriver.id).toBe("opencode");
     expect(opencodeHarnessDriver.capabilities()).toEqual({
       nativeTools: true,
-      // Not wired in this slice: the platform refuses artifact-producing runs.
-      businessTools: false,
+      // Business tools load as the `agentmeld` MCP server from the run config.
+      businessTools: true,
       cancellation: { supported: true, mode: "signal" },
-      // Tool events are visible but not admitted/hashed into the ledger.
-      evidence: false,
+      // Native calls are admitted before execution and completed through the
+      // tool bridge, which is where the ledger receives their evidence.
+      evidence: true,
       contextPacket: "platform",
       followUp: false,
       streaming: true,

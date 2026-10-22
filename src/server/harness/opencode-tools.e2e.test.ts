@@ -33,7 +33,17 @@ import type { Agent, Conversation, Message, Workspace } from "@/shared/types";
  * It is skipped when the pinned OpenCode install is unavailable (CI does not
  * install it); the opt-in real-provider suite remains
  * `opencode-driver.e2e.test.ts`.
+ *
+ * The first run against a fresh engine home also makes OpenCode install its
+ * plugin runtime from npm, so the timeouts below are generous; later runs reuse
+ * that cache and settle in seconds.
  */
+// The engine home is a cache, not per-run state: OpenCode installs its plugin
+// runtime there, and a real install keeps `getDataDir()/opencode` across runs.
+// Point it at a stable directory so one machine pays that install once instead of
+// once per `vitest run`; the platform's own data directory stays hermetic.
+process.env.AGENTMELD_OPENCODE_HOME = path.join(os.tmpdir(), "agentmeld-opencode-e2e-home");
+
 const doctor = getOpenCodeDoctor();
 const skipReason = doctor.available ? null : `OpenCode is not installed: ${doctor.detail}`;
 if (skipReason) console.info(`[opencode tools e2e] skipped: ${skipReason}`);
@@ -151,7 +161,9 @@ function input(providerUrl: string, toolNames: string[]): HarnessInvocationInput
       reasoningEffort: null, vision: false, contextWindow: null,
     },
     workspaceRoot: tempDir,
-    timeoutMs: 120_000,
+    // Generous: the first run in a fresh home also installs OpenCode's plugin
+    // runtime. The driver's own timeout must not cut that install short.
+    timeoutMs: 600_000,
     access: "workspace",
   };
 }
@@ -188,7 +200,7 @@ describe.skipIf(skipReason !== null)("OpenCode tool transport end-to-end", () =>
     expect(mocks.evidence.some(record => record.childRunId === invocation.runId && record.type === "artifact_created")).toBe(true);
     // The model saw the MCP-prefixed tool; the platform never did.
     expect(provider.requests[0].tools).toContain("agentmeld_write_artifact");
-  }, 180_000);
+  }, 600_000);
 
   it("admits a native write and records its hash as evidence", async () => {
     const target = path.join(tempDir, "native-e2e.txt");
@@ -204,7 +216,7 @@ describe.skipIf(skipReason !== null)("OpenCode tool transport end-to-end", () =>
     expect(record).toBeDefined();
     expect(record).toMatchObject({ status: "valid", subjectId: "native-e2e.txt" });
     expect(JSON.parse(record!.payloadJson)).toMatchObject({ path: "native-e2e.txt", action: "created" });
-  }, 180_000);
+  }, 300_000);
 
   it("admits a native command and records command evidence", async () => {
     const target = path.join(tempDir, "command-e2e.txt");
@@ -215,5 +227,5 @@ describe.skipIf(skipReason !== null)("OpenCode tool transport end-to-end", () =>
 
     expect(fs.readFileSync(target, "utf8")).toBe("command-bytes");
     expect(mocks.evidence.some(record => record.childRunId === invocation.runId && record.type === "command_executed")).toBe(true);
-  }, 180_000);
+  }, 300_000);
 });

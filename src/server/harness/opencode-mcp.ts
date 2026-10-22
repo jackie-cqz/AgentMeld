@@ -40,6 +40,9 @@ export const OPENCODE_MCP_SERVER_NAME = "agentmeld";
 /** The prefix OpenCode puts in front of every MCP business tool. */
 export const OPENCODE_TOOL_PREFIX = `${OPENCODE_MCP_SERVER_NAME}_`;
 
+/** The two transport halves that report for duty over `/ready`. */
+type ReadyKind = "mcp" | "plugin";
+
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -117,8 +120,21 @@ export async function createOpenCodeToolEndpoint(
   const expectedAuthorization = Buffer.from(`Bearer ${token}`);
   const inFlight = new Set<Promise<void>>();
   let closed = false;
-  let mcpReady = false;
-  let pluginReady = false;
+  // Both halves report readiness over this endpoint, and each arrives at its own
+  // time: the native-admission plugin initializes while OpenCode bootstraps the
+  // session, the MCP server only after the prompt makes OpenCode resolve the
+  // session's toolset. A waiter therefore has to be woken by the report, not
+  // checked once when the wait starts.
+  const ready: Record<ReadyKind, boolean> = { mcp: false, plugin: false };
+  const readyWaiters = new Set<{ kind: ReadyKind; wake: () => void }>();
+  const markReady = (kind: ReadyKind) => {
+    ready[kind] = true;
+    for (const waiter of [...readyWaiters]) {
+      if (waiter.kind !== kind) continue;
+      readyWaiters.delete(waiter);
+      waiter.wake();
+    }
+  };
 
   const serve = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const authorization = Buffer.from(request.headers.authorization ?? "");
@@ -161,8 +177,7 @@ export async function createOpenCodeToolEndpoint(
       const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (request.url === "/ready") {
         const value = readySchema.parse(body);
-        if (value.kind === "mcp") mcpReady = true;
-        else pluginReady = true;
+        markReady(value.kind);
         send({ ok: true });
         return;
       }
@@ -226,15 +241,18 @@ export async function createOpenCodeToolEndpoint(
     AGENTMELD_OPENCODE_BRIDGE_TOKEN: token,
   };
 
-  const awaitFlag = (ready: () => boolean, timeoutMs: number, abort: AbortSignal, detail: string) => {
-    if (ready()) return Promise.resolve();
+  const awaitReady = (kind: ReadyKind, timeoutMs: number, abort: AbortSignal, detail: string) => {
+    if (ready[kind]) return Promise.resolve();
+    if (abort.aborted) return Promise.reject(new HarnessError("The OpenCode run was cancelled.", "aborted"));
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const waiter = { kind, wake: () => finish() };
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         abort.removeEventListener("abort", onAbort);
+        readyWaiters.delete(waiter);
         if (error) reject(error);
         else resolve();
       };
@@ -243,6 +261,7 @@ export async function createOpenCodeToolEndpoint(
         () => finish(new HarnessError(detail, "extension_unavailable")),
         timeoutMs,
       );
+      readyWaiters.add(waiter);
       abort.addEventListener("abort", onAbort, { once: true });
     });
   };
@@ -265,8 +284,8 @@ export async function createOpenCodeToolEndpoint(
     },
 
     awaitMcpReady(timeoutMs, abort) {
-      return awaitFlag(
-        () => mcpReady,
+      return awaitReady(
+        "mcp",
         timeoutMs,
         abort,
         "OpenCode did not expose the platform business tools; nothing was executed.",
@@ -274,8 +293,8 @@ export async function createOpenCodeToolEndpoint(
     },
 
     awaitPluginReady(timeoutMs, abort) {
-      return awaitFlag(
-        () => pluginReady,
+      return awaitReady(
+        "plugin",
         timeoutMs,
         abort,
         "OpenCode's native-tool admission plugin did not initialize; nothing was executed.",

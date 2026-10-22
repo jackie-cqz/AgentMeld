@@ -15,8 +15,8 @@
  *
  * The bridge token is inherited from the OpenCode server environment. It is
  * per-invocation and revoked at teardown; native `bash` inherits it too, which
- * is the same exposure the resolved provider credential already has through
- * `OPENCODE_CONFIG_CONTENT`.
+ * is the same exposure the resolved provider credential already has through the
+ * run's `OPENCODE_CONFIG` file.
  */
 import fs from "node:fs";
 
