@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronUp, FileText, ListTree, Loader2, MessageSqua
 import { useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { DispatchPlanEditor, validatePlan } from "@/components/dispatch-plan-editor";
+import { AcceptanceCriteriaChips } from "@/components/acceptance-criteria-chips";
 import { PendingQuestionCard } from "@/components/pending-question-card";
 import { Select } from "@/components/ui/select";
 import { requestJson } from "@/lib/request-json";
@@ -238,15 +239,13 @@ function DispatchPlanCard({ plan }: { plan: PendingDispatchPlan }) {
                   ) : null}
                 </div>
                 {(item.acceptanceCriteria?.length ?? 0) > 0 || (item.expectedOutputs?.length ?? 0) > 0 || (item.targetPaths?.length ?? 0) > 0 ? (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {item.acceptanceCriteria?.map((c, idx) => (
-                      <span key={idx} className="rounded bg-purple-50 px-1 py-0.5 text-[10px] text-purple-600">验收: {c}</span>
-                    ))}
+                  <div className="mt-1 flex flex-wrap items-start gap-1">
+                    <AcceptanceCriteriaChips values={item.acceptanceCriteria} />
                     {item.expectedOutputs?.map((o) => (
                       <span key={o.id} className="rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-600">{o.id} · {o.type}</span>
                     ))}
                     {item.targetPaths?.map((p) => (
-                      <span key={p} className="rounded bg-amber-50 px-1 py-0.5 font-mono text-[10px] text-amber-600">{p}</span>
+                      <span key={p} className="max-w-full break-all rounded bg-amber-50 px-1 py-0.5 font-mono text-[10px] text-amber-600">{p}</span>
                     ))}
                   </div>
                 ) : null}
