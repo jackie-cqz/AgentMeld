@@ -1,4 +1,5 @@
 import type { DispatchPlanItem } from "@/shared/types";
+import { serializeAcceptanceCriterion } from "@/shared/acceptance-criteria";
 import { applyRoleContracts } from "@/server/agent-contracts/contract-resolver";
 import { getActiveStrategy } from "@/server/context-policy/strategy-registry";
 import { listAgents } from "@/server/repositories";
@@ -44,8 +45,12 @@ export function parseDispatchPlanToolArgs(args: unknown): DispatchPlanItem[] {
         }))
       : undefined;
 
+    // A model may emit a structured contract here even though the field is a
+    // string list. Serialize it canonically (what verification and the prompt
+    // builder already understand) instead of letting String() produce
+    // "[object Object]", which neither layer can parse.
     const acceptanceCriteria = Array.isArray(raw.acceptanceCriteria)
-      ? raw.acceptanceCriteria.map((c) => String(c))
+      ? raw.acceptanceCriteria.map((c) => serializeAcceptanceCriterion(c))
       : undefined;
 
     const maxAttempts = typeof raw.maxAttempts === "number" ? raw.maxAttempts : undefined;

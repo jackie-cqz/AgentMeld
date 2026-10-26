@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileAndValidateDispatchPlan, compileDispatchPlan } from "@/server/dispatch-plan";
+import { compileAndValidateDispatchPlan, compileDispatchPlan, parseDispatchPlanToolArgs } from "@/server/dispatch-plan";
 import type { DispatchPlanItem } from "@/shared/types";
 
 describe("contract-based dependency compilation", () => {
@@ -83,5 +83,37 @@ describe("compileAndValidateDispatchPlan", () => {
     );
 
     expect(result).toContain("unknown task");
+  });
+});
+
+describe("parseDispatchPlanToolArgs acceptance criteria", () => {
+  const contract = {
+    id: "contract-artifact-prd-document",
+    description: "PRD 产物已创建",
+    required: true,
+    validator: { type: "artifact_exists", outputKey: "prd", artifactType: "document" },
+  };
+
+  it("serializes a structured contract instead of printing [object Object]", () => {
+    const [task] = parseDispatchPlanToolArgs({
+      tasks: [{
+        id: "t1",
+        agentId: "ag_pm",
+        task: "Write the PRD",
+        acceptanceCriteria: ["文档完整", contract],
+      }],
+    });
+
+    expect(task.acceptanceCriteria).toEqual(["文档完整", JSON.stringify(contract)]);
+    expect(task.acceptanceCriteria?.join("\n")).not.toContain("[object Object]");
+  });
+
+  it("keeps an already-canonical JSON string untouched", () => {
+    const serialized = JSON.stringify(contract);
+    const [task] = parseDispatchPlanToolArgs({
+      tasks: [{ id: "t1", agentId: "ag_pm", task: "Write the PRD", acceptanceCriteria: [serialized] }],
+    });
+
+    expect(task.acceptanceCriteria).toEqual([serialized]);
   });
 });

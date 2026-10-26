@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { serializeAcceptanceCriterion } from "@/shared/acceptance-criteria";
 import { approvePlan, getPendingPlan, rejectPlan, revisePlanWithFeedback } from "@/server/dispatch-plan-manager";
 import { compileAndValidateDispatchPlan } from "@/server/dispatch-plan";
 import { getApprovalRecord, getConversation, getAgent, MAX_RESOLVED_BY_LENGTH } from "@/server/repositories";
@@ -37,7 +38,10 @@ const resolveSchema = z.object({
       required: z.boolean().optional(),
       description: z.string().optional()
     })).optional(),
-    acceptanceCriteria: z.array(z.string()).optional(),
+    // Accept a structured contract here as well as a string, then normalize it
+    // to the canonical JSON string the verification engine parses. A plan that
+    // carries object criteria must not fail approval with a 400.
+    acceptanceCriteria: z.array(z.union([z.string(), z.record(z.string(), z.unknown())])).optional(),
     maxAttempts: z.number().int().min(1).max(5).optional(),
     targetPaths: z.array(z.string()).optional(),
     requiredCommands: z.array(z.object({
@@ -127,7 +131,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       dependsOn: p.dependsOn ?? [],
       inputs: p.inputs ?? [],
       expectedOutputs: p.expectedOutputs ?? [],
-      acceptanceCriteria: p.acceptanceCriteria ?? [],
+      acceptanceCriteria: (p.acceptanceCriteria ?? []).map((criterion) => serializeAcceptanceCriterion(criterion)),
       maxAttempts: p.maxAttempts,
       targetPaths: p.targetPaths,
       requiredCommands: p.requiredCommands,
