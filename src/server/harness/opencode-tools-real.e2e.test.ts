@@ -203,8 +203,11 @@ beforeAll(() => {
   };
 
   // The evidence row carries this snapshot id. It has no foreign key, but a
-  // real task identity should still resolve to the row the app would have
-  // written, so persist it with the same compiler the conductor uses.
+  // real task identity should still resolve to a persisted row, so this
+  // fixture writes one with buildMinimalContextEnvelope. That is a test
+  // fixture, not the conductor's own compileTaskContext pipeline (covered by
+  // the compiler tests); this suite only needs the real identity columns the
+  // evidence lookup joins on.
   const parsedTask: ParsedTask = {
     id: taskId,
     agentId: agent.id,
@@ -287,7 +290,9 @@ function invocation(): HarnessInvocationInput {
     workspaceRoot,
     // Generous: a cold engine home also installs OpenCode's plugin runtime.
     // Later runs reuse the cache and settle in seconds.
-    timeoutMs: 600_000,
+    // Below vitest's own 600_000ms test timeout so the driver's abort and
+    // process teardown finish before vitest kills the test.
+    timeoutMs: 540_000,
     access: "workspace",
   };
 }
@@ -316,9 +321,10 @@ describe.skipIf(realSkipReason !== null)("OpenCode real-model business-tool end-
     );
     expect(successes.length).toBeGreaterThanOrEqual(1);
 
-    // The model saw OpenCode's MCP-prefixed name; the platform recorded the
-    // platform name. Both facts are part of the transport proof.
-    expect(calls[0].toolName).toBe("write_artifact");
+    // The filter above already proves the neutral stream carries the platform
+    // name; assert instead that the payload the model sent survived the
+    // transport, since the bridge must forward write_artifact's arguments.
+    expect(calls[0].args).toMatchObject({ outputKey: "note", type: "document" });
 
     // Binding, through the same map a dispatched task's report consumes.
     const artifacts = getTaskArtifacts(childRunId);
@@ -331,6 +337,12 @@ describe.skipIf(realSkipReason !== null)("OpenCode real-model business-tool end-
     expect(artifact).toBeDefined();
     expect(artifact?.type).toBe("document");
     expect(artifact?.createdByAgentId).toBe(agent.id);
+    // The prompt gives the exact document body; assert it survived the
+    // model -> MCP -> bridge -> artifacts table path unchanged.
+    expect(artifact?.content).toMatchObject({
+      type: "document",
+      content: "# Real-model E2E\n\nThis document was written by a real model through the AgentMeld business-tool bridge.",
+    });
 
     // The evidence row is read back from SQLite, not from the in-memory mock
     // the scripted e2e uses. Its foreign keys only resolve because this file
@@ -345,6 +357,7 @@ describe.skipIf(realSkipReason !== null)("OpenCode real-model business-tool end-
       taskId,
       attemptId: taskExecution.attemptId,
       childRunId,
+      contextSnapshotId: taskExecution.contextSnapshotId,
       agentId: agent.id,
       sourceKind: "tool_call",
       subjectType: "artifact",

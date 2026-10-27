@@ -31,8 +31,10 @@ import type { Agent, Conversation, Message, Workspace } from "@/shared/types";
  * so the run needs no API credential and is repeatable.
  *
  * It is skipped when the pinned OpenCode install is unavailable (CI does not
- * install it); the opt-in real-provider suite remains
- * `opencode-driver.e2e.test.ts`.
+ * install it). The two opt-in real-provider suites are
+ * `opencode-driver.e2e.test.ts` (`OPENCODE_E2E_*`) and
+ * `opencode-tools-real.e2e.test.ts` (`OPENCODE_REAL_E2E=1` + `DEEPSEEK_*`);
+ * see docs/opencode-runtime.md for both conventions.
  *
  * The first run against a fresh engine home also makes OpenCode install its
  * plugin runtime from npm, so the timeouts below are generous; later runs reuse

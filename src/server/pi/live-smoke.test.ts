@@ -44,7 +44,11 @@ it.runIf(process.env.AGENTMELD_PI_LIVE_SMOKE === "1")("real provider: native rea
       expect(calls.some(call => call.toolName === name && events.some(event => event.type === "tool.result" && event.callId === call.callId && !event.isError)), `successful ${name} receipt`).toBe(true);
     }
     const usage = events.find((event): event is Extract<StreamEvent, { type: "run.usage" }> => event.type === "run.usage");
-    expect(usage?.usage.modelId, "the run reports the model the gateway actually served").toBe(liveModelId);
+    expect(usage, "the run reports usage from the completed model turn").toBeDefined();
+    // PiEventProjection echoes the configured id into usage, so this only pins
+    // the wiring; the provider's own token count below is the real signal.
+    expect(usage?.usage.modelId, "the configured model id is echoed into usage").toBe(liveModelId);
+    expect(usage?.usage.outputTokens ?? 0, "the provider reported output tokens").toBeGreaterThan(0);
     expect(listArtifacts(conversation.id)).toHaveLength(1);
     if (process.env.AGENTMELD_PI_LIVE_SMOKE_TRACE === "1") {
       const artifacts = listArtifacts(conversation.id);
