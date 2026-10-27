@@ -9,11 +9,17 @@ import { newMessageId, newRunId } from "@/shared/ids";
 import { runPiInvocation } from "./runtime";
 import type { StreamEvent } from "@/shared/types";
 
+// The configured gateway serves a DeepSeek-compatible model under its own id;
+// it does not serve the public `deepseek-chat` name. Keep this in step with the
+// gateway (overridable for a machine pointed at a different deployment) rather
+// than hardcoding a model the provider will reject.
+const liveModelId = process.env.DEEPSEEK_MODEL_ID?.trim() || "deepseek-v4-flash";
+
 // Explicit opt-in: the ordinary suite never sends requests to a paid provider.
 it.runIf(process.env.AGENTMELD_PI_LIVE_SMOKE === "1")("real provider: native read, edit, verification and stored artifact", async () => {
   const key = process.env.DEEPSEEK_API_KEY;
   if (!key || key.includes("your_")) throw new Error("Live Pi smoke requires a configured DeepSeek credential.");
-  const agent = createAgent({ name: "Pi live smoke", description: "Isolated acceptance fixture", adapterName: "pi", modelProvider: "deepseek", modelId: "deepseek-chat", apiKey: key,
+  const agent = createAgent({ name: "Pi live smoke", description: "Isolated acceptance fixture", adapterName: "pi", modelProvider: "deepseek", modelId: liveModelId, apiKey: key,
     apiBaseUrl: resolveProviderBaseUrl("deepseek"), toolNames: ["fs_read", "fs_patch", "bash", "write_artifact"], systemPrompt: "Complete the exact small task using real tools. Do not claim success before verifying." });
   const conversation = createConversation({ mode: "single", agentIds: [agent.id], fsWriteApprovalMode: "auto" });
   const workspace = getWorkspaceForConversation(conversation.id)!;
@@ -25,12 +31,31 @@ it.runIf(process.env.AGENTMELD_PI_LIVE_SMOKE === "1")("real provider: native rea
   const timer = setTimeout(() => controller.abort(), 90000);
   const events: StreamEvent[] = [];
   try {
-    for await (const event of runPiInvocation({ agent, conversation, triggerMessage, workspace, workspacePath: workspace.rootPath, conversationId: conversation.id, runId: newRunId(), recentMessages: [], apiKey: key, apiBaseUrl: agent.apiBaseUrl, toolNames: agent.toolNames, systemPrompt: agent.systemPrompt }, controller.signal)) events.push(event);
+    try {
+      for await (const event of runPiInvocation({ agent, conversation, triggerMessage, workspace, workspacePath: workspace.rootPath, conversationId: conversation.id, runId: newRunId(), recentMessages: [], apiKey: key, apiBaseUrl: agent.apiBaseUrl, toolNames: agent.toolNames, systemPrompt: agent.systemPrompt }, controller.signal)) events.push(event);
+    } catch (error) {
+      // A provider that rejects the model must fail honestly and say which
+      // model/endpoint it rejected; never fall back to a different model.
+      throw new Error(`Pi live smoke failed against model "${liveModelId}" at ${agent.apiBaseUrl}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
     expect(fs.readFileSync(path.join(workspace.rootPath, "note.txt"), "utf8")).toBe("Pi verified\n");
     const calls = events.filter(event => event.type === "tool.call");
     for (const name of ["read", "edit", "bash", "write_artifact"]) {
       expect(calls.some(call => call.toolName === name && events.some(event => event.type === "tool.result" && event.callId === call.callId && !event.isError)), `successful ${name} receipt`).toBe(true);
     }
+    const usage = events.find((event): event is Extract<StreamEvent, { type: "run.usage" }> => event.type === "run.usage");
+    expect(usage, "the run reports usage from the completed model turn").toBeDefined();
+    // PiEventProjection echoes the configured id into usage, so this only pins
+    // the wiring; the provider's own token count below is the real signal.
+    expect(usage?.usage.modelId, "the configured model id is echoed into usage").toBe(liveModelId);
+    expect(usage?.usage.outputTokens ?? 0, "the provider reported output tokens").toBeGreaterThan(0);
     expect(listArtifacts(conversation.id)).toHaveLength(1);
+    if (process.env.AGENTMELD_PI_LIVE_SMOKE_TRACE === "1") {
+      const artifacts = listArtifacts(conversation.id);
+      console.info(`[pi live smoke] model=${liveModelId} endpoint=${agent.apiBaseUrl}`);
+      console.info(`[pi live smoke] tool calls=${JSON.stringify(calls.map(call => call.toolName))}`);
+      console.info(`[pi live smoke] usage=${JSON.stringify(usage?.usage)}`);
+      console.info(`[pi live smoke] artifacts=${JSON.stringify(artifacts.map(artifact => ({ id: artifact.id, type: artifact.type, title: artifact.title })))}`);
+    }
   } finally { clearTimeout(timer); }
 }, 120000);

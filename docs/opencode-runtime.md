@@ -149,6 +149,35 @@ install is not available, and the skip reason is printed at suite load. The
 first run in a fresh engine home installs OpenCode's plugin runtime, so that
 run is slower; the suite allows for it and caches the home between runs.
 
+`opencode-tools-real.e2e.test.ts` is the real-model half of the same proof: the
+same OpenCode/MCP/bridge path, but with the real provider and the real SQLite
+evidence ledger instead of the scripted model and the mocked repository. A
+passing run means a real model chose to call `agentmeld_write_artifact`, the
+argument payload crossed the bridge, and the artifact binding plus the
+`artifact_created` evidence row (with real foreign keys) landed in the
+platform. Because it makes a paid request it is opt-in and skipped by default,
+with the skip reason printed at suite load:
+
+```bash
+OPENCODE_REAL_E2E=1
+DEEPSEEK_API_KEY=...      # the provider credential
+DEEPSEEK_BASE_URL=...     # a bare host is normalised to /v1
+DEEPSEEK_MODEL_ID=...     # optional, defaults to deepseek-v4-flash
+```
+
+The OpenAI-compatible endpoint OpenCode loads must be the versioned one; the
+app's `resolveProviderBaseUrl` appends `/v1` to a bare host, so
+`https://gateway.example.com` and `https://gateway.example.com/v1` both work.
+Set `OPENCODE_REAL_E2E_TRACE=1` to print the neutral event trace.
+
+The two real-provider suites use separate opt-in conventions so either can run
+alone and an ordinary `pnpm test` / CI run never spends money: the driver
+transport suite (`opencode-driver.e2e.test.ts`) reads `OPENCODE_E2E_*`, while
+the business-tool suite (`opencode-tools-real.e2e.test.ts`) reads
+`OPENCODE_REAL_E2E` plus the shared `DEEPSEEK_*` provider variables. Both skip
+when their gate, credential or pinned OpenCode install is missing, printing
+the reason at suite load.
+
 `opencode-driver.e2e.test.ts` starts a real `opencode serve` and makes a real
 provider request. It is skipped unless all of the following are set:
 
