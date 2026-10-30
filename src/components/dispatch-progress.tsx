@@ -3,7 +3,7 @@
 import {
   Ban, CheckCircle2, Circle, Clock3, GitBranch,
   Loader2, RotateCcw, XCircle, AlertTriangle, RefreshCw,
-  FileCheck, ShieldCheck, Eye, ChevronDown, ChevronRight
+  FileCheck, ShieldCheck, Eye, ChevronDown, ChevronRight, ChevronUp
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import type { DispatchState } from "@/stores/store-types";
@@ -16,6 +16,10 @@ import type { ManifestEntry } from "@/components/task-context-manifest";
 import type { AttemptRecord } from "@/components/task-attempt-timeline";
 import { ContextTraceDrawer } from "@/components/context-trace-drawer";
 import { TaskHandoffControl } from "@/components/task-handoff-control";
+import { AcceptanceCriteriaChips } from "@/components/acceptance-criteria-chips";
+
+/** Task descriptions are often multi-paragraph prompts; show a clamped preview. */
+const DESCRIPTION_CLAMP_THRESHOLD = 100;
 
 export function DispatchProgress({ messageId }: { messageId: string }) {
   const dispatch = useAppStore((state) =>
@@ -179,6 +183,7 @@ function DispatchTaskRow({ dispatch, taskId, onOpenDrawer, onOpenTrace }: { disp
   const agents = useAppStore((state) => state.agents);
   const task = dispatch.plan.find((item) => item.id === taskId);
   const [expanded, setExpanded] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   if (!task) return null;
   const status = dispatch.taskStatus[taskId] ?? "pending";
   const agent = agents[task.agentId];
@@ -217,7 +222,20 @@ function DispatchTaskRow({ dispatch, taskId, onOpenDrawer, onOpenTrace }: { disp
               <VerificationBadge status={verificationStatus} />
             ) : null}
           </div>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{task.task}</p>
+          <p className={`mt-1 text-xs leading-5 text-slate-600 ${descriptionExpanded ? "whitespace-pre-line" : "line-clamp-2"}`}>
+            {task.task}
+          </p>
+          {task.task.length > DESCRIPTION_CLAMP_THRESHOLD ? (
+            <button
+              type="button"
+              onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+              aria-expanded={descriptionExpanded}
+              className="mt-0.5 flex items-center gap-0.5 text-[10px] text-slate-400 hover:text-slate-600"
+            >
+              {descriptionExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              {descriptionExpanded ? "收起任务说明" : "展开任务说明"}
+            </button>
+          ) : null}
           {task.dependsOn.length > 0 ? (
             <div className="mt-1 flex flex-wrap gap-1">
               {task.dependsOn.map((dep) => (
@@ -225,15 +243,13 @@ function DispatchTaskRow({ dispatch, taskId, onOpenDrawer, onOpenTrace }: { disp
               ))}
             </div>
           ) : null}
-          <div className="mt-1 flex flex-wrap gap-1">
-            {task.acceptanceCriteria?.map((criterion, idx) => (
-              <span key={idx} className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] text-purple-700">验收: {criterion}</span>
-            ))}
+          <div className="mt-1 flex flex-wrap items-start gap-1">
+            <AcceptanceCriteriaChips values={task.acceptanceCriteria} />
             {task.expectedOutputs?.map((output) => (
               <span key={output.id} className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">{output.id} · {output.type}</span>
             ))}
             {task.targetPaths?.map((path) => (
-              <span key={path} className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] text-amber-700">{path}</span>
+              <span key={path} className="max-w-full break-all rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] text-amber-700">{path}</span>
             ))}
           </div>
           {/* P7: Evidence-aware summary row — clickable items open the drawer */}
